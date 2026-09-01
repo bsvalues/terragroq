@@ -52,6 +52,71 @@ const MAX_CLOUD_PROVIDER_STREAM_BYTES = 4_194_304
 // comfortably below CreateProcess' command-line ceiling rather than inheriting the 2 MB UI cap.
 const MAX_DIFF_REVIEW_PATCH_BYTES = 20_000
 const MAX_DIFF_REVIEW_PROMPT_UNITS = 24_000
+const ELIGIBILITY_HEADERS = { "cache-control": "no-store" }
+
+function exactEligibilityPath(value: string | null): string | null {
+  if (!value || value !== value.trim() || value.length > 1_000 || /[\\\u0000-\u001f\u007f]/.test(value)
+    || value.startsWith("/") || /^[A-Za-z]:/.test(value)) return null
+  const segments = value.split("/")
+  return segments.some((segment) => !segment || segment === "." || segment === "..") ? null : value
+}
+
+export async function GET(request: Request) {
+  const session = await getSession()
+  if (!session) {
+    return Response.json({ eligible: false, reason: "UNAUTHENTICATED" }, { status: 401, headers: ELIGIBILITY_HEADERS })
+  }
+  const url = new URL(request.url)
+  const queryKeys = [...url.searchParams.keys()].sort()
+  const exactQuery = queryKeys.join("\0") === "actor\0path\0worldId"
+    && url.searchParams.getAll("worldId").length === 1
+    && url.searchParams.getAll("actor").length === 1
+    && url.searchParams.getAll("path").length === 1
+  const worldId = url.searchParams.get("worldId")
+  const actor = url.searchParams.get("actor")
+  const selectedPath = exactEligibilityPath(url.searchParams.get("path"))
+  if (!exactQuery || !worldId || worldId !== worldId.trim() || worldId.length > 200 || /[\u0000-\u001f\u007f]/.test(worldId)
+    || actor !== "codex" && actor !== "claude" || !selectedPath) {
+    return Response.json({ eligible: false, reason: "ELIGIBILITY_REQUEST_INVALID" }, { status: 400, headers: ELIGIBILITY_HEADERS })
+  }
+  if (isSensitiveWorkspacePath(selectedPath)) {
+    return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
+  }
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) {
+    return Response.json({ eligible: false, reason: "PROJECT_BINDING_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
+  }
+  const binding = projectBinding.binding
+  try {
+    const authority = await deriveSpaceMutationAuthority({
+      userId: session.user.id,
+      worldId,
+      binding: {
+        projectId: binding.projectId,
+        projectKey: binding.projectKey,
+        repositoryIdentity: binding.repositoryIdentity,
+        spaceIdentity: binding.project.identity,
+      },
+      expected: { actor, capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: selectedPath },
+    })
+    if (authority.worldId !== worldId || authority.actor !== actor || authority.selectedPath !== selectedPath) {
+      return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
+    }
+    return Response.json({
+      eligible: true,
+      worldId: authority.worldId,
+      worldRevision: authority.worldRevision,
+      outcomeKey: authority.outcomeKey,
+      workOrderId: authority.workOrderId,
+      grantId: authority.grantId,
+      actor: authority.actor,
+      selectedPath: authority.selectedPath,
+    }, { status: 200, headers: ELIGIBILITY_HEADERS })
+  } catch {
+    return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
+  }
+}
 
 type DiffReviewIdentity = Readonly<{
   worldId: string

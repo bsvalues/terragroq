@@ -74,7 +74,7 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).toContain('action === "Fork unavailable"')
     expect(source).toContain('lineMode === "fork" ? "Fork session"')
     expect(source).toContain("agentSessions.forkClaudeSession")
-    expect(source).toContain('["Summarize", continueAction, "Delegate", "Council"] as const')
+    expect(source).toContain('["Summarize", continueAction, spaceDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", "Council"] as const')
     expect(source).toContain("SPACE_CONTINUE_PROMPT")
     expect(source).toContain("setAutomaticSpaceContinuePending(true)")
     expect(source).toContain("void submitLine(null, SPACE_CONTINUE_PROMPT)")

@@ -13,6 +13,33 @@ const SESSION_KEY = "williamos:agent-session:world-a:c%3A%2Frepos%2Fterrafusion"
 vi.mock("next/dynamic", () => ({
   default: () => function Editor() { return <textarea aria-label="Source content" readOnly /> },
 }))
+vi.mock("@/components/workspace-shell/editor-surface", () => ({
+  EditorSurface: ({ space, onEditorChange, onSelectedFileDirtyChange }: {
+    space: { selectedPath: string | null; editor: { activePaneId: "primary" | "secondary"; openFiles: string[]; panes: { id: "primary" | "secondary"; activePath: string | null; selection: { anchor: number; head: number } }[] } }
+    onEditorChange: (editor: typeof space.editor, selectedPath: string) => void
+    onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
+  }) => <div>Source {space.selectedPath}<button type="button" onClick={() => onEditorChange({
+    ...space.editor,
+    openFiles: ["src/app.ts", "src/other.ts"],
+    panes: space.editor.panes.map((pane) => pane.id === space.editor.activePaneId
+      ? { ...pane, activePath: "src/other.ts", selection: { anchor: 0, head: 0 } }
+      : pane),
+  }, "src/other.ts")}>Select other file</button><button type="button" onClick={() => {
+    if (space.selectedPath) onSelectedFileDirtyChange?.(space.selectedPath, true)
+  }}>Dirty selected file</button></div>,
+}))
+
+const BOUND_SPINE = {
+  ...EMPTY_SPINE,
+  outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+  outcomeTitle: "Finish Experience V2",
+  workOrderId: 1121,
+  execution: "authorized" as const,
+}
+
+function ndjson(...events: readonly Record<string, unknown>[]): Response {
+  return new Response(events.map((event) => `${JSON.stringify(event)}\n`).join(""), { status: 200 })
+}
 
 afterEach(() => {
   cleanup()
@@ -22,6 +49,312 @@ afterEach(() => {
 })
 
 describe("Experience V2 selected Space actions", () => {
+  it("delegates a Space only as the exact already-authorized saved selected file", async () => {
+    const sessionId = "codex-space-file-1"
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base,
+      revision: 7,
+      activeWindowId: null,
+      selectedPath: "src/app.ts",
+      editor: {
+        ...base.editor,
+        openFiles: ["src/app.ts"],
+        activePaneId: "primary",
+        panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      },
+    })
+    const agentRequests: Record<string, unknown>[] = []
+    let spacePuts = 0
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        spacePuts += 1
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) return Response.json({
+        eligible: true, worldId: "world-a", worldRevision: 8,
+        outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 44,
+        actor: "codex", selectedPath: "src/app.ts",
+      })
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        agentRequests.push(JSON.parse(String(init.body)))
+        return ndjson(
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: "a".repeat(64) },
+          { type: "result", text: "Changed only the exact selected file." },
+          { type: "done", code: 0, reason: null },
+        )
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(spacePuts).toBeGreaterThan(0))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    expect(within(line).getByText("Space assignment · exact selected file src/app.ts")).toBeTruthy()
+    const claudeUnavailable = within(line).getByRole("button", { name: "Claude unavailable" }) as HTMLButtonElement
+    expect(claudeUnavailable.disabled).toBe(true)
+    expect(claudeUnavailable.title).toBe("Exact-file assignment binding is not available for Claude yet.")
+    fireEvent.click(within(line).getByRole("button", { name: "Codex" }))
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Implement the bounded fix." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+
+    await waitFor(() => expect(agentRequests).toHaveLength(1))
+    expect(agentRequests[0]).toEqual({
+      worldId: "world-a",
+      prompt: "Owner request: Implement the bounded fix.",
+      sessionId: null,
+      resume: false,
+    })
+    expect(await within(line).findByText("Changed only the exact selected file.")).toBeTruthy()
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
+    expect(stored).toContain('"target":{"kind":"file","path":"src/app.ts"}')
+    expect(stored).not.toContain("src/other.ts")
+  })
+
+  it("shows Space Delegate unavailable when no exact selected-file authority is bound", async () => {
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({ ...base, activeWindowId: null, selectedPath: "src/app.ts" })
+    const requests: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      requests.push(url)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: EMPTY_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
+    expect(unavailable.disabled).toBe(true)
+    expect(unavailable.title).toBe("Delegate needs one clean durably saved selected file in a server-bound active Work Order.")
+    expect(screen.getByText(unavailable.title)).toBeTruthy()
+    expect(requests.some((url) => url === "/api/loom/codex" || url === "/api/loom/agent")).toBe(false)
+  })
+
+  it.each([
+    ["refused", { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }],
+    ["stale", {
+      eligible: true, worldId: "world-a", worldRevision: 6,
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 44,
+      actor: "codex", selectedPath: "src/app.ts",
+    }],
+  ])("keeps Space Delegate unavailable when the exact server proof is %s", async (_label, eligibility) => {
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base, revision: 7, activeWindowId: null, selectedPath: "src/app.ts",
+      editor: {
+        ...base.editor, openFiles: ["src/app.ts"], activePaneId: "primary",
+        panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      },
+    })
+    const agentRequests: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) return Response.json(eligibility)
+      if (url === "/api/loom/codex" || url === "/api/loom/agent") agentRequests.push(url)
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
+    expect(unavailable.disabled).toBe(true)
+    expect(await screen.findByText("Delegate requires a current server-derived exact-path authority proof for Codex.")).toBeTruthy()
+    expect(agentRequests).toEqual([])
+  })
+
+  it("discards an exact Space file assignment when the selected path drifts during inference", async () => {
+    const sessionId = "codex-space-file-stale"
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base, revision: 7, activeWindowId: null, selectedPath: "src/app.ts",
+      editor: { ...base.editor, openFiles: ["src/app.ts"], activePaneId: "primary", panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }] },
+    })
+    let resolveAgent!: (response: Response) => void
+    let agentSignal: AbortSignal | null = null
+    let spacePuts = 0
+    const agent = new Promise<Response>((resolve) => { resolveAgent = resolve })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        spacePuts += 1
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) return Response.json({
+        eligible: true, worldId: "world-a", worldRevision: 8,
+        outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 44,
+        actor: "codex", selectedPath: "src/app.ts",
+      })
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        agentSignal = init.signal ?? null
+        return agent
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(spacePuts).toBeGreaterThan(0))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    fireEvent.click(within(line).getByRole("button", { name: "Codex" }))
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Do not retarget this." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+    await waitFor(() => expect(agentSignal).not.toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Select other file" }))
+    await waitFor(() => expect(agentSignal?.aborted).toBe(true))
+    resolveAgent(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: "b".repeat(64) },
+      { type: "result", text: "STALE SPACE ASSIGNMENT" },
+      { type: "done", code: 0, reason: null },
+    ))
+
+    await waitFor(() => expect(within(line).queryByText("STALE SPACE ASSIGNMENT")).toBeNull())
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
+    expect(stored).not.toContain(sessionId)
+  })
+
+  it("aborts an exact Space file assignment when the same selected file becomes dirty", async () => {
+    const sessionId = "codex-space-file-dirty-stale"
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base, revision: 7, activeWindowId: null, selectedPath: "src/app.ts",
+      editor: {
+        ...base.editor, openFiles: ["src/app.ts"], activePaneId: "primary",
+        panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      },
+    })
+    let resolveAgent!: (response: Response) => void
+    let agentSignal: AbortSignal | null = null
+    const agent = new Promise<Response>((resolve) => { resolveAgent = resolve })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) return Response.json({
+        eligible: true, worldId: "world-a", worldRevision: 8,
+        outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 44,
+        actor: "codex", selectedPath: "src/app.ts",
+      })
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        agentSignal = init.signal ?? null
+        return agent
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    fireEvent.click(within(line).getByRole("button", { name: "Codex" }))
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Do not overwrite my buffer." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+    await waitFor(() => expect(agentSignal).not.toBeNull())
+
+    fireEvent.click(screen.getByRole("button", { name: "Dirty selected file" }))
+    await waitFor(() => expect(agentSignal?.aborted).toBe(true))
+    resolveAgent(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: "d".repeat(64) },
+      { type: "result", text: "STALE DIRTY RESULT" },
+      { type: "done", code: 0, reason: null },
+    ))
+    await waitFor(() => expect(within(line).queryByText("STALE DIRTY RESULT")).toBeNull())
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
+    expect(stored).not.toContain(sessionId)
+  })
+
+  it("stops the exact accepted Space file assignment before stale completion can persist", async () => {
+    const sessionId = "codex-space-file-accepted-stale"
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base, revision: 7, activeWindowId: null, selectedPath: "src/app.ts",
+      editor: {
+        ...base.editor, openFiles: ["src/app.ts"], activePaneId: "primary",
+        panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      },
+    })
+    let agentSignal: AbortSignal | null = null
+    const encoder = new TextEncoder()
+    const agentResponse = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false,
+          selectedPath: "src/app.ts", assignmentHash: "c".repeat(64),
+        })}\n`))
+      },
+    }))
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) return Response.json({
+        eligible: true, worldId: "world-a", worldRevision: 8,
+        outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 44,
+        actor: "codex", selectedPath: "src/app.ts",
+      })
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        agentSignal = init.signal ?? null
+        return agentResponse
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    fireEvent.click(within(line).getByRole("button", { name: "Codex" }))
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Keep this exact." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+
+    await screen.findByRole("button", { name: "Builder · Codex · Space assignment · exact selected file src/app.ts" })
+    fireEvent.click(screen.getByRole("button", { name: "Select other file" }))
+    await waitFor(() => expect(agentSignal?.aborted).toBe(true))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Builder · Codex · Space assignment · exact selected file src/app.ts" })).toBeNull())
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
+    expect(stored).not.toContain(sessionId)
+  })
   it("summarizes the exact Space in one click without exposing a second editable prompt", async () => {
     const serverSpace = spaceToServer({
       ...defaultSpace(1440, 900, "world-a", "TerraFusion"),
