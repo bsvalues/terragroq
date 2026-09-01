@@ -6,7 +6,7 @@ import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
@@ -59,18 +59,26 @@ export async function POST(request: Request) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
 
-  // A model editing real files is the most consequential thing this application does. Bind the
-  // receipt only after the server has derived the canonical target path and Project identity; an
-  // old WilliamOS path-only receipt must not become TerraFusion write authority.
-  const context = await requireWorkContext({
-    requestedPath: resolved.relative,
-    projectKey: binding.projectKey,
-    repository: binding.repositoryIdentity,
-  })
-  if (!context.ok) return workContextRefusal(context)
+  const worldId = typeof body.worldId === "string" ? body.worldId : ""
+  try {
+    await deriveSpaceMutationAuthority({
+      userId: session.user.id,
+      worldId,
+      binding: {
+        projectId: binding.projectId,
+        projectKey: binding.projectKey,
+        repositoryIdentity: binding.repositoryIdentity,
+        spaceIdentity: binding.project.identity,
+      },
+      target: { kind: "selected-file", requestedPath: resolved.relative },
+    })
+  } catch (error) {
+    return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+      status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+    })
+  }
 
   if (body.intent === "improve-diff") {
-    const worldId = typeof body.worldId === "string" ? body.worldId : ""
     const expectedDiffFingerprint = typeof body.expectedDiffFingerprint === "string" ? body.expectedDiffFingerprint : ""
     if (!worldId || worldId.length > 200 || /[\0-\x1f\x7f]/.test(worldId)
       || !expectedDiffFingerprint || expectedDiffFingerprint.length > 16_384) {

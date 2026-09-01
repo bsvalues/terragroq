@@ -13,7 +13,11 @@ import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import {
+  deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError,
+  type SpaceMutationAuthority,
+} from "@/lib/governance/space-mutation-authority"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
@@ -545,39 +549,40 @@ export async function POST(request: Request) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
 
-  // Generic cloud turns spawn the CLI with acceptEdits against the real checkout, which makes them
-  // the most powerful mutation surface in the application -- strictly broader than /api/loom/edit.
-  // Selected-file review is separately constrained to a read-only tool set below, so requiring write
-  // authority for it would make the receipt lie about what the turn can do. The local path above is
-  // also deliberately ungated because it only produces text.
-  let workContextReceipt: string | null = null
+  // Generic cloud turns can edit the checkout. Their authority therefore comes only from the exact
+  // persisted Space and its server-derived selected path, never from a browser-authored receipt.
+  // Read-only Review, Preview and Local conversation remain outside this mutation boundary.
+  let mutationAuthority: SpaceMutationAuthority | null = null
   let resumeForkedFrom: string | null = null
   if (!reviewMode && !previewMode && !diffReviewMode) {
-    // Generic Claude Builder runs with acceptEdits and is not mechanically confined to a selected
-    // file. Do not invent an exact path for it: the project/repository-bound gate must fail closed
-    // until this surface is backed by a genuinely path-bound assignment.
-    const context = await requireWorkContext({
-      requestedPath: null,
-      projectKey: binding.projectKey,
-      repository: binding.repositoryIdentity,
-    })
-    if (!context.ok) return workContextRefusal(context)
-    workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
-    if (forkMode && (!workContextReceipt || priorThread?.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null)) {
-      return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    try {
+      mutationAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: typeof body.worldId === "string" ? body.worldId : "",
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        target: { kind: "selected-file" },
+      })
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+      })
     }
-    if (forkMode && priorThread?.workContextReceipt !== workContextReceipt) {
+    const priorMatches = priorThread?.provider === "cloud" && priorThread.mode === "agent"
+      && priorThread.worldId === mutationAuthority.worldId && priorThread.path === mutationAuthority.selectedPath
+    if ((forkMode || resuming) && !priorMatches) {
       return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
     }
     if (resuming && priorThread?.forkedFrom) {
-      if (!workContextReceipt || priorThread.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null) {
-        return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
-      }
-      if (priorThread.workContextReceipt !== workContextReceipt) {
-        return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
-      }
       resumeForkedFrom = priorThread.forkedFrom
     }
+    prompt = [
+      `Work only on the exact server-authorized selected file: ${mutationAuthority.selectedPath}`,
+      "Do not edit, create, delete, rename, or move any other path.",
+      prompt,
+    ].join("\n\n")
   }
 
   // Resume lookup and every earlier await can race the live Space or Git state. Re-earn the exact
@@ -596,6 +601,29 @@ export async function POST(request: Request) {
       { ...currentIdentity, worldId: diffReviewContext!.worldId },
     )) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+  }
+
+  if (mutationAuthority) {
+    try {
+      const terminal = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
+      })
+      if (terminal.worldRevision !== mutationAuthority.worldRevision
+        || terminal.workOrderId !== mutationAuthority.workOrderId || terminal.grantId !== mutationAuthority.grantId
+        || terminal.selectedPath !== mutationAuthority.selectedPath) {
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
+      })
     }
   }
 
@@ -713,7 +741,7 @@ export async function POST(request: Request) {
             resumed: resuming,
             ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {
               mode: "agent",
-              ...(workContextReceipt ? { workContextReceipt } : {}),
+              ...(mutationAuthority ? { worldId: mutationAuthority.worldId, path: mutationAuthority.selectedPath } : {}),
               ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             }),
           },
@@ -769,7 +797,8 @@ export async function POST(request: Request) {
               subject: childSessionId,
               metadata: {
                 provider: provider.id, external: provider.external, metered: provider.metered,
-                resumed: false, mode: "agent", workContextReceipt, forkedFrom: forkSourceId,
+                resumed: false, mode: "agent", worldId: mutationAuthority!.worldId,
+                path: mutationAuthority!.selectedPath, forkedFrom: forkSourceId,
               },
             })
           } catch {

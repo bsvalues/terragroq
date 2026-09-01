@@ -1186,6 +1186,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   ), [])
 
   const change = useSelectedFileChange({
+    worldId,
     path: changeTarget,
     dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
@@ -2646,7 +2647,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
               const next = context && worldId ? { ...context, worldId } : current?.worldId === worldId ? null : current
               liveDiffContextRef.current = next
               return next

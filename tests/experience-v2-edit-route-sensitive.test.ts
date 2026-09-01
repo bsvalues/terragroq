@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const seams = vi.hoisted(() => ({
   spawn: vi.fn(),
   getSession: vi.fn(),
-  requireWorkContext: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
   resolveRealWorkspacePath: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -20,13 +20,15 @@ vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
     workspaceRoot: process.cwd(),
+    projectId: 7,
     projectKey: "terrafusion",
     repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    project: { identity: "c:/terrafusion" },
   } }),
 }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: seams.requireWorkContext,
-  workContextRefusal: vi.fn(),
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
@@ -52,7 +54,7 @@ class FakeChild extends EventEmitter {
 const request = (path: string) => new Request("http://williamos.test/api/loom/edit", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ path, task: "Apply the selected change." }),
+  body: JSON.stringify({ worldId: "world-a", path, task: "Apply the selected change." }),
 })
 
 const improveRequest = (overrides: Record<string, unknown> = {}) => new Request("http://williamos.test/api/loom/edit", {
@@ -84,7 +86,7 @@ describe("selected-file Change sensitive-path boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
-    seams.requireWorkContext.mockResolvedValue({ ok: true })
+    seams.deriveSpaceMutationAuthority.mockResolvedValue({ worldId: "world-a", selectedPath: "src/app.ts" })
     seams.resolveRealWorkspacePath.mockImplementation(async (_root: string, selectedPath: string) => ({
       ok: true,
       absolute: `C:/workspace/${selectedPath}`,
@@ -142,11 +144,9 @@ describe("selected-file Change sensitive-path boundary", () => {
 
     const response = await POST(improveRequest())
     expect(response.status).toBe(200)
-    expect(seams.requireWorkContext).toHaveBeenCalledWith({
-      requestedPath: "src/app.ts",
-      projectKey: "terrafusion",
-      repository: "bsvalues/terrafusion_os_1.0",
-    })
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
+    }))
     expect(seams.loadOwnedWorkingWorld).toHaveBeenCalledWith("owner-1", "world-a")
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(2)
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenNthCalledWith(1, expect.any(String), "src/app.ts")

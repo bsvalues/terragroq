@@ -53,7 +53,7 @@ export async function GET(req: Request) {
       terraFusionRootConfigured = binding.ok
       terraFusionRootStatus = binding.ok ? "VERIFIED" : binding.error
     } else {
-      terraFusionRootStatus = owner.failure
+      terraFusionRootStatus = owner.failure ?? "OWNER_UNRESOLVED"
     }
   }
   return NextResponse.json(

@@ -7,7 +7,7 @@ const seams = vi.hoisted(() => ({
   stat: vi.fn(),
   getSession: vi.fn(),
   resolveRealWorkspacePath: vi.fn(),
-  requireWorkContext: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -21,17 +21,19 @@ vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
     workspaceRoot: process.cwd(),
+    projectId: 7,
     projectKey: "terrafusion",
     repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    project: { identity: "c:/terrafusion" },
   } }),
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
   resolveRealWorkspacePath: seams.resolveRealWorkspacePath,
 }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: seams.requireWorkContext,
-  workContextRefusal: vi.fn(),
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({
@@ -47,6 +49,12 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter()
   stdin = { end: vi.fn() }
   kill = vi.fn()
+}
+
+const mutationAuthority = {
+  owner: "owner-1", worldId: "world-a", worldRevision: 3, projectId: 7,
+  projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 51, actor: "claude", selectedPath: "src/example.ts",
 }
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
@@ -67,7 +75,7 @@ describe("selected-file review route", () => {
       absolute: "C:/workspace/src/example.ts",
       relative: "src/example.ts",
     })
-    seams.requireWorkContext.mockResolvedValue({ ok: true })
+    seams.deriveSpaceMutationAuthority.mockResolvedValue(mutationAuthority)
     seams.poolQuery.mockResolvedValue({
       rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
     })
@@ -111,7 +119,7 @@ describe("selected-file review route", () => {
     expect(args).not.toContain("Edit")
     expect(args).not.toContain("Write")
     expect(args).not.toContain("Bash")
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
 
     child.emit("close", 0)
     await response.text()
@@ -168,7 +176,7 @@ describe("selected-file review route", () => {
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error })
     expect(seams.spawn).not.toHaveBeenCalled()
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
   })
 
   it("rejects a resolved path containing prompt control characters before spawning", async () => {
@@ -331,23 +339,26 @@ describe("selected-file review route", () => {
     })
   })
 
-  it("binds a mutation-capable cloud builder gate to TerraFusion and no invented path", async () => {
+  it("binds a mutation-capable cloud builder to the exact persisted Space selection", async () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
 
     const response = await POST(request({
       provider: "cloud",
+      worldId: "world-a",
       prompt: "Implement the selected change.",
       sessionId: "123e4567-e89b-42d3-a456-426614174000",
       resume: false,
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.requireWorkContext).toHaveBeenCalledWith({
-      requestedPath: null,
-      projectKey: "terrafusion",
-      repository: "bsvalues/terrafusion_os_1.0",
-    })
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
+    }))
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/example.ts" },
+    }))
     expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
     expect(seams.spawn.mock.calls[0][1]).toEqual([
       "--print",
@@ -355,13 +366,20 @@ describe("selected-file review route", () => {
       "--verbose",
       "--permission-mode", "acceptEdits",
       "--session-id", "123e4567-e89b-42d3-a456-426614174000",
-      "Implement the selected change.",
+      [
+        "Work only on the exact server-authorized selected file: src/example.ts",
+        "Do not edit, create, delete, rename, or move any other path.",
+        "Implement the selected change.",
+      ].join("\n\n"),
     ])
     expect(seams.recordLoomStart).toHaveBeenCalledWith({
       userId: "owner-1",
       kind: "agent",
       subject: "123e4567-e89b-42d3-a456-426614174000",
-      metadata: { provider: "cloud", external: true, metered: true, resumed: false, mode: "agent" },
+      metadata: {
+        provider: "cloud", external: true, metered: true, resumed: false,
+        mode: "agent", worldId: "world-a", path: "src/example.ts",
+      },
     })
 
     child.emit("close", 0)
@@ -421,15 +439,14 @@ describe("selected-file review route", () => {
 describe("Claude Builder fork route", () => {
   const sourceId = "123e4567-e89b-42d3-a456-426614174000"
   const childId = "223e4567-e89b-42d3-a456-426614174000"
-  const currentReceipt = "current-work-context"
 
   beforeEach(() => {
     vi.clearAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
-    seams.requireWorkContext.mockResolvedValue({ ok: true, receipt: currentReceipt })
+    seams.deriveSpaceMutationAuthority.mockResolvedValue(mutationAuthority)
     seams.poolQuery.mockResolvedValue({ rows: [{
       userId: "owner-1",
-      metadata: { provider: "cloud", mode: "agent", path: null, workContextReceipt: currentReceipt },
+      metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/example.ts" },
     }] })
   })
 
@@ -439,11 +456,11 @@ describe("Claude Builder fork route", () => {
     ["too many characters", "x".repeat(20_001), "FORK_PROMPT_TOO_LONG"],
     ["too many UTF-8 bytes", "😀".repeat(9_000), "FORK_PROMPT_TOO_LONG"],
   ])("refuses a %s prompt before authority or thread lookup", async (_label, prompt, error) => {
-    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt }))
+    const response = await POST(request({ mode: "fork", provider: "cloud", worldId: "world-a", sourceSessionId: sourceId, prompt }))
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error })
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
     expect(seams.poolQuery).not.toHaveBeenCalled()
     expect(seams.spawn).not.toHaveBeenCalled()
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
@@ -456,6 +473,7 @@ describe("Claude Builder fork route", () => {
     const response = await POST(request({
       mode: "fork",
       provider: "cloud",
+      worldId: "world-a",
       sourceSessionId: sourceId,
       prompt: "Explore the smaller implementation without changing the source thread.",
     }))
@@ -465,7 +483,11 @@ describe("Claude Builder fork route", () => {
       "--print", "--output-format", "stream-json", "--verbose",
       "--permission-mode", "acceptEdits",
       "--resume", sourceId, "--fork-session",
-      "Explore the smaller implementation without changing the source thread.",
+      [
+        "Work only on the exact server-authorized selected file: src/example.ts",
+        "Do not edit, create, delete, rename, or move any other path.",
+        "Explore the smaller implementation without changing the source thread.",
+      ].join("\n\n"),
     ])
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
 
@@ -476,7 +498,7 @@ describe("Claude Builder fork route", () => {
       subject: childId,
       metadata: {
         provider: "cloud", external: true, metered: true, resumed: false,
-        mode: "agent", workContextReceipt: currentReceipt, forkedFrom: sourceId,
+        mode: "agent", worldId: "world-a", path: "src/example.ts", forkedFrom: sourceId,
       },
     }))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({
@@ -497,16 +519,15 @@ describe("Claude Builder fork route", () => {
   })
 
   it.each([
-    ["foreign owner", { userId: "owner-2", metadata: { provider: "cloud", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_NOT_YOURS"],
-    ["wrong provider", { userId: "owner-1", metadata: { provider: "local", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["review source", { userId: "owner-1", metadata: { provider: "cloud", mode: "review", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["missing recorded mode", { userId: "owner-1", metadata: { provider: "cloud", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["unknown recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: "builder", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["malformed recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: 7, workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["stale context", { userId: "owner-1", metadata: { provider: "cloud", mode: "agent", workContextReceipt: "old" } }, "THREAD_CONTEXT_MISMATCH"],
+    ["foreign owner", { userId: "owner-2", metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/example.ts" } }, "THREAD_NOT_YOURS"],
+    ["wrong provider", { userId: "owner-1", metadata: { provider: "local", mode: "agent", worldId: "world-a", path: "src/example.ts" } }, "THREAD_CONTEXT_MISMATCH"],
+    ["review source", { userId: "owner-1", metadata: { provider: "cloud", mode: "review", worldId: "world-a", path: "src/example.ts" } }, "THREAD_CONTEXT_MISMATCH"],
+    ["missing recorded mode", { userId: "owner-1", metadata: { provider: "cloud", worldId: "world-a", path: "src/example.ts" } }, "THREAD_CONTEXT_MISMATCH"],
+    ["wrong Space", { userId: "owner-1", metadata: { provider: "cloud", mode: "agent", worldId: "world-b", path: "src/example.ts" } }, "THREAD_CONTEXT_MISMATCH"],
+    ["stale selected path", { userId: "owner-1", metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/other.ts" } }, "THREAD_CONTEXT_MISMATCH"],
   ])("refuses a %s before spawning", async (_label, row, error) => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [row] })
-    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }))
+    const response = await POST(request({ mode: "fork", provider: "cloud", worldId: "world-a", sourceSessionId: sourceId, prompt: "Diverge." }))
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toMatchObject({ error })
     expect(seams.spawn).not.toHaveBeenCalled()
@@ -520,7 +541,7 @@ describe("Claude Builder fork route", () => {
   ])("materializes nothing for %s", async (_label, frame, reason) => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
-    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }))
+    const response = await POST(request({ mode: "fork", provider: "cloud", worldId: "world-a", sourceSessionId: sourceId, prompt: "Diverge." }))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify(frame)}\n`))
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
@@ -533,7 +554,7 @@ describe("Claude Builder fork route", () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
     const abort = new AbortController()
-    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }, abort.signal))
+    const response = await POST(request({ mode: "fork", provider: "cloud", worldId: "world-a", sourceSessionId: sourceId, prompt: "Diverge." }, abort.signal))
     abort.abort()
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
@@ -545,12 +566,12 @@ describe("Claude Builder fork route", () => {
   it("carries receipt-bound fork lineage through a normal child resume", async () => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [{
       userId: "owner-1",
-      metadata: { provider: "cloud", mode: "agent", path: null, workContextReceipt: currentReceipt, forkedFrom: sourceId },
+      metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/example.ts", forkedFrom: sourceId },
     }] })
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
     const response = await POST(request({
-      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+      provider: "cloud", worldId: "world-a", prompt: "Continue the child.", sessionId: childId, resume: true,
     }))
 
     expect(response.status).toBe(200)
@@ -563,39 +584,38 @@ describe("Claude Builder fork route", () => {
     })
     expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
       subject: childId,
-      metadata: expect.objectContaining({ workContextReceipt: currentReceipt, forkedFrom: sourceId }),
+      metadata: expect.objectContaining({ worldId: "world-a", path: "src/example.ts", forkedFrom: sourceId }),
     }))
   })
 
   it.each([
-    ["wrong provider", { provider: "local", mode: "agent", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["missing exact mode", { provider: "cloud", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
-    ["stale work context", { provider: "cloud", mode: "agent", path: null, workContextReceipt: "stale" }, "THREAD_CONTEXT_MISMATCH"],
-  ])("refuses normal child lineage with %s instead of replaying browser authority", async (_label, metadata, error) => {
+    ["wrong provider", { provider: "local", mode: "agent", worldId: "world-a", path: "src/example.ts" }],
+    ["missing exact mode", { provider: "cloud", worldId: "world-a", path: "src/example.ts" }],
+    ["stale Space", { provider: "cloud", mode: "agent", worldId: "world-b", path: "src/example.ts" }],
+    ["stale selected path", { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/other.ts" }],
+  ])("refuses normal child lineage with %s instead of replaying browser authority", async (_label, metadata) => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: { ...metadata, forkedFrom: sourceId } }] })
     const response = await POST(request({
-      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+      provider: "cloud", worldId: "world-a", prompt: "Continue the child.", sessionId: childId, resume: true,
     }))
 
     expect(response.status).toBe(403)
-    await expect(response.json()).resolves.toMatchObject({ error })
+    await expect(response.json()).resolves.toMatchObject({ error: "THREAD_CONTEXT_MISMATCH" })
     expect(seams.spawn).not.toHaveBeenCalled()
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
   })
 
-  it("keeps a legacy owner-owned generic Claude resume compatible without inventing lineage", async () => {
+  it("refuses a legacy generic Claude resume that has no recorded Space/path authority", async () => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
     const response = await POST(request({
-      provider: "cloud", prompt: "Continue legacy work.", sessionId: childId, resume: true,
+      provider: "cloud", worldId: "world-a", prompt: "Continue legacy work.", sessionId: childId, resume: true,
     }))
 
-    expect(response.status).toBe(200)
-    child.emit("close", 0)
-    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events[0]).toEqual({ type: "session", sessionId: childId, resumed: true })
-    expect(events[0]).not.toHaveProperty("forkedFrom")
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: "THREAD_CONTEXT_MISMATCH" })
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 })
 

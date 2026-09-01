@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = projectBinding.binding.workspaceRoot
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -58,8 +58,23 @@ export async function POST(request: Request) {
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
   // could drift away from it.
   if (operation.mutating) {
-    const context = await requireWorkContext()
-    if (!context.ok) return workContextRefusal(context)
+    try {
+      await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: typeof body.worldId === "string" ? body.worldId : "",
+        binding: {
+          projectId: projectBinding.binding.projectId,
+          projectKey: projectBinding.binding.projectKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          spaceIdentity: projectBinding.binding.project.identity,
+        },
+        target: { kind: "operation", operation: operation.id },
+      })
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+      })
+    }
   }
 
   const command = operation.command === "node" ? process.execPath : operation.command

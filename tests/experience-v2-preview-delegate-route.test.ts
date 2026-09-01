@@ -7,7 +7,7 @@ const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   loadOwnedWorkingWorld: vi.fn(),
   inspectWorkspaceApp: vi.fn(),
-  requireWorkContext: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -16,16 +16,19 @@ const seams = vi.hoisted(() => ({
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+  } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/environment/workspace-app", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/environment/workspace-app")>(),
   inspectWorkspaceApp: seams.inspectWorkspaceApp,
 }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: seams.requireWorkContext,
-  workContextRefusal: vi.fn(),
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({ recordLoomStart: seams.recordLoomStart, recordLoomEnd: seams.recordLoomEnd }))
@@ -64,6 +67,11 @@ describe("Preview debugger route", () => {
     })
     seams.inspectWorkspaceApp.mockResolvedValue(evidence)
     seams.recordLoomStart.mockResolvedValue(undefined)
+    seams.deriveSpaceMutationAuthority.mockResolvedValue({
+      owner: "owner-1", worldId: "world-a", worldRevision: 3, projectId: 7,
+      projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 51, actor: "claude", selectedPath: "src/app.ts",
+    })
     seams.poolQuery.mockResolvedValue({ rows: [{ userId: "owner-1", metadata: {
       provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint,
     } }] })
@@ -80,7 +88,7 @@ describe("Preview debugger route", () => {
 
     expect(response.status).toBe(200)
     expect(seams.loadOwnedWorkingWorld).toHaveBeenCalledWith("owner-1", "world-a")
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
     const args = seams.spawn.mock.calls[0][1] as string[]
     expect(args).toContain("plan")
     expect(args).toContain("")
@@ -121,7 +129,7 @@ describe("Preview debugger route", () => {
     await expect(response.json()).resolves.toEqual({ error: "PREVIEW_NOT_ACTIVE" })
     expect(seams.inspectWorkspaceApp).not.toHaveBeenCalled()
     expect(seams.spawn).not.toHaveBeenCalled()
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
   })
 
   it("refuses a minimized running-app at start", async () => {
@@ -150,7 +158,44 @@ describe("Preview debugger route", () => {
     const response = await POST(request({ provider: "cloud", prompt: "Edit files.", sessionId, resume: true }))
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toEqual({ error: "THREAD_DESCRIPTOR_MISMATCH" })
-    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.deriveSpaceMutationAuthority).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
+  })
+
+  it("binds a generic Claude turn to the exact server-derived Space selection", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      provider: "cloud", worldId: "world-a", prompt: "Apply the bounded fix.", sessionId, resume: false,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
+    }))
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
+    }))
+    const prompt = (seams.spawn.mock.calls[0][1] as string[]).at(-1)
+    expect(prompt).toContain("exact server-authorized selected file: src/app.ts")
+    expect(prompt).toContain("Do not edit, create, delete, rename, or move any other path")
+    child.emit("close", 0)
+    await response.text()
+    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ mode: "agent", worldId: "world-a", path: "src/app.ts" }),
+    }))
+  })
+
+  it("refuses a resumed Claude thread from a different Space selection", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: {
+      provider: "cloud", mode: "agent", worldId: "world-b", path: "src/other.ts",
+    } }] })
+    const response = await POST(request({
+      provider: "cloud", worldId: "world-a", prompt: "Continue.", sessionId, resume: true,
+    }))
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: "THREAD_CONTEXT_MISMATCH" })
     expect(seams.spawn).not.toHaveBeenCalled()
   })
 
