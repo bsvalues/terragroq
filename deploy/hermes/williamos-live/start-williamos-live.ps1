@@ -261,10 +261,17 @@ if ($declaredWilliamOsRoot) {
 # stopping `WilliamOS Live` left port 3100 serving the outgoing process, while the replacement task
 # failed with EADDRINUSE. Health then measured the orphan and falsely reported a successful restart.
 $previousPreference = $ErrorActionPreference
+$serverExit = 1
 try {
   $ErrorActionPreference = "Continue"
   & $node $server 1>> $stdoutLog 2>> $stderrLog
-  $serverExit = $LASTEXITCODE
+  $nodeInvocationSucceeded = $?
+  $nodeExit = $LASTEXITCODE
+  if ($nodeInvocationSucceeded) {
+    $serverExit = if ($null -eq $nodeExit) { 0 } else { $nodeExit }
+  } elseif ($null -ne $nodeExit -and $nodeExit -ne 0) {
+    $serverExit = $nodeExit
+  }
 } finally {
   $ErrorActionPreference = $previousPreference
 }

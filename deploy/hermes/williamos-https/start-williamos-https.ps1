@@ -31,10 +31,17 @@ Set-Location -LiteralPath $AppRoot
 
 # Invoke Node directly. Do not replace this with Start-Process: that was the orphaning defect.
 $previousPreference = $ErrorActionPreference
+$proxyExit = 1
 try {
   $ErrorActionPreference = "Continue"
   & $node $proxy 1>> $stdoutLog 2>> $stderrLog
-  $proxyExit = $LASTEXITCODE
+  $nodeInvocationSucceeded = $?
+  $nodeExit = $LASTEXITCODE
+  if ($nodeInvocationSucceeded) {
+    $proxyExit = if ($null -eq $nodeExit) { 0 } else { $nodeExit }
+  } elseif ($null -ne $nodeExit -and $nodeExit -ne 0) {
+    $proxyExit = $nodeExit
+  }
 } finally {
   $ErrorActionPreference = $previousPreference
 }

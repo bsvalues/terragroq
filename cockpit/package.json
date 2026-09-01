@@ -3,7 +3,7 @@
   "version": "0.1.7",
   "private": true,
   "scripts": {
-    "native:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage-webview2-loader.ps1",
+    "native:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 stage",
     "native:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 test",
     "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 dev",
     "tauri:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 build"

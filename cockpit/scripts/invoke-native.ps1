@@ -4,7 +4,7 @@
 #>
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidateSet("test", "dev", "build")][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet("stage", "test", "dev", "build")][string]$Action,
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$NativeArguments
 )
 
@@ -26,8 +26,13 @@ $manifest = Join-Path $cockpitRoot "src-tauri\Cargo.toml"
 & cargo fetch --manifest-path $manifest --locked
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stage-webview2-loader.ps1") -CockpitRoot $cockpitRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$targetProfiles = if ($Action -eq "dev") { @("release", "debug") } else { @("release") }
+foreach ($targetProfile in $targetProfiles) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stage-webview2-loader.ps1") -CockpitRoot $cockpitRoot -TargetProfile $targetProfile
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if ($Action -eq "stage") { exit 0 }
 
 if ($Action -eq "test") {
   & cargo test --manifest-path $manifest --locked @NativeArguments

@@ -31,6 +31,15 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code).toMatch(/exit\s+\$proxyExit/)
   })
 
+  it("cannot report success when the Node invocation itself fails", () => {
+    const code = executableOnly(launcher)
+    expect(code).toMatch(/\$proxyExit\s*=\s*1/)
+    expect(code).toMatch(/\$nodeInvocationSucceeded\s*=\s*\$\?/)
+    expect(code).toMatch(/\$nodeExit\s*=\s*\$LASTEXITCODE/)
+    expect(code.indexOf("$nodeInvocationSucceeded = $?"))
+      .toBeLessThan(code.indexOf("$nodeExit = $LASTEXITCODE"))
+  })
+
   it("keeps logs without leaking them through task output", () => {
     const code = executableOnly(launcher)
     expect(code).toMatch(/1>>\s*\$stdoutLog\s+2>>\s*\$stderrLog/)

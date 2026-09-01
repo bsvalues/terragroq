@@ -10,7 +10,8 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$CockpitRoot
+  [string]$CockpitRoot,
+  [ValidateSet("release", "debug")][string]$TargetProfile = "release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,10 +46,10 @@ if ($hashes.Count -ne 1) {
   throw "Multiple webview2-com-sys 0.38.2 loader candidates have different bytes; refusing an ambiguous native build."
 }
 
-$target = Join-Path $CockpitRoot "src-tauri\target\release\WebView2Loader.dll"
+$target = Join-Path $CockpitRoot "src-tauri\target\$TargetProfile\WebView2Loader.dll"
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
 Copy-Item -LiteralPath $candidates[0] -Destination $target -Force
 
 $stagedHash = Get-Sha256 -Path $target
 if ($stagedHash -ne $hashes[0]) { throw "Staged WebView2Loader.dll hash differs from its locked crate source" }
-Write-Output "staged WebView2Loader.dll sha256=$stagedHash"
+Write-Output "staged $TargetProfile WebView2Loader.dll sha256=$stagedHash"

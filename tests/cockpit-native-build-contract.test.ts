@@ -16,11 +16,20 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
   })
 
   it("stages the loader before native tests and both Tauri entry points", () => {
+    expect(packageJson.scripts["native:stage"]).toContain("invoke-native.ps1 stage")
     expect(packageJson.scripts["native:test"]).toContain("invoke-native.ps1 test")
     expect(packageJson.scripts["tauri:dev"]).toContain("invoke-native.ps1 dev")
     expect(packageJson.scripts["tauri:build"]).toContain("invoke-native.ps1 build")
     expect(invoke.indexOf("stage-webview2-loader.ps1")).toBeLessThan(invoke.indexOf("cargo test"))
     expect(invoke).toContain('@("--bundles", "msi,nsis")')
+    expect(invoke).toContain('if ($Action -eq "stage") { exit 0 }')
+  })
+
+  it("stages the loader beside both release and development executables", () => {
+    expect(stage).toMatch(/ValidateSet\("release", "debug"\)/)
+    expect(stage).toContain('target\\$TargetProfile\\WebView2Loader.dll')
+    expect(invoke).toContain('if ($Action -eq "dev") { @("release", "debug") }')
+    expect(invoke).toContain("-TargetProfile $targetProfile")
   })
 
   it("fetches the locked Cargo graph before staging on a fresh checkout", () => {

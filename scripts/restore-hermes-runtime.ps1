@@ -22,11 +22,11 @@ if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
 }
 
 function Stop-ExpectedListener {
-  param([int]$ListenerPort, [string]$ExpectedCommandFragment)
+  param([int]$ListenerPort, [string]$ExpectedCommandPath)
   Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
-      if (-not $process -or $process.CommandLine -notlike "*$ExpectedCommandFragment*") {
+      if (-not $process -or -not $process.CommandLine -or $process.CommandLine.IndexOf($ExpectedCommandPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
         throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS rollback"
       }
       Stop-Process -Id $process.ProcessId -Force
@@ -85,8 +85,8 @@ if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartR
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandFragment "server.js"
-Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandFragment "hermes-https-proxy.mjs"
+Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandPath (Join-Path $Runtime "server.js")
+Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $Runtime "scripts\hermes-https-proxy.mjs")
 Start-Sleep -Seconds 2
 
 foreach ($entry in $manifest.directories) {
