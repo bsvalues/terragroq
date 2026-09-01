@@ -1049,7 +1049,24 @@ export function createRepositoryLifecycle(options) {
     return { removed: true }
   }
 
-  function removeGeneratedNextOutput(record) {
+  function canonicalValidationDirectory(record, workingDirectory = ".") {
+    const canonicalWorktree = fs.realpathSync(record.worktreePath)
+    const lexicalTarget = path.resolve(record.worktreePath, workingDirectory)
+    if (lexicalTarget !== record.worktreePath && !inside(record.worktreePath, lexicalTarget)) {
+      wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory escapes owned worktree")
+    }
+    const targetStat = fs.statSync(lexicalTarget, { throwIfNoEntry: false })
+    if (!targetStat?.isDirectory()) {
+      wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory is not an existing directory")
+    }
+    const canonicalTarget = fs.realpathSync(lexicalTarget)
+    if (canonicalTarget !== canonicalWorktree && !inside(canonicalWorktree, canonicalTarget)) {
+      wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory resolves outside owned worktree")
+    }
+    return canonicalTarget
+  }
+
+  function removeGeneratedNextOutput(record, workingDirectory = ".") {
     if (executionBackend && !executionBackend.isLocal) return { removed: false }
     const worktreeStat = fs.lstatSync(record.worktreePath, { throwIfNoEntry: false })
     if (!worktreeStat) return { removed: false }
@@ -1058,7 +1075,8 @@ export function createRepositoryLifecycle(options) {
       || !inside(fs.realpathSync(record.ownedWorktreeRoot), fs.realpathSync(record.worktreePath))) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree root is no longer an ordinary contained directory")
     }
-    const nextOutput = path.join(record.worktreePath, ".next")
+    const commandRoot = canonicalValidationDirectory(record, workingDirectory)
+    const nextOutput = path.join(commandRoot, ".next")
     const nextStat = fs.lstatSync(nextOutput, { throwIfNoEntry: false })
     if (!nextStat) return { removed: false }
     if (!nextStat.isDirectory() || nextStat.isSymbolicLink()) {
@@ -1173,18 +1191,15 @@ export function createRepositoryLifecycle(options) {
     }
     const results = []
     for (const command of normalized) {
+      const commandRoot = canonicalValidationDirectory(record, command.workingDirectory)
       const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
       if (executable === "npm" && command.args[0] === "run" && command.args[1] === "build") {
-        removeGeneratedNextOutput(record)
+        removeGeneratedNextOutput(record, command.workingDirectory)
       }
       const validationEnvironment = resolveWorktreeValidationEnvironment({
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
       }, workspaceRoot)
-      const commandRoot = path.resolve(record.worktreePath, command.workingDirectory)
-      if (commandRoot !== record.worktreePath && !inside(record.worktreePath, commandRoot)) {
-        wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory escapes owned worktree")
-      }
       const invocation = resolveWorktreeValidationInvocation(command, commandRoot)
       const result = await run(invocation.command, invocation.args, {
         cwd: commandRoot, env: validationEnvironment,

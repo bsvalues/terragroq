@@ -43,6 +43,27 @@ function validationWorkspace(workspacePath, workingDirectory, flavor = path) {
   return candidate
 }
 
+function canonicalLocalValidationWorkspace(workspacePath, workingDirectory) {
+  const root = fs.realpathSync(validationWorkspace(workspacePath, "."))
+  const candidate = fs.realpathSync(validationWorkspace(root, workingDirectory))
+  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) {
+    throw new TypeError("workingDirectory resolves outside workspace")
+  }
+  if (!fs.statSync(candidate).isDirectory()) throw new TypeError("workingDirectory is not a directory")
+  return candidate
+}
+
+const REMOTE_VALIDATION_WORKSPACE_SCRIPT = String.raw`import os,sys
+root=os.path.realpath(sys.argv[1])
+candidate=os.path.realpath(os.path.join(root,sys.argv[2]))
+try:
+    contained=os.path.commonpath([root,candidate]) == root
+except ValueError:
+    contained=False
+if not contained or not os.path.isdir(candidate):
+    raise SystemExit(73)
+print(candidate, end='')`
+
 function hasExactWorktree(output, workspacePath, branch) {
   return String(output).split(/\r?\n\r?\n/).some((block) => {
     const lines = block.split(/\r?\n/)
@@ -142,7 +163,7 @@ export class LocalExecutionBackend extends ExecutionBackend {
     for (const entry of commands) {
       const { workingDirectory, ...command } = entry
       results.push(await this.runCommand({
-        workspacePath: validationWorkspace(this.#workspace(workspacePath), workingDirectory),
+        workspacePath: canonicalLocalValidationWorkspace(this.#workspace(workspacePath), workingDirectory),
         ...command,
       }))
     }
@@ -291,7 +312,16 @@ export class AegisExecutionBackend extends ExecutionBackend {
     const results = []
     for (const entry of commands) {
       const { workingDirectory, ...command } = entry
-      const validationPath = validationWorkspace(this.#workspace(workspacePath), workingDirectory, path.posix)
+      const lexicalPath = validationWorkspace(this.#workspace(workspacePath), workingDirectory, path.posix)
+      const canonical = await this.#remote("python3", [
+        "-c", REMOTE_VALIDATION_WORKSPACE_SCRIPT,
+        path.posix.resolve(this.#workspace(workspacePath)),
+        path.posix.relative(path.posix.resolve(this.#workspace(workspacePath)), lexicalPath) || ".",
+      ])
+      if (canonical.exitCode !== 0 || !canonical.stdout.trim().startsWith("/")) {
+        throw new Error("remote validation workingDirectory resolves outside workspace")
+      }
+      const validationPath = canonical.stdout.trim()
       if (entry.command === "npm" && entry.args?.[0] === "run" && entry.args?.[1] === "build") {
         const cleanup = await this.runCommand({ workspacePath: validationPath, command: "rm", args: ["-rf", "--", ".next"] })
         if (cleanup.exitCode !== 0) throw new Error(`remote validation cleanup exited ${cleanup.exitCode}`)

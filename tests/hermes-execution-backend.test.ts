@@ -118,6 +118,26 @@ describe("execution backends", () => {
     fs.rmSync(root, { recursive: true, force: true })
   })
 
+  it("rejects a validation working-directory symlink that resolves outside the local workspace", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-link-"))
+    const workspacePath = path.join(root, "workspace")
+    const outside = path.join(root, "outside")
+    fs.mkdirSync(workspacePath)
+    fs.mkdirSync(outside)
+    fs.symlinkSync(outside, path.join(workspacePath, "linked"), process.platform === "win32" ? "junction" : "dir")
+    const calls: Call[] = []
+    const backend = new LocalExecutionBackend({
+      repositoryRoot: workspacePath,
+      commandRunner: async (call: Call) => { calls.push(call); return { code: 0, stdout: "", stderr: "" } },
+    })
+    await expect(backend.validate({
+      workspacePath,
+      commands: [{ command: "npm", args: ["test"], workingDirectory: "linked" }],
+    })).rejects.toThrow("resolves outside workspace")
+    expect(calls.some((call) => call.command === "npm")).toBe(false)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
   it("constructs bounded SSH commands for every AEGIS operation", async () => {
     const calls: Call[] = []
     const backend = new AegisExecutionBackend({
@@ -125,6 +145,9 @@ describe("execution backends", () => {
       commandRunner: async (call: Call) => {
         calls.push(call)
         if (call.args.at(-1)?.includes("'test' '-e' '/worker/runtime/worktrees/goal-8/file.txt' '-a' '-f'")) return { code: 0 }
+        if (call.args.at(-1)?.includes("commonpath([root,candidate])")) {
+          return { code: 0, stdout: "/worker/runtime/worktrees/goal-8/frontend" }
+        }
         if (call.args.at(-1)?.includes("exec 'python3' '-c'")) return { code: 0, stdout: `${"c".repeat(64)}\n` }
         return { code: 0, stdout: "remote", stderr: "" }
       },
@@ -135,6 +158,9 @@ describe("execution backends", () => {
       env: { NEXT_TELEMETRY_DISABLED: "1" } })
     expect(await backend.stat({ workspacePath, relPath: "file.txt" })).toEqual({ exists: true, isFile: true })
     expect(await backend.snapshotFile({ workspacePath, relPath: "file.txt" })).toEqual({ sha256: "c".repeat(64) })
+    await expect(backend.validate({ workspacePath, commands: [{
+      command: "npm", args: ["run", "build"], workingDirectory: "frontend",
+    }] })).resolves.toEqual([{ exitCode: 0, stdout: "remote", stderr: "" }])
     await backend.git({ workspacePath, args: ["status", "--short"] })
     await backend.cleanup({ workspacePath })
 
@@ -142,7 +168,31 @@ describe("execution backends", () => {
     expect(calls[2].args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'add'")
     expect(calls[3].args.at(-1)).toContain("cd -- '/worker/runtime/worktrees/goal-8' && NEXT_TELEMETRY_DISABLED='1' exec 'npm' 'test' 'it'\"'\"'s-safe'")
     expect(calls.some((call) => call.args.at(-1)?.includes("os.O_NOFOLLOW"))).toBe(true)
+    expect(calls.some((call) => call.args.at(-1)?.includes(
+      "cd -- '/worker/runtime/worktrees/goal-8/frontend' && exec 'rm' '-rf' '--' '.next'",
+    ))).toBe(true)
+    expect(calls.some((call) => call.args.at(-1)?.includes(
+      "cd -- '/worker/runtime/worktrees/goal-8/frontend' && exec 'npm' 'run' 'build'",
+    ))).toBe(true)
     expect(calls.at(-1)?.args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'remove'")
+  })
+
+  it("rejects an AEGIS validation path when the remote canonical check escapes", async () => {
+    const calls: Call[] = []
+    const backend = new AegisExecutionBackend({
+      host: "aegis",
+      commandRunner: async (call: Call) => {
+        calls.push(call)
+        return call.args.at(-1)?.includes("commonpath([root,candidate])")
+          ? { code: 73, stdout: "", stderr: "" }
+          : { code: 0, stdout: "", stderr: "" }
+      },
+    })
+    await expect(backend.validate({
+      workspacePath: "/srv/william/hermes/worktrees/outcome-44",
+      commands: [{ command: "npm", args: ["test"], workingDirectory: "linked" }],
+    })).rejects.toThrow("resolves outside workspace")
+    expect(calls.some((call) => call.args.at(-1)?.includes("exec 'npm'"))).toBe(false)
   })
 
   it("rejects workspace traversal before filesystem or SSH access", async () => {

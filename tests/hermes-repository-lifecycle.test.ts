@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 
-import { describe, expect, it, vi } from "vitest"
+import { afterAll, describe, expect, it, vi } from "vitest"
 
 import {
   createCommandEnvironment,
@@ -16,9 +16,13 @@ import {
 
 const sha = "a".repeat(40)
 const mergeSha = "b".repeat(40)
-const root = path.resolve("C:/workspace/terragroq")
-const ownedRoot = path.resolve("C:/workspace-owned/hermes")
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-repository-lifecycle-"))
+const root = path.join(fixtureRoot, "workspace", "terragroq")
+const ownedRoot = path.join(fixtureRoot, "workspace-owned", "hermes")
 const ownedWorktree = path.join(ownedRoot, "hermes-goal-77")
+fs.mkdirSync(root, { recursive: true })
+fs.mkdirSync(ownedWorktree, { recursive: true })
+afterAll(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }))
 const rootGit = `git -C ${root}`
 const ownedGit = `git -C ${ownedWorktree}`
 const branch = "codex/hermes-goal-77"
@@ -710,6 +714,65 @@ describe("Hermes repository lifecycle", () => {
 
       expect(nextOutputPresentDuringBuild).toBe(false)
       expect(fs.existsSync(path.join(record.worktreePath, ".next"))).toBe(false)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("removes generated Next output from the build command's nested working directory", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-nested-next-validation-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot, repositoryRoot: workspaceRoot, ownedWorktreeRoot: worktreeRoot,
+        validationCommands: [{ command: "npm", args: ["run", "build"], workingDirectory: "frontend" }],
+        runner: async ({ command, args, cwd }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          if (command === "npm") expect(fs.existsSync(path.join(cwd, ".next"))).toBe(false)
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      fs.mkdirSync(path.join(record.worktreePath, "frontend", ".next"), { recursive: true })
+      fs.writeFileSync(path.join(record.worktreePath, "frontend", ".next", "generated.txt"), "generated")
+      await lifecycle.runValidationCommands(record)
+      expect(fs.existsSync(path.join(record.worktreePath, "frontend", ".next"))).toBe(false)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("rejects a validation working-directory symlink that resolves outside the owned worktree", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-validation-escape-"))
+    const workspaceRoot = path.join(tempRoot, "repository")
+    const worktreeRoot = path.join(tempRoot, "worktrees")
+    const outside = path.join(tempRoot, "outside")
+    let validationInvoked = false
+    try {
+      const lifecycle = createRepositoryLifecycle({
+        workspaceRoot, repositoryRoot: workspaceRoot, ownedWorktreeRoot: worktreeRoot,
+        validationCommands: [{ command: "npm", args: ["test"], workingDirectory: "linked" }],
+        runner: async ({ command, args }: Call) => {
+          if (args.includes("remote") && args.includes("get-url")) {
+            return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+          }
+          if (args.includes("show-ref")) return { code: 1, stdout: "" }
+          if (command === "npm") validationInvoked = true
+          return { code: 0, stdout: "" }
+        },
+      })
+      const record = await lifecycle.createWorktree({ branch })
+      fs.mkdirSync(record.worktreePath, { recursive: true })
+      fs.mkdirSync(outside)
+      fs.symlinkSync(outside, path.join(record.worktreePath, "linked"), process.platform === "win32" ? "junction" : "dir")
+      await expect(lifecycle.runValidationCommands(record)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_VALIDATION_WALL",
+      })
+      expect(validationInvoked).toBe(false)
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true })
     }

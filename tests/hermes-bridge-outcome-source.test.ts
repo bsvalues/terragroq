@@ -1660,6 +1660,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toMatchObject({ workOrderRef: "WO-HERMES-OUTCOME-4" })
 
     const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
+    expect(authorizationCall[0]).toContain("deterministic_validator.recover")
+    expect(authorizationCall[0]).toContain("parentReceiptId")
+    expect(authorizationCall[0]).toContain('COALESCE(deterministic_recovery."replacementContract"')
     expect(authorizationCall[1]?.slice(8, 11)).toEqual([
       HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
       HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,

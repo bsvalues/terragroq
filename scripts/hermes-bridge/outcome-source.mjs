@@ -3611,7 +3611,9 @@ export async function projectOutcomeRuntimeCheckpoint({
           contract_acquisition."createdAt" AS "executionEpochStartedAt",
           contract_acquisition."firstFencingToken" AS "executionEpochFirstFencingToken",
           contract_acquisition."latestFencingToken" AS "executionEpochLatestFencingToken",
-         contract_receipt."resultBinding"->'workContract' AS "workContract",
+         COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract') AS "workContract",
+         deterministic_recovery.id AS "deterministicRecoveryReceiptId",
          contract_receipt."resultBinding"->>'implementationGrantRef' AS "receiptImplementationGrantRef",
          contract_receipt."resultBinding"->>'implementationGrantId' AS "receiptImplementationGrantId",
          contract_receipt.operation AS "receiptOperation",
@@ -3725,6 +3727,30 @@ export async function projectOutcomeRuntimeCheckpoint({
        JOIN "outcome_queue_mutation_receipt" AS contract_receipt
         ON contract_receipt."userId" = contract_queue."userId"
         AND contract_receipt."outcomeKey" = contract_queue."outcomeKey"
+       LEFT JOIN LATERAL (
+         SELECT recovery_receipt.id,
+           recovery_receipt."resultBinding"->'replacementContract' AS "replacementContract"
+         FROM "outcome_queue_mutation_receipt" AS recovery_receipt
+         WHERE recovery_receipt."userId" = contract_receipt."userId"
+           AND recovery_receipt."outcomeKey" = contract_receipt."outcomeKey"
+           AND recovery_receipt.operation = 'deterministic_validator.recover'
+           AND recovery_receipt."requestBinding"->>'operation' = 'deterministic_validator.recover'
+           AND recovery_receipt."requestBinding"->>'parentReceiptId' = contract_receipt.id::text
+           AND recovery_receipt."requestBinding"->>'priorContractId'
+             = contract_receipt."resultBinding"->'workContract'->>'id'
+           AND recovery_receipt."requestBinding"->>'priorContractDigest'
+             = contract_receipt."resultBinding"->'workContract'->>'digest'
+           AND recovery_receipt."requestBinding"->>'recoveryId'
+             = recovery_receipt."resultBinding"->>'recoveryId'
+           AND recovery_receipt."requestBinding"->>'fingerprint'
+             = recovery_receipt."resultBinding"->>'fingerprint'
+           AND recovery_receipt."resultBinding"->'supersedes'->>'id'
+             = contract_receipt."resultBinding"->'workContract'->>'id'
+           AND recovery_receipt."resultBinding"->'supersedes'->>'digest'
+             = contract_receipt."resultBinding"->'workContract'->>'digest'
+         ORDER BY recovery_receipt.id DESC
+         LIMIT 1
+       ) AS deterministic_recovery ON true
        JOIN "outcome_queue_acquisition_receipt" AS contract_acquisition
          ON contract_acquisition."userId" = contract_queue."userId"
         AND contract_acquisition."outcomeKey" = contract_queue."outcomeKey"
@@ -3839,15 +3865,21 @@ export async function projectOutcomeRuntimeCheckpoint({
            AND contract_receipt."resultBinding"->>'workOrderId' = contract_queue."activeWorkOrderId"::text))
          AND contract_receipt."resultBinding"->>'grantRef' = contract_queue."authorityGrantRef"
          AND contract_receipt."resultBinding"->>'decisionId' = contract_queue."approvalDecisionId"::text
-         AND contract_receipt."resultBinding"->'workContract'->>'id' = $9
-         AND contract_receipt."resultBinding"->'workContract'->>'digest' = $10
-         AND contract_receipt."resultBinding"->'workContract'->>'version' = $11
-         AND contract_receipt."resultBinding"->'workContract'->>'repository' = 'bsvalues/terragroq'
-         AND contract_receipt."resultBinding"->'workContract'->>'lane' = contract_goal.lane
+         AND COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract')->>'id' = $9
+         AND COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract')->>'digest' = $10
+         AND COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract')->>'version' = $11
+         AND COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract')->>'repository' = 'bsvalues/terragroq'
+         AND COALESCE(deterministic_recovery."replacementContract",
+           contract_receipt."resultBinding"->'workContract')->>'lane' = contract_goal.lane
          AND ($9 <> '${HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID}' OR (
            contract_goal."acceptedContractIds" = ARRAY['${HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID}']::text[]
            AND contract_queue."acceptedContractIds" = contract_goal."acceptedContractIds"
-           AND contract_receipt."resultBinding"->'workContract' = $33::jsonb
+           AND COALESCE(deterministic_recovery."replacementContract",
+             contract_receipt."resultBinding"->'workContract') = $33::jsonb
            AND contract_receipt."resultBinding"->'acceptedContractIds'
              = to_jsonb(contract_goal."acceptedContractIds")
            AND EXISTS (

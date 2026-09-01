@@ -362,8 +362,10 @@ describe("deterministic validator circuit breaking", () => {
     }
     const selectOutcome = vi.fn(async () => queueBoundOutcome())
     const packageLocalTest = "packages/ui/src/__tests__/county.spec.ts"
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
     const value = fixture(["components/hermes/live-status.tsx", packageLocalTest], {
       executionBackend, selectOutcome,
+      refreshQueueOutcome,
       recoverDeterministicValidatorQueue: queueRecovery,
       workContractResolver: () => ({
         version: "test.v1", id: "orchestrator-package-fixture", digest: "e".repeat(64),
@@ -399,6 +401,8 @@ describe("deterministic validator circuit breaking", () => {
     expect(recovered.metadata.deterministicValidatorCircuit.status).toBe("RECOVERED")
     expect(selectOutcome).toHaveBeenCalledTimes(1)
     expect(queueRecovery).toHaveBeenCalledOnce()
+    expect(queueRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder.at(-1)!)
     expect(recovered.metadata.outcome.queueBinding).toMatchObject({ expectedVersion: 4, fencingToken: 3 })
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalledWith(expect.objectContaining({
       commands: expect.arrayContaining([expect.objectContaining({
@@ -406,6 +410,29 @@ describe("deterministic validator circuit breaking", () => {
         args: expect.arrayContaining([packageLocalTest]),
       })]),
     }))
+  })
+
+  it("fails closed when the worktree changes after the deterministic wall and before activation", async () => {
+    const executionBackend = { stat: vi.fn(async () => ({ exists: true, isFile: true })) }
+    const value = fixture(["components/hermes/live-status.tsx", "tests/hermes-live-status.test.tsx"], {
+      executionBackend,
+      selectOutcome: vi.fn(async () => queueBoundOutcome()),
+      recoverDeterministicValidatorQueue: queueRecovery,
+    })
+    const inspectWorktreeSnapshot = vi.fn(async () => ({
+      snapshotHash: "a".repeat(64), manifest: { version: "hermes-worktree-snapshot.v1" },
+    }))
+    Object.assign(value.lifecycle, { inspectWorktreeSnapshot })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
+    })
+    inspectWorktreeSnapshot.mockResolvedValue({
+      snapshotHash: "b".repeat(64), manifest: { version: "hermes-worktree-snapshot.v1" },
+    })
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
+    })
+    expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
   })
 
   it("opens permanently on a second wall and never advances to a successor", async () => {

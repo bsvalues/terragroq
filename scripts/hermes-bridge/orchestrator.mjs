@@ -2113,6 +2113,22 @@ export function createHermesOrchestrator(options = {}) {
         outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
       }
     }
+    const deterministicRecovery = current?.metadata?.deterministicValidatorQueueRecovery
+    const deterministicRecoveryNeedsBinding = deterministicRecovery === null
+      || Date.parse(deterministicRecovery?.recoveredLeaseExpiresAt ?? "") <= now().getTime()
+    if (current?.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
+      && deterministicRecoveryNeedsBinding) {
+      const recoveryBinding = await recoverDeterministicQueue({ execution: current })
+      state.bindDeterministicValidatorQueueRecovery({
+        idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}:${recoveryBinding.receiptId}`,
+        outcomeId,
+        expectedFencingToken: current.fencingToken,
+        expectedCheckpointSequence: current.checkpoint.sequence,
+        recoveryBinding,
+      })
+      current = state.read().executions[outcomeId]
+      outcome = current.metadata.outcome
+    }
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)
       : await refreshQueueOutcome(outcome)
@@ -2134,21 +2150,25 @@ export function createHermesOrchestrator(options = {}) {
       if (!abandoned && Date.parse(current.lease.expiresAt) > now().getTime()) {
         return { result: "LEASE_HELD", outcomeId }
       }
-      const deterministicRecovery = current.metadata?.deterministicValidatorQueueRecovery
-      const deterministicRecoveryNeedsBinding = deterministicRecovery === null
-        || Date.parse(deterministicRecovery?.recoveredLeaseExpiresAt ?? "") <= now().getTime()
-      if (current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
-        && deterministicRecoveryNeedsBinding) {
-        const recoveryBinding = await recoverDeterministicQueue({ execution: current })
-        state.bindDeterministicValidatorQueueRecovery({
-          idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}:${recoveryBinding.receiptId}`,
-          outcomeId,
-          expectedFencingToken: current.fencingToken,
-          expectedCheckpointSequence: current.checkpoint.sequence,
-          recoveryBinding,
+      if (current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY") {
+        const expectedSnapshotHash = current.metadata.deterministicValidatorCircuit
+          ?.recovery?.structuredInputs?.worktreeSnapshotHash
+        const recoveryWorktreePath = current.metadata?.worktreePath
+        const recoveryBranch = current.metadata?.branch
+        if (!/^[0-9a-f]{64}$/.test(expectedSnapshotHash ?? "")
+          || typeof recoveryWorktreePath !== "string" || typeof recoveryBranch !== "string") {
+          throw Object.assign(new Error("Deterministic recovery snapshot identity is incomplete"), {
+            code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
+          })
+        }
+        const observedSnapshot = await lifecycle.inspectWorktreeSnapshot({
+          worktreePath: recoveryWorktreePath, branch: recoveryBranch,
         })
-        current = state.read().executions[outcomeId]
-        outcome = current.metadata.outcome
+        if (observedSnapshot.snapshotHash !== expectedSnapshotHash) {
+          throw Object.assign(new Error("Deterministic recovery worktree changed after the wall"), {
+            code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
+          })
+        }
       }
       lease = current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
         ? state.activateDeterministicValidatorRecovery({
