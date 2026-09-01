@@ -294,6 +294,10 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toMatch(/function ConvertTo-PowerShellLiteral[\s\S]*\.Replace\("'",\s*"''"\)/)
     expect(code).toMatch(/ConvertTo-PowerShellLiteral \$LiveStartTarget/)
     expect(restoreCommand).toContain("-LiveStartTarget $liveStartTargetLiteral")
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \(\[string\]\$Port\)/)
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \(\[string\]\$HttpsPort\)/)
+    expect(restoreCommand).toContain("-Port $portLiteral")
+    expect(restoreCommand).toContain("-HttpsPort $httpsPortLiteral")
     expect(restoreCommand).not.toContain('$LiveStartTarget`"')
   })
 

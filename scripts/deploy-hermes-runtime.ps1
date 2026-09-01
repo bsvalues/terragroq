@@ -246,7 +246,9 @@ if (-not $SkipRollbackCapture) {
   $taskNameLiteral = ConvertTo-PowerShellLiteral $TaskName
   $httpsTaskNameLiteral = ConvertTo-PowerShellLiteral $HttpsTaskName
   $liveStartTargetLiteral = ConvertTo-PowerShellLiteral $LiveStartTarget
-  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral"
+  $portLiteral = ConvertTo-PowerShellLiteral ([string]$Port)
+  $httpsPortLiteral = ConvertTo-PowerShellLiteral ([string]$HttpsPort)
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -Port $portLiteral -HttpsPort $httpsPortLiteral"
 }
 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
