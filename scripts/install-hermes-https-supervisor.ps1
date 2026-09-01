@@ -13,7 +13,8 @@ param(
   [string]$InstallRoot = "C:\ProgramData\WilliamOS",
   [string]$TaskName = "WilliamOS HTTPS",
   [int]$HttpsPort = 3443,
-  [switch]$VerifyOnly
+  [switch]$VerifyOnly,
+  [string]$RestoreFrom
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,11 @@ $launcherTarget = Join-Path $InstallRoot "start-williamos-https.ps1"
 $appRoot = "C:\HermesLab\williamos-runtime-64034e93-flat"
 $proxyTarget = Join-Path $appRoot "scripts\hermes-https-proxy.mjs"
 $healthUri = "https://192.168.88.9:$HttpsPort/api/health"
+
+function ConvertTo-PowerShellLiteral {
+  param([string]$Value)
+  return "'{0}'" -f $Value.Replace("'", "''")
+}
 
 function Wait-HttpsHealthy {
   param([int]$TimeoutSeconds = 60)
@@ -73,6 +79,84 @@ function Assert-SupervisedLifecycle {
   Write-Output "verified lifecycle: stopping the task closes port $HttpsPort and restarting restores health"
 }
 
+if ($RestoreFrom) {
+  $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+  $resolvedRollbackRoot = [IO.Path]::GetFullPath($RestoreFrom).TrimEnd('\')
+  $rollbackParent = [IO.Path]::GetFullPath((Join-Path $resolvedInstallRoot "rollback")).TrimEnd('\') + '\'
+  if (-not $resolvedRollbackRoot.StartsWith($rollbackParent, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing HTTPS supervisor restore outside $rollbackParent"
+  }
+
+  $statePath = Join-Path $resolvedRollbackRoot "task-state.json"
+  if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+    throw "HTTPS supervisor rollback state is missing: $statePath"
+  }
+  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  foreach ($property in @("taskWasPresent", "taskWasRunning", "launcherWasPresent")) {
+    if ($state.psobject.Properties.Name -notcontains $property -or $state.$property -isnot [bool]) {
+      throw "HTTPS supervisor rollback state has no valid $property boolean"
+    }
+  }
+
+  $taskBackup = Join-Path $resolvedRollbackRoot "task.xml"
+  $launcherBackup = Join-Path $resolvedRollbackRoot "start-williamos-https.ps1"
+  if ($state.taskWasPresent -and -not (Test-Path -LiteralPath $taskBackup -PathType Leaf)) {
+    throw "HTTPS supervisor rollback requires the captured task XML: $taskBackup"
+  }
+  if ($state.launcherWasPresent -and -not (Test-Path -LiteralPath $launcherBackup -PathType Leaf)) {
+    throw "HTTPS supervisor rollback requires the captured launcher: $launcherBackup"
+  }
+
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  Get-NetTCPConnection -LocalPort $HttpsPort -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+      if ($process.CommandLine -notlike "*$proxyTarget*") {
+        throw "Port $HttpsPort is owned by an unrelated process $($process.ProcessId); refusing to stop it"
+      }
+      Stop-Process -Id $process.ProcessId -Force
+    }
+
+  if ($state.launcherWasPresent) {
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $launcherTarget) -Force
+    Copy-Item -LiteralPath $launcherBackup -Destination $launcherTarget -Force
+  } else {
+    Remove-Item -LiteralPath $launcherTarget -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($state.taskWasPresent) {
+    Register-ScheduledTask -TaskName $TaskName -Xml (Get-Content -LiteralPath $taskBackup -Raw) -Force | Out-Null
+    if ($state.taskWasRunning) {
+      Start-ScheduledTask -TaskName $TaskName
+    }
+  } else {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  }
+
+  $restoredTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if (($null -ne $restoredTask) -ne $state.taskWasPresent) {
+    throw "HTTPS supervisor task presence did not return to its captured state"
+  }
+  if ((Test-Path -LiteralPath $launcherTarget -PathType Leaf) -ne $state.launcherWasPresent) {
+    throw "HTTPS supervisor launcher presence did not return to its captured state"
+  }
+  if ($state.taskWasRunning) {
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+      $restoredTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+      if ($restoredTask.State -eq "Running") { break }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    if ($restoredTask.State -ne "Running") {
+      throw "The restored $TaskName did not return to its captured Running state"
+    }
+  }
+
+  Write-Output "restored HTTPS supervisor state from $resolvedRollbackRoot"
+  exit 0
+}
+
 if ($VerifyOnly) {
   Assert-InstalledSupervisor
   exit 0
@@ -86,12 +170,14 @@ $backupRoot = Join-Path $InstallRoot ("rollback\https-supervisor-{0}" -f [DateTi
 $null = New-Item -ItemType Directory -Path $backupRoot -Force
 $oldTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $oldTaskWasRunning = $null -ne $oldTask -and $oldTask.State -eq "Running"
+$oldLauncherWasPresent = Test-Path -LiteralPath $launcherTarget -PathType Leaf
 if ($oldTask) {
   Export-ScheduledTask -TaskName $TaskName | Out-File -LiteralPath (Join-Path $backupRoot "task.xml") -Encoding unicode
 }
 [ordered]@{
   taskWasPresent = $null -ne $oldTask
   taskWasRunning = $oldTaskWasRunning
+  launcherWasPresent = $oldLauncherWasPresent
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupRoot "task-state.json") -Encoding utf8
 if (Test-Path -LiteralPath $launcherTarget) {
   Copy-Item -LiteralPath $launcherTarget -Destination (Join-Path $backupRoot "start-williamos-https.ps1") -Force
@@ -145,4 +231,9 @@ try {
   throw
 }
 
-Write-Output "installed and verified; rollback: restore task.xml and start-williamos-https.ps1 from $backupRoot"
+$scriptLiteral = ConvertTo-PowerShellLiteral $PSCommandPath
+$installRootLiteral = ConvertTo-PowerShellLiteral $InstallRoot
+$taskNameLiteral = ConvertTo-PowerShellLiteral $TaskName
+$httpsPortLiteral = ConvertTo-PowerShellLiteral ([string]$HttpsPort)
+$backupRootLiteral = ConvertTo-PowerShellLiteral $backupRoot
+Write-Output "installed and verified; rollback: powershell -NoProfile -ExecutionPolicy Bypass -File $scriptLiteral -InstallRoot $installRootLiteral -TaskName $taskNameLiteral -HttpsPort $httpsPortLiteral -RestoreFrom $backupRootLiteral"

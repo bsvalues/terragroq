@@ -39,7 +39,7 @@ describe("the HERMES HTTPS supervisor", () => {
   it("captures both the outgoing task and launcher before mutation", () => {
     const code = executableOnly(installer)
     const capture = code.indexOf("Export-ScheduledTask")
-    const register = code.indexOf("Register-ScheduledTask")
+    const register = code.indexOf("Register-ScheduledTask", capture)
     expect(capture).toBeGreaterThan(-1)
     expect(register).toBeGreaterThan(capture)
     expect(code).toContain("task.xml")
@@ -88,5 +88,16 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code).toContain("task-state.json")
     expect(rollback).toMatch(/if \(\$oldTaskWasRunning\) \{ Start-ScheduledTask -TaskName \$TaskName \}/)
     expect(rollback).not.toMatch(/Register-ScheduledTask[^\n]*\n\s*Start-ScheduledTask -TaskName \$TaskName/)
+  })
+
+  it("emits an executable rollback that restores or removes resources from captured state", () => {
+    const code = executableOnly(installer)
+    expect(code).toContain("launcherWasPresent")
+    expect(code).toMatch(/if \(\$RestoreFrom\)/)
+    expect(code).toContain('Join-Path $resolvedRollbackRoot "task-state.json"')
+    expect(code).toMatch(/if \(\$state\.taskWasPresent\)[\s\S]*Register-ScheduledTask[\s\S]*else \{[\s\S]*Unregister-ScheduledTask/)
+    expect(code).toMatch(/if \(\$state\.launcherWasPresent\)[\s\S]*Copy-Item[\s\S]*else \{[\s\S]*Remove-Item/)
+    expect(code).toContain("-RestoreFrom $backupRootLiteral")
+    expect(code).not.toContain("rollback: restore task.xml and start-williamos-https.ps1")
   })
 })
