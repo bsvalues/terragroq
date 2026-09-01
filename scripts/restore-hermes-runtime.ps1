@@ -49,6 +49,69 @@ function Stop-ExpectedListener {
 if (-not (Test-Path -LiteralPath $RollbackRoot -PathType Container)) {
   throw "Rollback directory does not exist: $RollbackRoot"
 }
+
+function Assert-LauncherMutationAccess {
+  param([string]$TargetPath, [bool]$WillBePresent)
+
+  if (Test-Path -LiteralPath $TargetPath -PathType Leaf) {
+    if ($WillBePresent) {
+      $stream = $null
+      try {
+        $stream = [IO.File]::Open($TargetPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+      } catch {
+        throw "The WilliamOS Live launcher '$TargetPath' cannot be replaced by this process. Run rollback from an elevated administrator shell; refusing before stopping production."
+      } finally {
+        if ($stream) { $stream.Dispose() }
+      }
+      return
+    }
+
+    if (-not ("WilliamOS.LauncherAccessNative" -as [type])) {
+      Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace WilliamOS {
+  public static class LauncherAccessNative {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern SafeFileHandle CreateFile(
+      string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+      uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+  }
+}
+"@
+    }
+    $deleteAccess = [uint32]0x00010000
+    $shareReadWriteDelete = [uint32]0x00000007
+    $openExisting = [uint32]3
+    $handle = [WilliamOS.LauncherAccessNative]::CreateFile(
+      $TargetPath, $deleteAccess, $shareReadWriteDelete, [IntPtr]::Zero,
+      $openExisting, 0, [IntPtr]::Zero)
+    if ($handle.IsInvalid) {
+      $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      $handle.Dispose()
+      throw "The WilliamOS Live launcher '$TargetPath' cannot be removed by this process (Win32 $nativeError). Run rollback from an elevated administrator shell; refusing before stopping production."
+    }
+    $handle.Dispose()
+    return
+  }
+
+  if (-not $WillBePresent) { return }
+  $parent = Split-Path -Parent $TargetPath
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    throw "The WilliamOS Live launcher directory '$parent' does not exist. Create it with administrator ownership before rollback; refusing before stopping production."
+  }
+  $probe = Join-Path $parent (".williamos-rollback-write-probe-{0}.tmp" -f [guid]::NewGuid().ToString("N"))
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($probe, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+  } catch {
+    throw "The WilliamOS Live launcher directory '$parent' is not writable by this process. Run rollback from an elevated administrator shell; refusing before stopping production."
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  }
+}
 $manifestPath = Join-Path $RollbackRoot "rollback-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   throw "Rollback is incomplete: $manifestPath is missing"
@@ -94,6 +157,7 @@ $liveStartRollbackFile = Join-Path $RollbackRoot $expectedLiveStartBackup
 if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartRollbackFile -PathType Leaf)) {
   throw "Rollback is incomplete: $liveStartRollbackFile is missing"
 }
+Assert-LauncherMutationAccess -TargetPath $LiveStartTarget -WillBePresent ([bool]$manifest.liveStart.wasPresent)
 
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue

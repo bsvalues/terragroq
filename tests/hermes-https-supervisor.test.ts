@@ -54,6 +54,21 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code).toContain("task.xml")
   })
 
+  it("proves launcher replacement or removal access before stopping the HTTPS task", () => {
+    const code = executableOnly(installer)
+    const restoreBranch = code.slice(code.indexOf("if ($RestoreFrom)"), code.indexOf("if ($VerifyOnly)"))
+    const installBranch = code.slice(code.indexOf('foreach ($required in @($launcherSource, $proxyTarget))'))
+    expect(code).toContain("function Assert-LauncherMutationAccess")
+    expect(code).toContain("$deleteAccess")
+    const restoreAssertion = restoreBranch.indexOf("Assert-LauncherMutationAccess")
+    const installAssertion = installBranch.indexOf("Assert-LauncherMutationAccess")
+    expect(restoreAssertion).toBeGreaterThan(-1)
+    expect(installAssertion).toBeGreaterThan(-1)
+    expect(restoreAssertion).toBeLessThan(restoreBranch.indexOf("Stop-ScheduledTask"))
+    expect(installAssertion).toBeLessThan(installBranch.indexOf("Stop-ScheduledTask"))
+    expect(code).toContain("refusing before stopping production")
+  })
+
   it("does not broaden privileges or network policy", () => {
     const code = executableOnly(installer)
     expect(code).toMatch(/-LogonType\s+Interactive\s+-RunLevel\s+Limited/)

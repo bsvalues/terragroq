@@ -383,6 +383,17 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(assertion).toBeLessThan(stopIndex)
   })
 
+  it("proves rollback can restore or remove the external launcher before stopping production", () => {
+    const restore = executableOnly(restoreText)
+    const assertion = restore.lastIndexOf("Assert-LauncherMutationAccess")
+    const stopIndex = restore.indexOf("Stop-ScheduledTask")
+    expect(restore).toContain("[IO.File]::Open($TargetPath")
+    expect(restore).toContain("$deleteAccess")
+    expect(restore).toContain("Run rollback from an elevated administrator shell; refusing before stopping production")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(stopIndex)
+  })
+
   it("refuses to stop unrelated processes on either product port", () => {
     const code = executableOnly(deployText)
     const restore = executableOnly(restoreText)

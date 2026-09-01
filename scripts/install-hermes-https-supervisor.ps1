@@ -73,6 +73,69 @@ function Test-CommandLineHasExactPath {
   }
 }
 
+function Assert-LauncherMutationAccess {
+  param([string]$TargetPath, [bool]$WillBePresent)
+
+  if (Test-Path -LiteralPath $TargetPath -PathType Leaf) {
+    if ($WillBePresent) {
+      $stream = $null
+      try {
+        $stream = [IO.File]::Open($TargetPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+      } catch {
+        throw "The WilliamOS HTTPS launcher '$TargetPath' cannot be replaced by this process. Run the supervisor operation from an elevated administrator shell; refusing before stopping production."
+      } finally {
+        if ($stream) { $stream.Dispose() }
+      }
+      return
+    }
+
+    if (-not ("WilliamOS.LauncherAccessNative" -as [type])) {
+      Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace WilliamOS {
+  public static class LauncherAccessNative {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern SafeFileHandle CreateFile(
+      string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+      uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+  }
+}
+"@
+    }
+    $deleteAccess = [uint32]0x00010000
+    $shareReadWriteDelete = [uint32]0x00000007
+    $openExisting = [uint32]3
+    $handle = [WilliamOS.LauncherAccessNative]::CreateFile(
+      $TargetPath, $deleteAccess, $shareReadWriteDelete, [IntPtr]::Zero,
+      $openExisting, 0, [IntPtr]::Zero)
+    if ($handle.IsInvalid) {
+      $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      $handle.Dispose()
+      throw "The WilliamOS HTTPS launcher '$TargetPath' cannot be removed by this process (Win32 $nativeError). Run the supervisor operation from an elevated administrator shell; refusing before stopping production."
+    }
+    $handle.Dispose()
+    return
+  }
+
+  if (-not $WillBePresent) { return }
+  $parent = Split-Path -Parent $TargetPath
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    throw "The WilliamOS HTTPS launcher directory '$parent' does not exist. Create it with administrator ownership first; refusing before stopping production."
+  }
+  $probe = Join-Path $parent (".williamos-https-write-probe-{0}.tmp" -f [guid]::NewGuid().ToString("N"))
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($probe, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+  } catch {
+    throw "The WilliamOS HTTPS launcher directory '$parent' is not writable by this process. Run the supervisor operation from an elevated administrator shell; refusing before stopping production."
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Assert-InstalledSupervisor {
   foreach ($required in @($launcherTarget, $proxyTarget)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing installed WilliamOS HTTPS file: $required" }
@@ -135,6 +198,7 @@ if ($RestoreFrom) {
   if ($state.launcherWasPresent -and -not (Test-Path -LiteralPath $launcherBackup -PathType Leaf)) {
     throw "HTTPS supervisor rollback requires the captured launcher: $launcherBackup"
   }
+  Assert-LauncherMutationAccess -TargetPath $launcherTarget -WillBePresent ([bool]$state.launcherWasPresent)
 
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
@@ -194,6 +258,7 @@ if ($VerifyOnly) {
 foreach ($required in @($launcherSource, $proxyTarget)) {
   if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Refusing install: required file is missing: $required" }
 }
+Assert-LauncherMutationAccess -TargetPath $launcherTarget -WillBePresent $true
 
 $backupRoot = Join-Path $InstallRoot ("rollback\https-supervisor-{0}" -f [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ"))
 $null = New-Item -ItemType Directory -Path $backupRoot -Force
