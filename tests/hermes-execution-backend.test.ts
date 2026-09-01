@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 
 import { describe, expect, it } from "vitest"
@@ -12,6 +13,7 @@ import {
   ResidentModelExecutionBackend,
   selectExecutionBackend,
 } from "../scripts/hermes-bridge/execution-backend.mjs"
+import { DESCRIPTOR_BOUND_VALIDATION_SCRIPT } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
 
 type Call = { command: string; args: string[]; cwd?: string; timeoutMs?: number; env?: Record<string, string> }
 
@@ -194,6 +196,64 @@ describe("execution backends", () => {
     expect(calls[0].args.at(-1)).toContain("os.O_NOFOLLOW")
     expect(calls[0].args.at(-1)).toContain("os.fchdir(current_fd)")
   })
+
+  it.runIf(process.platform !== "win32")(
+    "executes the production descriptor helper, cleans build output, rejects links, and holds the opened directory across a swap",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-descriptor-validation-"))
+      const external = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-descriptor-external-"))
+      const nested = path.join(root, "nested")
+      const preserved = path.join(root, "preserved")
+      try {
+        fs.mkdirSync(path.join(nested, ".next"), { recursive: true })
+        fs.writeFileSync(path.join(nested, ".next", "stale"), "stale")
+        fs.writeFileSync(path.join(nested, "marker"), "trusted")
+        fs.writeFileSync(path.join(external, "marker"), "untrusted")
+
+        const direct = spawnSync("python3", [
+          "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+          root, "nested", "1", process.execPath, "-e", "process.stdout.write(process.cwd())",
+        ], { encoding: "utf8" })
+        expect(direct.status).toBe(0)
+        expect(direct.stdout).toBe(nested)
+        expect(fs.existsSync(path.join(nested, ".next"))).toBe(false)
+
+        fs.symlinkSync(external, path.join(root, "linked"), "dir")
+        const linked = spawnSync("python3", [
+          "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+          root, "linked", "0", process.execPath, "-e", "process.exit(0)",
+        ], { encoding: "utf8" })
+        expect(linked.status).not.toBe(0)
+
+        const child = spawn("python3", [
+          "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+          root, "nested", "0", process.execPath, "-e",
+          "const fs=require('node:fs');fs.writeFileSync('ready','1');const end=Date.now()+5000;while(!fs.existsSync('go')&&Date.now()<end){};process.stdout.write(fs.readFileSync('marker','utf8'))",
+        ], { stdio: ["ignore", "pipe", "pipe"] })
+        let stdout = ""
+        let stderr = ""
+        child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk })
+        child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk })
+        const closed = new Promise<number | null>((resolve) => child.once("close", resolve))
+        const deadline = Date.now() + 5_000
+        while (!fs.existsSync(path.join(nested, "ready")) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        expect(fs.existsSync(path.join(nested, "ready"))).toBe(true)
+        fs.renameSync(nested, preserved)
+        fs.symlinkSync(external, nested, "dir")
+        fs.writeFileSync(path.join(preserved, "go"), "1")
+        const exitCode = await closed
+        expect(stderr).toBe("")
+        expect(exitCode).toBe(0)
+        expect(stdout).toBe("trusted")
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+        fs.rmSync(external, { recursive: true, force: true })
+      }
+    },
+    20_000,
+  )
 
   it("rejects workspace traversal before filesystem or SSH access", async () => {
     const local = new LocalExecutionBackend({ commandRunner: async () => ({ code: 0 }) })

@@ -5,12 +5,22 @@ import path from "node:path"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { AegisExecutionBackend } from "../scripts/hermes-bridge/execution-backend.mjs"
-import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
+import {
+  createHermesOrchestrator,
+  deriveHermesRuntimeProjectionBindings,
+} from "../scripts/hermes-bridge/orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 import { OUTCOME_QUEUE_SQL } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
 import { projectOutcomeRuntimeCheckpoint, projectOutcomeRuntimeLease } from "../scripts/hermes-bridge/outcome-source.mjs"
 import { createRepositoryLifecycle } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
 import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
+import {
+  buildFocusedValidationCommand,
+  createDeterministicValidatorCircuit,
+  createDeterministicValidatorReplacement,
+  createDeterministicValidatorWallEvidence,
+} from "../scripts/hermes-bridge/deterministic-validator-recovery.mjs"
+import { recoverDeterministicValidatorQueue } from "../scripts/hermes-bridge/deterministic-validator-queue-recovery.mjs"
 
 const databaseUrl = process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL
 const runDatabase = databaseUrl ? describe : describe.skip
@@ -351,5 +361,130 @@ runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
     expect(harness.state.cleaned).toBe(true)
     expect(state.read().ownerTouchCounters).toEqual({ OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0, OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0, OWNER_ROUTINE_CONTACT_COUNT: 0 })
     expect(JSON.stringify(harness.calls).toLowerCase()).not.toMatch(/codex exec|runtime-operator|hermes-kernel|issue\s*#?357|\b#357\b/)
+  })
+})
+
+runDatabase("deterministic replacement projection on PostgreSQL", { timeout: 60_000 }, () => {
+  let adminPool: import("pg").Pool
+  let scopedPool: import("pg").Pool
+  let client: import("pg").PoolClient
+  let schema = ""
+  let scopedUrl = ""
+
+  beforeAll(async () => {
+    const { Pool } = await import("pg")
+    adminPool = new Pool({ connectionString: directDatabaseUrl(databaseUrl!) })
+    client = await adminPool.connect()
+    schema = `hermes_recovered_projection_${randomUUID().replaceAll("-", "")}`
+    await bootstrap(client, schema)
+    scopedUrl = scopedDatabaseUrl(databaseUrl!, schema)
+    scopedPool = new Pool({ connectionString: scopedUrl })
+    await seed(client)
+  })
+  afterAll(async () => {
+    await scopedPool?.end()
+    if (client && schema) {
+      await client.query("SET search_path TO public")
+      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+    }
+    client?.release()
+    await adminPool?.end()
+  })
+
+  it("recovers the queue and projects checkpoints against the persisted replacement contract", async () => {
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-recovered-projection-"))
+    roots.push(runtimeRoot)
+    fs.mkdirSync(path.join(runtimeRoot, "control"), { recursive: true })
+    fs.writeFileSync(path.join(runtimeRoot, "control", "activation"), "enabled\n")
+    fs.writeFileSync(path.join(runtimeRoot, "control", "authority-not-before"), "2026-08-20T00:00:00.000Z\n")
+    const queue = createHermesOutcomeQueueRuntime({
+      databaseUrl: scopedUrl, holderId: "resident-hermes", runtimeRoot,
+      campaignWindowId: "campaign-recovery-projection", processIdentity: "supervisor-recovery-projection",
+      now: () => now, ensureQueueSchema: async () => true,
+    })
+    try {
+      const selected = await queue.selectOutcome()
+      expect(selected).not.toBeNull()
+      await client.query(`UPDATE work_order SET status='active' WHERE id=201`)
+      const oldContract = selected!.verifiedQueueWorkContract.contract
+      expect(oldContract).toMatchObject({ id: contract.id, digest: contract.digest })
+      const focusedValidationCommand = buildFocusedValidationCommand({
+        testPaths: ["tests/hermes-derived-aegis-cycle.test.ts"],
+      })
+      const evidence = createDeterministicValidatorWallEvidence({
+        outcomeId: String(selected!.id), outcomeKey: selected!.outcomeKey,
+        contract: oldContract, worktreeSnapshotHash: "9".repeat(64),
+        missingTestPaths: ["tests/hermes-derived-aegis-cycle.test.ts"],
+        focusedValidationCommand,
+      })
+      const replacement = createDeterministicValidatorReplacement({ contract: oldContract, evidence })
+      const circuit = createDeterministicValidatorCircuit({
+        evidence, replacement, sourceFencingToken: 225, sourceCheckpointSequence: 911,
+        observedAt: "2026-08-31T12:00:00.000Z",
+      })
+      const recoveryBinding = await recoverDeterministicValidatorQueue({
+        execution: {
+          outcomeId: String(selected!.id), fencingToken: 225, lease: { status: "ABANDONED" },
+          metadata: { deterministicValidatorCircuit: circuit, outcome: selected },
+        },
+        pool: scopedPool,
+      })
+      const recoveredOutcome = {
+        ...selected,
+        queueBinding: {
+          ...selected!.queueBinding,
+          expectedVersion: recoveryBinding.recoveredExpectedVersion,
+          fencingToken: recoveryBinding.recoveredFencingToken,
+          leaseExpiresAt: recoveryBinding.recoveredLeaseExpiresAt,
+        },
+        deterministicValidatorQueueRecovery: recoveryBinding,
+        deterministicValidatorReplacement: {
+          recoveryId: recoveryBinding.recoveryId,
+          fingerprint: recoveryBinding.fingerprint,
+          id: replacement.replacementContract.id,
+          digest: replacement.replacementContract.digest,
+        },
+        verifiedQueueWorkContract: {
+          provenance: {
+            operation: "deterministic_validator.recover",
+            outcomeKey: selected!.outcomeKey,
+            workOrderRef: childRef,
+            recoveryId: recoveryBinding.recoveryId,
+            fingerprint: recoveryBinding.fingerprint,
+            receiptId: recoveryBinding.receiptId,
+          },
+          contract: replacement.replacementContract,
+        },
+      }
+      const bindings = deriveHermesRuntimeProjectionBindings(recoveredOutcome, { requireVerified: true })
+      await expect(projectOutcomeRuntimeCheckpoint({
+        databaseUrl: scopedUrl,
+        outcomeId: Number(selected!.id),
+        attempt: recoveryBinding.recoveredFencingToken,
+        workContract: bindings.workContract,
+        executionBinding: bindings.executionBinding,
+        checkpoint: { sequence: 0, state: "LEASED", detail: "Recovered contract projected" },
+      })).resolves.toMatchObject({ workOrderId: 201, workOrderRef: childRef, status: "active" })
+
+      const durable = await client.query(`SELECT r."resultBinding"->'replacementContract' AS replacement,
+          w.validators, e.metadata->>'workContractId' AS "projectedContractId",
+          e.metadata->>'workContractDigest' AS "projectedContractDigest"
+        FROM outcome_queue_mutation_receipt r
+        JOIN work_order w ON w.id=201
+        JOIN governance_event e ON e."entityType"='work_order' AND e."entityId"='201'
+          AND e."eventType"='HERMES_RUNTIME_CHECKPOINT'
+        WHERE r.operation='deterministic_validator.recover'
+        ORDER BY e.id DESC LIMIT 1`)
+      expect(durable.rows[0]).toMatchObject({
+        replacement: { id: replacement.replacementContract.id, digest: replacement.replacementContract.digest },
+        validators: replacement.replacementContract.validationCommands.map(
+          ({ command, args }: any) => `${command} ${args.join(" ")}`,
+        ),
+        projectedContractId: replacement.replacementContract.id,
+        projectedContractDigest: replacement.replacementContract.digest,
+      })
+    } finally {
+      await queue.close()
+    }
   })
 })
