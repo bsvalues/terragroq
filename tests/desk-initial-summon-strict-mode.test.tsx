@@ -91,7 +91,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     })
 
     await waitFor(() => expect(screen.getByText("WO-STRICT-1")).toBeTruthy())
-    expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/environment/space/outcome")).toHaveLength(1)
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/space/outcome")).toBe(false)
     expect(screen.getAllByText("WO-STRICT-1")).toHaveLength(1)
     expect(screen.getByRole("region", { name: "Source window" })).toBeTruthy()
     expect(screen.getByLabelText("Workspace project").textContent).toContain("terrafusion_os_1.0")

@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState, type FormEvent } from "react"
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react"
 import { ArrowLeft, GitPullRequest, ShieldCheck } from "lucide-react"
 
 import {
@@ -11,12 +11,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { DeliveryAdoption } from "@/components/workspace-shell/delivery-adoption"
 
 // The server digest binds the owner's explicit admission.
 // Preview must precede explicit, digest-bound admission.
 const CONFIRMATION = "ADMIT_EXTERNAL_WORK_ORDER" as const
 
 type AdmissionStep = "capture" | "review" | "complete"
+type ArtifactRestoreState = "idle" | "checking" | "none" | "artifact"
 type ExternalSource = "github" | "other"
 
 type AdmissionResult = Readonly<{
@@ -134,11 +136,13 @@ function isAdmissionResult(value: unknown): value is AdmissionResult {
 export function ExternalWorkOrderAdmission({
   worldId,
   persisted,
+  bound = false,
   className,
   onAdmitted,
 }: {
   worldId: string | null
   persisted: boolean
+  bound?: boolean
   className?: string
   onAdmitted?: (result: AdmissionResult) => void | Promise<void>
 }) {
@@ -160,6 +164,7 @@ export function ExternalWorkOrderAdmission({
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<AdmissionPreview | null>(null)
   const [result, setResult] = useState<AdmissionResult | null>(null)
+  const [artifactRestoreState, setArtifactRestoreState] = useState<ArtifactRestoreState>("idle")
   const attemptRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null)
 
   const externalWorkOrder = useMemo(() => {
@@ -203,13 +208,19 @@ export function ExternalWorkOrderAdmission({
     setPreview(null)
     setResult(null)
     setSubmitting(false)
+    setArtifactRestoreState("idle")
   }
 
   function handleOpen(next: boolean) {
     if (!next && submitting) return
     setOpen(next)
+    if (next && worldId && persisted) setArtifactRestoreState(bound ? "artifact" : "checking")
     if (!next) reset()
   }
+
+  const handleArtifactAvailability = useCallback((available: boolean) => {
+    setArtifactRestoreState(available ? "artifact" : "none")
+  }, [])
 
   async function review(event: FormEvent) {
     event.preventDefault()
@@ -300,7 +311,7 @@ export function ExternalWorkOrderAdmission({
             <GitPullRequest className="size-3.5" aria-hidden /> External work ingress
           </div>
           <DialogTitle className="text-xl font-semibold tracking-tight text-[#edf3e9]">
-            {step === "capture" ? "Bring authorized work into this Space" : step === "review" ? "Review the exact admission packet" : "Work is bound to this Space"}
+            {step === "capture" && artifactRestoreState === "artifact" ? "Deliver the exact admitted artifact" : step === "capture" ? "Bring authorized work into this Space" : step === "review" ? "Review the exact admission packet" : "Work is bound to this Space"}
           </DialogTitle>
           <DialogDescription className="leading-5 text-[#9ca797]">
             {step === "capture"
@@ -311,7 +322,11 @@ export function ExternalWorkOrderAdmission({
           </DialogDescription>
         </DialogHeader>
 
-        {step === "capture" ? (
+        {step === "capture" && worldId && persisted && artifactRestoreState !== "none" ? (
+          <div className="p-6">
+            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} />
+          </div>
+        ) : step === "capture" ? (
           <form onSubmit={(event) => void review(event)} className="grid gap-5 p-6">
             <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
               <label className={labelClass}>Source
@@ -404,6 +419,7 @@ export function ExternalWorkOrderAdmission({
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Authority</dt><dd>{result.authority.level} · Codex</dd></div>
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Provenance</dt><dd title={result.provenanceDigest}>{compactDigest(result.provenanceDigest)}</dd></div>
             </dl>
+            <DeliveryAdoption worldId={result.worldId} />
             {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
             <div className="flex justify-end"><button type="button" onClick={() => handleOpen(false)} className="rounded border border-[#687b63] bg-[#1a2419] px-4 py-2 text-xs font-semibold text-[#e5eee1]">Continue in Space</button></div>
           </section>

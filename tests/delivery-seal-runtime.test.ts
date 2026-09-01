@@ -44,9 +44,46 @@ describe("delivery commit inspection", () => {
     expect(measured.patchDigest).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it.runIf(process.platform === "win32")("accepts the same Windows worktree root with different path casing", async () => {
+    const repo = repository()
+    const measured = await inspectGitDelivery(repo.root.toUpperCase(), repo.baseSha, repo.commitSha, ["src/selected.ts"])
+    expect(measured).toMatchObject({ commitSha: repo.commitSha, paths: ["src/selected.ts"] })
+  })
+
   it("refuses a commit whose selected assignment path has no delivered patch", async () => {
     const repo = repository()
     await expect(inspectGitDelivery(repo.root, repo.baseSha, repo.commitSha, ["src/missing.ts"]))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+  })
+
+  it("measures an exact deleted path with a deterministic head-absent representation", async () => {
+    const repo = repository()
+    fs.unlinkSync(path.join(repo.root, "src", "selected.ts"))
+    git(repo.root, "add", "src/selected.ts")
+    git(repo.root, "commit", "-m", "delete selected path")
+    const deletedHead = git(repo.root, "rev-parse", "HEAD")
+
+    const first = await inspectGitDelivery(repo.root, repo.commitSha, deletedHead, ["src/selected.ts"])
+    const second = await inspectGitDelivery(repo.root, repo.commitSha, deletedHead, ["src/selected.ts"])
+    expect(first).toMatchObject({ commitSha: deletedHead, paths: ["src/selected.ts"] })
+    expect(first.contentDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(second.contentDigest).toBe(first.contentDigest)
+  })
+
+  it("measures both exact paths of a rename without collapsing the source", async () => {
+    const repo = repository()
+    fs.renameSync(path.join(repo.root, "src", "selected.ts"), path.join(repo.root, "src", "renamed.ts"))
+    git(repo.root, "add", "-A", "src")
+    git(repo.root, "commit", "-m", "rename selected path")
+    const renamedHead = git(repo.root, "rev-parse", "HEAD")
+
+    const measured = await inspectGitDelivery(
+      repo.root,
+      repo.commitSha,
+      renamedHead,
+      ["src/selected.ts", "src/renamed.ts"],
+      { allowMultiple: true },
+    )
+    expect(measured).toMatchObject({ commitSha: renamedHead, paths: ["src/renamed.ts", "src/selected.ts"] })
   })
 })

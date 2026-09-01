@@ -30,6 +30,11 @@ async function gitBytes(root: string, args: readonly string[]): Promise<Buffer> 
   return result.stdout
 }
 
+async function gitBytesIfPresent(root: string, revision: string, deliveryPath: string): Promise<Buffer | null> {
+  const entry = await gitBytes(root, ["ls-tree", "-z", revision, "--", deliveryPath])
+  return entry.length === 0 ? null : gitBytes(root, ["show", `${revision}:${deliveryPath}`])
+}
+
 function canonicalRemote(value: string): string {
   const trimmed = value.trim().replace(/\.git$/i, "").replace(/\/$/, "")
   const scp = /^git@([^:]+):(.+)$/.exec(trimmed)
@@ -57,12 +62,21 @@ function normalizedPaths(root: string, values: readonly string[]): string[] {
   return [...seen].sort()
 }
 
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left)
+  const normalizedRight = path.resolve(right)
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
+}
+
 /** Measure an exact assignment patch using only Git and Node built-ins. */
 export async function inspectGitDelivery(
   projectRoot: string,
   baseSha: string,
   commitSha: string,
   requestedPaths: readonly string[],
+  options: Readonly<{ allowMultiple?: boolean }> = {},
 ): Promise<MeasuredDelivery> {
   const root = path.resolve(projectRoot)
   if (!COMMIT.test(baseSha) || !COMMIT.test(commitSha)) invalid("the delivery commits are malformed")
@@ -70,18 +84,28 @@ export async function inspectGitDelivery(
   if (paths.length === 0) invalid("the delivery has no assigned paths")
   try {
     const top = (await git(root, ["rev-parse", "--show-toplevel"])).trim()
-    if (path.resolve(top) !== root) invalid("the assignment workspace is not the exact Git worktree root")
+    if (!sameFilesystemPath(top, root)) invalid("the assignment workspace is not the exact Git worktree root")
     const measuredBase = (await git(root, ["rev-parse", `${baseSha}^{commit}`])).trim().toLowerCase()
     const measuredCommit = (await git(root, ["rev-parse", `${commitSha}^{commit}`])).trim().toLowerCase()
     if (measuredBase !== baseSha.toLowerCase() || measuredCommit !== commitSha.toLowerCase()) invalid("the exact delivery commits are unavailable")
     await git(root, ["merge-base", "--is-ancestor", measuredBase, measuredCommit])
-    const changed = (await git(root, ["diff", "--name-only", "-z", measuredBase, measuredCommit, "--", ...paths]))
+    const changed = (await git(root, ["diff", "--no-renames", "--name-only", "-z", measuredBase, measuredCommit, "--", ...paths]))
       .split("\0").filter(Boolean).map((item) => item.replace(/\\/g, "/")).sort()
     if (JSON.stringify(changed) !== JSON.stringify(paths)) invalid("the exact assignment paths are not all changed by this commit")
-    const patch = await git(root, ["diff", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
+    const patch = await git(root, ["diff", "--no-renames", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
     if (!patch) invalid("the assignment patch is empty")
-    if (paths.length !== 1) invalid("one persisted Codex assignment must deliver one exact selected path")
-    const deliveredBytes = await gitBytes(root, ["show", `${measuredCommit}:${paths[0]}`])
+    if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
+    const delivered = await Promise.all(paths.map(async (deliveryPath) => ({
+      deliveryPath,
+      bytes: await gitBytesIfPresent(root, measuredCommit, deliveryPath),
+    })))
+    const deliveredBytes = paths.length === 1 && delivered[0].bytes !== null
+      ? delivered[0].bytes
+      : Buffer.concat(delivered.map(({ deliveryPath, bytes }) => (
+          bytes === null
+            ? Buffer.from(`${deliveryPath}\0deleted\0`, "utf8")
+            : Buffer.concat([Buffer.from(`${deliveryPath}\0${bytes.length}\0`, "utf8"), bytes])
+        )))
     const origin = canonicalRemote(await git(root, ["remote", "get-url", "origin"]))
     return {
       repository: origin,

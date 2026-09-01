@@ -3,6 +3,7 @@ import {
   DeliverySealError,
   deliverySigningKeyFromBase64,
   issueLoomCodexDeliverySeal,
+  type AssignmentDeliverySealPayload,
   type WilliamOSDeliverySeal,
 } from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
@@ -50,7 +51,7 @@ function exactLockedAuthority(
   assignmentMetadata: unknown,
   readyMetadata: unknown,
   locked: Record<string, unknown>,
-  seal: WilliamOSDeliverySeal,
+  seal: Readonly<{ payload: AssignmentDeliverySealPayload; signature: string }>,
   threadId: string,
 ): boolean {
   const assignment = metadataObject(assignmentMetadata)
@@ -123,6 +124,10 @@ export async function recordDeliverySealWithAuthorityFence(
     connect: () => pool.connect() as unknown as Promise<SealFenceClient>,
   },
 ): Promise<void> {
+  if (input.seal.payload.version !== "williamos-delivery-seal.v1") {
+    throw new DeliverySealError("DELIVERY_SEAL_REQUEST_INVALID", "the assignment authority fence accepts only assignment-output seals")
+  }
+  const assignmentSeal = input.seal as Readonly<{ payload: AssignmentDeliverySealPayload; signature: string }>
   const client = await dependencies.connect()
   try {
     await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE")
@@ -161,7 +166,7 @@ export async function recordDeliverySealWithAuthorityFence(
           AND authority_row."status" = 'active'
           AND (authority_row."expiresAt" IS NULL OR authority_row."expiresAt" > CURRENT_TIMESTAMP)
         FOR UPDATE OF assignment_event, ready_event, world, outcome, work, authority_row`,
-      [input.userId, input.threadId, input.assignmentEventId, input.readyEventId, input.seal.payload.assignment.assignmentHash],
+      [input.userId, input.threadId, input.assignmentEventId, input.readyEventId, assignmentSeal.payload.assignment.assignmentHash],
     )
     const row = locked.rows[0]
     if (!row) throw new DeliverySealError("DELIVERY_SEAL_ASSIGNMENT_STALE", "the assignment authority changed before the delivery seal was recorded")
@@ -169,7 +174,7 @@ export async function recordDeliverySealWithAuthorityFence(
     if (typeof assignment.workspace !== "string") {
       throw new DeliverySealError("DELIVERY_SEAL_ASSIGNMENT_STALE", "the locked assignment workspace is unavailable")
     }
-    if (!exactLockedAuthority(row.assignmentMetadata, row.readyMetadata, row, input.seal, input.threadId)) {
+    if (!exactLockedAuthority(row.assignmentMetadata, row.readyMetadata, row, assignmentSeal, input.threadId)) {
       throw new DeliverySealError("DELIVERY_SEAL_ASSIGNMENT_STALE", "the assignment authority changed before the delivery seal was recorded")
     }
     const inserted = await client.query(
@@ -182,8 +187,8 @@ export async function recordDeliverySealWithAuthorityFence(
         assignmentEventId: input.assignmentEventId,
         readyEventId: input.readyEventId,
         threadId: input.threadId,
-        assignmentHash: input.seal.payload.assignment.assignmentHash,
-        seal: input.seal,
+        assignmentHash: assignmentSeal.payload.assignment.assignmentHash,
+        seal: assignmentSeal,
       })],
     )
     if (!inserted.rows[0]?.id) throw new Error("DELIVERY_SEAL_NOT_DURABLE")

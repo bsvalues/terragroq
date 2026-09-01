@@ -100,7 +100,7 @@ import {
   type OwnedWorkingWorldRecord,
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
-import { createWorkingWorld, withTurn, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
+import { createWorkingWorld, EMPTY_SPINE, withTurn, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 import { POST } from "@/app/api/environment/line/route"
 
 function councilSession(id: string, createdAt: string) {
@@ -285,7 +285,9 @@ describe("server-owned Space persistence", () => {
     expect(created.name).toBe("Release work")
     expect(created.space.revision).toBe(0)
     expect(created.space.openFiles).toEqual([])
-    expect(JSON.parse(store.rows.get("server-id")!.snapshot).resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
+    const persisted = JSON.parse(store.rows.get("server-id")!.snapshot)
+    expect(persisted.resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
+    expect(persisted.spine).toEqual(EMPTY_SPINE)
     await expect(createOwnedProjectSpace({ userId: "owner-a", project, name: "bad\nname" }, store)).rejects.toThrow("SPACE_NAME_INVALID")
   })
 
