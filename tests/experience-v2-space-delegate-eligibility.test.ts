@@ -66,6 +66,25 @@ describe("Space Delegate exact-path eligibility", () => {
     })
   })
 
+  it("projects the independently derived Claude selected-file authority without reusing Codex proof", async () => {
+    seams.deriveAuthority.mockResolvedValue({
+      owner: "owner-1", worldId: "world-a", worldRevision: 9,
+      projectId: 7, projectKey: "williamos", repositoryIdentity: "repo:williamos",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 45,
+      actor: "claude", selectedPath: "src/app.ts",
+    })
+
+    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=claude&path=src%2Fapp.ts"))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(expect.objectContaining({
+      eligible: true, actor: "claude", grantId: 45, selectedPath: "src/app.ts",
+    }))
+    expect(seams.deriveAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      expected: { actor: "claude", capability: "selected-file-change" },
+    }))
+  })
+
   it("returns a non-sensitive ineligible projection when exact authority is refused", async () => {
     const AuthorityError = (await import("@/lib/governance/space-mutation-authority")).SpaceMutationAuthorityError
     seams.deriveAuthority.mockRejectedValue(new AuthorityError("secret reservation details"))

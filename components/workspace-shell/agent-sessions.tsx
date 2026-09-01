@@ -36,6 +36,16 @@ export type AgentSessionFileTarget = Readonly<{
   path: string
 }>
 
+export type AgentSessionFileAuthorityProof = Readonly<{
+  worldId: string
+  worldRevision: number
+  outcomeKey: string
+  workOrderId: number
+  grantId: number
+  actor: "codex" | "claude"
+  selectedPath: string
+}>
+
 export type AgentSessionPreview = Readonly<{
   worldId: string
   evidenceFingerprint: string
@@ -132,6 +142,7 @@ export type RunClaudeTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string, binding?: AgentSessionDiffReview) => void
   target?: AgentSessionFileTarget
+  expectedFileAuthority?: AgentSessionFileAuthorityProof
   requiredSessionKey?: string
 }>
 
@@ -141,6 +152,7 @@ export type RunAgentTurnInput = Readonly<{
   assignment: string
   prompt: string
   target?: AgentSessionFileTarget
+  expectedFileAuthority?: AgentSessionFileAuthorityProof
   automatic?: boolean
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
@@ -289,6 +301,27 @@ function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
   return path ? { kind: "file", path } : null
 }
 
+function parseFileAuthorityProof(value: unknown): AgentSessionFileAuthorityProof | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const keys = Object.keys(candidate).sort().join("\0")
+  const worldId = boundedText(candidate.worldId, 200)
+  const outcomeKey = boundedText(candidate.outcomeKey, 200)
+  const selectedPath = canonicalWorkspaceFilePath(candidate.selectedPath)
+  return keys === "actor\0grantId\0outcomeKey\0selectedPath\0workOrderId\0worldId\0worldRevision"
+    && worldId && outcomeKey && selectedPath
+    && Number.isSafeInteger(candidate.worldRevision) && Number(candidate.worldRevision) >= 0
+    && Number.isSafeInteger(candidate.workOrderId) && Number(candidate.workOrderId) > 0
+    && Number.isSafeInteger(candidate.grantId) && Number(candidate.grantId) > 0
+    && (candidate.actor === "codex" || candidate.actor === "claude")
+    ? {
+      worldId, worldRevision: candidate.worldRevision as number, outcomeKey,
+      workOrderId: candidate.workOrderId as number, grantId: candidate.grantId as number,
+      actor: candidate.actor, selectedPath,
+    }
+    : null
+}
+
 function parsePreview(value: unknown): AgentSessionPreview | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
@@ -350,7 +383,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
-    || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
+    || target !== undefined && (role !== "Builder"
+      || candidate.provider !== "Codex" && candidate.provider !== "Claude" || reviewPath !== undefined)
     || isClaudeReviewer !== (reviewPath !== undefined)
     || (candidate.diffReview !== undefined && !diffReview)
     || diffReview != null && (candidate.provider !== "Claude" || role !== "Reviewer" || reviewPath !== diffReview.path
@@ -918,13 +952,20 @@ export function useExperienceAgentSessions({
     const expectedDiffFingerprint = candidateDiffFingerprint && new TextEncoder().encode(candidateDiffFingerprint).byteLength <= 16_384
       ? candidateDiffFingerprint : null
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
+    const expectedFileAuthority = input.expectedFileAuthority === undefined
+      ? null : parseFileAuthorityProof(input.expectedFileAuthority)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     const requiredSessionKey = input.requiredSessionKey === undefined ? null : boundedText(input.requiredSessionKey, 200)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if ((mode === "delegate" || forkMode) && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
     if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
-      || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
+      || input.provider !== "Codex" && input.provider !== "Claude")) throw new Error("AGENT_TARGET_INVALID")
+    if (input.expectedFileAuthority !== undefined && (!expectedFileAuthority || !requestedTarget
+      || expectedFileAuthority.worldId !== worldId || expectedFileAuthority.selectedPath !== requestedTarget.path
+      || expectedFileAuthority.actor !== input.provider.toLowerCase())) throw new Error("AGENT_TARGET_INVALID")
+    if (input.provider === "Claude" && requestedTarget && !expectedFileAuthority) throw new Error("AGENT_TARGET_INVALID")
+    if (input.provider !== "Claude" && input.expectedFileAuthority !== undefined) throw new Error("AGENT_TARGET_INVALID")
     if ((mode === "review" || diffReviewMode) && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (diffReviewMode && (!reviewWorldId || reviewWorldId !== worldId || !expectedDiffFingerprint)) throw new Error("AGENT_DIFF_REVIEW_INPUT_INVALID")
     if ((mode === "review" || diffReviewMode) && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
@@ -1154,14 +1195,27 @@ export function useExperienceAgentSessions({
             && typeof event.forkedFrom === "string" && CLAUDE_SESSION_ID.test(event.forkedFrom)
             && event.forkedFrom !== event.sessionId ? event.forkedFrom : null
           const invalidResumeForkLineage = !forkMode && event.forkedFrom !== undefined && !resumeForkedFrom
-          const capturedTarget = input.provider === "Codex" ? requestedTarget ?? prior?.target ?? null : null
-          const serverSelectedPath = input.provider === "Codex" && capturedTarget
+          const capturedTarget = requestedTarget ?? prior?.target ?? null
+          const serverSelectedPath = capturedTarget
             ? canonicalWorkspaceFilePath(event.selectedPath)
             : null
           const serverAssignmentHash = input.provider === "Codex" && capturedTarget && typeof event.assignmentHash === "string"
             && ASSIGNMENT_HASH.test(event.assignmentHash) ? event.assignmentHash : null
-          const invalidTargetBinding = Boolean(capturedTarget
-            && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
+          const claudeAuthorityBindingMatches = input.provider !== "Claude" || !capturedTarget
+            || Boolean(expectedFileAuthority
+              && event.provider === "Claude" && event.mode === "delegate"
+              && event.worldId === expectedFileAuthority.worldId
+              && event.worldRevision === expectedFileAuthority.worldRevision
+              && event.outcomeKey === expectedFileAuthority.outcomeKey
+              && event.workOrderId === expectedFileAuthority.workOrderId
+              && event.grantId === expectedFileAuthority.grantId
+              && event.actor === expectedFileAuthority.actor
+              && serverSelectedPath === expectedFileAuthority.selectedPath)
+          const invalidTargetBinding = Boolean(capturedTarget && (
+            serverSelectedPath !== capturedTarget.path
+            || input.provider === "Codex" && !serverAssignmentHash
+            || input.provider === "Claude" && !claudeAuthorityBindingMatches
+          ))
           const previewWorldId = previewMode ? boundedText(event.worldId, 200) : null
           const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
             ? event.evidenceFingerprint : null

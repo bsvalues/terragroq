@@ -840,6 +840,12 @@ export async function POST(request: Request) {
       if (!forkMode && !previewMode && !diffReviewMode) {
         send({
           type: "session", sessionId, resumed: resuming,
+          ...(mutationAuthority ? {
+            provider: "Claude", mode: "delegate", worldId: mutationAuthority.worldId,
+            worldRevision: mutationAuthority.worldRevision, outcomeKey: mutationAuthority.outcomeKey,
+            workOrderId: mutationAuthority.workOrderId, grantId: mutationAuthority.grantId,
+            actor: mutationAuthority.actor, selectedPath: mutationAuthority.selectedPath,
+          } : {}),
           ...(previewMode ? { provider: "Claude", mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
           ...(resumeForkedFrom ? { provider: "Claude", mode: "delegate", forkedFrom: resumeForkedFrom } : {}),
         })

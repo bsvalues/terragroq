@@ -101,7 +101,7 @@ describe("Experience V2 selected Space actions", () => {
     expect(within(line).getByText("Space assignment · exact selected file src/app.ts")).toBeTruthy()
     const claudeUnavailable = within(line).getByRole("button", { name: "Claude unavailable" }) as HTMLButtonElement
     expect(claudeUnavailable.disabled).toBe(true)
-    expect(claudeUnavailable.title).toBe("Exact-file assignment binding is not available for Claude yet.")
+    expect(claudeUnavailable.title).toBe("No current server-derived exact-path Claude authority proof is available.")
     fireEvent.click(within(line).getByRole("button", { name: "Codex" }))
     fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Implement the bounded fix." } })
     fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
