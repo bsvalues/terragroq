@@ -6,6 +6,7 @@ import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, Terminal
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
@@ -360,6 +361,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [councilBusy, setCouncilBusy] = useState(false)
   const [councilError, setCouncilError] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
+  const [executionSession, setExecutionSession] = useState<ProjectedWorldWorkerSession | null>(null)
+  const boundExecutionSession = executionSession?.worldId === worldId
+    && executionSession.workOrderId === spine.workOrderId
+    ? executionSession
+    : null
   const [judgment, setJudgment] = useState<WilliamJudgment | null>(null)
   const [judgmentBusy, setJudgmentBusy] = useState(false)
   const [judgmentError, setJudgmentError] = useState<string | null>(null)
@@ -381,7 +387,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
     worldId: storage === "server" ? worldId : null,
-    worker: spine.worker ?? null,
+    executionSession: boundExecutionSession,
     autoContinue: storage === "server" && hydrated && spine.outcomeKey !== null,
     onAutoContinuation: relayAutoContinuation,
   })
@@ -546,7 +552,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     // intent). Clear the active opinion until it is regenerated from the newly persisted world.
     judgmentRequestedRef.current = null
     setJudgment(null)
-    if (typeof reply.worldId === "string") setWorldId(reply.worldId)
+    if (typeof reply.worldId === "string") {
+      if (reply.worldId !== worldRef.current) setExecutionSession(null)
+      setWorldId(reply.worldId)
+    }
     if (reply.spine) setSpine(reply.spine)
     const say = typeof reply.say === "string" ? reply.say : ""
     if (say) appendConversation("williamos", say)
@@ -809,25 +818,48 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   useEffect(() => {
     const outcomeKey = spine.outcomeKey
-    if (!outcomeKey || !isExecutionLive(spine.execution)) return
+    if (!hydrated || storage !== "server" || !worldId || !outcomeKey) {
+      setExecutionSession(null)
+      return
+    }
     let cancelled = false
+    let latestRead = 0
     const executionWorldId = worldId
+    const executionWorkOrderId = spine.workOrderId
     const executionEpoch = transitionEpochRef.current
-    const timer = setInterval(async () => {
+    const readExecution = async () => {
+      const readId = ++latestRead
       try {
-        const response = await fetch(`/api/environment/execution?outcomeKey=${encodeURIComponent(outcomeKey)}`, { cache: "no-store" })
-        if (!response.ok) return
-        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence">
-        if (cancelled || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch) return
-        setSpine((current) => current.outcomeKey === outcomeKey
+        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
+        if (!response.ok) {
+          if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
+            setExecutionSession(null)
+          }
+          return
+        }
+        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence" | "outcomeKey" | "workOrderId"> & { session: ProjectedWorldWorkerSession | null }
+        if (cancelled || readId !== latestRead || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch
+          || spineRef.current.outcomeKey !== outcomeKey || spineRef.current.workOrderId !== executionWorkOrderId) return
+        if (live.outcomeKey !== outcomeKey || live.workOrderId !== executionWorkOrderId
+          || live.session && live.session.workOrderId !== executionWorkOrderId) {
+          setExecutionSession(null)
+          return
+        }
+        setSpine((current) => current.outcomeKey === outcomeKey && current.workOrderId === executionWorkOrderId
           ? { ...current, execution: live.execution, worker: live.worker, evidence: live.evidence }
           : current)
+        setExecutionSession(live.session?.worldId === executionWorldId ? live.session : null)
       } catch {
         // Preserve the last canonical observation until the next successful read.
       }
-    }, 4000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [spine.execution, spine.outcomeKey, worldId])
+    }
+    void readExecution()
+    const timer = setInterval(() => void readExecution(), 4000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [hydrated, spine.outcomeKey, spine.workOrderId, storage, worldId])
 
   const sendPersist = useCallback(async (job: PersistJob) => {
     try {
@@ -1917,7 +1949,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         role: descriptor.role,
         provider: descriptor.provider,
         assignment: descriptor.assignment,
-        truth: projection.truth,
+        truth: projection.truth === "persisted" ? "resume-unverified" : projection.truth,
         turns: descriptor.completedTurns ?? [],
       }
     })()
@@ -2033,6 +2065,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" ? ["Inspect", "Council"] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Council"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
@@ -2117,6 +2151,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     judgmentRequestedRef.current = null
     judgmentContextRef.current = null
     setWorldId(payload.worldId)
+    setExecutionSession(null)
     setSpace(restored)
     setPersistenceError(null)
     setPersistencePending(false)
@@ -2276,7 +2311,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const currentAgentCollectionKnown = agentSessions.collectionState === "available" || agentSessions.collectionState === "missing"
   const currentMissionAgents = currentAgentCollectionKnown
     ? agentSessions.sessions
-    : agentSessions.sessions.filter((agent) => agent.truth === "live")
+    : agentSessions.sessions.filter((agent) => agent.truth !== "resume-unverified")
   const currentMissionSpace: MissionControlSpaceProjection = {
     id: worldId ?? space.id,
     name: space.name,
@@ -2336,6 +2371,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
+    if (selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" && action === "Inspect") {
+      materializeSurfaces({ surfaces: [{ kind: "hermes", subject: "HERMES local execution" }] })
+      return
+    }
     if (selectedKind === "space" && action === "Summarize") {
       openLine("Summarize this exact current Space: ", "william", "space-summary")
       return
@@ -2573,6 +2612,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </div>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
+          if (agent.kind === "world-worker") {
+            setFocusedAgentId(agent.id)
+            setDelegateContext(null)
+            setLineOpen(false)
+            if (agent.role === "HERMES") {
+              materializeSurfaces({ surfaces: [{ kind: "hermes", subject: "HERMES local execution" }] })
+            }
+            return
+          }
           const running = agentSessions.activeSessionIds.includes(agent.id)
           if (running && agent.kind === "durable-session") {
             setFocusedAgentId(agent.id)

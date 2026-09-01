@@ -2,8 +2,13 @@ import { and, desc, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import { evidenceRecord, outcomeQueueItem, workOrder } from "@/lib/db/schema"
+import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { getUserId } from "@/lib/session"
-import { projectWorldExecution, type CanonicalExecution } from "@/lib/environment/world-execution"
+import {
+  projectWorldExecution,
+  projectWorldWorkerSession,
+  type CanonicalExecution,
+} from "@/lib/environment/world-execution"
 import type { WorldEvidence } from "@/lib/environment/working-world"
 
 /**
@@ -27,34 +32,69 @@ export async function GET(request: Request) {
   }
   if (!userId) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  const outcomeKey = new URL(request.url).searchParams.get("outcomeKey")?.trim()
-  if (!outcomeKey) return Response.json({ error: "OUTCOME_KEY_REQUIRED" }, { status: 400 })
-  // The queue's own key grammar. Anything else is refused rather than turned into a wildcard read.
-  if (!/^[A-Za-z0-9:_.-]{1,200}$/.test(outcomeKey)) {
-    return Response.json({ error: "OUTCOME_KEY_MALFORMED" }, { status: 400 })
+  const worldId = new URL(request.url).searchParams.get("worldId")
+  if (!worldId) return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })
+  if (!/^[A-Za-z0-9:_.-]{1,200}$/.test(worldId)) {
+    return Response.json({ error: "WORLD_ID_MALFORMED" }, { status: 400 })
+  }
+
+  let world
+  try {
+    world = await loadOwnedWorkingWorld(userId, worldId)
+  } catch {
+    return Response.json({ error: "WORLD_PERSISTENCE_UNAVAILABLE" }, { status: 503 })
+  }
+  if (!world) return Response.json({ error: "WORLD_ABSENT" }, { status: 404 })
+  const outcomeKey = world.spine.outcomeKey
+  const worldWorkOrderId = world.spine.workOrderId
+  if (!outcomeKey || worldWorkOrderId === null) {
+    return Response.json({ error: "SPACE_EXECUTION_BINDING_MISSING" }, { status: 409 })
   }
 
   const rows = await db
     .select({
       lifecycleState: outcomeQueueItem.lifecycleState,
       activeWorkOrderId: outcomeQueueItem.activeWorkOrderId,
+      outcomeTitle: outcomeQueueItem.title,
     })
     .from(outcomeQueueItem)
     .where(and(eq(outcomeQueueItem.userId, userId), eq(outcomeQueueItem.outcomeKey, outcomeKey)))
     .limit(1)
 
   const outcome = rows[0]
-  if (!outcome) return Response.json({ error: "OUTCOME_ABSENT" }, { status: 404 })
+  if (!outcome || outcome.activeWorkOrderId !== worldWorkOrderId) {
+    return Response.json({ error: "SPACE_EXECUTION_BINDING_MISMATCH" }, { status: 409 })
+  }
 
   let workOrderStatus: string | null = null
   let workOrderLane: string | null = null
+  let boundWorkOrder: Readonly<{
+    id: number
+    ref: string | null
+    title: string
+    assignee: string | null
+    agent: string | null
+    lane: string | null
+  }> | null = null
   let evidence: WorldEvidence[] = []
   if (outcome.activeWorkOrderId !== null) {
     const [bound] = await db
-      .select({ status: workOrder.status, lane: workOrder.lane })
+      .select({
+        id: workOrder.id,
+        ref: workOrder.ref,
+        title: workOrder.title,
+        status: workOrder.status,
+        lane: workOrder.lane,
+        assignee: workOrder.assignee,
+        agent: workOrder.agent,
+      })
       .from(workOrder)
       .where(and(eq(workOrder.userId, userId), eq(workOrder.id, outcome.activeWorkOrderId)))
       .limit(1)
+    if (!bound || bound.id !== worldWorkOrderId) {
+      return Response.json({ error: "SPACE_EXECUTION_BINDING_MISMATCH" }, { status: 409 })
+    }
+    boundWorkOrder = bound
     workOrderStatus = bound?.status ?? null
     workOrderLane = bound?.lane ?? null
 
@@ -87,5 +127,18 @@ export async function GET(request: Request) {
     observedAt: new Date().toISOString(),
   }
 
-  return Response.json({ outcomeKey, ...projectWorldExecution(canonical) })
+  const projected = projectWorldExecution(canonical)
+  const observedAt = canonical.observedAt
+  const session = boundWorkOrder
+    ? projectWorldWorkerSession({
+        worldId,
+        outcome: { key: outcomeKey, title: outcome.outcomeTitle },
+        workOrder: boundWorkOrder,
+        status: projected.execution,
+        evidence: projected.evidence,
+        observedAt,
+      })
+    : null
+
+  return Response.json({ worldId, outcomeKey, workOrderId: worldWorkOrderId, ...projected, session })
 }

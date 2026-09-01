@@ -135,7 +135,7 @@ function SpacePreview({
         <span className={styles.agents} aria-label={agentLabel}>
           {visibleAgents.map((agent) => (
             <span key={agent.id} className={styles.agent} data-state={agent.state} title={`${agent.role} · ${agent.activity}`}>
-              <i /> {agent.name} · {agent.activity}{agent.truth === "resume-unverified" ? <small className={styles.agentTruth}>Saved · resume unverified</small> : null}
+              <i /> {agent.name} · {agent.activity}{agent.truth === "resume-unverified" ? <small className={styles.agentTruth}>Saved · resume unverified</small> : agent.truth === "persisted" ? <small className={styles.agentTruth}>Persisted assignment · runtime liveness unverified</small> : null}
             </span>
           ))}
           {agentTruthUnknown ? <span>Agent activity unknown</span> : space.agents.length === 0 ? <span>No active agents</span> : null}

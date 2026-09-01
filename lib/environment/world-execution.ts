@@ -33,6 +33,77 @@ export type ProjectedExecution = Readonly<{
   evidence: readonly WorldEvidence[]
 }>
 
+export type ProjectedWorldWorkerSession = Readonly<{
+  id: string
+  worldId: string
+  workOrderId: number
+  assignee: string
+  agent: string | null
+  role: "HERMES" | "Executor"
+  providerLabel: string
+  assignment: string
+  status: WorldExecutionState
+  evidence: string
+  observedAt: string
+}>
+
+export type WorldWorkerSessionProjectionInput = Readonly<{
+  worldId: string
+  outcome: Readonly<{ key: string; title: string }>
+  workOrder: Readonly<{
+    id: number
+    ref: string | null
+    title: string
+    assignee: string | null
+    agent: string | null
+    lane: string | null
+  }>
+  status: WorldExecutionState
+  evidence: readonly WorldEvidence[]
+  observedAt: string
+}>
+
+function exactIdentity(value: string | null): string | null {
+  return value && value === value.trim() && value.length <= 200 && !value.includes("\0") ? value : null
+}
+
+function boundedCopy(value: string, fallback: string, max = 500): string {
+  const text = value.trim().replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ")
+  if (!text) return fallback
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
+}
+
+/** Project one exact persisted Work Order executor without inferring identity from its lane. */
+export function projectWorldWorkerSession(
+  input: WorldWorkerSessionProjectionInput,
+): ProjectedWorldWorkerSession | null {
+  const assignee = exactIdentity(input.workOrder.assignee)
+  if (!assignee || !Number.isSafeInteger(input.workOrder.id) || input.workOrder.id <= 0) return null
+  const agent = exactIdentity(input.workOrder.agent)
+  const hermes = assignee === "hermes-codex-bridge" && agent === "codex"
+  const outcome = boundedCopy(input.outcome.title, input.outcome.key, 240)
+  const workOrderRef = exactIdentity(input.workOrder.ref) ?? `Work Order #${input.workOrder.id}`
+  const workOrderTitle = boundedCopy(input.workOrder.title, "Bounded assignment", 240)
+  const latest = input.evidence.at(-1)
+  const evidence = latest
+    ? boundedCopy(`${latest.kind}: ${latest.detail}${latest.result ? ` · ${latest.result}` : ""}`, "Persisted execution evidence", 500)
+    : "No persisted execution evidence yet"
+
+  return {
+    id: `world-worker:${encodeURIComponent(input.worldId)}:${input.workOrder.id}:${encodeURIComponent(assignee)}`,
+    worldId: input.worldId,
+    workOrderId: input.workOrder.id,
+    assignee,
+    agent,
+    role: hermes ? "HERMES" : "Executor",
+    providerLabel: hermes ? "Local execution" : `${assignee}${agent ? ` · ${agent}` : ""}`,
+    assignment: boundedCopy(`${outcome} · ${workOrderRef}: ${workOrderTitle}`, "Bounded assignment"),
+    status: input.status,
+    evidence,
+    observedAt: input.observedAt,
+  }
+}
+
 /**
  * Canonical lifecycle → what the owner is watching.
  *

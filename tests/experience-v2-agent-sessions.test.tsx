@@ -14,7 +14,7 @@ import {
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
-import type { WorldWorker } from "@/lib/environment/working-world"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
@@ -52,8 +52,8 @@ async function openWilliamConversation() {
   return screen.findByRole("complementary", { name: "William conversation" })
 }
 
-function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker, autoContinue, onAutoContinuation })
+function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, executionSession, autoContinue, onAutoContinuation })
   expose = controller
   return (
     <AgentSessionStrip
@@ -489,8 +489,9 @@ describe("Experience V2 real agent sessions", () => {
   it("contains a throwing corrupt-record cleanup and keeps the current session truth unknown", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     window.localStorage.setItem(key, "{bad-json")
-    const removeItem = Storage.prototype.removeItem
-    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (candidate) {
+    const storagePrototype = Object.getPrototypeOf(window.localStorage) as Storage
+    const removeItem = storagePrototype.removeItem
+    vi.spyOn(storagePrototype, "removeItem").mockImplementation(function (candidate) {
       if (candidate === key) throw new DOMException("blocked", "SecurityError")
       return removeItem.call(this, candidate)
     })
@@ -524,12 +525,16 @@ describe("Experience V2 real agent sessions", () => {
       { id: "Codex:build-1", role: "Builder", providerLabel: "Codex", assignment: "Build workspace", status: "working", evidence: "live agent stream", truth: "live", kind: "durable-session", mode: "delegate", presentation: "Builder validating the patch." },
       { id: "Local:123e4567-e89b-42d3-a456-426614174000", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "thinking", evidence: "live model response", truth: "live", kind: "durable-session", mode: "delegate", presentation: "<thinking>hidden secret</thinking>" },
       { id: "Claude:223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", providerLabel: "Claude", assignment: "Review current work", status: "resume unverified", evidence: "saved transcript", truth: "resume-unverified", kind: "durable-session", mode: "review" },
+      { id: "world-worker:world-1:41:hermes-codex-bridge", role: "HERMES", providerLabel: "Local execution", assignment: "Finish the bounded slice", status: "implementing", evidence: "persisted assignment", truth: "persisted", kind: "world-worker", mode: "delegate" },
+      { id: "world-worker:world-1:42:hermes-codex-bridge", role: "HERMES", providerLabel: "Local execution", assignment: "Recover the bounded slice", status: "blocked", evidence: "persisted assignment", truth: "persisted", kind: "world-worker", mode: "delegate" },
     ]
 
     expect(projectMissionAgentSessions(sessions, true)).toEqual([
       { id: "Codex:build-1", name: "Codex", role: "Builder", activity: "Builder validating the patch.", state: "working", truth: "live" },
       { id: "Local:123e4567-e89b-42d3-a456-426614174000", name: "Local", role: "Thinker", activity: "Conversation", state: "working", truth: "live" },
       { id: "Claude:223e4567-e89b-42d3-a456-426614174000", name: "Claude", role: "Reviewer", activity: "Review current work", state: "waiting", truth: "resume-unverified" },
+      { id: "world-worker:world-1:41:hermes-codex-bridge", name: "Local execution", role: "HERMES", activity: "Finish the bounded slice", state: "working", truth: "persisted" },
+      { id: "world-worker:world-1:42:hermes-codex-bridge", name: "Local execution", role: "HERMES", activity: "Recover the bounded slice", state: "blocked", truth: "persisted" },
     ])
   })
 
@@ -1276,7 +1281,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem("williamos:agent-session:owner-b:project-b", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${bId}`, sessions: [descriptor(bId, "B only")] }))
     const observed: string[][] = []
     function Probe({ ownerScope, worldScope }: { ownerScope: string; worldScope: string }) {
-      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, worker: null })
+      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, executionSession: null })
       observed.push(controller.sessions.map((session) => session.assignment))
       return <span>{controller.sessions.map((session) => session.assignment).join(",") || "No sessions"}</span>
     }
@@ -2872,7 +2877,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Claude turn" })).toBeNull())
   })
 
-  it("keeps live World Spine worker facts separate from durable provider sessions", () => {
+  it("projects exact server-derived HERMES execution with stable Space identity beside provider sessions", () => {
     const durableId = "123e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
       schemaVersion: 3,
@@ -2888,18 +2893,114 @@ describe("Experience V2 real agent sessions", () => {
         completedTurns: [],
       }],
     }))
-    render(<Harness worker={{ lane: "review", state: "reviewing", since: "2026-08-27T16:00:00Z" }} />)
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:world-1:41:hermes-codex-bridge",
+      worldId: "world-1",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      status: "reviewing",
+      evidence: "tests: 84 passed · PASS",
+      observedAt: "2026-08-27T16:00:00Z",
+    }
+    const mounted = render(<Harness executionSession={executionSession} />)
 
-    const worker = screen.getByRole("button", { name: /Worker · review lane/i })
+    const worker = screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })
     expect(worker).toBeTruthy()
-    expect(worker.getAttribute("aria-label")).not.toContain("Current Space execution")
-    expect(within(worker).getByText("reviewing · live world state")).toBeTruthy()
-    expect(worker.querySelector('[data-agent-session-level="assignment"]')).toBeNull()
-    expect(screen.queryByTitle("Current Space execution")).toBeNull()
+    expect(within(worker).getByTitle("Finish the durable HERMES session").textContent).toBe("Finish the durable HERMES session")
+    expect(within(worker).getByText("reviewing · tests: 84 passed · PASS")).toBeTruthy()
+    expect(expose!.sessions).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: "world-worker:world-1:41:hermes-codex-bridge",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      kind: "world-worker",
+      truth: "persisted",
+    })]))
 
     const durable = screen.getByRole("button", { name: `Reviewer · Claude · Review src/world-worker.ts` })
     expect(within(durable).getByTitle("Review src/world-worker.ts").textContent).toBe("Review src/world-worker.ts")
     expect(within(durable).getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
+
+    mounted.rerender(<Harness executionSession={{
+      ...executionSession,
+      status: "complete",
+      evidence: "merge: protected main · PASS",
+      observedAt: "2026-08-27T16:10:00Z",
+    }} />)
+    expect(expose!.sessions.filter((session) => session.kind === "world-worker")).toEqual([
+      expect.objectContaining({ id: executionSession.id, status: "complete", evidence: "merge: protected main · PASS" }),
+    ])
+    expect(JSON.parse(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")!)).toMatchObject({
+      sessions: [expect.objectContaining({ provider: "Claude" })],
+    })
+  })
+
+  it("keeps a newer successful HERMES poll when an older failed read settles afterward", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "TerraFusion",
+      outcomeKey: "EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const space = {
+      ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
+      editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+    }
+    let settleOlderRead!: (response: Response) => void
+    const olderRead = new Promise<Response>((resolve) => { settleOlderRead = resolve })
+    const successfulSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      status: "implementing",
+      evidence: "tests: 202 passed · PASS",
+      observedAt: "2026-08-31T22:00:00Z",
+    }
+    let executionReads = 0
+    let poll: (() => void) | null = null
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      poll = callback as () => void
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionReads += 1
+        if (executionReads === 1) return olderRead
+        return Promise.resolve(Response.json({ ...spine, session: successfulSession }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-31T22:00:00Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(poll).not.toBeNull())
+    act(() => poll!())
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+
+    await act(async () => settleOlderRead(new Response(null, { status: 503 })))
+    expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
   })
 
   it("creates a real Claude session from the streamed route response and persists its descriptor", async () => {

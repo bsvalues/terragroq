@@ -15,16 +15,20 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
 
 function agentTruth(space: MissionControlSpaceProjection): string {
   const live = space.agents.filter((agent) => agent.truth === "live")
+  const persisted = space.agents.filter((agent) => agent.truth === "persisted")
   const saved = space.agents.filter((agent) => agent.truth === "resume-unverified")
   const parts: string[] = []
   if (live.length > 0) {
     parts.push(`${countLabel(live.length, "live agent")} — ${live.map((agent) => `${agent.role} · ${agent.activity}`).join("; ")}`)
   }
+  if (persisted.length > 0) {
+    parts.push(`${countLabel(persisted.length, "persisted assignment")} — ${persisted.map((agent) => `${agent.role} · ${agent.activity}`).join("; ")}`)
+  }
   if (space.agentActivityKnown === false) {
     parts.push(live.length > 0 ? "saved activity unknown" : "agent activity unknown")
   } else if (saved.length > 0) {
     parts.push(`${countLabel(saved.length, "saved session")} awaiting verification`)
-  } else if (live.length === 0) {
+  } else if (live.length === 0 && persisted.length === 0) {
     parts.push("no agent sessions")
   }
   return `${space.name}: ${parts.join("; ")}.`

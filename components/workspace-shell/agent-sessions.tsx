@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { WorldWorker } from "@/lib/environment/working-world"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
+const ACTIVE_WORLD_EXECUTION_STATES = new Set(["authorized", "acquired", "implementing", "validating", "reviewing", "remediating"])
 const ASSIGNMENT_HASH = /^[0-9a-f]{64}$/
 const GIT_OBJECT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const STORAGE_PREFIX = "williamos:agent-session:"
@@ -81,7 +82,7 @@ export type ExperienceAgentSession = Readonly<{
   assignment: string
   status: string
   evidence: string
-  truth: "live" | "resume-unverified"
+  truth: "live" | "persisted" | "resume-unverified"
   kind: "durable-session" | "world-worker"
   mode: "delegate" | "review" | "diff-review" | "preview"
   target?: AgentSessionFileTarget
@@ -99,7 +100,7 @@ export type MissionAgentSessionProjection = Readonly<{
   role: string
   activity: string
   state: "working" | "waiting" | "blocked" | "idle"
-  truth?: "live" | "resume-unverified"
+  truth?: "live" | "persisted" | "resume-unverified"
 }>
 
 export type SavedAgentSessionProjection = Readonly<{
@@ -540,21 +541,21 @@ function storageKey(ownerScope: string, worldScope: string): string {
 }
 
 function projectSessions(
-  worker: WorldWorker | null,
+  executionSession: ProjectedWorldWorkerSession | null,
   durable: readonly DurableAgentSession[],
   verified: readonly DurableAgentSession[],
   activeTurns: readonly ActiveAgentTurn[],
 ): readonly ExperienceAgentSession[] {
   const sessions: ExperienceAgentSession[] = []
-  if (worker) {
+  if (executionSession) {
     sessions.push({
-      id: `world-worker:${worker.lane}:${worker.since}`,
-      role: "Worker",
-      providerLabel: `${worker.lane} lane`,
-      assignment: "Current Space execution",
-      status: worker.state,
-      evidence: "live world state",
-      truth: "live",
+      id: executionSession.id,
+      role: executionSession.role,
+      providerLabel: executionSession.providerLabel,
+      assignment: executionSession.assignment,
+      status: executionSession.status,
+      evidence: executionSession.evidence,
+      truth: "persisted",
       kind: "world-worker",
       mode: "delegate",
     })
@@ -672,7 +673,7 @@ export function projectMissionAgentSessions(
 ): readonly MissionAgentSessionProjection[] {
   const projected = new Map<string, MissionAgentSessionProjection>()
   for (const session of sessions) {
-    const truth = current && session.truth === "live" ? "live" : "resume-unverified"
+    const truth = current ? session.truth : "resume-unverified"
     const candidate: MissionAgentSessionProjection = {
       id: session.id,
       name: session.providerLabel,
@@ -680,29 +681,36 @@ export function projectMissionAgentSessions(
       activity: agentPresentationText(current ? session.presentation : null)
         ?? agentPresentationText(session.assignment)
         ?? "Bounded assignment",
-      state: truth === "resume-unverified"
-        ? "waiting"
-        : session.status === "working" || session.status === "thinking" ? "working" : "idle",
+      state: truth === "resume-unverified" ? "waiting" : missionAgentState(session.status),
       truth,
     }
     const existing = projected.get(session.id)
-    if (!existing || existing.truth !== "live" && candidate.truth === "live") projected.set(session.id, candidate)
+    const rank = (value: MissionAgentSessionProjection["truth"]) => value === "live" ? 2 : value === "persisted" ? 1 : 0
+    if (!existing || rank(candidate.truth) > rank(existing.truth)) projected.set(session.id, candidate)
   }
   return [...projected.values()]
+}
+
+function missionAgentState(status: string): MissionAgentSessionProjection["state"] {
+  if (status === "blocked") return "blocked"
+  if (status === "working" || status === "thinking" || ACTIVE_WORLD_EXECUTION_STATES.has(status)) {
+    return "working"
+  }
+  return "idle"
 }
 
 export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
   worldId,
-  worker,
+  executionSession,
   autoContinue = false,
   onAutoContinuation,
 }: {
   ownerScope: string
   worldScope: string
   worldId: string | null
-  worker: WorldWorker | null
+  executionSession: ProjectedWorldWorkerSession | null
   autoContinue?: boolean
   onAutoContinuation?: RunAgentTurnInput["onContinuation"]
 }): ProviderNeutralAgentSessionController {
@@ -1539,8 +1547,8 @@ export function useExperienceAgentSessions({
   const presentedActiveSessionIds = presentedActiveTurns.map((turn) => turn.id)
   const presentedPausableSessionIds = presentedActiveTurns.filter((turn) => turn.sessionId !== null).map((turn) => turn.id)
   const sessions = useMemo(
-    () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns) : [],
-    [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns],
+    () => scopeLoaded ? projectSessions(executionSession, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns) : [],
+    [scopeLoaded, executionSession, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns],
   )
   const presentedSelectedSessionKey = scopeLoaded ? selectedSessionKey : null
   const presentedDurableSession = scopeLoaded ? durableSession : null
@@ -1626,7 +1634,7 @@ export function AgentSessionStrip({
           aria-pressed={activeSessionId === session.id}
           aria-label={session.kind === "durable-session"
             ? `${session.role} · ${session.providerLabel} · ${session.assignment}`
-            : `${session.role} · ${session.providerLabel} · ${session.status} · ${session.evidence}`}
+            : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
@@ -1638,7 +1646,7 @@ export function AgentSessionStrip({
             <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
               {session.role} · {session.providerLabel}
             </strong>
-            {session.kind === "durable-session" ? (
+            {session.assignment ? (
               <span
                 data-agent-session-level="assignment"
                 title={session.assignment}
