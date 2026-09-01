@@ -11,7 +11,7 @@ const seams = vi.hoisted(() => ({
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: seams.resolveBinding,
+  resolveCanonicalWorkspaceProjectBinding: seams.resolveBinding,
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({
   workspaceProjectFromRoot: () => ({ identity: "c:/project", name: "Project" }),
@@ -62,7 +62,7 @@ describe("Experience V2 Space route", () => {
     expect(seams.load).toHaveBeenCalledWith(expect.objectContaining({ worldId: "a", userId: "owner" }))
   })
 
-  it("creates from name only and ignores client identity, project and snapshot widening", async () => {
+  it("creates from name only and ignores client repository, path and snapshot widening", async () => {
     const response = await POST(new Request("http://localhost/api/environment/space", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: " Beta ", worldId: "client", project: { identity: "foreign" }, space: { openFiles: ["secret"] } }),
@@ -71,6 +71,35 @@ describe("Experience V2 Space route", () => {
     expect(seams.create).toHaveBeenCalledWith(expect.objectContaining({ userId: "owner", name: " Beta " }))
     expect(seams.create.mock.calls[0][0]).not.toHaveProperty("worldId")
     expect(seams.create.mock.calls[0][0]).not.toHaveProperty("space")
+  })
+
+  it("selects only the canonical WilliamOS Project while keeping TerraFusion as the default", async () => {
+    const response = await POST(new Request("http://localhost/api/environment/space", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "WilliamOS delivery", projectKey: "williamos" }),
+    }))
+    expect(response.status).toBe(201)
+    expect(seams.resolveBinding).toHaveBeenCalledWith("owner", "williamos")
+
+    await GET(new Request("http://localhost/api/environment/space"))
+    expect(seams.resolveBinding).toHaveBeenLastCalledWith("owner", "terrafusion")
+  })
+
+  it.each([
+    ["GET", () => GET(new Request("http://localhost/api/environment/space?projectKey=foreign"))],
+    ["POST", () => POST(new Request("http://localhost/api/environment/space", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectKey: "foreign" }),
+    }))],
+    ["PUT", () => PUT(new Request("http://localhost/api/environment/space", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worldId: "a", space: {}, projectKey: { repository: "bsvalues/terragroq" } }),
+    }))],
+  ])("rejects an unregistered %s project selector before binding or persistence", async (_method, invoke) => {
+    seams.resolveBinding.mockClear()
+    const response = await invoke()
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: "SPACE_PROJECT_INVALID" })
+    expect(seams.resolveBinding).not.toHaveBeenCalled()
   })
 
   it("never degrades an exact missing or project-mismatched lookup into browser state", async () => {

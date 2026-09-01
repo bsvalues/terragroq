@@ -1,7 +1,10 @@
 import {
   removeOwnedProjectSpace,
 } from "@/lib/environment/space-persistence"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type CanonicalWorkspaceProjectKey,
+} from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
@@ -16,15 +19,22 @@ function validWorldId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0")
 }
 
+function canonicalProjectKey(value: string | null): CanonicalWorkspaceProjectKey | null {
+  if (value === null) return "terrafusion"
+  return value === "terrafusion" || value === "williamos" ? value : null
+}
+
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ worldId: string }> },
 ) {
   const session = await getSession()
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
   const { worldId } = await context.params
   if (!validWorldId(worldId)) return reply({ error: "WORLD_ID_INVALID" }, 400)
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const projectKey = canonicalProjectKey(new URL(request.url).searchParams.get("projectKey"))
+  if (!projectKey) return reply({ error: "SPACE_PROJECT_INVALID" }, 400)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
   if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
   try {
     const removed = await removeOwnedProjectSpace({
