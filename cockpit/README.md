@@ -23,7 +23,7 @@ includes that loader because the GNU executable requires it before application e
 ```powershell
 pnpm install --frozen-lockfile
 pnpm native:test
-pnpm tauri:build -- --bundles msi,nsis
+pnpm tauri:build
 ```
 
 Installers are emitted below `src-tauri/target/release/bundle/msi` and `src-tauri/target/release/bundle/nsis`. Before accepting an installed build, verify that the install contains both `williamos-cockpit.exe` and `WebView2Loader.dll`, launch twice, and confirm one process owns the loopback single-instance guard. Record the source commit, lockfiles, artifact size, and SHA-256. An unsigned local build is not a trusted distribution artifact.

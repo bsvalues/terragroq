@@ -25,6 +25,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($Action -eq "test") {
   & cargo test --manifest-path (Join-Path $cockpitRoot "src-tauri\Cargo.toml") --locked @NativeArguments
 } else {
+  if ($Action -eq "build" -and (-not $NativeArguments -or $NativeArguments.Count -eq 0)) {
+    $NativeArguments = @("--bundles", "msi,nsis")
+  }
   & pnpm exec tauri $Action @NativeArguments
 }
 exit $LASTEXITCODE

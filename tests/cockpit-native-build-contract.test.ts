@@ -20,6 +20,7 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
     expect(packageJson.scripts["tauri:dev"]).toContain("invoke-native.ps1 dev")
     expect(packageJson.scripts["tauri:build"]).toContain("invoke-native.ps1 build")
     expect(invoke.indexOf("stage-webview2-loader.ps1")).toBeLessThan(invoke.indexOf("cargo test"))
+    expect(invoke).toContain('@("--bundles", "msi,nsis")')
   })
 
   it("provides the already-installed MinGW dlltool to cargo and every dependency", () => {
