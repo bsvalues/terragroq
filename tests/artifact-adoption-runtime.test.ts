@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto"
 
 import { describe, expect, it, vi } from "vitest"
 
-import { createArtifactAdoptionRuntime } from "@/lib/governance/artifact-adoption-runtime"
+import { createArtifactAdoptionRuntime, deriveArtifactAdoptionBaseSha } from "@/lib/governance/artifact-adoption-runtime"
 
 const head = "2".repeat(40)
 const base = "1".repeat(40)
@@ -100,6 +100,31 @@ function harness(row = authorityRow()) {
 }
 
 describe("persisted prospective artifact adoption", () => {
+  it("fetches and verifies the exact admitted PR head before deriving its merge base", async () => {
+    const execute = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args[0] === "pr") return { stdout: JSON.stringify({ number: 1117, state: "OPEN", headRefOid: head, baseRefOid: "0".repeat(40), baseRefName: "main" }) }
+      if (args.includes("refs/williamos/artifact-adoption/pr-1117-head^{commit}")) return { stdout: `${head}\n` }
+      if (args.includes("refs/remotes/origin/main^{commit}")) return { stdout: `${base}\n` }
+      if (args.includes("merge-base")) return { stdout: `${base}\n` }
+      return { stdout: "" }
+    })
+    await expect(deriveArtifactAdoptionBaseSha("C:/repo", "https://github.com/bsvalues/terragroq", 1117, head, execute))
+      .resolves.toEqual({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base })
+    expect(execute).toHaveBeenCalledWith("git", ["-C", "C:/repo", "fetch", "--quiet", "origin",
+      "+refs/pull/1117/head:refs/williamos/artifact-adoption/pr-1117-head"], { windowsHide: true })
+    expect(execute.mock.calls.find(([, args]) => args.includes("merge-base"))?.[1]).toContain(head)
+  })
+
+  it("fails closed when the fetched PR ref no longer equals the admitted head", async () => {
+    const execute = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args[0] === "pr") return { stdout: JSON.stringify({ number: 1117, state: "OPEN", headRefOid: head, baseRefOid: "0".repeat(40), baseRefName: "main" }) }
+      if (args.includes("refs/williamos/artifact-adoption/pr-1117-head^{commit}")) return { stdout: `${"9".repeat(40)}\n` }
+      return { stdout: "" }
+    })
+    await expect(deriveArtifactAdoptionBaseSha("C:/repo", "https://github.com/bsvalues/terragroq", 1117, head, execute))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+    expect(execute.mock.calls.some(([, args]) => args.includes("merge-base"))).toBe(false)
+  })
   it("derives exact artifact authority from the persisted Space admission and rejects malformed reservations before GitHub", async () => {
     const valid = harness()
     await expect(valid.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({ pullRequest: 1117, headSha: head, paths })
@@ -163,6 +188,7 @@ describe("persisted prospective artifact adoption", () => {
     ])
     expect(lifecycle.inspectPullRequest).toHaveBeenCalledWith(1117, { allowRemediationBranch: true })
     expect(sealed.seal.payload).toMatchObject({ version: "williamos-delivery-seal.v2", delivery: { commitSha: head, paths } })
+    expect(sealed.sealBlock).toBe(["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(sealed.seal, null, 2), "```"].join("\n"))
     expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(2)
 
     const replayed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")

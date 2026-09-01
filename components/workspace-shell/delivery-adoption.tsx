@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Check, Fingerprint, GitCommitHorizontal, LoaderCircle, ShieldCheck } from "lucide-react"
+import { Check, Clipboard, Fingerprint, GitCommitHorizontal, LoaderCircle, ShieldCheck } from "lucide-react"
 
 const ENDPOINT = "/api/governance/delivery-adoption"
 
@@ -26,6 +26,7 @@ type ArtifactSeal = Readonly<{
   worldId: string
   adoptionHash: string
   seal: Readonly<{ payload: Record<string, unknown>; signature: string }>
+  sealBlock: string
 }>
 
 type RestoredArtifactSeal = ArtifactSeal & Omit<ArtifactPreview, "status">
@@ -89,22 +90,27 @@ function isAuthorization(value: unknown): value is ArtifactAuthorization {
     && Number.isSafeInteger(value.authorizationEventId) && Number(value.authorizationEventId) > 0
 }
 
-function hasSeal(value: Record<string, unknown>): value is { seal: ArtifactSeal["seal"] } {
+function hasSeal(value: Record<string, unknown>): value is Record<string, unknown> & { seal: ArtifactSeal["seal"] } {
   return isRecord(value.seal)
     && hasExactKeys(value.seal, ["payload", "signature"])
     && isRecord(value.seal.payload)
     && typeof value.seal.signature === "string" && value.seal.signature.length > 0
 }
 
+function deliverySealBlock(seal: ArtifactSeal["seal"]): string {
+  return ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(seal, null, 2), "```"].join("\n")
+}
+
 function isRestoredSeal(value: unknown): value is RestoredArtifactSeal {
   return isRecord(value)
-    && hasExactKeys(value, ["status", "worldId", "pullRequest", "headSha", "paths", "previewDigest", "adoptionHash", "seal"])
+    && hasExactKeys(value, ["status", "worldId", "pullRequest", "headSha", "paths", "previewDigest", "adoptionHash", "seal", "sealBlock"])
     && value.status === "SEALED"
     && typeof value.worldId === "string"
     && Number.isSafeInteger(value.pullRequest) && Number(value.pullRequest) > 0
     && isHead(value.headSha) && isStrings(value.paths) && isDigest(value.previewDigest)
     && isDigest(value.adoptionHash)
     && hasSeal(value)
+    && value.sealBlock === deliverySealBlock(value.seal)
 }
 
 function compact(value: string): string {
@@ -129,6 +135,7 @@ export function DeliveryAdoption({
   const [authorization, setAuthorization] = useState<ArtifactAuthorization | null>(null)
   const [seal, setSeal] = useState<ArtifactSeal | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<string | null>(null)
   const attemptRef = useRef<string | null>(null)
 
   const explainFailure = useCallback((value: unknown, fallback: string) => {
@@ -171,7 +178,7 @@ export function DeliveryAdoption({
         setAuthorization(value)
         setStage("authorized")
       } else if (isRestoredSeal(value)) {
-        setSeal({ status: "SEALED", worldId: value.worldId, adoptionHash: value.adoptionHash, seal: value.seal })
+        setSeal({ status: "SEALED", worldId: value.worldId, adoptionHash: value.adoptionHash, seal: value.seal, sealBlock: value.sealBlock })
         setStage("sealed")
       } else {
         setStage("ready")
@@ -232,11 +239,21 @@ export function DeliveryAdoption({
       if (!response.ok || !isRestoredSeal(value) || value.worldId !== worldId || value.adoptionHash !== authorization.adoptionHash) {
         throw new Error(explainFailure(value, "WilliamOS could not validate and seal this exact artifact."))
       }
-      setSeal({ status: "SEALED", worldId: value.worldId, adoptionHash: value.adoptionHash, seal: value.seal })
+      setSeal({ status: "SEALED", worldId: value.worldId, adoptionHash: value.adoptionHash, seal: value.seal, sealBlock: value.sealBlock })
       setStage("sealed")
     } catch (cause) {
       setStage("authorized")
       setError(cause instanceof Error ? cause.message : "WilliamOS could not validate and seal this exact artifact.")
+    }
+  }
+
+  async function copySealBlock() {
+    if (!seal) return
+    try {
+      await navigator.clipboard.writeText(seal.sealBlock)
+      setCopyStatus("Full delivery seal block copied.")
+    } catch {
+      setCopyStatus("Clipboard unavailable. Select and copy the full block below.")
     }
   }
 
@@ -264,7 +281,13 @@ export function DeliveryAdoption({
         ) : null}
 
         {stage === "loading" ? <p role="status" className="flex items-center gap-2 text-xs text-[#9ca797]"><LoaderCircle className="size-3.5 animate-spin" aria-hidden />Reading current Space authority and exact artifact…</p> : null}
-        {stage === "sealed" && seal ? <p role="status" className="flex items-center gap-2 rounded border border-[#52634d] bg-[#172016] px-3 py-2 text-xs text-[#dbe7d6]"><Check className="size-4" aria-hidden />Exact-head evidence is green and the delivery seal is issued · {compact(seal.adoptionHash)}</p> : null}
+        {stage === "sealed" && seal ? <div className="grid gap-3 rounded border border-[#52634d] bg-[#172016] px-3 py-3 text-xs text-[#dbe7d6]">
+          <p role="status" className="flex items-center gap-2"><Check className="size-4" aria-hidden />Exact-head evidence is green and the delivery seal is issued · {compact(seal.adoptionHash)}</p>
+          <p className="leading-5 text-[#aebaa9]">Publish this complete block in PR #{preview?.pullRequest}’s description so the protected delivery check can verify it.</p>
+          <textarea aria-label="Complete WilliamOS delivery seal block" readOnly value={seal.sealBlock} rows={8} className="w-full resize-y rounded border border-[#42503f] bg-[#090c09] p-2 font-mono text-[10px] leading-4 text-[#dbe7d6]" />
+          <button type="button" onClick={() => void copySealBlock()} className="flex items-center gap-2 justify-self-end rounded border border-[#8da083] bg-[#253122] px-3 py-2 font-semibold text-[#edf3e9]"><Clipboard className="size-3.5" aria-hidden />Copy complete seal block</button>
+          {copyStatus ? <p role="status" className="text-[#aebaa9]">{copyStatus}</p> : null}
+        </div> : null}
         {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
 
         {stage === "ready" ? <button type="button" onClick={() => void authorize()} className="justify-self-end rounded border border-[#8da083] bg-[#253122] px-4 py-2 text-xs font-semibold text-[#edf3e9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#a7ba9d]">Authorize exact artifact</button> : null}

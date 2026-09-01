@@ -10,6 +10,8 @@ import { DeliveryAdoption } from "@/components/workspace-shell/delivery-adoption
 const worldId = "space-adoption"
 const headSha = "8df3d10a2060abe6f51282c5391c7b5723f788da"
 const previewDigest = "a".repeat(64)
+const seal = { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" }
+const sealBlock = ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(seal, null, 2), "```"].join("\n")
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -97,7 +99,7 @@ describe("prospective delivery adoption UI", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ status: "READY_FOR_CONFIRMATION", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest }))
       .mockResolvedValueOnce(response({ status: "AUTHORIZED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, idempotencyKey, adoptionHash, authorizationEventId: 101 }, 201))
-      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
+      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal, sealBlock }))
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("crypto", { randomUUID: () => idempotencyKey })
 
@@ -117,7 +119,8 @@ describe("prospective delivery adoption UI", () => {
       idempotencyKey,
     })
     expect(await screen.findByText(/delivery seal is issued/i)).toBeTruthy()
-    expect(screen.queryByRole("textbox")).toBeNull()
+    expect((screen.getByRole("textbox", { name: "Complete WilliamOS delivery seal block" }) as HTMLTextAreaElement).value).toBe(sealBlock)
+    expect(screen.getByRole("button", { name: "Copy complete seal block" })).toBeTruthy()
   })
 
   it("restores persisted authorization from preview after reload and resumes at exact-head validation", async () => {
@@ -136,7 +139,7 @@ describe("prospective delivery adoption UI", () => {
         adoptionHash,
         authorizationEventId: 101,
       }))
-      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
+      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal, sealBlock }))
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("crypto", { randomUUID: () => idempotencyKey })
 
@@ -162,7 +165,8 @@ describe("prospective delivery adoption UI", () => {
       paths: ["app/a.ts", "lib/b.ts"],
       previewDigest,
       adoptionHash,
-      seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" },
+      seal,
+      sealBlock,
     }))
     vi.stubGlobal("fetch", fetchMock)
 

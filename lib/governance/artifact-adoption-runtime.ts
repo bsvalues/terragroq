@@ -28,6 +28,12 @@ const ADMISSION_OPERATION = "space.external_work_order.admit"
 const SUPPORTED_REPOSITORY = "bsvalues/terragroq"
 const DELIVERY_SEAL_CHECK = "WilliamOS assignment delivery seal"
 
+type CommandRunner = (
+  executable: string,
+  args: readonly string[],
+  options: Readonly<{ encoding?: "utf8"; windowsHide: true }>,
+) => Promise<Readonly<{ stdout: string }>>
+
 type QueryResult = { rows: Record<string, unknown>[] }
 type Queryable = { query(sql: string, values?: readonly unknown[]): Promise<QueryResult> }
 type Client = Queryable & { release(): void }
@@ -170,11 +176,17 @@ const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
     AND receipt."operation" = '${ADMISSION_OPERATION}' AND receipt."outcomeKey" = outcome."outcomeKey"
   WHERE world."userId" = $1 AND world."id" = $2`
 
-async function defaultBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<Readonly<{ pullRequestBaseSha: string; baseRefSha: string; mergeBaseSha: string }>> {
+export async function deriveArtifactAdoptionBaseSha(
+  root: string,
+  repository: string,
+  pullRequest: number,
+  headSha: string,
+  execute: CommandRunner = runFile as unknown as CommandRunner,
+): Promise<Readonly<{ pullRequestBaseSha: string; baseRefSha: string; mergeBaseSha: string }>> {
   try {
     const slug = repository.replace(/^https:\/\/github\.com\//, "")
     if (slug !== SUPPORTED_REPOSITORY) throw new Error("unsupported repository")
-    const result = await runFile("gh", ["pr", "view", String(pullRequest), "--repo", slug, "--json", "number,state,headRefOid,baseRefOid,baseRefName"], {
+    const result = await execute("gh", ["pr", "view", String(pullRequest), "--repo", slug, "--json", "number,state,headRefOid,baseRefOid,baseRefName"], {
       encoding: "utf8", windowsHide: true,
     })
     const value = JSON.parse(result.stdout) as Record<string, unknown>
@@ -182,9 +194,14 @@ async function defaultBaseSha(root: string, repository: string, pullRequest: num
     const baseRefName = String(value.baseRefName ?? "").trim()
     if (Number(value.number) !== pullRequest || value.state !== "OPEN"
       || value.headRefOid !== headSha || !SHA.test(pullRequestBaseSha) || !baseRefName) throw new Error("bad pull request identity")
-    await runFile("git", ["-C", root, "fetch", "--quiet", "origin", `refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`], { windowsHide: true })
-    const baseRefSha = (await runFile("git", ["-C", root, "rev-parse", `refs/remotes/origin/${baseRefName}^{commit}`], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
-    const mergeBaseSha = (await runFile("git", ["-C", root, "merge-base", baseRefSha, headSha], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
+    const localHeadRef = `refs/williamos/artifact-adoption/pr-${pullRequest}-head`
+    await execute("git", ["-C", root, "fetch", "--quiet", "origin",
+      `+refs/pull/${pullRequest}/head:${localHeadRef}`], { windowsHide: true })
+    const fetchedHeadSha = (await execute("git", ["-C", root, "rev-parse", `${localHeadRef}^{commit}`], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
+    if (fetchedHeadSha !== headSha) throw new Error("pull request head changed during fetch")
+    await execute("git", ["-C", root, "fetch", "--quiet", "origin", `refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`], { windowsHide: true })
+    const baseRefSha = (await execute("git", ["-C", root, "rev-parse", `refs/remotes/origin/${baseRefName}^{commit}`], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
+    const mergeBaseSha = (await execute("git", ["-C", root, "merge-base", baseRefSha, fetchedHeadSha], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
     if (!SHA.test(baseRefSha) || !SHA.test(mergeBaseSha)) throw new Error("bad pull request base")
     return { pullRequestBaseSha, baseRefSha, mergeBaseSha }
   } catch { fail("DELIVERY_SEAL_DIFF_INVALID", "the exact artifact base commit is unavailable") }
@@ -198,7 +215,7 @@ function defaultOptions(): ArtifactAdoptionRuntimeOptions {
       repository: repository.replace(/^https:\/\/github\.com\//, ""), workspaceRoot: root, repositoryRoot: root,
       ownedWorktreeRoot: path.join(os.homedir(), ".williamos", "loom", "codex-worktrees"),
     }) as Lifecycle,
-    deriveBaseSha: defaultBaseSha,
+    deriveBaseSha: deriveArtifactAdoptionBaseSha,
     inspectDelivery: (root, baseSha, commitSha, paths) => inspectGitDelivery(root, baseSha, commitSha, paths, { allowMultiple: true }),
     signingKey: deliverySigningKeyFromBase64(process.env.WILLIAMOS_DELIVERY_SEAL_PRIVATE_KEY_B64),
     now: () => new Date(),
@@ -206,6 +223,11 @@ function defaultOptions(): ArtifactAdoptionRuntimeOptions {
 }
 
 export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOptions) {
+  const sealBlock = (seal: WilliamOSDeliverySeal) => [
+    "```WILLIAMOS_DELIVERY_SEAL",
+    JSON.stringify(seal, null, 2),
+    "```",
+  ].join("\n")
   const loadContext = async (userId: string, worldId: string): Promise<Context> => {
     const result = await options.database.query(CONTEXT_SQL, [userId, worldId])
     if (result.rows.length === 0) fail("DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND", "no exact Space-bound delivery adoption is available")
@@ -431,7 +453,7 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
           status: "SEALED" as const, worldId,
           pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
           paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
-          adoptionHash: persisted.authorization.adoptionHash, seal,
+          adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
         }
       }
       await recordProspectiveArtifactAdoptionEvidence({ userId, authorizationEventId: persisted.eventId, authorization: persisted.authorization }, dependencies)
@@ -443,7 +465,7 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         status: "SEALED" as const, worldId,
         pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
         paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
-        adoptionHash: persisted.authorization.adoptionHash, seal,
+        adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
       }
     },
   }
