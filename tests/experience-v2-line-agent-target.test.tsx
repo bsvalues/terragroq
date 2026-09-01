@@ -30,7 +30,7 @@ vi.mock("next/dynamic", () => ({
   },
 }))
 
-function workspaceResponse() {
+function workspaceResponse(storage: "browser" | "server" = "browser") {
   const space = {
     ...defaultSpace(),
     selectedPath: "src/app.ts",
@@ -42,15 +42,19 @@ function workspaceResponse() {
     space: spaceToServer(space),
     spine: EMPTY_SPINE,
     project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
-    storage: "browser",
-    browserStorageKey: "line-target-test",
+    storage,
+    ...(storage === "browser" ? { browserStorageKey: "line-target-test" } : {}),
   })
 }
 
-function fetcher() {
+function fetcher(storage: "browser" | "server" = "browser") {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+    if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse(storage))
+    if (url === "/api/environment/space" && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body))
+      return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-08-30T12:00:00.000Z" }))
+    }
     if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
     if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n" }))
     if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json(liveDiff))
@@ -428,6 +432,122 @@ describe("Experience V2 Line durable-session targets", () => {
 
     expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
     expect(harness.controller.continueSession).not.toHaveBeenCalled()
+  })
+
+  it("asks William with one exact bounded saved-session snapshot and no agent execution", async () => {
+    const base = fetcher("server")
+    const lineBodies: any[] = []
+    const mockedFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)))
+        return Promise.resolve(Response.json({ worldId: "browser-world", say: "Historical advisory.", surfaces: [], spine: EMPTY_SPINE }))
+      }
+      return base(input, init)
+    })
+    vi.stubGlobal("fetch", mockedFetch)
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Reviewer · Claude · Review src/app.ts" })[0])
+    fireEvent.click(screen.getByRole("button", { name: "Ask William" }))
+    expect(await screen.findByText(`Browser-saved session snapshot · Claude:${FIRST} · runtime liveness unverified`)).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "What should I know about this exact session?" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+
+    await waitFor(() => expect(lineBodies).toHaveLength(1))
+    expect(lineBodies[0]).toMatchObject({
+      worldId: "browser-world",
+      text: "What should I know about this exact session?",
+      lineContext: {
+        kind: "agent-snapshot",
+        sessionKey: `Claude:${FIRST}`,
+        role: "Reviewer",
+        provider: "Claude",
+        assignment: "Review src/app.ts",
+        mode: "review",
+        target: "file review · src/app.ts",
+        forkedFrom: null,
+        updatedAt: "2026-08-30T12:00:00.000Z",
+        lastTurn: {
+          identity: "turn-1:2026-08-30T12:00:00.000Z",
+          result: { excerpt: "Saved Review src/app.ts", originalCodePoints: 23 },
+        },
+      },
+    })
+    expect(lineBodies[0].lineContext.clientGuard).toBeUndefined()
+    expect(harness.controller.continueSession).not.toHaveBeenCalled()
+    expect(harness.controller.runClaudeTurn).not.toHaveBeenCalled()
+    expect(harness.controller.runAgentTurn).not.toHaveBeenCalled()
+  })
+
+  it("sends no William request when the selected saved session changes after snapshot capture", async () => {
+    const base = fetcher()
+    const lineRequests: unknown[] = []
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/environment/line" && init?.method === "POST") {
+        lineRequests.push(init.body)
+        return Promise.resolve(Response.json({ worldId: "browser-world", say: "must not settle", surfaces: [], spine: EMPTY_SPINE }))
+      }
+      return base(input, init)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Reviewer · Claude · Review src/app.ts" })[0])
+    fireEvent.click(screen.getByRole("button", { name: "Ask William" }))
+    await screen.findByText(/Browser-saved session snapshot/)
+    fireEvent.click(screen.getByRole("button", { name: "Focus Source" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "What should I know?" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+
+    expect(await screen.findByText("The selected browser-saved session changed before William dispatch, so no advice was requested.")).toBeTruthy()
+    expect(lineRequests).toHaveLength(0)
+  })
+
+  it("rechecks the exact saved session after the Space persistence barrier before requesting William", async () => {
+    const base = fetcher("server")
+    const lineRequests: unknown[] = []
+    let signalPutStarted!: () => void
+    let releasePut!: () => void
+    let deferNextPut = false
+    const putStarted = new Promise<void>((resolve) => { signalPutStarted = resolve })
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/environment/space" && init?.method === "PUT" && deferNextPut) {
+        deferNextPut = false
+        const body = JSON.parse(String(init.body))
+        signalPutStarted()
+        return new Promise<Response>((resolve) => {
+          releasePut = () => resolve(Response.json({
+            worldId: body.worldId,
+            space: body.space,
+            updatedAt: "2026-08-30T12:00:00.000Z",
+          }))
+        })
+      }
+      if (String(input) === "/api/environment/line" && init?.method === "POST") {
+        lineRequests.push(init.body)
+        return Promise.resolve(Response.json({ worldId: "browser-world", say: "must not settle", surfaces: [], spine: EMPTY_SPINE }))
+      }
+      return base(input, init)
+    }))
+    const { rerender } = render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Reviewer · Claude · Review src/app.ts" })[0])
+    fireEvent.click(screen.getByRole("button", { name: "Ask William" }))
+    await screen.findByText(/Browser-saved session snapshot/)
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "What should I know?" } })
+    deferNextPut = true
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    await putStarted
+
+    harness.controller.savedSessions = [descriptor(SECOND, "Review src/other.ts")]
+    harness.controller.selectedSessionKey = `Claude:${SECOND}`
+    rerender(<WorkspaceShell />)
+    releasePut()
+
+    expect(await screen.findByText("The selected browser-saved session changed before William dispatch, so no advice was requested.")).toBeTruthy()
+    expect(lineRequests).toHaveLength(0)
   })
 })
 
