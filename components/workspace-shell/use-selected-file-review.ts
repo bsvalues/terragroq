@@ -164,5 +164,9 @@ export function useSelectedFileReview({
     run(capture.path, "", null, capture)
   ), [run])
 
-  return { ...state, canStop: state.running, reset, start, startCapturedPath, stop }
+  const startCapturedDiff = useCallback((diff: SelectedDiffReviewCapture) => (
+    run(diff.path, "", diff, null)
+  ), [run])
+
+  return { ...state, canStop: state.running, reset, start, startCapturedPath, startCapturedDiff, stop }
 }

@@ -1516,8 +1516,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       worldId,
       transitionEpoch: transitionEpochRef.current,
     }
+    const reviewIdentityIsCurrent = () => {
+      const current = stateRef.current
+      const live = liveDiffContextRef.current
+      return Boolean(worldRef.current === captured.worldId
+        && transitionEpochRef.current === captured.transitionEpoch
+        && storageRef.current === "server"
+        && current.activeWindowId === "diff" && current.selectedPath === captured.path
+        && !dirtyPathsRef.current[captured.path]
+        && live?.worldId === captured.worldId && live.path === captured.path
+        && live.fingerprint === captured.fingerprint
+        && !persistenceErrorRef.current)
+    }
     setCapturedDiffReview(captured)
-    setAgentWorkReview(false)
+    setAgentWorkReview(true)
     setCapturedDiffImprove(null)
     setReviewTarget(captured.path)
     review.reset(captured.path)
@@ -1529,8 +1541,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineTargetPickerOpen(false)
     setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
+    void review.startCapturedDiff({
+      worldId: captured.worldId,
+      path: captured.path,
+      fingerprint: captured.fingerprint,
+      isCurrent: reviewIdentityIsCurrent,
+      beforeStart: async () => {
+        await persistBarrierRef.current()
+        if (!reviewIdentityIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
+      },
+    })
+  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
     const target = space.selectedPath
