@@ -41,16 +41,31 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   throw "Rollback is incomplete: $manifestPath is missing"
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.version -ne 2 -or $null -eq $manifest.nextPresent -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if ($manifest.version -ne 3 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
-$expectedRollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
+$expectedRollbackFiles = @(
+  "server.js",
+  "package.json",
+  "lib\generated\build-provenance.json",
+  "scripts\hermes-https-proxy.mjs",
+  "scripts\fabric\resolve-authority-registry-url.mjs"
+)
 $manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
   throw "Rollback manifest does not name the exact runtime file set"
 }
-if ($manifest.nextPresent -and -not (Test-Path -LiteralPath (Join-Path $RollbackRoot ".next") -PathType Container)) {
-  throw "Rollback is incomplete: $RollbackRoot\.next is missing"
+$expectedRollbackDirectories = @(".next", "public", "lib\fabric")
+if ([bool]$manifest.withDependencies) { $expectedRollbackDirectories += "node_modules" }
+$manifestDirectoryPaths = @($manifest.directories | ForEach-Object { [string]$_.path })
+if (@(Compare-Object -ReferenceObject $expectedRollbackDirectories -DifferenceObject $manifestDirectoryPaths).Count -ne 0) {
+  throw "Rollback manifest does not name the exact runtime directory set"
+}
+foreach ($entry in $manifest.directories) {
+  if (-not $entry.path -or $null -eq $entry.wasPresent) { throw "Rollback manifest has an invalid directory entry" }
+  if ($entry.wasPresent -and -not (Test-Path -LiteralPath (Join-Path $RollbackRoot $entry.path) -PathType Container)) {
+    throw "Rollback is incomplete: $(Join-Path $RollbackRoot $entry.path) is missing"
+  }
 }
 foreach ($entry in $manifest.files) {
   if (-not $entry.path -or $null -eq $entry.wasPresent) { throw "Rollback manifest has an invalid file entry" }
@@ -74,11 +89,15 @@ Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandFragment "server.js"
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandFragment "hermes-https-proxy.mjs"
 Start-Sleep -Seconds 2
 
-if ($manifest.nextPresent) {
-  $null = robocopy (Join-Path $RollbackRoot ".next") (Join-Path $Runtime ".next") /MIR /NFL /NDL /NJH /NJS /NP
-  if ($LASTEXITCODE -ge 8) { throw "rollback failed copying .next (exit $LASTEXITCODE)" }
-} elseif (Test-Path -LiteralPath (Join-Path $Runtime ".next")) {
-  Remove-Item -LiteralPath (Join-Path $Runtime ".next") -Recurse -Force
+foreach ($entry in $manifest.directories) {
+  $source = Join-Path $RollbackRoot $entry.path
+  $target = Join-Path $Runtime $entry.path
+  if ($entry.wasPresent) {
+    $null = robocopy $source $target /MIR /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback failed copying $($entry.path) (exit $LASTEXITCODE)" }
+  } elseif (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Recurse -Force
+  }
 }
 
 foreach ($entry in $manifest.files) {

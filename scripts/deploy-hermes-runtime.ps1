@@ -210,26 +210,39 @@ if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).
 # ROLLBACK CAPTURE, before anything is overwritten. `robocopy /MIR` below is destructive and this
 # script used to say, accurately, that "the previous build is not automatically restored" -- which
 # left the only recovery from a bad deploy as "rebuild the previous commit", requiring the previous
-# commit to still be known and buildable. The three things the deploy replaces are copied aside
-# first, so recovery is a copy back.
-#
-# Deliberately NOT node_modules or .env.local: neither is touched unless -WithDependencies is passed,
-# and .env.local is guarded by hash below.
+# commit to still be known and buildable. Every runtime path this script can mutate is copied aside
+# first, so recovery is a copy back. `.env.local` is excluded because deployment never writes it and
+# its hash is guarded below; node_modules is captured exactly when -WithDependencies will replace it.
 if (-not $SkipRollbackCapture) {
   $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
-  $rollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
+  $rollbackFiles = @(
+    "server.js",
+    "package.json",
+    "lib\generated\build-provenance.json",
+    "scripts\hermes-https-proxy.mjs",
+    "scripts\fabric\resolve-authority-registry-url.mjs"
+  )
+  $rollbackDirectories = @(".next", "public", "lib\fabric")
+  if ($WithDependencies) { $rollbackDirectories += "node_modules" }
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 2
-    nextPresent = (Test-Path -LiteralPath (Join-Path $Runtime ".next") -PathType Container)
+    version = 3
+    withDependencies = [bool]$WithDependencies
+    directories = @()
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
   }
-  if ($rollbackManifest.nextPresent) {
-    $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
-    if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying .next (exit $LASTEXITCODE)" }
+  foreach ($directory in $rollbackDirectories) {
+    $existing = Join-Path $Runtime $directory
+    $wasPresent = Test-Path -LiteralPath $existing -PathType Container
+    $rollbackManifest.directories += [ordered]@{ path = $directory; wasPresent = $wasPresent }
+    if ($wasPresent) {
+      $rollbackDirectory = Join-Path $rollbackRoot $directory
+      $null = robocopy $existing $rollbackDirectory /MIR /NFL /NDL /NJH /NJS /NP
+      if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying $directory (exit $LASTEXITCODE)" }
+    }
   }
   foreach ($file in $rollbackFiles) {
     $existing = Join-Path $Runtime $file
@@ -246,7 +259,7 @@ if (-not $SkipRollbackCapture) {
     $null = New-Item -ItemType Directory -Path (Split-Path -Parent $liveStartRollbackFile) -Force
     Copy-Item -LiteralPath $LiveStartTarget -Destination $liveStartRollbackFile -Force
   }
-  $rollbackManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
+  $rollbackManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
   $restoreScriptLiteral = ConvertTo-PowerShellLiteral (Join-Path $Source "scripts\restore-hermes-runtime.ps1")

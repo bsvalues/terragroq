@@ -264,11 +264,15 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(verify).toMatch(/\$runningSha\s+-ne\s+\$looseSha/)
   })
 
-  it("captures every loose file it overwrites in the rollback", () => {
+  it("captures every loose file and directory it can overwrite in the rollback", () => {
     const code = executableOnly(deployText)
-    for (const file of ["server.js", "package.json", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs"]) {
+    for (const file of ["server.js", "package.json", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
       expect(code).toContain(file)
     }
+    for (const directory of ['".next"', '"public"', '"lib\\fabric"', '"node_modules"']) {
+      expect(code).toContain(directory)
+    }
+    expect(code).toMatch(/if \(\$WithDependencies\) \{ \$rollbackDirectories \+= "node_modules" \}/)
     expect(code).toContain("restore-hermes-runtime.ps1")
   })
 
@@ -277,10 +281,13 @@ describe("the deploy places what the start script needs and can be undone", () =
     const restore = executableOnly(restoreText)
     expect(code).toContain("rollback-manifest.json")
     expect(code).toContain("wasPresent")
-    expect(code).toContain("nextPresent")
+    expect(code).toContain("withDependencies")
+    expect(code).toContain("directories")
     expect(restore).toContain("expectedRollbackFiles")
+    expect(restore).toContain("expectedRollbackDirectories")
     expect(restore).toContain("Compare-Object")
-    expect(restore).toMatch(/elseif\s*\(Test-Path -LiteralPath \$target\)[\s\S]*Remove-Item -LiteralPath \$target/)
+    expect(restore).toMatch(/foreach \(\$entry in \$manifest\.directories\)[\s\S]*Remove-Item -LiteralPath \$target -Recurse -Force/)
+    expect(restore).toMatch(/foreach \(\$entry in \$manifest\.files\)[\s\S]*Remove-Item -LiteralPath \$target -Force/)
     expect(code).toContain("liveStartWasPresent")
     expect(code).toContain("external\\start-williamos-live.ps1")
     expect(restore).toContain("Rollback manifest does not name the exact WilliamOS Live start definition")
