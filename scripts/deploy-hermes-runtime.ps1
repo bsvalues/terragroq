@@ -141,6 +141,15 @@ $standalone = Join-Path $Source ".next\standalone"
 if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
 }
+
+# The restore command is operator-facing, executable rollback evidence. Values must be serialized as
+# PowerShell data, not interpolated into double-quoted source where `$` and backticks are evaluated.
+# Single-quoted literals preserve every Windows path metacharacter; apostrophes double inside them.
+function ConvertTo-PowerShellLiteral {
+  param([string]$Value)
+  if ($Value -match "[`r`n`0]") { throw "Cannot render a multiline or NUL-containing rollback argument" }
+  return "'" + $Value.Replace("'", "''") + "'"
+}
 $liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-williamos-live.ps1"
 if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
@@ -231,7 +240,13 @@ if (-not $SkipRollbackCapture) {
   $rollbackManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
-  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Source\scripts\restore-hermes-runtime.ps1`" -RollbackRoot `"$rollbackRoot`" -Runtime `"$Runtime`" -TaskName `"$TaskName`" -HttpsTaskName `"$HttpsTaskName`" -LiveStartTarget `"$LiveStartTarget`""
+  $restoreScriptLiteral = ConvertTo-PowerShellLiteral (Join-Path $Source "scripts\restore-hermes-runtime.ps1")
+  $rollbackRootLiteral = ConvertTo-PowerShellLiteral $rollbackRoot
+  $runtimeLiteral = ConvertTo-PowerShellLiteral $Runtime
+  $taskNameLiteral = ConvertTo-PowerShellLiteral $TaskName
+  $httpsTaskNameLiteral = ConvertTo-PowerShellLiteral $HttpsTaskName
+  $liveStartTargetLiteral = ConvertTo-PowerShellLiteral $LiveStartTarget
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral"
 }
 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the

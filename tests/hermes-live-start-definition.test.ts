@@ -288,10 +288,13 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(restore).toMatch(/Remove-Item\s+-LiteralPath\s+\$LiveStartTarget/)
   })
 
-  it("prints a restore command bound to the exact custom launcher target", () => {
+  it("prints a restore command with every path serialized as PowerShell data", () => {
     const code = executableOnly(deployText)
     const restoreCommand = code.split(/\r?\n/).find((line) => line.includes("to restore:")) ?? ""
-    expect(restoreCommand).toContain('-LiveStartTarget `"$LiveStartTarget`"')
+    expect(code).toMatch(/function ConvertTo-PowerShellLiteral[\s\S]*\.Replace\("'",\s*"''"\)/)
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \$LiveStartTarget/)
+    expect(restoreCommand).toContain("-LiveStartTarget $liveStartTargetLiteral")
+    expect(restoreCommand).not.toContain('$LiveStartTarget`"')
   })
 
   it("refuses rollback-skip mode before overwriting an existing external launcher", () => {
