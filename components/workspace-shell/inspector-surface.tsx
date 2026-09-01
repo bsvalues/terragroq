@@ -6,6 +6,7 @@ import { HermesOperationalSurface } from "@/components/hermes/hermes-operational
 import { EXECUTION_ASSIGNMENT_INSPECTOR_KIND, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { parsePreviewInspectorPayload } from "./types"
 import type { AgentSessionDiffReview } from "./agent-sessions"
+import { AGENT_SESSION_INSPECTOR_SURFACE_KIND, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 
 export type InspectorSurface = Readonly<{
   id: string
@@ -102,6 +103,9 @@ export function diffReviewInspectorBinding(value: unknown): AgentSessionDiffRevi
 
 export function inspectorSurfaceWindowTitle(surface: InspectorSurface): string {
   if (surface.kind === "hermes") return "HERMES · Appliance"
+  const agentSession = surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+    ? parseAgentSessionInspectorPayload(surface.payload) : null
+  if (agentSession) return `Agent session · ${agentSession.role} · ${agentSession.provider}`
   const assignment = surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
     ? parseExecutionAssignmentInspectorPayload(surface.payload) : null
   if (assignment) return `Assignment · Work Order #${assignment.workOrderId}`
@@ -183,8 +187,47 @@ function WorldWorkerAssignmentInspector({ payload }: { payload: unknown }) {
   )
 }
 
+function DurableAgentSessionInspector({ payload }: { payload: unknown }) {
+  const snapshot = parseAgentSessionInspectorPayload(payload)
+  if (!snapshot) return <div className={styles.inspectorEmpty} role="status">Durable agent session snapshot unavailable.</div>
+  const truth = snapshot.verificationAtCapture === "verified"
+    ? `Verified at snapshot time ${snapshot.capturedAt} · current runtime liveness unverified`
+    : `Saved / resume unverified at snapshot time ${snapshot.capturedAt}`
+  const target = snapshot.target === null ? "—"
+    : snapshot.target.kind === "file" ? `file · ${snapshot.target.path}`
+    : snapshot.target.kind === "review" ? `file review · ${snapshot.target.path}`
+    : snapshot.target.kind === "preview" ? `preview · ${snapshot.target.worldId} · ${snapshot.target.evidenceFingerprint}`
+    : `diff · ${snapshot.target.path} · ${snapshot.target.fingerprint} · patch ${snapshot.target.patchHash}`
+  return (
+    <article className={styles.inspectorRows} aria-label="Durable agent session snapshot">
+      <h2>{snapshot.role} · {snapshot.provider}</h2>
+      <p><strong>{truth}</strong></p>
+      <dl>
+        <div><dt>Exact session key</dt><dd>{snapshot.sessionKey}</dd></div>
+        <div><dt>Assignment</dt><dd>{snapshot.assignment}</dd></div>
+        <div><dt>Mode</dt><dd>{snapshot.mode}</dd></div>
+        <div><dt>Target</dt><dd>{target}</dd></div>
+        <div><dt>Fork lineage</dt><dd>{snapshot.forkedFrom ? `Claude:${snapshot.forkedFrom}` : "—"}</dd></div>
+        <div><dt>Updated</dt><dd>{snapshot.updatedAt}</dd></div>
+      </dl>
+      <h3>Canonical completed turns · {snapshot.turns.length}</h3>
+      {snapshot.turns.length > 0 ? snapshot.turns.map((turn, index) => (
+        <section key={`${turn.completedAt}:${index}`} aria-label={`Completed turn ${index + 1}`}>
+          <h4>Turn {index + 1}</h4>
+          <dl>
+            <div><dt>Owner</dt><dd>{turn.ownerPrompt}</dd></div>
+            <div><dt>Result</dt><dd>{turn.finalResult}</dd></div>
+            <div><dt>Completed</dt><dd>{turn.completedAt}</dd></div>
+          </dl>
+        </section>
+      )) : <p>No completed turns retained.</p>}
+    </article>
+  )
+}
+
 export function InspectorSurfaceView({ surface, onRefresh }: { surface: InspectorSurface; onRefresh?: () => void }) {
   if (surface.kind === "hermes") return <HermesOperationalSurface />
+  if (surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND) return <DurableAgentSessionInspector payload={surface.payload} />
   if (surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) return <WorldWorkerAssignmentInspector payload={surface.payload} />
   if (surface.kind === "william-judgment") {
     try {
