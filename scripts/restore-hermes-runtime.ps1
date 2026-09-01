@@ -15,6 +15,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# The deployed HERMES proxy and its authenticated origin are one canonical 3443 -> 3100 boundary.
+# Refuse misleading probe/listener overrides before validating or mutating a rollback.
+if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
+  throw "WilliamOS HERMES uses the canonical HTTP/HTTPS ports 3100/3443; port overrides are not supported"
+}
+
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandFragment)
   Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |

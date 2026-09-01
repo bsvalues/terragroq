@@ -42,6 +42,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# These are product identity, not deployment knobs. The HTTPS proxy's host allow-list, forwarded
+# origin, device-auth boundary, native Cockpit capability, and HERMES certificates all name this
+# exact 3100/3443 pair. Accepting different values here previously changed only the probes and
+# rollback command while the proxy kept serving 3443 -> 3100. Refuse that split-brain state before
+# verification, task control, rollback capture, or file mutation.
+if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
+  throw "WilliamOS HERMES uses the canonical HTTP/HTTPS ports 3100/3443; port overrides are not supported"
+}
+
 # Resolved here rather than as a parameter default: $PSScriptRoot is not populated during parameter
 # binding, so the default silently became an empty path.
 if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }

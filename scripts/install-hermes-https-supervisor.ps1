@@ -17,6 +17,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($HttpsPort -ne 3443) {
+  throw "WilliamOS HERMES uses the canonical HTTPS port 3443; port overrides are not supported"
+}
 if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }
 
 $launcherSource = Join-Path $Source "deploy\hermes\williamos-https\start-williamos-https.ps1"

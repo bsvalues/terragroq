@@ -301,6 +301,22 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(restoreCommand).not.toContain('$LiveStartTarget`"')
   })
 
+  it("refuses noncanonical port overrides before verification or deployment mutation", () => {
+    const code = executableOnly(deployText)
+    const refusalIndex = code.indexOf("port overrides are not supported")
+    expect(code).toMatch(/\$Port\s+-ne\s+3100\s+-or\s+\$HttpsPort\s+-ne\s+3443/)
+    expect(refusalIndex).toBeGreaterThan(-1)
+    expect(refusalIndex).toBeLessThan(code.indexOf('if ($VerifyOnly)'))
+    expect(refusalIndex).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+
+    const restore = executableOnly(restoreText)
+    const restoreRefusalIndex = restore.indexOf("port overrides are not supported")
+    expect(restore).toMatch(/\$Port\s+-ne\s+3100\s+-or\s+\$HttpsPort\s+-ne\s+3443/)
+    expect(restoreRefusalIndex).toBeGreaterThan(-1)
+    expect(restoreRefusalIndex).toBeLessThan(restore.indexOf("Rollback directory does not exist"))
+    expect(restoreRefusalIndex).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
+  })
+
   it("refuses rollback-skip mode before overwriting an existing external launcher", () => {
     const code = executableOnly(deployText)
     const refusalIndex = code.indexOf("SkipRollbackCapture cannot overwrite")

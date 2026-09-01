@@ -15,6 +15,15 @@ function executableOnly(text: string) {
 }
 
 describe("the HERMES HTTPS supervisor", () => {
+  it("refuses a noncanonical HTTPS port before task or file mutation", () => {
+    const code = executableOnly(installer)
+    const refusalIndex = code.indexOf("port overrides are not supported")
+    expect(code).toMatch(/\$HttpsPort\s+-ne\s+3443/)
+    expect(refusalIndex).toBeGreaterThan(-1)
+    expect(refusalIndex).toBeLessThan(code.indexOf("rollback captured"))
+    expect(refusalIndex).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+  })
+
   it("invokes Node directly instead of detaching it with Start-Process", () => {
     const code = executableOnly(launcher)
     expect(code).toMatch(/&\s*\$node\s+\$proxy/)
