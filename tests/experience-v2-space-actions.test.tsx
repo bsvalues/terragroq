@@ -580,6 +580,34 @@ describe("Experience V2 selected Space actions", () => {
     expect(requests.some((request) => request.includes("/api/loom/codex") || request.includes("/api/loom/agent"))).toBe(false)
   })
 
+  it("does not offer Talk, Redirect, or Continue for a saved Claude file-mutation transcript without current authority", async () => {
+    const descriptor = {
+      schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Builder", provider: "Claude", assignment: "Build src/app.ts",
+      target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+    }
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({
+      schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [descriptor],
+    }))
+    const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "TerraFusion", space: serverSpace,
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", spine: EMPTY_SPINE,
+      })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Builder · Claude · Build src/app.ts" }))
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Redirect" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Continue session" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Review work" })).toBeTruthy()
+  })
+
   it.each([
     ["corrupt", "{not-json", "Saved durable sessions are corrupt, so Continue cannot verify an exact session."],
     ["oversized", "x".repeat(262_145), "Saved durable sessions exceed the safe storage limit, so Continue cannot verify an exact session."],

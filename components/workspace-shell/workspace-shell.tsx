@@ -342,6 +342,10 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
 
 function durableSessionDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | StandardDelegateContext | null {
   if (!agent || agent.kind !== "durable-session") return null
+  // A saved Claude file-mutation transcript does not retain the server-derived authority proof
+  // required for another write. Keep it inspectable/reviewable, but do not advertise a
+  // continuation context that the server must refuse.
+  if (agent.providerLabel === "Claude" && agent.target) return null
   if (agent.mode === "review" || agent.mode === "diff-review") return reviewerDelegateContext(agent)
   const provider = agent.providerLabel
   if (provider !== "Codex" && provider !== "Claude" && provider !== "Local") return null
@@ -3090,6 +3094,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Inspect", "Ask William", "Talk", "Council", pauseAction, forkAction] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "durable-session" && !durableSessionDelegateContext(selectedAgent)
+      ? ["Inspect", "Ask William", "Council", pauseAction, forkAction, selectedAgent.target ? "Review work" : "Review work unavailable"] as const
     : selectedKind === "agent" ? ["Inspect", "Ask William", "Talk", "Redirect", "Council", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, spaceDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", "Council"] as const
   const improveUnavailableReason = selectedKind !== "diff" ? null
