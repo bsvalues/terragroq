@@ -39,7 +39,7 @@ function workspaceResponse() {
 }
 
 function stream(...events: readonly Record<string, unknown>[]): Response {
-  return new Response(`${events.map(JSON.stringify).join("\n")}\n`, { headers: { "content-type": "application/x-ndjson" } })
+  return new Response(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`, { headers: { "content-type": "application/x-ndjson" } })
 }
 
 function deferredStream(...events: readonly Record<string, unknown>[]) {
@@ -388,7 +388,7 @@ describe("Experience V2 selected-file Review", () => {
     ])
   })
 
-  it("reviews a restored agent's exact persisted file target instead of the currently selected file", async () => {
+  it("starts a separate read-only Reviewer in one click for the restored agent's captured file target", async () => {
     const agentId = "restored-codex-agent"
     const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
     window.localStorage.setItem(key, JSON.stringify({
@@ -405,13 +405,11 @@ describe("Experience V2 selected-file Review", () => {
         completedTurns: [{ ownerPrompt: "Implement it", finalResult: "Implemented it", completedAt: "2026-08-28T12:00:00.000Z" }],
       }],
     }))
-    const fetcher = baseFetch(() => stream(
-      { type: "session", sessionId: SESSION_ID, resumed: false },
-      resultEvent("Independent review of the agent's work"),
-      { type: "done", code: 0, reason: null },
-    ))
+    let resolveReview!: (response: Response) => void
+    const reviewArrival = new Promise<Response>((resolve) => { resolveReview = resolve })
+    const fetcher = baseFetch(() => reviewArrival)
     vi.stubGlobal("fetch", fetcher)
-    render(<WorkspaceShell />)
+    const view = render(<WorkspaceShell />)
 
     await screen.findByLabelText("Source content")
     fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
@@ -421,11 +419,32 @@ describe("Experience V2 selected-file Review", () => {
 
     expect(screen.getByText("Review · src/app.ts")).toBeTruthy()
     expect(screen.queryByText("Review · src/other.ts")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
-    expect(await screen.findByText("Independent review of the agent's work")).toBeTruthy()
+    expect(screen.getByText("Starting read-only Review…")).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Review focus" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Stop review" })).toBeTruthy()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
-    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ mode: "review", path: "src/app.ts" })
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+    })
+
+    resolveReview(stream(
+      { type: "session", sessionId: SESSION_ID, resumed: false },
+      resultEvent("Independent review of the agent's work"),
+      { type: "done", code: 0, reason: null },
+    ))
+    expect(await screen.findByText("Independent review of the agent's work")).toBeTruthy()
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
+    const sessions = JSON.parse(String(window.localStorage.getItem(key))).sessions as Array<Record<string, unknown>>
+    expect(sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: agentId, provider: "Codex", target: { kind: "file", path: "src/app.ts" } }),
+      expect.objectContaining({ sessionId: SESSION_ID, provider: "Claude", role: "Reviewer", reviewPath: "src/app.ts" }),
+    ]))
+
+    view.unmount()
+    render(<WorkspaceShell />)
+    expect(await screen.findByRole("button", { name: /Builder · Codex · Implement src\/app.ts/ })).toBeTruthy()
+    expect(await screen.findByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ })).toBeTruthy()
   })
 
   it("truthfully disables Review work for a restored successful Claude session without a server-bound file target", async () => {
@@ -507,7 +526,7 @@ describe("Experience V2 selected-file Review", () => {
     const stop = vi.fn()
     const sessions: ExperienceAgentSessionController = {
       sessions: [], durableSession: null, savedDescriptor: null, savedSessions: [], selectedSessionKey: null,
-      descriptorState: "none", activeSessionId: "Codex:writer", pausableSessionId: "Codex:writer",
+      descriptorState: "none", collectionState: "available", activeSessionId: "Codex:writer", pausableSessionId: "Codex:writer",
       activeSessionIds: ["Codex:writer", `Claude:${SESSION_ID}`],
       pausableSessionIds: ["Codex:writer", `Claude:${SESSION_ID}`],
       activeTurns: [
@@ -515,6 +534,7 @@ describe("Experience V2 selected-file Review", () => {
         { id: `Claude:${SESSION_ID}`, provider: "Claude", role: "Reviewer", sessionId: SESSION_ID, presentation: "Agent is working.", descriptor: null },
       ],
       error: null,
+      runPreviewDiagnostic: vi.fn(),
       runClaudeTurn(input) { turn = input; return new Promise(() => undefined) },
       selectSession: () => false,
       stop,
@@ -533,6 +553,42 @@ describe("Experience V2 selected-file Review", () => {
     expect(stop).not.toHaveBeenCalledWith("Codex:writer")
   })
 
+  it("waits for this Review session identity before stopping and never stops an unrelated Reviewer", () => {
+    let turn: RunClaudeTurnInput | null = null
+    const stop = vi.fn()
+    const unrelatedReviewer = "Claude:unrelated-reviewer"
+    const sessions: ExperienceAgentSessionController = {
+      sessions: [], durableSession: null, savedDescriptor: null, savedSessions: [], selectedSessionKey: null,
+      descriptorState: "none", collectionState: "available", activeSessionId: unrelatedReviewer, pausableSessionId: unrelatedReviewer,
+      activeSessionIds: [unrelatedReviewer], pausableSessionIds: [unrelatedReviewer],
+      activeTurns: [
+        { id: unrelatedReviewer, provider: "Claude", role: "Reviewer", sessionId: "unrelated-reviewer", presentation: "Agent is working.", descriptor: null },
+      ],
+      error: null,
+      runPreviewDiagnostic: vi.fn(),
+      runClaudeTurn(input) { turn = input; return new Promise(() => undefined) },
+      selectSession: () => false,
+      stop,
+    }
+    function Harness() {
+      const review = useSelectedFileReview({ path: "src/app.ts", sessions, onReport: () => undefined })
+      return <>
+        <button onClick={() => void review.startCapturedPath({ path: "src/app.ts", isStartCurrent: () => true, isPresentationCurrent: () => true })}>Review work</button>
+        <button onClick={review.stop}>Stop</button>
+      </>
+    }
+    render(<Harness />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Review work" }))
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+
+    expect(stop).not.toHaveBeenCalled()
+    act(() => turn?.onEvent?.({ type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: false }))
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(stop).toHaveBeenCalledWith(`Claude:${SESSION_ID}`)
+    expect(stop).not.toHaveBeenCalledWith(unrelatedReviewer)
+  })
+
   it("suppresses a stale older completion after a newer Review has started", async () => {
     const turns: RunClaudeTurnInput[] = []
     const resolvers: Array<(value: DurableClaudeSession) => void> = []
@@ -540,7 +596,8 @@ describe("Experience V2 selected-file Review", () => {
     let activeTurn = -1
     const sessions: ExperienceAgentSessionController = {
       sessions: [], durableSession: null, savedDescriptor: null, savedSessions: [], selectedSessionKey: null,
-      descriptorState: "none", activeSessionId: null, pausableSessionId: null, activeSessionIds: [], pausableSessionIds: [], activeTurns: [], error: null,
+      descriptorState: "none", collectionState: "available", activeSessionId: null, pausableSessionId: null, activeSessionIds: [], pausableSessionIds: [], activeTurns: [], error: null,
+      runPreviewDiagnostic: vi.fn(),
       runClaudeTurn(input) {
         activeTurn = turns.length
         turns.push(input)
@@ -557,6 +614,7 @@ describe("Experience V2 selected-file Review", () => {
     }
     render(<Harness />)
     fireEvent.click(screen.getByRole("button", { name: "Start" }))
+    act(() => turns[0]?.onEvent?.({ type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: false }))
     fireEvent.click(screen.getByRole("button", { name: "Stop" }))
     await screen.findByText("Stop requested. Review outcome is unknown.")
     fireEvent.click(screen.getByRole("button", { name: "Select other" }))
