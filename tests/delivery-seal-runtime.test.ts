@@ -63,6 +63,7 @@ describe("delivery commit inspection", () => {
     ["embedded space", "src/selected file.ts"],
     ["embedded tab", "src/selected\tfile.ts"],
     ["embedded newline", "src/selected\nfile.ts"],
+    ["Unicode NEXT LINE", "src/selected\u0085file.ts"],
     ["asterisk wildcard", "src/*.ts"],
     ["question-mark wildcard", "src/selected?.ts"],
   ])("rejects a noncanonical %s authority path", async (_label, deliveryPath) => {
