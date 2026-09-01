@@ -271,19 +271,45 @@ describe("Experience V2 Line durable-session targets", () => {
     render(<WorkspaceShell />)
 
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue from Space." } })
-    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    await waitFor(() => expect(harness.controller.continueSession).toHaveBeenCalledTimes(1))
+    expect(harness.controller.continueSession.mock.calls[0][0]).toMatchObject({
+      sessionKey: `Claude:${FIRST}`,
+      prompt: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
+    })
+    expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Continue session" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Stop Space continuation" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
 
     expect(screen.getByText("Agent is starting.")).toBeTruthy()
-    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole("button", { name: "Stop Space continuation" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
     fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
     expect(harness.controller.continueSession).toHaveBeenCalledTimes(1)
 
     settle(harness.controller.savedSessions[0])
     await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
+  })
+
+  it("stops the exact newly-created Space continuation instead of an unrelated same-role pending turn", async () => {
+    workspaceActiveWindowId = null
+    const unrelated = { id: "starting-claude-41", provider: "Claude", role: "Reviewer", sessionId: null, presentation: "Agent is starting.", descriptor: null }
+    const exact = { id: "starting-claude-42", provider: "Claude", role: "Reviewer", sessionId: null, presentation: "Agent is starting.", descriptor: null }
+    harness.controller.activeTurns = [unrelated]
+    harness.controller.continueSession = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal("fetch", fetcher())
+    const view = render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }))
+    await waitFor(() => expect(harness.controller.continueSession).toHaveBeenCalledTimes(1))
+    harness.controller.activeTurns = [unrelated, exact]
+    view.rerender(<WorkspaceShell />)
+    fireEvent.click(screen.getByRole("button", { name: "Stop Space continuation" }))
+
+    expect(harness.controller.stop).toHaveBeenCalledWith(exact.id)
+    expect(harness.controller.stop).not.toHaveBeenCalledWith(unrelated.id)
   })
 
   it("reattaches pre-init Reviewer Talk to the exact review session without starting another resume", async () => {
