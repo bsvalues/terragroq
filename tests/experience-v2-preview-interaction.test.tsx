@@ -22,6 +22,8 @@ const previewSpace = spaceToServer({
   ...defaultSpace(1440, 900, "world-a", "TerraFusion"),
   activeWindowId: "running-app",
   runningAppUrl: "http://tf.test:5000/app",
+  selectedPath: "src/app.ts",
+  editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" },
 })
 const attached = {
   schemaVersion: 1 as const,
@@ -54,6 +56,10 @@ function installFetch(
       return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-08-30T03:00:01.000Z" })
     }
     if (url === "/api/environment/preview") return Response.json({ evidence: previewEvidence() })
+    if (url === "/api/environment/line" && init?.method === "POST") return Response.json({
+      worldId: "world-a", say: "The admitted Preview is reachable; DOM, console, and network evidence are unavailable.",
+      surfaces: [], spine: EMPTY_SPINE,
+    })
     if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
     return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
   })
@@ -186,31 +192,28 @@ describe("Experience V2 Preview evidence interaction", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Explain" }))
 
-    const line = screen.getByRole("textbox", { name: "The Line" }) as HTMLInputElement
-    expect(line.value).toBe("Explain the exact current developer Preview evidence: ")
-    expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
+    expect(await screen.findByRole("dialog", { name: "The Line" })).toBeTruthy()
     expect(screen.queryByText("Preview debugger · Claude · read-only")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Stop Preview debug" })).toBeNull()
     expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
   })
 
   it("runs Debug directly as one durable read-only Claude Preview debugger", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     const baseFetch = installFetch(() => attached)
+    let resolveDiagnostic!: (response: Response) => void
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
     const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
       expect(JSON.parse(String(init?.body))).toEqual({
         mode: "preview",
         provider: "cloud",
         worldId: "world-a",
-        prompt: "Why is the admitted frame blank?",
+        prompt: "Diagnose the exact current Developer Preview using only its server-derived admitted evidence. State reachability, framing, and evidence limits; do not infer DOM, console, network, or business UI state.",
         sessionId: null,
         resume: false,
       })
-      return ndjsonResponse([
-        { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
-        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "The admitted frame is reachable; DOM, console, and network evidence remain unavailable." } },
-        { type: "done", reason: null, code: 0 },
-      ])
+      return diagnostic
     })
     vi.stubGlobal("fetch", fetchStub)
     render(<WorkspaceShell />)
@@ -219,13 +222,20 @@ describe("Experience V2 Preview evidence interaction", () => {
 
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
     expect(screen.getByText("Preview debugger · Claude · read-only")).toBeTruthy()
+    expect(screen.getByText("Agent is working.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Stop Preview debug" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull()
     expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
-    const line = screen.getByRole("textbox", { name: "The Line" }) as HTMLInputElement
-    expect(line.value).toBe("")
-    fireEvent.change(line, { target: { value: "Why is the admitted frame blank?" } })
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    resolveDiagnostic(ndjsonResponse([
+        { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "The admitted frame is reachable; DOM, console, and network evidence remain unavailable." } },
+        { type: "done", reason: null, code: 0 },
+      ]))
 
     expect(await screen.findByText("The admitted frame is reachable; DOM, console, and network evidence remain unavailable.")).toBeTruthy()
+    expect(screen.getByRole("textbox", { name: "The Line" })).toBeTruthy()
     expect(await screen.findByText("Preview debugger · Claude")).toBeTruthy()
     expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/loom/agent")).toHaveLength(1)
     expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
@@ -234,10 +244,47 @@ describe("Experience V2 Preview evidence interaction", () => {
     expect(stored).toContain('"preview":{"worldId":"world-a","evidenceFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}')
   })
 
-  it("refuses Debug before transport when the captured Preview is no longer current", async () => {
+  it("stops the exact pending Preview diagnostic before any session is accepted", async () => {
     const baseFetch = installFetch(() => attached)
+    let resolveDiagnostic!: (response: Response) => void
+    let diagnosticSignal: AbortSignal | null = null
+    let signalStarted!: () => void
+    const started = new Promise<void>((resolve) => { signalStarted = resolve })
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
     const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/loom/agent") throw new Error("Preview Debug must not dispatch")
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      diagnosticSignal = init?.signal ?? null
+      signalStarted()
+      return diagnostic
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    await screen.findByText("Space ready")
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }))
+    await started
+    fireEvent.click(screen.getByRole("button", { name: "Stop Preview debug" }))
+
+    expect(diagnosticSignal?.aborted).toBe(true)
+    resolveDiagnostic(ndjsonResponse([
+      { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174009", resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174009", result: "Late stopped Preview report." } },
+      { type: "done", reason: null, code: 0 },
+    ]))
+
+    await waitFor(() => expect(screen.queryByText("Late stopped Preview report.")).toBeNull())
+    expect(screen.queryByText("Preview debugger · Claude")).toBeNull()
+    expect(screen.queryByRole("navigation", { name: "Durable agent sessions" })).toBeNull()
+    expect([...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n"))
+      .not.toContain("123e4567-e89b-42d3-a456-426614174009")
+  })
+
+  it("suppresses a completed Debug result when the captured Preview window is no longer current", async () => {
+    const baseFetch = installFetch(() => attached)
+    let resolveDiagnostic!: (response: Response) => void
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/loom/agent") return diagnostic
       return baseFetch(input, init)
     })
     vi.stubGlobal("fetch", fetchStub)
@@ -245,49 +292,53 @@ describe("Experience V2 Preview evidence interaction", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Debug" }))
     fireEvent.click(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose this exact Preview." } })
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    resolveDiagnostic(ndjsonResponse([
+      { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174001", resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174001", result: "Stale Preview result must not be presented." } },
+      { type: "done", reason: null, code: 0 },
+    ]))
 
-    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
-    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(false)
-    expect(screen.queryByRole("navigation", { name: "Durable agent sessions" })).toBeNull()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(true)
+    await waitFor(() => expect(screen.queryByText("Stale Preview result must not be presented.")).toBeNull())
   })
 
-  it("invalidates an unsubmitted Preview Debug focus when the exact world changes", async () => {
+  it("does not carry a delayed Preview Debug presentation across Space unmount and re-entry", async () => {
     const worldB = spaceToServer({
       ...defaultSpace(1440, 900, "world-b", "Other Space"),
       activeWindowId: "running-app",
       runningAppUrl: "http://tf.test:5000/other",
     })
-    const spaces = [
-      { worldId: "world-a", name: "TerraFusion", space: previewSpace, updatedAt: "2026-08-30T03:00:00.000Z" },
-      { worldId: "world-b", name: "Other Space", space: worldB, updatedAt: "2026-08-30T03:01:00.000Z" },
-    ]
     const baseFetch = installFetch(() => attached)
+    let activeWorld: "world-a" | "world-b" = "world-a"
+    let resolveDiagnostic!: (response: Response) => void
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
     const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Response.json({
-        worldId: "world-a", name: "TerraFusion", space: previewSpace, project, storage: "server",
-        spine: EMPTY_SPINE, spaces, multiSpaceAvailable: true,
-      })
-      if (url === "/api/environment/space?worldId=world-b") return Response.json({
-        worldId: "world-b", name: "Other Space", space: worldB, project, storage: "server",
-        spine: EMPTY_SPINE, spaces, multiSpaceAvailable: true,
-      })
-      if (url === "/api/loom/agent") throw new Error("A stale world must not dispatch Preview Debug")
+      if (url === "/api/environment/space" && !init?.method) return activeWorld === "world-a"
+        ? Response.json({ worldId: "world-a", name: "TerraFusion", space: previewSpace, project, storage: "server", spine: EMPTY_SPINE })
+        : Response.json({ worldId: "world-b", name: "Other Space", space: worldB, project, storage: "server", spine: EMPTY_SPINE })
+      if (url === "/api/loom/agent") return diagnostic
       return baseFetch(input, init)
     })
     vi.stubGlobal("fetch", fetchStub)
+    const first = render(<WorkspaceShell />)
+
+    await screen.findByText("Space ready")
+    fireEvent.click(await screen.findByRole("button", { name: "Debug" }))
+    expect(await screen.findByText("Agent is working.")).toBeTruthy()
+    first.unmount()
+    window.localStorage.clear()
+    activeWorld = "world-b"
+    resolveDiagnostic(ndjsonResponse([
+      { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174002", resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174002", result: "World A Preview result." } },
+      { type: "done", reason: null, code: 0 },
+    ]))
     render(<WorkspaceShell />)
 
-    fireEvent.click(await screen.findByRole("button", { name: "Debug" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose world A." } })
-    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
-    fireEvent.click(screen.getByRole("button", { name: "Enter Other Space" }))
-
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull())
-    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(false)
-    expect(screen.queryByRole("navigation", { name: "Durable agent sessions" })).toBeNull()
+    expect((await screen.findByTitle("Running TerraFusion application")).getAttribute("src")).toBe("http://tf.test:5000/other")
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(true)
+    expect(screen.queryByText("World A Preview result.")).toBeNull()
   })
 
   it("delegates Preview only to a durable read-only Claude Preview debugger", async () => {
@@ -349,8 +400,6 @@ describe("Experience V2 Preview evidence interaction", () => {
     render(<WorkspaceShell />)
 
     fireEvent.click(await screen.findByRole("button", { name: "Debug" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose without browser instrumentation." } })
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
 
     expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
     expect(screen.queryByRole("navigation", { name: "Durable agent sessions" })).toBeNull()
