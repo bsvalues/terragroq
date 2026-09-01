@@ -58,7 +58,7 @@ function normalizedPaths(root: string, values: readonly string[]): string[] {
     const candidate = raw
     const absolute = path.resolve(root, candidate)
     const relative = path.relative(path.resolve(root), absolute).replace(/\\/g, "/")
-    if (!candidate || candidate !== candidate.trim() || candidate.includes("\\") || candidate.includes("*") || candidate.includes("?")
+    if (!candidate || /\s/.test(candidate) || candidate.includes("\\") || candidate.includes("*") || candidate.includes("?")
       || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(candidate) || path.isAbsolute(relative)) {
       invalid("the delivery path is not canonical and repository-relative")
     }
