@@ -175,6 +175,24 @@ describe("exact persisted executor projects as a Space-bound session", () => {
       workOrder: { ...input.workOrder, assignee: null, lane: "hermes" },
     })).toBeNull()
   })
+
+  it("keeps projected provider labels inside the inspector payload contract", () => {
+    const assignee = "a".repeat(200)
+    const session = projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee, agent: "codex" },
+    })
+
+    expect(session?.providerLabel).toHaveLength(200)
+    expect(session?.providerLabel.endsWith("…")).toBe(true)
+  })
+
+  it("rejects persisted executor identities containing control characters", () => {
+    expect(projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee: "builder\talpha" },
+    })).toBeNull()
+  })
 })
 
 describe("the world knows when to keep watching", () => {

@@ -64,7 +64,7 @@ export type WorldWorkerSessionProjectionInput = Readonly<{
 }>
 
 function exactIdentity(value: string | null): string | null {
-  return value && value === value.trim() && value.length <= 200 && !value.includes("\0") ? value : null
+  return value && value === value.trim() && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null
 }
 
 function boundedCopy(value: string, fallback: string, max = 500): string {
@@ -96,7 +96,9 @@ export function projectWorldWorkerSession(
     assignee,
     agent,
     role: hermes ? "HERMES" : "Executor",
-    providerLabel: hermes ? "Local execution" : `${assignee}${agent ? ` · ${agent}` : ""}`,
+    providerLabel: hermes
+      ? "Local execution"
+      : boundedCopy(`${assignee}${agent ? ` · ${agent}` : ""}`, assignee, 200),
     assignment: boundedCopy(`${outcome} · ${workOrderRef}: ${workOrderTitle}`, "Bounded assignment"),
     status: input.status,
     evidence,

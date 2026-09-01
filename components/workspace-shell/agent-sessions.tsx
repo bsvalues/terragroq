@@ -597,7 +597,8 @@ function projectSessions(
   durable.forEach((descriptor) => {
     const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
     const isLocal = descriptor.provider === "Local"
-    const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
+    const isVerified = !(descriptor.provider === "Claude" && descriptor.target)
+      && verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
     const active = activeTurns.find((turn) => turn.id === descriptorKey)
     const isWorking = Boolean(active)
     sessions.push({
@@ -1570,7 +1571,9 @@ export function useExperienceAgentSessions({
     const prior = exactKey && loadedStorageKey === operationStorageKey && selectedSessionKeyRef.current === exactKey
       ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === exactKey) ?? null
       : null
-    if (!prior || !exactKey) return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
+    if (!prior || !exactKey || prior.provider === "Claude" && prior.target) {
+      return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
+    }
     const mode = prior.preview ? "preview" as const : prior.diffReview ? "diff-review" as const : prior.reviewPath ? "review" as const : "delegate" as const
     return executeTurn({
       provider: prior.provider,

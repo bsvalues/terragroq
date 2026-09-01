@@ -3392,6 +3392,40 @@ describe("Experience V2 real agent sessions", () => {
     }))
   })
 
+  it("does not expose a completed Claude file mutation session as resumable without current authority", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174113"
+    const authority = {
+      worldId: "world-1", worldRevision: 9, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      workOrderId: 1122, grantId: 45, actor: "claude" as const, selectedPath: "src/app.ts",
+    }
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Changed the exact file." } },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Change the exact file.",
+        target: { kind: "file", path: "src/app.ts" }, expectedFileAuthority: authority,
+      })
+    })
+
+    expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Claude:${sessionId}`,
+      truth: "resume-unverified",
+      evidence: "saved transcript · server verification required",
+      target: { kind: "file", path: "src/app.ts" },
+    })])
+    await expect(expose!.continueSession({
+      sessionKey: `Claude:${sessionId}`,
+      prompt: "Continue the mutation.",
+    })).rejects.toThrow("AGENT_CONTINUE_SESSION_UNAVAILABLE")
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it("rejects a Claude target session when the server authority binding differs from the captured proof", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174112"
     const authority = {
