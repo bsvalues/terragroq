@@ -11,6 +11,10 @@ import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-
 
 const TERRAFUSION_PROJECT_KEY = "terrafusion"
 export const TERRAFUSION_REPOSITORY_IDENTITY = "bsvalues/terrafusion_os_1.0"
+const WILLIAMOS_PROJECT_KEY = "williamos"
+export const WILLIAMOS_REPOSITORY_IDENTITY = "bsvalues/terragroq"
+
+export type CanonicalWorkspaceProjectKey = typeof TERRAFUSION_PROJECT_KEY | typeof WILLIAMOS_PROJECT_KEY
 
 export type WorkspaceProjectBinding = Readonly<{
   projectId: number
@@ -53,7 +57,7 @@ type ProjectBindingRow = Readonly<{
 }>
 
 export type WorkspaceProjectBindingDependencies = Readonly<{
-  loadProjectRows: (userId: string) => Promise<readonly ProjectBindingRow[]>
+  loadProjectRows: (userId: string, projectKey: CanonicalWorkspaceProjectKey) => Promise<readonly ProjectBindingRow[]>
   readGitRemoteOrigin: (workspaceRoot: string) => Promise<string>
   readGitTopLevel: (workspaceRoot: string) => Promise<string>
   realpath: (workspaceRoot: string) => Promise<string>
@@ -108,7 +112,7 @@ function readGitTopLevel(workspaceRoot: string): Promise<string> {
 }
 
 const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies = {
-  async loadProjectRows(userId) {
+  async loadProjectRows(userId, projectKey) {
     return db
       .select({
         projectId: project.id,
@@ -123,7 +127,7 @@ const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies =
         eq(projectResource.type, "repo"),
         eq(projectResource.relationship, "primary-repo"),
       ))
-      .where(and(eq(project.userId, userId), eq(project.key, TERRAFUSION_PROJECT_KEY)))
+      .where(and(eq(project.userId, userId), eq(project.key, projectKey)))
       .limit(2)
   },
   readGitRemoteOrigin,
@@ -182,6 +186,76 @@ export async function resolveTerraFusionWorkspaceBinding(
 }
 
 /**
+ * Resolve the signed-in owner's canonical WilliamOS Project and prove that the server-declared
+ * WilliamOS checkout is exactly the bsvalues/terragroq repository. Neither repository identity nor
+ * checkout location is accepted from the browser.
+ */
+export async function resolveWilliamOsWorkspaceBinding(
+  userId: string,
+  dependencies: WorkspaceProjectBindingDependencies = workspaceProjectBindingDependencies,
+): Promise<WorkspaceProjectBindingResult> {
+  const configuredRoot = process.env.WILLIAMOS_PROJECT_ROOT?.trim()
+  if (!configuredRoot) return { ok: false, error: "WILLIAMOS_WORKSPACE_ROOT_NOT_CONFIGURED" }
+
+  let rows: readonly ProjectBindingRow[]
+  try {
+    rows = await dependencies.loadProjectRows(userId, WILLIAMOS_PROJECT_KEY)
+  } catch {
+    return { ok: false, error: "WORKSPACE_PROJECT_LOOKUP_UNAVAILABLE" }
+  }
+  if (rows.length === 0) return { ok: false, error: "WILLIAMOS_PROJECT_UNBOUND" }
+  if (rows.length !== 1) return { ok: false, error: "WILLIAMOS_PRIMARY_REPO_AMBIGUOUS" }
+
+  const row = rows[0]
+  if (
+    row.projectKey !== WILLIAMOS_PROJECT_KEY
+    || normalizeRepositoryIdentity(row.repositoryIdentity) !== WILLIAMOS_REPOSITORY_IDENTITY
+  ) return { ok: false, error: "WILLIAMOS_PRIMARY_REPO_INVALID" }
+
+  const checkout = await verifyCanonicalTerraFusionCheckout(
+    configuredRoot,
+    WILLIAMOS_REPOSITORY_IDENTITY,
+    dependencies,
+  )
+  if (!checkout.ok) return checkout
+
+  let configuredSpaceIdentity: string
+  try {
+    // The checkout location is operational state; it is not the persisted Space namespace. The
+    // server preserves this continuity identity when WILLIAMOS_PROJECT_ROOT later moves, exactly as
+    // it does for the TerraFusion target above.
+    configuredSpaceIdentity = normalizePortableAbsolutePathIdentity(
+      process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY || checkout.binding.configuredWorkspaceRoot,
+    )
+  } catch {
+    return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
+  }
+
+  return {
+    ok: true,
+    binding: {
+      projectId: row.projectId,
+      projectKey: row.projectKey,
+      projectName: row.projectName,
+      repositoryIdentity: row.repositoryIdentity,
+      ...checkout.binding,
+      workspaceAppUrl: null,
+      project: workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName),
+    },
+  }
+}
+
+export async function resolveCanonicalWorkspaceProjectBinding(
+  userId: string,
+  projectKey: unknown,
+  dependencies?: WorkspaceProjectBindingDependencies,
+): Promise<WorkspaceProjectBindingResult> {
+  if (projectKey === WILLIAMOS_PROJECT_KEY) return resolveWilliamOsWorkspaceBinding(userId, dependencies)
+  if (projectKey === TERRAFUSION_PROJECT_KEY) return resolveTerraFusionWorkspaceBinding(userId, dependencies)
+  return { ok: false, error: "SPACE_PROJECT_INVALID" }
+}
+
+/**
  * Verify one proposed checkout against the signed-in owner's durable TerraFusion Project before it
  * can be persisted as server-global configuration. The browser supplies a candidate path only; it
  * cannot choose the Project or repository identity that the server will accept.
@@ -193,7 +267,7 @@ export async function verifyTerraFusionWorkspaceRoot(
 ): Promise<VerifiedTerraFusionWorkspaceRootResult> {
   let rows: readonly ProjectBindingRow[]
   try {
-    rows = await dependencies.loadProjectRows(userId)
+    rows = await dependencies.loadProjectRows(userId, TERRAFUSION_PROJECT_KEY)
   } catch {
     return { ok: false, error: "WORKSPACE_PROJECT_LOOKUP_UNAVAILABLE" }
   }

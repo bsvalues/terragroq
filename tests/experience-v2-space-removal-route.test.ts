@@ -7,7 +7,7 @@ const seams = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
-vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveTerraFusionWorkspaceBinding: seams.resolveBinding }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveCanonicalWorkspaceProjectBinding: seams.resolveBinding }))
 vi.mock("@/lib/environment/space-persistence", () => ({
   workspaceProjectFromRoot: () => ({ identity: "c:/project", name: "Project" }),
   removeOwnedProjectSpace: seams.remove,
@@ -44,6 +44,20 @@ describe("Experience V2 Space removal route", () => {
       project: { identity: "c:/project", name: "Project" },
       worldId: "world-b",
     })
+  })
+
+  it("selects the canonical WilliamOS Project and rejects all other selectors", async () => {
+    const williamOsRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=williamos", { method: "DELETE" })
+    const selected = await DELETE(williamOsRequest, context("world-b"))
+    expect(selected.status).toBe(200)
+    expect(seams.resolveBinding).toHaveBeenCalledWith("owner-a", "williamos")
+
+    seams.resolveBinding.mockClear()
+    const invalidRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=foreign", { method: "DELETE" })
+    const invalid = await DELETE(invalidRequest, context("world-b"))
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toEqual({ error: "SPACE_PROJECT_INVALID" })
+    expect(seams.resolveBinding).not.toHaveBeenCalled()
   })
 
   it("rejects malformed route identity before persistence", async () => {

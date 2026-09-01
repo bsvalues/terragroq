@@ -3,8 +3,10 @@
   "version": "0.1.7",
   "private": true,
   "scripts": {
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "native:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 stage",
+    "native:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 test",
+    "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 dev",
+    "tauri:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-native.ps1 build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

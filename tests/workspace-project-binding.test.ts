@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   normalizeRepositoryIdentity,
+  resolveCanonicalWorkspaceProjectBinding,
   resolveTerraFusionWorkspaceBinding,
+  resolveWilliamOsWorkspaceBinding,
   verifyCanonicalTerraFusionCheckout,
   type WorkspaceProjectBindingDependencies,
 } from "@/lib/projects/workspace-project-binding"
@@ -10,12 +12,18 @@ import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-
 
 const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
 const originalSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
+const originalWilliamOsRoot = process.env.WILLIAMOS_PROJECT_ROOT
+const originalWilliamOsSpaceIdentity = process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
 
 afterEach(() => {
   if (originalRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
   else process.env.WILLIAMOS_TERRAFUSION_ROOT = originalRoot
   if (originalSpaceIdentity === undefined) delete process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
   else process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = originalSpaceIdentity
+  if (originalWilliamOsRoot === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
+  else process.env.WILLIAMOS_PROJECT_ROOT = originalWilliamOsRoot
+  if (originalWilliamOsSpaceIdentity === undefined) delete process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
+  else process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY = originalWilliamOsSpaceIdentity
 })
 
 function dependencies(
@@ -206,5 +214,71 @@ describe("TerraFusion workspace Project binding", () => {
   it("rejects NUL before a portable Space identity can reach process.env", () => {
     expect(() => normalizePortableAbsolutePathIdentity(`C:/repos/original${String.fromCharCode(0)}evil`))
       .toThrow("WILLIAMOS_TERRAFUSION_SPACE_IDENTITY is invalid")
+  })
+})
+
+describe("WilliamOS workspace Project binding", () => {
+  const row = {
+    projectId: 1,
+    projectKey: "williamos",
+    projectName: "WilliamOS",
+    repositoryIdentity: "bsvalues/terragroq",
+  }
+
+  it("binds only the declared WilliamOS checkout to the canonical TerraGroq repository", async () => {
+    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terragroq"
+    const seams = dependencies([row], "git@github.com:bsvalues/terragroq.git")
+    const result = await resolveWilliamOsWorkspaceBinding("owner", seams)
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        projectId: 1,
+        projectKey: "williamos",
+        projectName: "WilliamOS",
+        repositoryIdentity: "bsvalues/terragroq",
+        workspaceAppUrl: null,
+        project: expect.objectContaining({ name: "WilliamOS", identity: expect.stringMatching(/repos[\\/]terragroq$/) }),
+      }),
+    })
+  })
+
+  it("keeps WilliamOS Space identity stable when its verified checkout moves", async () => {
+    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/moved/terragroq"
+    process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY = "/repos/original/terragroq"
+    const result = await resolveWilliamOsWorkspaceBinding(
+      "owner",
+      dependencies([row], "git@github.com:bsvalues/terragroq.git"),
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terragroq$/),
+        project: { identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/), name: "WilliamOS" },
+      }),
+    })
+  })
+
+  it("dispatches only the server-whitelisted WilliamOS key", async () => {
+    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terragroq"
+    const seams = dependencies([row], "git@github.com:bsvalues/terragroq.git")
+    await expect(resolveCanonicalWorkspaceProjectBinding("owner", "williamos", seams))
+      .resolves.toMatchObject({ ok: true, binding: { projectKey: "williamos" } })
+    await expect(resolveCanonicalWorkspaceProjectBinding("owner", "foreign", seams))
+      .resolves.toEqual({ ok: false, error: "SPACE_PROJECT_INVALID" })
+  })
+
+  it("fails closed for missing root, missing Project, and noncanonical repository identity", async () => {
+    delete process.env.WILLIAMOS_PROJECT_ROOT
+    await expect(resolveWilliamOsWorkspaceBinding("owner", dependencies([row], "git@github.com:bsvalues/terragroq.git")))
+      .resolves.toEqual({ ok: false, error: "WILLIAMOS_WORKSPACE_ROOT_NOT_CONFIGURED" })
+
+    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terragroq"
+    await expect(resolveWilliamOsWorkspaceBinding("owner", dependencies([], "git@github.com:bsvalues/terragroq.git")))
+      .resolves.toEqual({ ok: false, error: "WILLIAMOS_PROJECT_UNBOUND" })
+
+    await expect(resolveWilliamOsWorkspaceBinding("owner", dependencies([{ ...row, repositoryIdentity: "bsvalues/other" }], "git@github.com:bsvalues/other.git")))
+      .resolves.toEqual({ ok: false, error: "WILLIAMOS_PRIMARY_REPO_INVALID" })
   })
 })

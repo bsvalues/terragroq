@@ -31,13 +31,25 @@ param(
   [string]$Source,
   [string]$Runtime = "C:\HermesLab\williamos-runtime-64034e93-flat",
   [string]$TaskName = "WilliamOS Live",
+  [string]$HttpsTaskName = "WilliamOS HTTPS",
+  [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
   [int]$Port = 3100,
+  [int]$HttpsPort = 3443,
   [switch]$WithDependencies,
   [switch]$VerifyOnly,
   [switch]$SkipRollbackCapture
 )
 
 $ErrorActionPreference = "Stop"
+
+# These are product identity, not deployment knobs. The HTTPS proxy's host allow-list, forwarded
+# origin, device-auth boundary, native Cockpit capability, and HERMES certificates all name this
+# exact 3100/3443 pair. Accepting different values here previously changed only the probes and
+# rollback command while the proxy kept serving 3443 -> 3100. Refuse that split-brain state before
+# verification, task control, rollback capture, or file mutation.
+if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
+  throw "WilliamOS HERMES uses the canonical HTTP/HTTPS ports 3100/3443; port overrides are not supported"
+}
 
 # Resolved here rather than as a parameter default: $PSScriptRoot is not populated during parameter
 # binding, so the default silently became an empty path.
@@ -89,16 +101,145 @@ function Get-RunningSha {
   return $null
 }
 
+function Test-HttpsCockpit {
+  param([int]$Port, [int]$TimeoutSeconds = 60)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $response = Invoke-WebRequest -Uri "https://192.168.88.9:$Port/api/health" -UseBasicParsing -TimeoutSec 10
+      if ($response.StatusCode -eq 200) { return $true }
+    } catch {
+      Start-Sleep -Seconds 3
+    }
+  }
+  return $false
+}
+
+function Stop-ExpectedListener {
+  param([int]$ListenerPort, [string]$ExpectedCommandPath)
+  $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
+  Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+      $pathMatched = $false
+      if ($process -and $process.CommandLine) {
+        $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
+          @($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) |
+            Where-Object { $_ } | Select-Object -First 1
+        })
+        if ($tokens.Count -ge 2 -and [IO.Path]::GetFileName($tokens[0]) -ieq "node.exe") {
+          try {
+            $pathMatched = [IO.Path]::GetFullPath($tokens[1]).TrimEnd('\') -ieq $expectedPath
+          } catch { }
+        }
+      }
+      if (-not $pathMatched) {
+        throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS deploy"
+      }
+      Stop-Process -Id $process.ProcessId -Force
+    }
+}
+
+function Assert-LiveTaskUsesLauncher {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+  $actions = @($task.Actions)
+  if ($actions.Count -ne 1 -or [IO.Path]::GetFileName($actions[0].Execute) -ine "powershell.exe" -or -not $actions[0].Arguments) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+  $fileArguments = [regex]::Matches($actions[0].Arguments, '(?i)(?:^|\s)-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))(?=\s|$)')
+  if ($fileArguments.Count -ne 1) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+  $selectedArgument = @($fileArguments[0].Groups[1].Value, $fileArguments[0].Groups[2].Value, $fileArguments[0].Groups[3].Value) |
+    Where-Object { $_ } | Select-Object -First 1
+  $expectedLauncher = [IO.Path]::GetFullPath($LiveStartTarget).TrimEnd('\')
+  $actualLauncher = [IO.Path]::GetFullPath($selectedArgument).TrimEnd('\')
+  if ($actualLauncher -ine $expectedLauncher) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+}
+
+function Assert-LiveLauncherWritable {
+  # Prove the external launcher can actually be replaced before stopping either production task.
+  # Membership in Administrators is insufficient under UAC: a medium-integrity token reports the
+  # group as deny-only and can read this file but cannot overwrite it. Discovering that after the
+  # tasks are stopped creates an avoidable outage without changing a single deployed byte.
+  if (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
+    $stream = $null
+    try {
+      $stream = [IO.File]::Open($LiveStartTarget, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    } catch {
+      throw "The WilliamOS Live launcher '$LiveStartTarget' is not writable by this process. Run the deployment from an elevated administrator shell; refusing before stopping production."
+    } finally {
+      if ($stream) { $stream.Dispose() }
+    }
+    return
+  }
+
+  $parent = Split-Path -Parent $LiveStartTarget
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    throw "The WilliamOS Live launcher directory '$parent' does not exist. Create it with the required administrator ownership before deploying; refusing before stopping production."
+  }
+  $probe = Join-Path $parent (".williamos-deploy-write-probe-{0}.tmp" -f [guid]::NewGuid().ToString("N"))
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($probe, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+  } catch {
+    throw "The WilliamOS Live launcher directory '$parent' is not writable by this process. Run the deployment from an elevated administrator shell; refusing before stopping production."
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Validate the external task binding before verification, rollback capture, task control, or file
+# mutation. A custom target is supported only when the supervised task actually invokes it.
+Assert-LiveTaskUsesLauncher
+
 if ($VerifyOnly) {
-  if (Test-Cockpit -Port $Port) { Write-Output "healthy: /sign-in answered 200 on port $Port"; exit 0 }
-  Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
-  exit 1
+  if (-not (Test-Cockpit -Port $Port)) {
+    Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
+    exit 1
+  }
+  if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
+    Write-Error "unhealthy: the canonical HTTPS origin did not answer on port $HttpsPort"
+    exit 1
+  }
+  $runningSha = Get-RunningSha -Port $Port
+  $looseSha = Get-BuiltSha -StandaloneRoot $Runtime
+  if (-not $runningSha -or $runningSha -ne $looseSha) {
+    Write-Error "provenance mismatch: running '$runningSha', loose runtime '$looseSha'"
+    exit 1
+  }
+  Write-Output "healthy: HTTP $Port and HTTPS $HttpsPort answer; running and loose provenance agree at $runningSha"
+  exit 0
 }
 
 $standalone = Join-Path $Source ".next\standalone"
 if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
 }
+
+# The restore command is operator-facing, executable rollback evidence. Values must be serialized as
+# PowerShell data, not interpolated into double-quoted source where `$` and backticks are evaluated.
+# Single-quoted literals preserve every Windows path metacharacter; apostrophes double inside them.
+function ConvertTo-PowerShellLiteral {
+  param([string]$Value)
+  if ($Value -match "[`r`n`0]") { throw "Cannot render a multiline or NUL-containing rollback argument" }
+  return "'" + $Value.Replace("'", "''") + "'"
+}
+$liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-williamos-live.ps1"
+if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
+  throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
+}
+# `-SkipRollbackCapture` is for an empty installation. The task launcher lives outside `$Runtime`,
+# so an empty runtime can still have an older hand-placed launcher. Overwriting that file without a
+# manifest would make the flag silently destructive. Refuse before stopping either task or changing
+# any bytes; a caller with an existing launcher must take the normal captured-rollback path.
+if ($SkipRollbackCapture -and (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf)) {
+  throw "SkipRollbackCapture cannot overwrite the existing WilliamOS Live start definition at '$LiveStartTarget'. Run without -SkipRollbackCapture so the external launcher is captured and restorable."
+}
+Assert-LiveLauncherWritable
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
@@ -139,35 +280,84 @@ if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).
 # ROLLBACK CAPTURE, before anything is overwritten. `robocopy /MIR` below is destructive and this
 # script used to say, accurately, that "the previous build is not automatically restored" -- which
 # left the only recovery from a bad deploy as "rebuild the previous commit", requiring the previous
-# commit to still be known and buildable. The three things the deploy replaces are copied aside
-# first, so recovery is a copy back.
-#
-# Deliberately NOT node_modules or .env.local: neither is touched unless -WithDependencies is passed,
-# and .env.local is guarded by hash below.
+# commit to still be known and buildable. Every runtime path this script can mutate is copied aside
+# first, so recovery is a copy back. `.env.local` is excluded because deployment never writes it and
+# its hash is guarded below; node_modules is captured exactly when -WithDependencies will replace it.
 if (-not $SkipRollbackCapture) {
   $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
-  if (Test-Path (Join-Path $Runtime ".next")) {
-    $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
-    if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying .next (exit $LASTEXITCODE)" }
+  $rollbackFiles = @(
+    "server.js",
+    "package.json",
+    "lib\generated\build-provenance.json",
+    "scripts\hermes-https-proxy.mjs",
+    "scripts\fabric\resolve-authority-registry-url.mjs"
+  )
+  $rollbackDirectories = @(".next", "public", "lib\fabric")
+  if ($WithDependencies) { $rollbackDirectories += "node_modules" }
+  $liveStartBackup = "external\start-williamos-live.ps1"
+  $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
+  $rollbackManifest = [ordered]@{
+    version = 3
+    withDependencies = [bool]$WithDependencies
+    directories = @()
+    files = @()
+    liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
   }
-  foreach ($file in @("server.js", "package.json")) {
+  foreach ($directory in $rollbackDirectories) {
+    $existing = Join-Path $Runtime $directory
+    $wasPresent = Test-Path -LiteralPath $existing -PathType Container
+    $rollbackManifest.directories += [ordered]@{ path = $directory; wasPresent = $wasPresent }
+    if ($wasPresent) {
+      $rollbackDirectory = Join-Path $rollbackRoot $directory
+      $null = robocopy $existing $rollbackDirectory /MIR /NFL /NDL /NJH /NJS /NP
+      if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying $directory (exit $LASTEXITCODE)" }
+    }
+  }
+  foreach ($file in $rollbackFiles) {
     $existing = Join-Path $Runtime $file
-    if (Test-Path $existing) { Copy-Item $existing (Join-Path $rollbackRoot $file) -Force }
+    $wasPresent = Test-Path -LiteralPath $existing -PathType Leaf
+    $rollbackManifest.files += [ordered]@{ path = $file; wasPresent = $wasPresent }
+    if ($wasPresent) {
+      $rollbackFile = Join-Path $rollbackRoot $file
+      $null = New-Item -ItemType Directory -Path (Split-Path -Parent $rollbackFile) -Force
+      Copy-Item -LiteralPath $existing -Destination $rollbackFile -Force
+    }
   }
+  if ($liveStartWasPresent) {
+    $liveStartRollbackFile = Join-Path $rollbackRoot $liveStartBackup
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $liveStartRollbackFile) -Force
+    Copy-Item -LiteralPath $LiveStartTarget -Destination $liveStartRollbackFile -Force
+  }
+  $rollbackManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
-  Write-Output "to restore: robocopy `"$rollbackRoot\.next`" `"$Runtime\.next`" /MIR ; copy server.js and package.json back ; Start-ScheduledTask -TaskName `"$TaskName`""
+  $restoreScriptLiteral = ConvertTo-PowerShellLiteral (Join-Path $Source "scripts\restore-hermes-runtime.ps1")
+  $rollbackRootLiteral = ConvertTo-PowerShellLiteral $rollbackRoot
+  $runtimeLiteral = ConvertTo-PowerShellLiteral $Runtime
+  $taskNameLiteral = ConvertTo-PowerShellLiteral $TaskName
+  $httpsTaskNameLiteral = ConvertTo-PowerShellLiteral $HttpsTaskName
+  $liveStartTargetLiteral = ConvertTo-PowerShellLiteral $LiveStartTarget
+  $portLiteral = ConvertTo-PowerShellLiteral ([string]$Port)
+  $httpsPortLiteral = ConvertTo-PowerShellLiteral ([string]$HttpsPort)
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -Port $portLiteral -HttpsPort $httpsPortLiteral"
 }
 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
+Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandPath (Join-Path $Runtime "server.js")
+Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $Runtime "scripts\hermes-https-proxy.mjs")
 Start-Sleep -Seconds 2
+
+# The task action points at ProgramData, so deploying only the bundle leaves boot semantics on an
+# older hand-placed generation. Install the repository-owned definition before restart; the exact
+# displaced bytes are part of the rollback manifest above.
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
+Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
@@ -178,12 +368,34 @@ foreach ($file in @("server.js", "package.json")) {
   Copy-Item (Join-Path $standalone $file) (Join-Path $Runtime $file) -Force
 }
 
+# Keep the loose runtime provenance record identical to the compiled health route. Operators and
+# rollback tooling inspect this file directly; leaving an older copy beside a newer running bundle
+# creates two contradictory answers for the same deployment.
+$provenanceRelative = "lib\generated\build-provenance.json"
+$provenanceSource = Join-Path $standalone $provenanceRelative
+if (-not (Test-Path $provenanceSource)) { throw "Missing standalone build provenance: $provenanceSource" }
+$provenanceTarget = Join-Path $Runtime $provenanceRelative
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $provenanceTarget) -Force
+Copy-Item $provenanceSource $provenanceTarget -Force
+
+# The HTTPS proxy is part of the exact deployed product, not an independently hand-placed script.
+$httpsProxyRelative = "scripts\hermes-https-proxy.mjs"
+$httpsProxySource = Join-Path $Source $httpsProxyRelative
+if (-not (Test-Path $httpsProxySource)) { throw "Missing HTTPS proxy in the source tree: $httpsProxySource" }
+$httpsProxyTarget = Join-Path $Runtime $httpsProxyRelative
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget) -Force
+Copy-Item $httpsProxySource $httpsProxyTarget -Force
+
 # Static assets and public/ live outside the standalone tree by design.
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next\static (exit $LASTEXITCODE)" }
 if (Test-Path (Join-Path $Source "public")) {
-  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /E /NFL /NDL /NJH /NJS /NP
+  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /MIR /NFL /NDL /NJH /NJS /NP
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying public (exit $LASTEXITCODE)" }
+} elseif (Test-Path -LiteralPath (Join-Path $Runtime "public") -PathType Container) {
+  # The target was captured in rollback manifest v3 above. A generation with no public tree must not
+  # keep serving the previous generation's assets.
+  Remove-Item -LiteralPath (Join-Path $Runtime "public") -Recurse -Force
 }
 
 if ($WithDependencies) {
@@ -206,7 +418,12 @@ if ($WithDependencies) {
 $fabricSource = Join-Path $Source "lib\fabric"
 $fabricTarget = Join-Path $Runtime "lib\fabric"
 $null = New-Item -ItemType Directory -Path $fabricTarget -Force
-$null = robocopy $fabricSource $fabricTarget "*.mjs" /NFL /NDL /NJH /NJS /NP
+# Only JavaScript modules belong in the production boot closure. Remove the outgoing generation's
+# modules after rollback capture, then copy the source closure recursively so deleted/relocated
+# modules cannot survive as runnable stale bytes. Non-module runtime files are left untouched.
+Get-ChildItem -LiteralPath $fabricTarget -Filter "*.mjs" -File -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+$null = robocopy $fabricSource $fabricTarget "*.mjs" /E /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"
@@ -273,4 +490,16 @@ if ($runningSha -ne $builtSha) {
   exit 1
 }
 
-Write-Output "deployed and verified: running $runningSha, /sign-in 200 on port $Port"
+$deployedLooseSha = Get-BuiltSha -StandaloneRoot $Runtime
+if ($deployedLooseSha -ne $builtSha) {
+  Write-Error "STALE LOOSE PROVENANCE: built and running $builtSha but $provenanceTarget reports $deployedLooseSha. The runtime is internally contradictory."
+  exit 1
+}
+
+Start-ScheduledTask -TaskName $HttpsTaskName
+if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
+  Write-Error "The application is live on loopback, but the supervised HTTPS product origin did not answer on port $HttpsPort. Treating the deploy as failed."
+  exit 1
+}
+
+Write-Output "deployed and verified: running $runningSha, loose provenance agrees, HTTP $Port and HTTPS $HttpsPort healthy"

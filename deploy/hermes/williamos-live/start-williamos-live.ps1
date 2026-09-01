@@ -139,6 +139,7 @@ function Deny-Boot {
 
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
+$declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
@@ -256,6 +257,26 @@ if ($declaredTerraFusionSpaceIdentity) {
 if ($declaredWilliamOsRoot) {
   $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
 }
+if ($declaredWilliamOsSpaceIdentity) {
+  $env:WILLIAMOS_PROJECT_SPACE_IDENTITY = $declaredWilliamOsSpaceIdentity
+}
 
-$process = Start-Process -FilePath $node -ArgumentList @($server) -WorkingDirectory $AppRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -Wait -PassThru -WindowStyle Hidden
-exit $process.ExitCode
+# Keep Node as the scheduled task's direct child. Start-Process detached the server from the task:
+# stopping `WilliamOS Live` left port 3100 serving the outgoing process, while the replacement task
+# failed with EADDRINUSE. Health then measured the orphan and falsely reported a successful restart.
+$previousPreference = $ErrorActionPreference
+$serverExit = 1
+try {
+  $ErrorActionPreference = "Continue"
+  & $node $server 1>> $stdoutLog 2>> $stderrLog
+  $nodeInvocationSucceeded = $?
+  $nodeExit = $LASTEXITCODE
+  if ($nodeInvocationSucceeded) {
+    $serverExit = if ($null -eq $nodeExit) { 0 } else { $nodeExit }
+  } elseif ($null -ne $nodeExit -and $nodeExit -ne 0) {
+    $serverExit = $nodeExit
+  }
+} finally {
+  $ErrorActionPreference = $previousPreference
+}
+exit $serverExit

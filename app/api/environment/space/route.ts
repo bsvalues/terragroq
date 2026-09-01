@@ -9,7 +9,11 @@ import {
 } from "@/lib/environment/space-persistence"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
-import { resolveTerraFusionWorkspaceBinding, type WorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type CanonicalWorkspaceProjectKey,
+  type WorkspaceProjectBinding,
+} from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
@@ -25,6 +29,11 @@ const reply = (value: unknown, status = 200) => Response.json(value, {
 
 function validWorldId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0")
+}
+
+function canonicalProjectKey(value: unknown): CanonicalWorkspaceProjectKey | null {
+  if (value === undefined || value === null) return "terrafusion"
+  return value === "terrafusion" || value === "williamos" ? value : null
 }
 
 async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
@@ -63,8 +72,10 @@ export async function GET(request: Request) {
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
   const requested = new URL(request.url).searchParams.get("worldId")
   if (requested !== null && !validWorldId(requested)) return reply({ error: "WORLD_ID_INVALID" }, 400)
+  const projectKey = canonicalProjectKey(new URL(request.url).searchParams.get("projectKey"))
+  if (!projectKey) return reply({ error: "SPACE_PROJECT_INVALID" }, 400)
 
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
   if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
   const binding = projectBinding.binding
 
@@ -92,7 +103,7 @@ export async function GET(request: Request) {
     if (requested !== null) return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
     // A missing optional persistence relation must not strand the primary browser experience.
     // The client persists this truthful, project-bound fallback in browser storage and labels it.
-    const fallback = createDefaultSpace(workspaceAppUrl)
+    const fallback = createDefaultSpace(workspaceAppUrl, binding.project.name)
     return reply({
       worldId: "browser-local",
       name: binding.project.name,
@@ -112,8 +123,10 @@ export async function POST(request: Request) {
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
   const parsed = await readBoundedJson(request, 2_000)
   if (!parsed.ok) return reply({ error: parsed.error }, parsed.status)
-  const body = parsed.value as { name?: unknown }
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const body = parsed.value as { name?: unknown; projectKey?: unknown }
+  const projectKey = canonicalProjectKey(body.projectKey)
+  if (!projectKey) return reply({ error: "SPACE_PROJECT_INVALID" }, 400)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
   if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
   const binding = projectBinding.binding
   try {
@@ -143,10 +156,12 @@ export async function PUT(request: Request) {
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
   const parsed = await readBoundedJson(request, MAX_SPACE_BYTES)
   if (!parsed.ok) return reply({ error: parsed.error }, parsed.status)
-  const body = parsed.value as { worldId?: unknown; space?: unknown }
+  const body = parsed.value as { worldId?: unknown; space?: unknown; projectKey?: unknown }
   if (!validWorldId(body.worldId)) return reply({ error: "WORLD_ID_INVALID" }, 400)
+  const projectKey = canonicalProjectKey(body.projectKey)
+  if (!projectKey) return reply({ error: "SPACE_PROJECT_INVALID" }, 400)
 
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
   if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
   const binding = projectBinding.binding
 
