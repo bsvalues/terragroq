@@ -6,6 +6,7 @@ const seams = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
   save: vi.fn(),
+  defaultSpace: vi.fn(),
   resolveBinding: vi.fn(),
 }))
 
@@ -16,7 +17,7 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
 vi.mock("@/lib/environment/space-persistence", () => ({
   workspaceProjectFromRoot: () => ({ identity: "c:/project", name: "Project" }),
   browserSpaceStorageKey: () => "opaque-browser-key",
-  createDefaultSpace: () => ({ schemaVersion: 1, revision: 0, windows: [], openFiles: [], panes: [], selection: null, activeWindowId: null, activePaneId: null, runningAppUrl: null }),
+  createDefaultSpace: seams.defaultSpace,
   loadOrCreateOwnedSpace: seams.load,
   listOwnedProjectSpaces: seams.list,
   createOwnedProjectSpace: seams.create,
@@ -37,6 +38,7 @@ beforeEach(() => {
   seams.list.mockReset().mockResolvedValue([{ worldId: "a", name: "Alpha", space: { revision: 2 }, updatedAt: "2026-08-28T00:00:00Z" }])
   seams.create.mockReset().mockResolvedValue({ ...current, worldId: "b", name: "Beta", space: { revision: 0 } })
   seams.save.mockReset()
+  seams.defaultSpace.mockReset().mockReturnValue({ schemaVersion: 1, revision: 0, windows: [], openFiles: [], panes: [], selection: null, activeWindowId: null, activePaneId: null, runningAppUrl: null })
   seams.resolveBinding.mockReset().mockResolvedValue({ ok: true, binding: {
     workspaceAppUrl: null,
     project: { identity: "c:/project", name: "Project" },
@@ -116,12 +118,17 @@ describe("Experience V2 Space route", () => {
 
   it("uses one truthful browser-local Space only for default persistence degradation", async () => {
     seams.load.mockRejectedValueOnce(new Error("database unavailable"))
-    const response = await GET(new Request("http://localhost/api/environment/space"))
+    seams.resolveBinding.mockResolvedValueOnce({ ok: true, binding: {
+      workspaceAppUrl: null,
+      project: { identity: "c:/williamos", name: "WilliamOS" },
+    } })
+    const response = await GET(new Request("http://localhost/api/environment/space?projectKey=williamos"))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
       worldId: "browser-local", storage: "browser", multiSpaceAvailable: false,
-      spaces: [{ worldId: "browser-local", name: "Project" }],
+      spaces: [{ worldId: "browser-local", name: "WilliamOS" }],
     })
+    expect(seams.defaultSpace).toHaveBeenCalledWith(null, "WilliamOS")
   })
 
   it("keeps a successful server GET when only collection listing degrades", async () => {

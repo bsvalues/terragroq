@@ -103,7 +103,7 @@ export async function GET(request: Request) {
     if (requested !== null) return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
     // A missing optional persistence relation must not strand the primary browser experience.
     // The client persists this truthful, project-bound fallback in browser storage and labels it.
-    const fallback = createDefaultSpace(workspaceAppUrl)
+    const fallback = createDefaultSpace(workspaceAppUrl, binding.project.name)
     return reply({
       worldId: "browser-local",
       name: binding.project.name,
