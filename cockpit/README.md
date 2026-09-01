@@ -15,11 +15,14 @@ Private key bytes and web session tokens never cross the native invoke boundary.
 
 ## Validation and build
 
-The proven local build uses the pinned Windows GNU Rust toolchain. The bundle explicitly includes `WebView2Loader.dll`, which the GNU executable requires before application entry:
+The build is pinned by `rust-toolchain.toml` to Windows GNU Rust 1.88. The native scripts stage the
+x64 `WebView2Loader.dll` from the exact `webview2-com-sys 0.38.2` crate already integrity-pinned by
+`Cargo.lock`; no hand-placed DLL or unversioned machine file is accepted. The bundle explicitly
+includes that loader because the GNU executable requires it before application entry:
 
 ```powershell
 pnpm install --frozen-lockfile
-cargo test --manifest-path src-tauri/Cargo.toml --locked
+pnpm native:test
 pnpm tauri:build -- --bundles msi,nsis
 ```
 
