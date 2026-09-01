@@ -149,6 +149,7 @@ describe("Hermes deterministic validator recovery", () => {
         sourceFencingToken: 19,
         recoveredExpectedVersion: 21,
         recoveredFencingToken: 20,
+        recoveredLeaseExpiresAt: new Date(now + 60_000).toISOString(),
         recordedAt: new Date(now).toISOString(),
         receiptId: 911,
         replacementContract: replacement.replacementContract,

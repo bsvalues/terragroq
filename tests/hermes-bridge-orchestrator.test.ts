@@ -349,6 +349,7 @@ describe("deterministic validator circuit breaking", () => {
       sourceFencingToken: queue.fencingToken,
       recoveredExpectedVersion: queue.expectedVersion + 1,
       recoveredFencingToken: queue.fencingToken + 1,
+      recoveredLeaseExpiresAt: "2026-07-21T01:50:01.000Z",
       recordedAt: "2026-07-21T01:00:01.000Z",
       receiptId: 911,
       replacementContract: circuit.recovery.replacementContract,

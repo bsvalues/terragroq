@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
 import { createHermesKernelClient, HERMES_KERNEL_INVOKER_RELATIVE, HERMES_KERNEL_POLICY_RELATIVE } from "./hermes-kernel-client.mjs"
-import { createCommandRunner } from "./repository-lifecycle.mjs"
+import { ATOMIC_SNAPSHOT_SCRIPT, createCommandRunner } from "./repository-lifecycle.mjs"
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
@@ -62,31 +62,6 @@ function shellQuote(value) {
   if (text.includes("\0")) throw new TypeError("remote command argument contains NUL")
   return `'${text.replaceAll("'", `'"'"'`)}'`
 }
-
-const ATOMIC_SNAPSHOT_SCRIPT = `
-import hashlib, os, stat, sys
-root = os.path.realpath(sys.argv[1])
-candidate = os.path.abspath(os.path.join(root, sys.argv[2]))
-if os.path.commonpath([root, candidate]) != root:
-    raise SystemExit(20)
-fd = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
-try:
-    opened = os.fstat(fd)
-    if not stat.S_ISREG(opened.st_mode):
-        raise SystemExit(21)
-    resolved = os.path.realpath('/proc/self/fd/' + str(fd))
-    if os.path.commonpath([root, resolved]) != root:
-        raise SystemExit(22)
-    digest = hashlib.sha256()
-    while True:
-        chunk = os.read(fd, 1024 * 1024)
-        if not chunk:
-            break
-        digest.update(chunk)
-    print(digest.hexdigest())
-finally:
-    os.close(fd)
-`
 
 /** Contract implemented by execution contexts used by the Hermes orchestrator. */
 export class ExecutionBackend {
@@ -304,7 +279,7 @@ export class AegisExecutionBackend extends ExecutionBackend {
     if (relative.startsWith("/") || relative.split("/").includes("..")) {
       throw new Error("relPath escapes workspace")
     }
-    const result = await this.#remote("python3", ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative])
+    const result = await this.#remote("python3", ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative, "digest"])
     const digest = result.stdout.trim()
     if (result.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(digest)) {
       throw new Error(`remote atomic snapshot exited ${result.exitCode}`)

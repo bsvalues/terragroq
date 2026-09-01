@@ -545,6 +545,10 @@ function metadata(input = {}, current = {}) {
       || !Number.isSafeInteger(deterministicValidatorQueueRecovery.recoveredFencingToken)
       || deterministicValidatorQueueRecovery.recoveredFencingToken
         <= deterministicValidatorQueueRecovery.sourceFencingToken
+      || typeof deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt !== "string"
+      || !Number.isFinite(Date.parse(deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt))
+      || Date.parse(deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt)
+        <= Date.parse(deterministicValidatorQueueRecovery.recordedAt)
       || !Number.isSafeInteger(deterministicValidatorQueueRecovery.receiptId)
       || deterministicValidatorQueueRecovery.receiptId <= 0
       || typeof deterministicValidatorQueueRecovery.recordedAt !== "string"
@@ -1812,6 +1816,12 @@ export function activateDeterministicValidatorRecovery(filePath, request, option
       || request.leaseDurationMs <= 0) {
       fail("DETERMINISTIC_VALIDATOR_CIRCUIT_STATE_WALL")
     }
+    const recoveredLeaseExpiresAt = current.metadata.deterministicValidatorQueueRecovery
+      ?.recoveredLeaseExpiresAt
+    if (!Number.isFinite(Date.parse(recoveredLeaseExpiresAt ?? ""))
+      || Date.parse(recoveredLeaseExpiresAt) <= requestedAt.milliseconds) {
+      fail("DETERMINISTIC_VALIDATOR_QUEUE_LEASE_EXPIRED")
+    }
     const recoveryCircuit = transitionDeterministicValidatorCircuit(circuit, {
       status: "RECOVERY_ACTIVE", observedAt: at.iso,
     })
@@ -1824,7 +1834,7 @@ export function activateDeterministicValidatorRecovery(filePath, request, option
         status: "ACTIVE",
         holderId: request.holderId,
         acquiredAt: at.iso,
-        expiresAt: new Date(requestedAt.milliseconds + request.leaseDurationMs).toISOString(),
+        expiresAt: recoveredLeaseExpiresAt,
       },
       checkpoint: {
         sequence: current.checkpoint.sequence + 1,
@@ -1867,6 +1877,9 @@ export function bindDeterministicValidatorQueueRecovery(filePath, request, optio
       || binding.sourceFencingToken !== queue?.fencingToken
       || binding.recoveredExpectedVersion !== queue.expectedVersion + 1
       || binding.recoveredFencingToken <= queue.fencingToken
+      || typeof binding.recoveredLeaseExpiresAt !== "string"
+      || !Number.isFinite(Date.parse(binding.recoveredLeaseExpiresAt))
+      || Date.parse(binding.recoveredLeaseExpiresAt) <= Date.parse(binding.recordedAt)
       || binding.replacementContract?.id !== circuit.recovery.replacementContract.id
       || binding.replacementContract?.digest !== circuit.recovery.replacementContract.digest) {
       fail("DETERMINISTIC_VALIDATOR_QUEUE_RECOVERY_STATE_WALL")
@@ -1879,6 +1892,7 @@ export function bindDeterministicValidatorQueueRecovery(filePath, request, optio
       sourceFencingToken: binding.sourceFencingToken,
       recoveredExpectedVersion: binding.recoveredExpectedVersion,
       recoveredFencingToken: binding.recoveredFencingToken,
+      recoveredLeaseExpiresAt: binding.recoveredLeaseExpiresAt,
       recordedAt: binding.recordedAt,
       receiptId: binding.receiptId,
     }
@@ -1899,6 +1913,7 @@ export function bindDeterministicValidatorQueueRecovery(filePath, request, optio
             ...queue,
             expectedVersion: binding.recoveredExpectedVersion,
             fencingToken: binding.recoveredFencingToken,
+            leaseExpiresAt: binding.recoveredLeaseExpiresAt,
           },
           deterministicValidatorQueueRecovery: durableBinding,
           deterministicValidatorReplacement: {

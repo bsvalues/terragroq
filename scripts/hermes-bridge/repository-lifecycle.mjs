@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
@@ -73,28 +73,101 @@ function inside(root, candidate) {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
+export const ATOMIC_SNAPSHOT_SCRIPT = `
+import hashlib, os, stat, sys
+root_path = os.path.realpath(sys.argv[1])
+relative = sys.argv[2]
+mode = sys.argv[3]
+parts = relative.split('/')
+if not parts or any(part in ('', '.', '..') or '/' in part or '\\x00' in part for part in parts):
+    raise SystemExit(20)
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+opened = []
+root_fd = os.open(root_path, directory_flags)
+opened.append(root_fd)
+try:
+    root_stat = os.fstat(root_fd)
+    observed_root = os.stat(root_path, follow_symlinks=False)
+    if not stat.S_ISDIR(root_stat.st_mode) or (root_stat.st_dev, root_stat.st_ino) != (observed_root.st_dev, observed_root.st_ino):
+        raise SystemExit(21)
+    current_fd = root_fd
+    for index, part in enumerate(parts):
+        final = index == len(parts) - 1
+        flags = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if final else directory_flags
+        next_fd = os.open(part, flags, dir_fd=current_fd)
+        opened.append(next_fd)
+        current_fd = next_fd
+        current_stat = os.fstat(current_fd)
+        if final:
+            if not stat.S_ISREG(current_stat.st_mode):
+                raise SystemExit(22)
+        elif not stat.S_ISDIR(current_stat.st_mode):
+            raise SystemExit(23)
+    digest = hashlib.sha256()
+    chunks = []
+    while True:
+        chunk = os.read(current_fd, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+        if mode == 'bytes':
+            chunks.append(chunk)
+    if mode == 'digest':
+        print(digest.hexdigest())
+    elif mode == 'bytes':
+        sys.stdout.buffer.write(b''.join(chunks))
+    else:
+        raise SystemExit(24)
+finally:
+    for descriptor in reversed(opened):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+`
+
+const WINDOWS_ISOLATED_SNAPSHOT_SCRIPT = `
+const fs=require('node:fs'),path=require('node:path');
+try{
+  const root=path.resolve(process.argv[1]),relative=process.argv[2],parts=relative.split('/');
+  if(!parts.length||parts.some((part)=>!part||part==='.'||part==='..'||part.includes('\\0')))process.exit(20);
+  let prefix=root;
+  for(let i=0;i<parts.length;i++){
+    prefix=path.join(prefix,parts[i]);
+    const value=fs.lstatSync(prefix,{bigint:true});
+    if(value.isSymbolicLink()||(i===parts.length-1?!value.isFile():!value.isDirectory()))process.exit(21);
+  }
+  const candidate=prefix,canonicalRoot=fs.realpathSync.native(root),canonicalCandidate=fs.realpathSync.native(candidate);
+  const relativeCanonical=path.relative(canonicalRoot,canonicalCandidate);
+  if(!relativeCanonical||relativeCanonical.startsWith('..')||path.isAbsolute(relativeCanonical))process.exit(22);
+  const flags=fs.constants.O_RDONLY|fs.constants.O_NONBLOCK|(fs.constants.O_NOFOLLOW||0),fd=fs.openSync(candidate,flags);
+  try{
+    const opened=fs.fstatSync(fd,{bigint:true}),observed=fs.statSync(candidate,{bigint:true});
+    if(!opened.isFile()||!observed.isFile()||opened.dev!==observed.dev||opened.ino!==observed.ino)process.exit(23);
+    prefix=root;
+    for(let i=0;i<parts.length;i++){
+      prefix=path.join(prefix,parts[i]);
+      if(fs.lstatSync(prefix).isSymbolicLink())process.exit(24);
+    }
+    process.stdout.write(fs.readFileSync(fd));
+  }finally{fs.closeSync(fd)}
+}catch{process.exit(25)}
+`
+
 export function readSafeUntrackedSnapshotFile(worktreePath, relativePath) {
   const root = path.resolve(worktreePath)
-  const candidate = path.resolve(root, safeRelativePath(relativePath))
-  let handle
-  try {
-    handle = fs.openSync(candidate, "r")
-    const opened = fs.fstatSync(handle, { bigint: true })
-    const link = fs.lstatSync(candidate)
-    const canonicalRoot = fs.realpathSync(root)
-    const canonicalCandidate = fs.realpathSync(candidate)
-    const observed = fs.statSync(candidate, { bigint: true })
-    if (!inside(root, candidate) || link.isSymbolicLink() || !opened.isFile()
-      || !observed.isFile() || opened.dev !== observed.dev || opened.ino !== observed.ino
-      || !inside(canonicalRoot, canonicalCandidate)) {
-      wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
-    }
-    return fs.readFileSync(handle)
-  } catch {
+  const relative = safeRelativePath(relativePath)
+  const executable = process.platform === "win32" ? process.execPath : "python3"
+  const args = process.platform === "win32"
+    ? ["-e", WINDOWS_ISOLATED_SNAPSHOT_SCRIPT, root, relative]
+    : ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative, "bytes"]
+  const result = spawnSync(executable, args, {
+    encoding: "buffer", windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 * 1024,
+  })
+  if (result.status !== 0 || result.error || !Buffer.isBuffer(result.stdout)) {
     wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
-  } finally {
-    if (handle !== undefined) fs.closeSync(handle)
   }
+  return result.stdout
 }
 
 function branchName(value) {

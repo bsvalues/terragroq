@@ -1,12 +1,35 @@
-import { canonicalJson, canonicalSha256, validateDeterministicValidatorCircuit } from "./deterministic-validator-recovery.mjs"
-import { EXACT_EXECUTION_ORIGIN_PREDICATE } from "./outcome-queue-source.mjs"
+import { canonicalSha256, validateDeterministicValidatorCircuit } from "./deterministic-validator-recovery.mjs"
+import {
+  ACQUISITION_AUTHORITY_PREDICATE,
+  EXACT_EXECUTION_ORIGIN_PREDICATE,
+  LIVE_APPROVAL_PREDICATE,
+  exactProjectedWorkContractPredicate,
+} from "./outcome-queue-source.mjs"
+
+const RECOVERY_LEASE_DURATION_MS = 50 * 60 * 1000
 
 function wall(code, detail) {
   throw Object.assign(new Error(detail ?? code), { code })
 }
 
-function exactArray(left, right) {
-  return canonicalJson(left) === canonicalJson(right)
+export async function withDeterministicValidatorRecoveryTransaction({
+  client, userId, operation,
+} = {}) {
+  if (!client || typeof client.query !== "function" || typeof operation !== "function"
+    || typeof userId !== "string" || userId.trim() === "") {
+    wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_TRANSACTION_WALL")
+  }
+  try {
+    await client.query("BEGIN")
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${userId}:outcome-queue`])
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${userId}:deterministic-validator-recovery`])
+    const result = await operation(client)
+    await client.query("COMMIT")
+    return result
+  } catch (error) {
+    try { await client.query("ROLLBACK") } catch {}
+    throw error
+  }
 }
 
 /**
@@ -35,9 +58,8 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
   })()
   const client = await pool.connect()
   try {
-    await client.query("BEGIN")
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${outcome.userId}:outcome-queue`])
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${outcome.userId}:deterministic-validator-recovery`])
+    return await withDeterministicValidatorRecoveryTransaction({
+      client, userId: outcome.userId, operation: async () => {
     const idempotencyKey = `${outcome.outcomeKey}:deterministic-validator-recovery:${recovery.fingerprint}`
     const prior = await client.query(
       `SELECT id, "requestHash", "requestBinding", "resultBinding"
@@ -60,17 +82,52 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
       replay = { receipt, result }
     }
 
+    const oldValidators = recovery.oldContract.validationCommands.map(
+      ({ command, args }) => `${command} ${args.join(" ")}`,
+    )
+    const newValidators = recovery.replacementContract.validationCommands.map(
+      ({ command, args }) => `${command} ${args.join(" ")}`,
+    )
     const clock = await client.query('SELECT clock_timestamp() AS "now"')
     const recordedAt = new Date(clock.rows[0].now).toISOString()
+    const recoveredLeaseExpiresAt = new Date(
+      Date.parse(recordedAt) + RECOVERY_LEASE_DURATION_MS,
+    ).toISOString()
+    const expectedValidators = replay ? newValidators : oldValidators
     const current = await client.query(
       `SELECT q.id, q."goalId", q."goalRef", q."outcomeKey", q.version, q."executionBinding",
-        "leaseHolder", "leaseToken", "acquisitionKey", "fencingToken",
-        "authorityGrantRef", "activeWorkOrderId", "lifecycleState"
-       FROM "outcome_queue_item" AS q
+        q."leaseHolder", q."leaseToken", q."leaseExpiresAt", q."acquisitionKey", q."fencingToken",
+        q."authorityGrantRef", q."activeWorkOrderId", q."lifecycleState"
+       FROM "outcome_queue_mutation_receipt" AS work_contract_receipt
+       JOIN "outcome_queue_item" AS q
+         ON work_contract_receipt."userId" = q."userId"
+       JOIN "work_order" AS projected_work
+         ON projected_work."userId" = q."userId"
+        AND projected_work.id = q."activeWorkOrderId"
        WHERE q."userId" = $1 AND q."outcomeKey" = $2
+         AND (${LIVE_APPROVAL_PREDICATE})
+         AND (${ACQUISITION_AUTHORITY_PREDICATE
+    .replaceAll("$8", "$4")
+    .replaceAll("$1::timestamptz", "$3::timestamptz")})
          AND (${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$3::timestamptz")})
+         AND (${exactProjectedWorkContractPredicate({
+    expectedLeaseHolder: "$5",
+    expectedValidators: "$6::text[]",
+  })})
+         AND projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'
+           THEN work_contract_receipt."resultBinding"->>'workOrderRef'
+           ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END
+         AND projected_work.goal = q."goalRef"
+         AND projected_work.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM "outcome_queue_item" AS live
+           WHERE live."userId" = q."userId" AND live.id <> q.id
+             AND live."lifecycleState" = 'active'
+             AND live."leaseExpiresAt" > $3::timestamptz
+         )
        FOR UPDATE OF q`,
-      [outcome.userId, outcome.outcomeKey, recordedAt],
+      [outcome.userId, outcome.outcomeKey, recordedAt,
+        Number(queue.activeWorkOrderId), queue.leaseHolder, expectedValidators],
     )
     if (current.rows.length !== 1) wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL")
     const row = current.rows[0]
@@ -88,7 +145,9 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
       || row.acquisitionKey !== queue.acquisitionKey
       || Number(row.activeWorkOrderId) !== Number(queue.activeWorkOrderId)
       || row.authorityGrantRef !== queue.authorityGrantRef
-      || row.lifecycleState !== "active") {
+      || row.lifecycleState !== "active"
+      || (replay && new Date(row.leaseExpiresAt).toISOString()
+        !== replay.result.queueRecovery.recoveredLeaseExpiresAt)) {
       wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL")
     }
     const authorization = await client.query(
@@ -113,26 +172,7 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
       || Number(acquisition.rows[0].latestFencingToken) !== expectedFence) {
       wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_ACQUISITION_WALL")
     }
-    const oldValidators = recovery.oldContract.validationCommands.map(
-      ({ command, args }) => `${command} ${args.join(" ")}`,
-    )
-    const newValidators = recovery.replacementContract.validationCommands.map(
-      ({ command, args }) => `${command} ${args.join(" ")}`,
-    )
-    const work = await client.query(
-      `SELECT id, ref, goal, "allowedFiles", validators FROM "work_order"
-       WHERE "userId" = $1 AND id = $2 FOR UPDATE`,
-      [outcome.userId, Number(queue.activeWorkOrderId)],
-    )
-    if (work.rows.length !== 1
-      || work.rows[0].goal !== row.goalRef
-      || !exactArray(work.rows[0].allowedFiles, recovery.oldContract.reservations)
-      || !exactArray(work.rows[0].validators, replay ? newValidators : oldValidators)) {
-      wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_WORK_ORDER_WALL")
-    }
-
     if (replay) {
-      await client.query("COMMIT")
       return {
         ...replay.result.queueRecovery,
         receiptId: Number(replay.receipt.id),
@@ -150,6 +190,7 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
       sourceFencingToken: Number(row.fencingToken),
       recoveredExpectedVersion,
       recoveredFencingToken,
+      recoveredLeaseExpiresAt,
       recordedAt,
     }
     const requestBinding = {
@@ -184,11 +225,16 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
     )
     const updated = await client.query(
       `UPDATE "outcome_queue_item" SET version = $3, "fencingToken" = $4,
+          "leaseExpiresAt" = $8::timestamptz,
           "lifecycleReason" = 'DETERMINISTIC_VALIDATOR_CONTRACT_RECOVERED', "updatedAt" = $7::timestamptz
        WHERE "userId" = $1 AND "outcomeKey" = $2 AND version = $5 AND "fencingToken" = $6
+         AND "executionBinding" = $9 AND "leaseHolder" = $10 AND "leaseToken" = $11
+         AND "acquisitionKey" = $12 AND "activeWorkOrderId" = $13
        RETURNING id`,
       [outcome.userId, outcome.outcomeKey, recoveredExpectedVersion, recoveredFencingToken,
-        queueRecovery.sourceExpectedVersion, queueRecovery.sourceFencingToken, recordedAt],
+        queueRecovery.sourceExpectedVersion, queueRecovery.sourceFencingToken, recordedAt,
+        recoveredLeaseExpiresAt, queue.executionBinding, queue.leaseHolder, queue.leaseToken,
+        queue.acquisitionKey, Number(queue.activeWorkOrderId)],
     )
     if (updated.rows.length !== 1) wall("HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL")
     const acquired = await client.query(
@@ -222,15 +268,13 @@ export async function recoverDeterministicValidatorQueue({ execution, pool: supp
         receiptId: Number(receipt.rows[0].id),
       }), recordedAt],
     )
-    await client.query("COMMIT")
     return {
       ...queueRecovery,
       receiptId: Number(receipt.rows[0].id),
       replacementContract: recovery.replacementContract,
     }
-  } catch (error) {
-    try { await client.query("ROLLBACK") } catch {}
-    throw error
+      },
+    })
   } finally {
     client.release()
     if (ownedPool) await ownedPool.end()

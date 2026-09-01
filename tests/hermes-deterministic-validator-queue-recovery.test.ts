@@ -62,7 +62,7 @@ function recoveryExecution() {
 }
 
 function queuePool(execution: ReturnType<typeof recoveryExecution>, {
-  drift = false, authorityRevoked = false,
+  drift = false, authorityRevoked = false, workOrderInvalid = false,
 } = {}) {
   const queue = execution.metadata.outcome.queueBinding
   const recovery = execution.metadata.deterministicValidatorCircuit.recovery
@@ -71,6 +71,7 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
   let version = drift ? queue.expectedVersion + 1 : queue.expectedVersion
   let fence = queue.fencingToken
   let acquisitionFence = queue.fencingToken
+  let leaseExpiresAt = "2026-08-31T12:05:00.000Z"
   let validators = recovery.oldContract.validationCommands.map(
     ({ command, args }: any) => `${command} ${args.join(" ")}`,
   )
@@ -102,7 +103,7 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
     }
     if (sql.includes("clock_timestamp")) return { rows: [{ now: "2026-08-31T12:00:01.000Z" }] }
     if (sql.includes('FROM "outcome_queue_item"')) {
-      return { rows: authorityRevoked ? [] : [{
+      return { rows: authorityRevoked || workOrderInvalid ? [] : [{
         goalId: 40,
         goalRef: "GOAL-0040",
         outcomeKey: "goal:GOAL-0040",
@@ -111,6 +112,7 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
         executionBinding: queue.executionBinding,
         leaseHolder: queue.leaseHolder,
         leaseToken: queue.leaseToken,
+        leaseExpiresAt,
         acquisitionKey: queue.acquisitionKey,
         activeWorkOrderId: queue.activeWorkOrderId,
         authorityGrantRef: queue.authorityGrantRef,
@@ -144,6 +146,7 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
     if (sql.includes('UPDATE "outcome_queue_item"')) {
       version = args[2]
       fence = args[3]
+      leaseExpiresAt = args[7]
       return { rows: [{ id: 1 }] }
     }
     if (sql.includes('UPDATE "outcome_queue_acquisition_receipt"')) {
@@ -189,6 +192,7 @@ describe("authoritative deterministic validator queue recovery", () => {
       recoveredExpectedVersion: 13,
       sourceFencingToken: 34,
       recoveredFencingToken: 35,
+      recoveredLeaseExpiresAt: "2026-08-31T12:50:01.000Z",
       receiptId: 93,
     })
     expect(value.mutations()).toBe(1)
@@ -223,6 +227,19 @@ describe("authoritative deterministic validator queue recovery", () => {
     expect(authorityQuery).toContain('"revokedAt" IS NULL')
     expect(authorityQuery).toContain('exact_execution_goal')
     expect(authorityQuery).toContain('exact_implementation_grant')
+  })
+
+  it("re-proves the exact active projected Work Order before reacquiring the queue lease", async () => {
+    const execution = recoveryExecution()
+    const value = queuePool(execution, { workOrderInvalid: true })
+    await expect(recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }))
+      .rejects.toMatchObject({ code: "HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL" })
+    const query = value.query.mock.calls.find(([sql]) => String(sql).includes('FROM "outcome_queue_item"'))?.[0]
+    expect(query).toContain('projected_work.status = \'active\'')
+    expect(query).toContain('projected_work."authorityGrantId"')
+    expect(query).toContain('q."leaseHolder" = $5')
+    expect(query).toContain('projected_work.validators = $6::text[]')
+    expect(value.mutations()).toBe(0)
   })
 
   it("serializes two database clients so only one CAS mutation wins", async () => {

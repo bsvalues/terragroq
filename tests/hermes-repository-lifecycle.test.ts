@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 import { describe, expect, it, vi } from "vitest"
 
@@ -45,6 +46,34 @@ describe("untracked snapshot containment", () => {
     } finally {
       fs.rmSync(worktree, { recursive: true, force: true })
       fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it("rejects a symlinked intermediate directory without opening its target", () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-snapshot-root-"))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-snapshot-outside-"))
+    try {
+      fs.writeFileSync(path.join(outside, "secret.test.ts"), "outside")
+      fs.symlinkSync(outside, path.join(worktree, "linked"), process.platform === "win32" ? "junction" : "dir")
+      expect(() => readSafeUntrackedSnapshotFile(worktree, "linked/secret.test.ts"))
+        .toThrow(expect.objectContaining({ code: "HERMES_REPOSITORY_SNAPSHOT_WALL" }))
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true })
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === "win32")("rejects a FIFO without blocking the supervisor", () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-snapshot-root-"))
+    try {
+      const fifo = path.join(worktree, "blocked.test.ts")
+      execFileSync("mkfifo", [fifo])
+      const startedAt = Date.now()
+      expect(() => readSafeUntrackedSnapshotFile(worktree, "blocked.test.ts"))
+        .toThrow(expect.objectContaining({ code: "HERMES_REPOSITORY_SNAPSHOT_WALL" }))
+      expect(Date.now() - startedAt).toBeLessThan(2_000)
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true })
     }
   })
 })

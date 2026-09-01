@@ -211,7 +211,7 @@ export const OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL = `
     '(terrafusion|terrapilot|property[[:space:]]+workbench|county|pacs|parcel|taxpayer|protected[[:space:]]+data|(deploy|release|cutover|mutat|writ|chang|updat|configur)[[:alnum:]_]*.{0,40}production|production.{0,40}(deploy|release|cutover|mutat|writ|chang|updat|configur)[[:alnum:]_]*|(create|publish|cut|push)[[:space:]]+(a[[:space:]]+)?(github[[:space:]]+)?release|(create|publish|push)[[:space:]]+(a[[:space:]]+)?(git[[:space:]]+)?tag|tag[[:space:]]+v?[0-9]|secret|password|credential|api[ -]?key|access[ -]?token|cookie|session|paid[[:space:]]+overage|increase[[:space:]]+(the[[:space:]]+)?spend|new[[:space:]]+spending|purchase|billing[[:space:]]+upgrade|destructive|delete|drop[[:space:]]+(table|database)|truncate|force[ -]?push|reset[[:space:]]+--hard|wipe|purge|issue[[:space:]]*#?357)'
 `
 
-const LIVE_APPROVAL_PREDICATE = `
+export const LIVE_APPROVAL_PREDICATE = `
   q."approvalState" = 'approved'
   AND EXISTS (
     SELECT 1
@@ -364,7 +364,7 @@ const V1_2_CAMPAIGN_RENEWAL_APPLIED_SQL = `
   )
 `
 
-const ACQUISITION_AUTHORITY_PREDICATE = LIVE_AUTHORITY_PREDICATE.replaceAll(
+export const ACQUISITION_AUTHORITY_PREDICATE = LIVE_AUTHORITY_PREDICATE.replaceAll(
   `q."activeWorkOrderId" = live_grant."workOrderId"`,
   `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
 )
@@ -773,7 +773,29 @@ function exactWorkContractReceiptPredicate(alias) {
   `
 }
 
-const EXACT_PROJECTED_WORK_CONTRACT_PREDICATE = `
+export function exactProjectedWorkContractPredicate({
+  expectedLeaseHolder = "$EXPECTED_LEASE_HOLDER",
+  expectedValidators = null,
+} = {}) {
+  const validatorPredicate = expectedValidators === null
+    ? `projected_work.validators = ARRAY(
+    SELECT concat_ws(
+      ' ',
+      validation_command.value->>'command',
+      (
+        SELECT string_agg(validation_argument.value, ' ' ORDER BY validation_argument.position)
+        FROM jsonb_array_elements_text(
+          COALESCE(validation_command.value->'args', '[]'::jsonb)
+        ) WITH ORDINALITY AS validation_argument(value, position)
+      )
+    )
+    FROM jsonb_array_elements(
+      work_contract_receipt."resultBinding"->'workContract'->'validationCommands'
+    ) WITH ORDINALITY AS validation_command(value, position)
+    ORDER BY validation_command.position
+  )`
+    : `projected_work.validators = ${expectedValidators}`
+  return `
   ${exactWorkContractReceiptPredicate("work_contract_receipt")}
   AND (
     SELECT count(*) = 1
@@ -789,29 +811,19 @@ const EXACT_PROJECTED_WORK_CONTRACT_PREDICATE = `
     ORDER BY reservation.position
   )
   AND cardinality(projected_work.validators) > 0
-  AND projected_work.validators = ARRAY(
-    SELECT concat_ws(
-      ' ',
-      validation_command.value->>'command',
-      (
-        SELECT string_agg(validation_argument.value, ' ' ORDER BY validation_argument.position)
-        FROM jsonb_array_elements_text(
-          COALESCE(validation_command.value->'args', '[]'::jsonb)
-        ) WITH ORDINALITY AS validation_argument(value, position)
-      )
-    )
-    FROM jsonb_array_elements(
-      work_contract_receipt."resultBinding"->'workContract'->'validationCommands'
-    ) WITH ORDINALITY AS validation_command(value, position)
-    ORDER BY validation_command.position
-  )
+  AND ${validatorPredicate}
   AND projected_work.lane = work_contract_receipt."resultBinding"->'workContract'->>'lane'
   AND projected_work.assignee = 'hermes-codex-bridge'
   AND projected_work.agent = 'codex'
+  AND projected_work."authorityGrantId"::text
+    = work_contract_receipt."resultBinding"->>'implementationGrantId'
   AND q."leaseHolder" IS NOT NULL
   AND btrim(q."leaseHolder") <> ''
-  AND q."leaseHolder" = $EXPECTED_LEASE_HOLDER
-`
+  AND q."leaseHolder" = ${expectedLeaseHolder}
+  `
+}
+
+const EXACT_PROJECTED_WORK_CONTRACT_PREDICATE = exactProjectedWorkContractPredicate()
 
 const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
