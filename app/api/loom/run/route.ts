@@ -83,7 +83,7 @@ export async function POST(request: Request) {
     cwd: projectRoot,
     shell: false,
     windowsHide: true,
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    env: { ...process.env, ...operation.env, NO_COLOR: "1", FORCE_COLOR: "0" },
   })
 
   let bytes = 0

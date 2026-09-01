@@ -1920,6 +1920,34 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("Updated src/app.ts.")).toBeTruthy()
   })
 
+  it("shows a truthful Local inference refusal in the open Line", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/agent" && init?.method === "POST") {
+        return Promise.resolve(Response.json({ error: "LOCAL_MODEL_UNAVAILABLE" }, { status: 503 }))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
+    const line = screen.getByRole("form", { name: "The Line" })
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "What is the current Space?" } })
+    fireEvent.click(within(line).getByRole("button", { name: "Ask Local" }))
+
+    expect(await within(line).findByText("Local inference unavailable.")).toBeTruthy()
+  })
+
   it("keeps agent work running when The Line closes and fences its late presentation from another Line", async () => {
     const sessionId = "423e4567-e89b-42d3-a456-426614174000"
     const encoder = new TextEncoder()

@@ -31,6 +31,8 @@ export interface LoomOperation {
   /** Executable name resolved against PATH; never operator-supplied. */
   command: string
   args: readonly string[]
+  /** Environment overrides required by this child operation, independent of the server process. */
+  env?: Readonly<Record<string, string>>
   /** "project" = the checkout, "runtime" = the deployed cockpit. */
   scope: "project" | "runtime"
   /** True when running this changes state rather than just reporting it. */
@@ -81,7 +83,8 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     // node is spawned directly rather than through pnpm: Windows refuses to run .cmd shims without
     // a shell, and introducing a shell would create the interpolation point this design avoids.
     command: "node",
-    args: ["node_modules/vitest/vitest.mjs", "run", "--reporter=default"],
+    args: ["node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent"],
+    env: { NODE_ENV: "test" },
     scope: "project",
     mutating: false,
     timeoutMs: 20 * 60_000,

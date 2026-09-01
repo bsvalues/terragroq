@@ -2639,10 +2639,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     } catch (error) {
       if (lineTarget !== "agent") {
         setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
-      } else if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) {
+      } else if (!agentPresentationIsCurrent || agentPresentationIsCurrent() || agentTerminalTruthIsCurrent?.()) {
+        const message = error instanceof Error ? error.message : ""
         setLineReply(error instanceof AgentTurnCommittedPersistenceError
           ? error.message
-          : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
+          : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped."
+            : delegateContext?.provider === "Local" && (message === "LOCAL_INFERENCE_UNAVAILABLE" || message === "LOCAL_MODEL_UNAVAILABLE")
+              ? "Local inference unavailable."
+              : "Agent turn unavailable.")
       }
     } finally {
       if (resumeDispatchKey) {
