@@ -5,6 +5,7 @@ import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
@@ -27,6 +28,13 @@ export async function GET(request: Request) {
 
   const device = (await headers()).get("x-williamos-device-cert")
   if (!device) return new Response(null, { status: 303, headers: { location: "/sign-in" } })
+
+  // A pre-provisioned Cockpit returns here on every startup. Preserve an already valid owner
+  // session instead of minting another 90-day database row and replacing its cookie each time.
+  const existingSession = await getSession()
+  if (existingSession?.user) {
+    return new Response(null, { status: 303, headers: { location: destination, "cache-control": "no-store" } })
+  }
 
   // The certificate proves a trusted DEVICE; it must still resolve to the right operator. Taking the
   // oldest row was wrong: this database also holds abandoned rows from setup and diagnostics, and

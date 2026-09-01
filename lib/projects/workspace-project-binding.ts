@@ -221,7 +221,12 @@ export async function resolveWilliamOsWorkspaceBinding(
 
   let configuredSpaceIdentity: string
   try {
-    configuredSpaceIdentity = normalizePortableAbsolutePathIdentity(checkout.binding.configuredWorkspaceRoot)
+    // The checkout location is operational state; it is not the persisted Space namespace. The
+    // server preserves this continuity identity when WILLIAMOS_PROJECT_ROOT later moves, exactly as
+    // it does for the TerraFusion target above.
+    configuredSpaceIdentity = normalizePortableAbsolutePathIdentity(
+      process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY || checkout.binding.configuredWorkspaceRoot,
+    )
   } catch {
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }

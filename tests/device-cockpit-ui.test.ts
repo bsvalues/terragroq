@@ -29,6 +29,14 @@ describe("device cockpit web integration", () => {
     expect(certificateSession).toBeGreaterThan(header)
     expect(nativeBootstrap).toBeGreaterThan(certificateSession)
   })
+  it("reuses a valid session instead of minting another row on every certificate-bearing startup", () => {
+    const source = read("app/api/device-cert/session/route.ts")
+    const existingSession = source.indexOf("await getSession()")
+    const createSession = source.indexOf("internalAdapter.createSession")
+    expect(existingSession).toBeGreaterThan(-1)
+    expect(createSession).toBeGreaterThan(existingSession)
+    expect(source).toContain("if (existingSession?.user)")
+  })
   it("routes an authenticated credential-less Cockpit to explicit enrollment", async () => {
     const replace = vi.fn()
     await authenticateCockpit({

@@ -139,6 +139,7 @@ function Deny-Boot {
 
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
+$declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
@@ -255,6 +256,9 @@ if ($declaredTerraFusionSpaceIdentity) {
 # the validated TerraFusion target into this variable.
 if ($declaredWilliamOsRoot) {
   $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
+}
+if ($declaredWilliamOsSpaceIdentity) {
+  $env:WILLIAMOS_PROJECT_SPACE_IDENTITY = $declaredWilliamOsSpaceIdentity
 }
 
 # Keep Node as the scheduled task's direct child. Start-Process detached the server from the task:

@@ -108,6 +108,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
+      "WILLIAMOS_PROJECT_SPACE_IDENTITY",
     ]))
   })
 })
@@ -221,6 +222,19 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("C:\\ProgramData\\WilliamOS\\start-williamos-live.ps1")
     expect(code).toMatch(/Copy-Item\s+-LiteralPath\s+\$liveStartSource\s+-Destination\s+\$LiveStartTarget/)
     expect(code.indexOf("$liveStartSource")).toBeLessThan(code.lastIndexOf("Start-ScheduledTask"))
+  })
+
+  it("proves the scheduled task invokes the selected launcher before any deployment mutation", () => {
+    const code = executableOnly(deployText)
+    const assertion = code.lastIndexOf("Assert-LiveTaskUsesLauncher")
+    const rollback = code.indexOf("rollback captured")
+    const stop = code.indexOf("Stop-ScheduledTask")
+    expect(code).toContain("Get-ScheduledTask -TaskName $TaskName")
+    expect(code).toContain("Arguments.IndexOf($LiveStartTarget")
+    expect(code).toContain("refusing a deploy that would install unused boot semantics")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(rollback)
+    expect(assertion).toBeLessThan(stop)
   })
 
   it("fails loudly if a boot-time tool is missing from the source tree", () => {

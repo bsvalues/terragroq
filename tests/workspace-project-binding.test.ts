@@ -13,6 +13,7 @@ import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-
 const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
 const originalSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
 const originalWilliamOsRoot = process.env.WILLIAMOS_PROJECT_ROOT
+const originalWilliamOsSpaceIdentity = process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
 
 afterEach(() => {
   if (originalRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
@@ -21,6 +22,8 @@ afterEach(() => {
   else process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = originalSpaceIdentity
   if (originalWilliamOsRoot === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
   else process.env.WILLIAMOS_PROJECT_ROOT = originalWilliamOsRoot
+  if (originalWilliamOsSpaceIdentity === undefined) delete process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
+  else process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY = originalWilliamOsSpaceIdentity
 })
 
 function dependencies(
@@ -236,6 +239,23 @@ describe("WilliamOS workspace Project binding", () => {
         repositoryIdentity: "bsvalues/terragroq",
         workspaceAppUrl: null,
         project: expect.objectContaining({ name: "WilliamOS", identity: expect.stringMatching(/repos[\\/]terragroq$/) }),
+      }),
+    })
+  })
+
+  it("keeps WilliamOS Space identity stable when its verified checkout moves", async () => {
+    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/moved/terragroq"
+    process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY = "/repos/original/terragroq"
+    const result = await resolveWilliamOsWorkspaceBinding(
+      "owner",
+      dependencies([row], "git@github.com:bsvalues/terragroq.git"),
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terragroq$/),
+        project: { identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/), name: "WilliamOS" },
       }),
     })
   })

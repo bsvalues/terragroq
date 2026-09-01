@@ -127,6 +127,18 @@ function Stop-ExpectedListener {
     }
 }
 
+function Assert-LiveTaskUsesLauncher {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+  $actions = @($task.Actions)
+  if ($actions.Count -ne 1 -or -not $actions[0].Arguments -or $actions[0].Arguments.IndexOf($LiveStartTarget, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+}
+
+# Validate the external task binding before verification, rollback capture, task control, or file
+# mutation. A custom target is supported only when the supervised task actually invokes it.
+Assert-LiveTaskUsesLauncher
+
 if ($VerifyOnly) {
   if (-not (Test-Cockpit -Port $Port)) {
     Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
