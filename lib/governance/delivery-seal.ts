@@ -8,11 +8,12 @@ import {
 } from "node:crypto"
 
 export const DELIVERY_SEAL_VERSION = "williamos-delivery-seal.v1" as const
+export const ARTIFACT_ADOPTION_SEAL_VERSION = "williamos-delivery-seal.v2" as const
 
 const DIGEST = /^[0-9a-f]{64}$/i
 const COMMIT = /^[0-9a-f]{40}$/i
 
-export type WilliamOSDeliverySealPayload = Readonly<{
+export type AssignmentDeliverySealPayload = Readonly<{
   version: typeof DELIVERY_SEAL_VERSION
   issuer: "WilliamOS"
   keyId: string
@@ -38,6 +39,34 @@ export type WilliamOSDeliverySealPayload = Readonly<{
     contentDigest: string
   }>
 }>
+
+export type ArtifactAdoptionDeliverySealPayload = Readonly<{
+  version: typeof ARTIFACT_ADOPTION_SEAL_VERSION
+  authorityKind: "prospective_artifact_adoption"
+  issuer: "WilliamOS"
+  keyId: string
+  issuedAt: string
+  adoption: Readonly<{
+    adoptionHash: string
+    owner: string
+    worldId: string
+    spaceRevision: number
+    outcome: Readonly<{ id: number; key: string; version: number }>
+    workOrder: Readonly<{ id: number; ref: string | null; version: string }>
+    grant: Readonly<{ id: number; ref: string | null; version: string }>
+    reservation: Readonly<{ allowed: readonly string[]; forbidden: readonly string[]; version: string }>
+    artifact: Readonly<{ pullRequest: number; headSha: string; paths: readonly string[] }>
+    evidence: Readonly<{
+      validationDigest: string
+      reviewDigest: string
+      validationHeadSha: string
+      reviewHeadSha: string
+    }>
+  }>
+  delivery: MeasuredDelivery
+}>
+
+export type WilliamOSDeliverySealPayload = AssignmentDeliverySealPayload | ArtifactAdoptionDeliverySealPayload
 
 export type WilliamOSDeliverySeal = Readonly<{
   payload: WilliamOSDeliverySealPayload
@@ -104,6 +133,8 @@ export class DeliverySealError extends Error {
     | "DELIVERY_SEAL_DIFF_INVALID"
     | "DELIVERY_SEAL_SIGNING_UNAVAILABLE"
     | "DELIVERY_SEAL_NOT_DURABLE"
+    | "DELIVERY_SEAL_CONFIRMATION_STALE"
+    | "DELIVERY_SEAL_EVIDENCE_INVALID"
 
   constructor(code: DeliverySealError["code"], message: string) {
     super(message)
@@ -285,7 +316,8 @@ export function verifyWilliamOSDeliverySeal(
   publicKeys: Readonly<Record<string, KeyObject | string>>,
 ): boolean {
   const configured = publicKeys[seal?.payload?.keyId]
-  if (!configured || seal.payload.version !== DELIVERY_SEAL_VERSION || seal.payload.issuer !== "WilliamOS") return false
+  if (!configured || ![DELIVERY_SEAL_VERSION, ARTIFACT_ADOPTION_SEAL_VERSION].includes(seal.payload.version)
+    || seal.payload.issuer !== "WilliamOS") return false
   try {
     const key = typeof configured === "string" ? createPublicKey(configured) : configured
     return key.asymmetricKeyType === "ed25519"

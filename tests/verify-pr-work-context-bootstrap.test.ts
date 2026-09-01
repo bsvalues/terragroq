@@ -16,6 +16,17 @@ afterEach(() => {
 })
 
 describe("pull-request delivery verifier bootstrap", () => {
+  it("opts the protected verifier into exact multi-path artifact measurement", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "scripts", "verify-pr-work-context.mjs"), "utf8")
+    expect(source).toMatch(/seal\.payload\.delivery\.paths,\s*\{\s*allowMultiple:\s*true\s*\}/)
+  })
+
+  it("binds verification to the immutable pull-request head instead of the synthetic checkout merge", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "scripts", "verify-pr-work-context.mjs"), "utf8")
+    expect(source).toMatch(/pr\.head\?\.sha/)
+    expect(source).toMatch(/git\("diff",\s*"--name-only",\s*`origin\/\$\{base\}\.\.\.\$\{headSha\}`\)/)
+  })
+
   it("reaches a controlled seal verdict in a clean checkout without application dependencies", () => {
     const container = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-delivery-bootstrap-"))
     temporaryRoots.push(container)

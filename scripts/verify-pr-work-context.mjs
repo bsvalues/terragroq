@@ -42,8 +42,11 @@ function configuredPublicKeys() {
 }
 
 git("fetch", "--quiet", "origin", base)
-const headSha = git("rev-parse", "HEAD").toLowerCase()
-const changedFiles = lines(git("diff", "--name-only", `origin/${base}...HEAD`))
+const eventHeadSha = String(pr.head?.sha ?? "").toLowerCase()
+const headSha = /^[0-9a-f]{40}$/.test(eventHeadSha)
+  ? eventHeadSha
+  : git("rev-parse", "HEAD").toLowerCase()
+const changedFiles = lines(git("diff", "--name-only", `origin/${base}...${headSha}`))
 const seals = parseDeclaredDeliverySeals(pr.body)
 const patchDigests = {}
 let repository
@@ -55,6 +58,7 @@ for (const seal of seals) {
       seal.payload.delivery.baseSha,
       headSha,
       seal.payload.delivery.paths,
+      { allowMultiple: true },
     )
     repository ??= measured.repository
     patchDigests[[...measured.paths].sort().join("\0")] = measured.patchDigest
