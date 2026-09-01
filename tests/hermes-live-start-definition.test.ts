@@ -288,6 +288,23 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(restore).toMatch(/Remove-Item\s+-LiteralPath\s+\$LiveStartTarget/)
   })
 
+  it("prints a restore command bound to the exact custom launcher target", () => {
+    const code = executableOnly(deployText)
+    const restoreCommand = code.split(/\r?\n/).find((line) => line.includes("to restore:")) ?? ""
+    expect(restoreCommand).toContain('-LiveStartTarget `"$LiveStartTarget`"')
+  })
+
+  it("refuses rollback-skip mode before overwriting an existing external launcher", () => {
+    const code = executableOnly(deployText)
+    const refusalIndex = code.indexOf("SkipRollbackCapture cannot overwrite")
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    const copyIndex = code.indexOf("Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget")
+    expect(code).toMatch(/\$SkipRollbackCapture\s+-and\s+\(Test-Path -LiteralPath \$LiveStartTarget -PathType Leaf\)/)
+    expect(refusalIndex).toBeGreaterThan(-1)
+    expect(refusalIndex).toBeLessThan(stopIndex)
+    expect(refusalIndex).toBeLessThan(copyIndex)
+  })
+
   it("refuses to stop unrelated processes on either product port", () => {
     const code = executableOnly(deployText)
     expect(code).toContain("Stop-ExpectedListener")

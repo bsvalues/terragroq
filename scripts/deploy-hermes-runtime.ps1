@@ -145,6 +145,13 @@ $liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-william
 if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
 }
+# `-SkipRollbackCapture` is for an empty installation. The task launcher lives outside `$Runtime`,
+# so an empty runtime can still have an older hand-placed launcher. Overwriting that file without a
+# manifest would make the flag silently destructive. Refuse before stopping either task or changing
+# any bytes; a caller with an existing launcher must take the normal captured-rollback path.
+if ($SkipRollbackCapture -and (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf)) {
+  throw "SkipRollbackCapture cannot overwrite the existing WilliamOS Live start definition at '$LiveStartTarget'. Run without -SkipRollbackCapture so the external launcher is captured and restorable."
+}
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
@@ -224,7 +231,7 @@ if (-not $SkipRollbackCapture) {
   $rollbackManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
-  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Source\scripts\restore-hermes-runtime.ps1`" -RollbackRoot `"$rollbackRoot`" -Runtime `"$Runtime`" -TaskName `"$TaskName`" -HttpsTaskName `"$HttpsTaskName`""
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Source\scripts\restore-hermes-runtime.ps1`" -RollbackRoot `"$rollbackRoot`" -Runtime `"$Runtime`" -TaskName `"$TaskName`" -HttpsTaskName `"$HttpsTaskName`" -LiveStartTarget `"$LiveStartTarget`""
 }
 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
