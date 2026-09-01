@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
+import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
+import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { getProcessStartedAt, getRuntimeInstanceId } from "@/lib/runtime-instance"
+import { getSession } from "@/lib/session"
 
 export const runtime = "nodejs"
 
@@ -38,10 +42,26 @@ export async function GET(req: Request) {
   }
 
   const readiness = await getAuthReadiness({ probeDatabase: true })
+  let terraFusionRootConfigured = false
+  let terraFusionRootStatus = "UNAUTHENTICATED"
+  const session = await getSession()
+  if (session?.user) {
+    const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
+    const owner = assertOwner(session.user.id, ownerId)
+    if (owner.ok) {
+      const binding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+      terraFusionRootConfigured = binding.ok
+      terraFusionRootStatus = binding.ok ? "VERIFIED" : binding.error
+    } else {
+      terraFusionRootStatus = owner.failure ?? "OWNER_UNRESOLVED"
+    }
+  }
   return NextResponse.json(
     {
       ok: true,
       readiness,
+      terraFusionRootConfigured,
+      terraFusionRootStatus,
       processStartedAt: getProcessStartedAt(),
       runtimeInstanceId: getRuntimeInstanceId(),
       checkedAt: new Date().toISOString(),

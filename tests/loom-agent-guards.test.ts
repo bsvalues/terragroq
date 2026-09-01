@@ -53,7 +53,7 @@ describe("work-context coverage across the workroom API", () => {
   for (const route of routes) {
     const mutates = /export async function (POST|PUT|PATCH|DELETE)/.test(route.source)
     it(`${route.name}: ${mutates ? "enforces" : "needs no"} work context`, () => {
-      const directGate = route.source.includes("requireWorkContext")
+      const directGate = route.source.includes("requireWorkContext") || route.source.includes("deriveSpaceMutationAuthority")
       const governedFileSeam = route.source.includes("writeGovernedWorkspaceFile")
         && readFileSync(path.join(__dirname, "..", "lib", "loom", "workspace-file-write.ts"), "utf8")
           .includes("authorize: requireWorkContext")

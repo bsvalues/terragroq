@@ -9,6 +9,7 @@ const terminalRouteSeams = vi.hoisted(() => ({
   getSession: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
 }))
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -16,13 +17,20 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: terminalRouteSeams.spawn,
 }))
 vi.mock("@/lib/session", () => ({ getSession: terminalRouteSeams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.platform === "win32" ? "C:\\work\\repo" : "/work/repo",
+    projectId: 7, projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    project: { identity: "c:/terrafusion" },
+  } }),
+}))
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: terminalRouteSeams.recordLoomStart,
   recordLoomEnd: terminalRouteSeams.recordLoomEnd,
 }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: vi.fn(),
-  workContextRefusal: vi.fn(),
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: terminalRouteSeams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
 }))
 
 import { POST } from "@/app/api/loom/run/route"

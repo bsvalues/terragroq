@@ -93,14 +93,22 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/&\s*\$node\s+@resolverArgs\s+2>&1/)
   })
 
-  it("only ever overrides the variables it resolves", () => {
+  it("only applies the runtime variables it resolves or reads explicitly", () => {
     const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
-    // WILLIAMOS_PROJECT_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
-    // reads `process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()`, `.env.local` declared it, and
+    // WILLIAMOS_TERRAFUSION_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
+    // reads the declared TerraFusion target root, `.env.local` declared it, and
     // nothing applied it -- so the deployed bundle became "the workspace" and every governed save
     // was refused with FAILED_STALE_MAIN while the cockpit answered 200.
-    expect(names).toEqual(new Set(["NODE_ENV", "HOSTNAME", "PORT", "DATABASE_URL", "WILLIAMOS_PROJECT_ROOT"]))
+    expect(names).toEqual(new Set([
+      "NODE_ENV",
+      "HOSTNAME",
+      "PORT",
+      "DATABASE_URL",
+      "WILLIAMOS_TERRAFUSION_ROOT",
+      "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
+      "WILLIAMOS_PROJECT_ROOT",
+    ]))
   })
 })
 
@@ -108,16 +116,30 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   const code = executableOnly(startText)
 
   it("applies the declared workspace instead of letting process.cwd() win", () => {
-    expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
+    expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_ROOT\s*=\s*\$resolvedProjectRoot/)
     // Applied BEFORE the server is launched, or it is not applied at all.
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+  })
+
+  it("exports the WilliamOS source root separately from the TerraFusion target", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$declaredWilliamOsRoot/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
     expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+  })
+
+  it("exports the stable Space identity without replacing it with the current checkout", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("Start-Process"))
   })
 
   it("does not carry a written-down workspace path of its own", () => {
     // The same reasoning as the address literals: a path baked in here is correct the day it is
     // typed and silently wrong afterwards, and a wrong workspace still serves files happily. The
     // value is a declared deployment fact, read from .env.local or passed in.
-    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_ROOT"/)
     expect(code).not.toMatch(/\[string\]\$ProjectRoot\s*=\s*"/)
   })
 
@@ -130,6 +152,7 @@ describe("the cockpit is given a proven governed workspace, or it does not start
       "PROJECT_ROOT_NOT_GOVERNED_WORKSPACE",
       "PROJECT_ROOT_NOT_WORKTREE_ROOT",
       "PROJECT_ROOT_NO_ORIGIN_REMOTE",
+      "PROJECT_ROOT_REPOSITORY_MISMATCH",
     ]) {
       const at = code.indexOf(refusal)
       expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)

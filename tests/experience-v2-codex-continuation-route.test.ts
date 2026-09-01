@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   readCodexContinuation: vi.fn(),
+  resolveProjectBinding: vi.fn(),
+  dependenciesForProjectRoot: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
@@ -10,7 +12,10 @@ vi.mock("@/lib/loom/codex-continuation", () => ({
   readCodexContinuation: seams.readCodexContinuation,
 }))
 vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
-  codexContinuationDependencies: {},
+  codexContinuationDependenciesForProjectRoot: seams.dependenciesForProjectRoot,
+}))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: seams.resolveProjectBinding,
 }))
 
 import { GET } from "@/app/api/loom/codex/continuation/route"
@@ -19,6 +24,11 @@ describe("Codex continuation restoration route", () => {
   beforeEach(() => {
     vi.resetAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    seams.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: { workspaceRoot: "C:/physical/terrafusion" },
+    })
+    seams.dependenciesForProjectRoot.mockReturnValue({ verified: "physical-terrafusion" })
   })
 
   it("restores the server-derived pending assignment for an owned Space", async () => {
@@ -36,7 +46,12 @@ describe("Codex continuation restoration route", () => {
       selectedPath: "src/next.ts",
       task: "Continue the bound Work Order in src/next.ts.",
     })
-    expect(seams.readCodexContinuation).toHaveBeenCalledWith("owner-1", "world-1", {})
+    expect(seams.dependenciesForProjectRoot).toHaveBeenCalledWith("C:/physical/terrafusion")
+    expect(seams.readCodexContinuation).toHaveBeenCalledWith(
+      "owner-1",
+      "world-1",
+      { verified: "physical-terrafusion" },
+    )
   })
 
   it("does not expose continuation state without an authenticated owner session", async () => {

@@ -39,8 +39,9 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
+export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
+  worldId?: string | null
   selectedPath: string | null
   active?: boolean
   historyScope?: string | null
@@ -315,7 +316,9 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     let receivedExit = false
     try {
       const response = await fetch("/api/loom/run", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand ? { operation, terminalCommand } : { operation }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand
+          ? { ...(worldId ? { worldId } : {}), operation, terminalCommand }
+          : { ...(worldId ? { worldId } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
       if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)

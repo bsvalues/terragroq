@@ -1,5 +1,3 @@
-import path from "node:path"
-
 import { pool } from "@/lib/db"
 import { validateWorkingWorld } from "@/lib/environment/working-world"
 import { authorityGrantFactsFromRow, grantCovers, isGrantActive } from "@/lib/governance/authority"
@@ -13,7 +11,6 @@ import { codexContinuationEvidenceEvent } from "@/lib/loom/codex-continuation"
 import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
 
 type BindingRow = Record<string, unknown>
-const PROJECT_ROOT = path.resolve(process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd())
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
@@ -221,16 +218,22 @@ async function persist(input: Parameters<CodexContinuationDependencies["persist"
   }
 }
 
-async function inspectTarget(selectedPath: string): Promise<boolean> {
-  try {
-    await inspectCodexAssignmentTarget(PROJECT_ROOT, selectedPath)
-    return true
-  } catch {
-    return false
+export function codexContinuationDependenciesForProjectRoot(
+  verifiedProjectRoot: string,
+): CodexContinuationDependencies {
+  return {
+    load,
+    persist,
+    async inspectTarget(selectedPath) {
+      try {
+        await inspectCodexAssignmentTarget(verifiedProjectRoot, selectedPath)
+        return true
+      } catch {
+        return false
+      }
+    },
   }
 }
-
-export const codexContinuationDependencies: CodexContinuationDependencies = { load, inspectTarget, persist }
 
 /** Hold one process-crash-safe database-session claim for an automatic Space dispatch. */
 export async function acquireCodexContinuationClaim(

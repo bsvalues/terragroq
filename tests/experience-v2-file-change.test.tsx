@@ -589,7 +589,7 @@ describe("Experience V2 selected-file Change", () => {
     expect(screen.getByText("Change applied; source and diff refreshed.")).toBeTruthy()
     expect(await screen.findByText("+after", { exact: false })).toBeTruthy()
     const edit = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/edit" && init?.method === "POST")
-    expect(JSON.parse(String(edit?.[1]?.body))).toEqual({ path: "src/app.ts", task: "Use the verified helper." })
+    expect(JSON.parse(String(edit?.[1]?.body))).toEqual({ worldId: "browser-world", path: "src/app.ts", task: "Use the verified helper." })
     expect(fetcher.mock.calls.some(([input, init]) => String(input) === "/api/environment/line" && init?.method === "POST")).toBe(false)
     expect(diffReads).toBeGreaterThan(0)
     const minimize = screen.getByRole("button", { name: "Minimize Source" }) as HTMLButtonElement
@@ -801,8 +801,8 @@ describe("Experience V2 selected-file Change", () => {
     await screen.findByText("Change was not verified.")
 
     expect(posted).toEqual([
-      { path: "src/app.ts", task: "Change the first file." },
-      { path: "src/other.ts", task: "Change the second file." },
+      { worldId: "browser-world", path: "src/app.ts", task: "Change the first file." },
+      { worldId: "browser-world", path: "src/other.ts", task: "Change the second file." },
     ])
   })
 
