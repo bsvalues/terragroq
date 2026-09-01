@@ -159,6 +159,39 @@ function Assert-LiveTaskUsesLauncher {
   }
 }
 
+function Assert-LiveLauncherWritable {
+  # Prove the external launcher can actually be replaced before stopping either production task.
+  # Membership in Administrators is insufficient under UAC: a medium-integrity token reports the
+  # group as deny-only and can read this file but cannot overwrite it. Discovering that after the
+  # tasks are stopped creates an avoidable outage without changing a single deployed byte.
+  if (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
+    $stream = $null
+    try {
+      $stream = [IO.File]::Open($LiveStartTarget, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    } catch {
+      throw "The WilliamOS Live launcher '$LiveStartTarget' is not writable by this process. Run the deployment from an elevated administrator shell; refusing before stopping production."
+    } finally {
+      if ($stream) { $stream.Dispose() }
+    }
+    return
+  }
+
+  $parent = Split-Path -Parent $LiveStartTarget
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    throw "The WilliamOS Live launcher directory '$parent' does not exist. Create it with the required administrator ownership before deploying; refusing before stopping production."
+  }
+  $probe = Join-Path $parent (".williamos-deploy-write-probe-{0}.tmp" -f [guid]::NewGuid().ToString("N"))
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($probe, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+  } catch {
+    throw "The WilliamOS Live launcher directory '$parent' is not writable by this process. Run the deployment from an elevated administrator shell; refusing before stopping production."
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  }
+}
+
 # Validate the external task binding before verification, rollback capture, task control, or file
 # mutation. A custom target is supported only when the supervised task actually invokes it.
 Assert-LiveTaskUsesLauncher
@@ -206,6 +239,7 @@ if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
 if ($SkipRollbackCapture -and (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf)) {
   throw "SkipRollbackCapture cannot overwrite the existing WilliamOS Live start definition at '$LiveStartTarget'. Run without -SkipRollbackCapture so the external launcher is captured and restorable."
 }
+Assert-LiveLauncherWritable
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we

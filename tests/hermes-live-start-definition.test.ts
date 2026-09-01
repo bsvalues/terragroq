@@ -373,6 +373,16 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(refusalIndex).toBeLessThan(copyIndex)
   })
 
+  it("proves the external launcher is writable before stopping production", () => {
+    const code = executableOnly(deployText)
+    const assertion = code.lastIndexOf("Assert-LiveLauncherWritable")
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    expect(code).toContain("[IO.File]::Open($LiveStartTarget")
+    expect(code).toContain("Run the deployment from an elevated administrator shell; refusing before stopping production")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(stopIndex)
+  })
+
   it("refuses to stop unrelated processes on either product port", () => {
     const code = executableOnly(deployText)
     const restore = executableOnly(restoreText)
