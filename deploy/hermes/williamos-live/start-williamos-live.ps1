@@ -257,5 +257,15 @@ if ($declaredWilliamOsRoot) {
   $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
 }
 
-$process = Start-Process -FilePath $node -ArgumentList @($server) -WorkingDirectory $AppRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -Wait -PassThru -WindowStyle Hidden
-exit $process.ExitCode
+# Keep Node as the scheduled task's direct child. Start-Process detached the server from the task:
+# stopping `WilliamOS Live` left port 3100 serving the outgoing process, while the replacement task
+# failed with EADDRINUSE. Health then measured the orphan and falsely reported a successful restart.
+$previousPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = "Continue"
+  & $node $server 1>> $stdoutLog 2>> $stderrLog
+  $serverExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousPreference
+}
+exit $serverExit

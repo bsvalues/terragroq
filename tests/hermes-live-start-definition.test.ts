@@ -61,10 +61,10 @@ describe("the cockpit's start script is declared in the repository", () => {
 
   it("refuses to start when resolution fails, instead of falling back to the file's address", () => {
     const code = executableOnly(startText)
-    // A non-zero resolver exit must reach an `exit 1` and must NOT reach Start-Process.
+    // A non-zero resolver exit must reach an `exit 1` and must NOT reach the server invocation.
     expect(code).toMatch(/\$resolverExit\s*-ne\s*0/)
     const refusalIndex = code.indexOf("AUTHORITY_HOST_UNRESOLVED")
-    const startIndex = code.indexOf("Start-Process")
+    const startIndex = code.indexOf("& $node $server")
     expect(refusalIndex).toBeGreaterThan(-1)
     expect(startIndex).toBeGreaterThan(refusalIndex)
     expect(code).not.toMatch(/catch\s*\{\s*\}/)
@@ -118,21 +118,21 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   it("applies the declared workspace instead of letting process.cwd() win", () => {
     expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_ROOT\s*=\s*\$resolvedProjectRoot/)
     // Applied BEFORE the server is launched, or it is not applied at all.
-    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_ROOT")).toBeLessThan(code.indexOf("& $node $server"))
   })
 
   it("exports the WilliamOS source root separately from the TerraFusion target", () => {
     expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
     expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$declaredWilliamOsRoot/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
-    expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+    expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("& $node $server"))
   })
 
   it("exports the stable Space identity without replacing it with the current checkout", () => {
     expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"/)
     expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
-    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("Start-Process"))
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("& $node $server"))
   })
 
   it("does not carry a written-down workspace path of its own", () => {
@@ -143,8 +143,8 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).not.toMatch(/\[string\]\$ProjectRoot\s*=\s*"/)
   })
 
-  it("refuses every way the workspace can be wrong, before Start-Process", () => {
-    const startIndex = code.indexOf("Start-Process")
+  it("refuses every way the workspace can be wrong before invoking the server", () => {
+    const startIndex = code.indexOf("& $node $server")
     for (const refusal of [
       "PROJECT_ROOT_UNDECLARED",
       "PROJECT_ROOT_MISSING",
@@ -195,6 +195,14 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("scripts\\fabric\\resolve-authority-registry-url.mjs")
     expect(code).toMatch(/Get-ChildItem[^\n]*\$fabricTarget[^\n]*"\*\.mjs"[\s\S]*Remove-Item -Force/)
     expect(code).toMatch(/robocopy \$fabricSource \$fabricTarget "\*\.mjs" \/E/)
+  })
+
+  it("keeps Node inside the scheduled task process tree so stopping the task closes port 3100", () => {
+    const code = executableOnly(startText)
+    expect(code).toMatch(/&\s*\$node\s+\$server\s+1>>\s*\$stdoutLog\s+2>>\s*\$stderrLog/)
+    expect(code).toMatch(/\$serverExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).toMatch(/exit\s+\$serverExit/)
+    expect(code).not.toContain("Start-Process")
   })
 
   it("mirrors public assets so stale files from the outgoing generation cannot survive", () => {
