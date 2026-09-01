@@ -100,6 +100,12 @@ type LineReply = Readonly<{
 }>
 
 type ExecutionAssignmentLineContext = Readonly<{ kind: "execution-assignment"; workOrderId: number }>
+const previewExplainLineContextSchema = z.object({
+  kind: z.literal("preview-explain"),
+  previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  selectedPath: z.string().min(1).max(4_096),
+}).strict()
+type PreviewExplainLineContext = z.infer<typeof previewExplainLineContextSchema>
 
 const diffChallengeLineContextSchema = z.object({
   kind: z.literal("diff-challenge"),
@@ -181,6 +187,11 @@ function parseSavedAgentLineContext(value: unknown): SavedAgentLineContext | nul
 
 function parseDiffChallengeLineContext(value: unknown): DiffChallengeLineContext | null {
   const parsed = diffChallengeLineContextSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+function parsePreviewExplainLineContext(value: unknown): PreviewExplainLineContext | null {
+  const parsed = previewExplainLineContextSchema.safeParse(value)
   return parsed.success ? parsed.data : null
 }
 
@@ -962,6 +973,41 @@ async function deriveDiffChallengeGrounding(
   }
 }
 
+async function derivePreviewExplainGrounding(
+  world: WorkingWorldSnapshot,
+  userId: string,
+  previewOrigin: string,
+  context: PreviewExplainLineContext,
+): Promise<Readonly<{ facts: string; version: string }> | null> {
+  const activeWindow = world.space?.windows.find((window) => window.id === world.space?.activeWindowId)
+  if (activeWindow?.kind !== "running-app") return null
+  const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
+  const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  if (selectedPath !== context.selectedPath) return null
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
+  if (!projectBinding.ok) return null
+  const selected = await deriveSelectedObjectGrounding(world, projectBinding.binding.workspaceRoot, previewOrigin)
+  let previewFingerprint: unknown = null
+  try {
+    previewFingerprint = (JSON.parse(selected.version) as { preview?: unknown }).preview
+  } catch {
+    return null
+  }
+  if (previewFingerprint !== context.previewFingerprint) return null
+  return {
+    facts: [
+      "Operation: read-only explanation of the exact current developer Preview. Explain only the server-derived attachment/admission evidence and the exact persisted selected source identity below.",
+      "Do not infer or describe TerraFusion business UI, DOM contents, console output, or network activity. Do not propose or perform mutation, debugging, delegation, or provider/runtime work.",
+      selected.facts,
+    ].join("\n"),
+    version: JSON.stringify({
+      persisted: selectedLineContextFingerprint(world),
+      workspaceRoot: projectBinding.binding.workspaceRoot,
+      selectedObject: selected.version,
+    }),
+  }
+}
+
 export async function POST(request: Request) {
   // A cookie-authenticated, state-changing, model-fanning endpoint: refuse the cross-site CSRF
   // shape and oversized bodies before doing any work. See lib/environment/line-guard.ts.
@@ -1002,12 +1048,13 @@ export async function POST(request: Request) {
   const executionAssignmentContext = parseExecutionAssignmentLineContext(body.lineContext)
   const savedAgentContext = parseSavedAgentLineContext(body.lineContext)
   const diffChallengeContext = parseDiffChallengeLineContext(body.lineContext)
+  const previewExplainContext = parsePreviewExplainLineContext(body.lineContext)
   const lineContext = body.lineContext === "space-summary" ? "space-summary"
-    : executionAssignmentContext ?? savedAgentContext ?? diffChallengeContext ?? null
+    : executionAssignmentContext ?? savedAgentContext ?? diffChallengeContext ?? previewExplainContext ?? null
   if (body.lineContext !== undefined && body.lineContext !== null && lineContext === null) {
     return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
   }
-  if ((executionAssignmentContext || savedAgentContext || diffChallengeContext) && (!requestedWorldId || summonRequest)) {
+  if ((executionAssignmentContext || savedAgentContext || diffChallengeContext || previewExplainContext) && (!requestedWorldId || summonRequest)) {
     return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
   }
 
@@ -1080,6 +1127,25 @@ export async function POST(request: Request) {
       updated = withTurn(updated, "williamos", say)
       const deriveSelectedContext = async (latest: WorkingWorldSnapshot) =>
         (await deriveDiffChallengeGrounding(latest, userId, lineContext, previewOrigin))?.version ?? "LINE_CONTEXT_STALE"
+      try {
+        await saveWorld(userId, requestedWorldId, updated, false, grounding.version, deriveSelectedContext)
+      } catch (error) {
+        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+        }
+        throw error
+      }
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+    }
+    if (lineContext && typeof lineContext === "object" && lineContext.kind === "preview-explain") {
+      const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
+      const grounding = await derivePreviewExplainGrounding(world, userId, previewOrigin, lineContext)
+      if (!grounding) return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+      let updated = withTurn(world, "owner", text)
+      const say = await converse(updated, text, grounding.facts)
+      updated = withTurn(updated, "williamos", say)
+      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) =>
+        (await derivePreviewExplainGrounding(latest, userId, previewOrigin, lineContext))?.version ?? "LINE_CONTEXT_STALE"
       try {
         await saveWorld(userId, requestedWorldId, updated, false, grounding.version, deriveSelectedContext)
       } catch (error) {

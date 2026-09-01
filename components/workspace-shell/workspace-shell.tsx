@@ -59,7 +59,22 @@ type DiffChallengeLineContext = Readonly<{
   fingerprint: string
   clientGuard: Readonly<{ worldId: string; transitionEpoch: number }>
 }>
-type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | null
+type PreviewExplainLineContext = Readonly<{
+  kind: "preview-explain"
+  previewFingerprint: string
+  selectedPath: string
+  clientGuard: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    requestId: number
+    projectIdentity: string
+    runningAppUrl: string | null
+    status: PreviewInspectorPayload["evidence"]["status"]
+    identity: PreviewInspectorPayload["evidence"]["identity"]
+    origin: string | null
+  }>
+}>
+type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | PreviewExplainLineContext | null
 type LineMode = "default" | "change" | "review" | "fork"
 type ExecutionObservation = Readonly<{
   worldId: string
@@ -520,6 +535,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const persistencePendingRef = useRef(persistencePending)
   const browserStorageKeyRef = useRef<string | null>(null)
   const previewEvidenceRequestRef = useRef(0)
+  const previewExplainEvidenceRef = useRef<Readonly<{
+    worldId: string
+    transitionEpoch: number
+    requestId: number
+    projectIdentity: string
+    payload: PreviewInspectorPayload
+  }> | null>(null)
   const preferenceStorageKeyRef = useRef<string | null>(null)
   const transitionEpochRef = useRef(0)
   const agentPresentationEpochRef = useRef(0)
@@ -1236,6 +1258,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const requestEpoch = transitionEpochRef.current
     const requestId = previewEvidenceRequestRef.current + 1
     previewEvidenceRequestRef.current = requestId
+    previewExplainEvidenceRef.current = null
     if (!requestWorldId || !requestProjectIdentity) return
     try {
       const response = await fetch("/api/environment/preview", { cache: "no-store" })
@@ -1296,6 +1319,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const previewId = inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT })
     if (id === previewId) {
       previewEvidenceRequestRef.current += 1
+      previewExplainEvidenceRef.current = null
       const currentWorld = worldRef.current
       const currentProject = projectRef.current?.identity
       if (currentWorld && currentProject) removePreviewEvidenceSnapshot(currentWorld, currentProject)
@@ -1726,6 +1750,30 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && live.fingerprint === context.fingerprint
   }, [])
 
+  const previewExplainLineContextIsCurrent = useCallback((context: PreviewExplainLineContext): boolean => {
+    const current = stateRef.current
+    const currentProject = projectRef.current
+    const capturedEvidence = previewExplainEvidenceRef.current
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && previewEvidenceRequestRef.current === context.clientGuard.requestId
+      && storageRef.current === "server"
+      && !persistenceErrorRef.current
+      && currentProject?.identity === context.clientGuard.projectIdentity
+      && current.activeWindowId === "running-app"
+      && current.runningAppUrl === context.clientGuard.runningAppUrl
+      && current.selectedPath === context.selectedPath
+      && !dirtyPathsRef.current[context.selectedPath]
+      && capturedEvidence?.worldId === context.clientGuard.worldId
+      && capturedEvidence.transitionEpoch === context.clientGuard.transitionEpoch
+      && capturedEvidence.requestId === context.clientGuard.requestId
+      && capturedEvidence.projectIdentity === context.clientGuard.projectIdentity
+      && capturedEvidence.payload.evidence.fingerprint === context.previewFingerprint
+      && capturedEvidence.payload.evidence.status === context.clientGuard.status
+      && capturedEvidence.payload.evidence.identity === context.clientGuard.identity
+      && capturedEvidence.payload.evidence.origin === context.clientGuard.origin
+  }, [])
+
   const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
@@ -1739,6 +1787,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (context && typeof context === "object" && context.kind === "diff-challenge"
       && (!diffChallengeLineContextIsCurrent(context) || persistencePendingRef.current)) {
       const stale = "The exact current patch changed before William could challenge it, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
+    if (context && typeof context === "object" && context.kind === "preview-explain"
+      && (!previewExplainLineContextIsCurrent(context) || persistencePendingRef.current)) {
+      const stale = "The exact developer Preview context changed before William could explain it, so no advice was requested."
       setLineReply(stale)
       setWilliamError(stale)
       return false
@@ -1783,8 +1838,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setWilliamError(stale)
         return false
       }
+      if (context && typeof context === "object" && context.kind === "preview-explain"
+        && !previewExplainLineContextIsCurrent(context)) {
+        const stale = "The exact developer Preview context changed before William could explain it, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
-      const serverContext = context && typeof context === "object" && (context.kind === "agent-snapshot" || context.kind === "diff-challenge")
+      const serverContext = context && typeof context === "object" && (context.kind === "agent-snapshot" || context.kind === "diff-challenge" || context.kind === "preview-explain")
         ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== "clientGuard"))
         : context
       const response = await fetch("/api/environment/line", {
@@ -1794,6 +1856,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
+      if (context && typeof context === "object" && context.kind === "preview-explain"
+        && !previewExplainLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
       if (context && typeof context === "object" && context.kind === "diff-challenge"
         && !diffChallengeLineContextIsCurrent(context)) {
@@ -1810,7 +1876,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setLineBusy(false)
       setWilliamBusy(false)
     }
-  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, focusedAgentId, lineBusy, williamBusy])
+  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, williamBusy])
 
   const reviewerAgentContext = delegateContext?.kind === "reviewer" ? delegateContext : null
 
@@ -2376,8 +2442,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             || !liveModifiedDiffIdentity(liveDiffContext)
             ? "Challenge needs the exact live modified patch for the saved selected file."
             : null
+  const previewExplainUnavailableReason = selectedKind !== "preview" ? null
+    : storage !== "server" ? "Explain requires a server-bound Space with durable persistence."
+      : persistenceError ? `Explain is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : persistencePending ? "Explain waits until the current Space is durably saved."
+          : !worldId || !project || !space.selectedPath || dirtyPaths[space.selectedPath]
+            ? "Explain needs an exact durably saved selected source file."
+            : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
-    : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
+    : selectedKind === "preview" ? ["Inspect", "Debug", previewExplainUnavailableReason ? "Explain unavailable" : "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Inspect", "Ask William", "Talk", "Council", pauseAction, forkAction] as const
@@ -2803,8 +2876,65 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       openLine("", "agent")
       return
     }
+    if (selectedKind === "preview" && action === "Explain unavailable") return
     if (selectedKind === "preview" && action === "Explain") {
-      openLine("Explain the exact current developer Preview evidence: ")
+      const requestWorldId = worldId
+      const requestProjectIdentity = project?.identity ?? null
+      const requestEpoch = transitionEpochRef.current
+      const requestPath = space.selectedPath
+      const requestRunningAppUrl = space.runningAppUrl
+      const requestId = previewEvidenceRequestRef.current + 1
+      previewEvidenceRequestRef.current = requestId
+      previewExplainEvidenceRef.current = null
+      if (!requestWorldId || !requestProjectIdentity || !requestPath || previewExplainUnavailableReason) return
+      void (async () => {
+        try {
+          const response = await fetch("/api/environment/preview", { cache: "no-store" })
+          const body = await response.json() as unknown
+          const evidence = body && typeof body === "object" ? (body as Record<string, unknown>).evidence : null
+          const payload = response.ok ? parsePreviewInspectorPayload({ evidence, snapshot: "live" }) : null
+          if (!payload) throw new Error("PREVIEW_EVIDENCE_UNAVAILABLE")
+          if (previewEvidenceRequestRef.current !== requestId
+            || worldRef.current !== requestWorldId
+            || projectRef.current?.identity !== requestProjectIdentity
+            || transitionEpochRef.current !== requestEpoch
+            || stateRef.current.activeWindowId !== "running-app"
+            || stateRef.current.runningAppUrl !== requestRunningAppUrl
+            || stateRef.current.selectedPath !== requestPath
+            || dirtyPathsRef.current[requestPath]) throw new Error("LINE_CONTEXT_STALE")
+          previewExplainEvidenceRef.current = {
+            worldId: requestWorldId,
+            transitionEpoch: requestEpoch,
+            requestId,
+            projectIdentity: requestProjectIdentity,
+            payload,
+          }
+          savePreviewEvidenceSnapshot(requestWorldId, requestProjectIdentity, payload)
+          const context: PreviewExplainLineContext = {
+            kind: "preview-explain",
+            previewFingerprint: payload.evidence.fingerprint,
+            selectedPath: requestPath,
+            clientGuard: {
+              worldId: requestWorldId,
+              transitionEpoch: requestEpoch,
+              requestId,
+              projectIdentity: requestProjectIdentity,
+              runningAppUrl: requestRunningAppUrl,
+              status: payload.evidence.status,
+              identity: payload.evidence.identity,
+              origin: payload.evidence.origin,
+            },
+          }
+          openLine("", "william", context)
+          void sendWilliamTurn("Explain the exact current developer Preview.", context)
+        } catch (error) {
+          if (worldRef.current === requestWorldId && transitionEpochRef.current === requestEpoch) {
+            const message = error instanceof Error ? error.message : "PREVIEW_EVIDENCE_UNAVAILABLE"
+            setTransitionMessage(message)
+            setWilliamError(message)
+          }
+        }
+      })()
       return
     }
     if (action === "Pause") {
@@ -3057,7 +3187,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             }}
           /> : null}
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
@@ -3147,7 +3277,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
               {lineTranscriptSession ? <AgentTranscriptHistory key={lineTranscriptSession.sessionKey} {...lineTranscriptSession} /> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment" ? `Persisted assignment · Work Order #${lineContext.workOrderId} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "agent-snapshot" ? `Browser-saved session snapshot · ${lineContext.sessionKey} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "diff-challenge" ? `Challenge exact patch · ${lineContext.path} · ${lineContext.patchHash}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment" ? `Persisted assignment · Work Order #${lineContext.workOrderId} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "agent-snapshot" ? `Browser-saved session snapshot · ${lineContext.sessionKey} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "diff-challenge" ? `Challenge exact patch · ${lineContext.path} · ${lineContext.patchHash}` : lineContext && typeof lineContext === "object" && lineContext.kind === "preview-explain" ? `Preview ${lineContext.clientGuard.status} · ${lineContext.clientGuard.identity} · ${lineContext.clientGuard.origin ?? "origin unavailable"} · source ${lineContext.selectedPath} · DOM unavailable · console unavailable · network unavailable` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
             </div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
