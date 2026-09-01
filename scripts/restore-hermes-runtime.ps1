@@ -8,6 +8,7 @@ param(
   [string]$Runtime = "C:\HermesLab\williamos-runtime-64034e93-flat",
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
+  [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443
 )
@@ -34,7 +35,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   throw "Rollback is incomplete: $manifestPath is missing"
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.version -ne 1 -or $null -eq $manifest.nextPresent -or $null -eq $manifest.files) {
+if ($manifest.version -ne 2 -or $null -eq $manifest.nextPresent -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
 $expectedRollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
@@ -50,6 +51,14 @@ foreach ($entry in $manifest.files) {
   if ($entry.wasPresent -and -not (Test-Path -LiteralPath (Join-Path $RollbackRoot $entry.path) -PathType Leaf)) {
     throw "Rollback is incomplete: $(Join-Path $RollbackRoot $entry.path) is missing"
   }
+}
+$expectedLiveStartBackup = "external\start-williamos-live.ps1"
+if (([string]$manifest.liveStart.target -ne $LiveStartTarget) -or ([string]$manifest.liveStart.backupPath -ne $expectedLiveStartBackup) -or ($null -eq $manifest.liveStart.wasPresent)) {
+  throw "Rollback manifest does not name the exact WilliamOS Live start definition"
+}
+$liveStartRollbackFile = Join-Path $RollbackRoot $expectedLiveStartBackup
+if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartRollbackFile -PathType Leaf)) {
+  throw "Rollback is incomplete: $liveStartRollbackFile is missing"
 }
 
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
@@ -75,6 +84,12 @@ foreach ($entry in $manifest.files) {
   } elseif (Test-Path -LiteralPath $target) {
     Remove-Item -LiteralPath $target -Force
   }
+}
+if ($manifest.liveStart.wasPresent) {
+  $null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
+  Copy-Item -LiteralPath $liveStartRollbackFile -Destination $LiveStartTarget -Force
+} elseif (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
+  Remove-Item -LiteralPath $LiveStartTarget -Force
 }
 
 Start-ScheduledTask -TaskName $TaskName

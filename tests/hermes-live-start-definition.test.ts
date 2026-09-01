@@ -195,6 +195,14 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("scripts\\fabric\\resolve-authority-registry-url.mjs")
   })
 
+  it("installs the repository-owned WilliamOS Live task definition before restart", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("deploy\\hermes\\williamos-live\\start-williamos-live.ps1")
+    expect(code).toContain("C:\\ProgramData\\WilliamOS\\start-williamos-live.ps1")
+    expect(code).toMatch(/Copy-Item\s+-LiteralPath\s+\$liveStartSource\s+-Destination\s+\$LiveStartTarget/)
+    expect(code.indexOf("$liveStartSource")).toBeLessThan(code.lastIndexOf("Start-ScheduledTask"))
+  })
+
   it("fails loudly if a boot-time tool is missing from the source tree", () => {
     expect(executableOnly(deployText)).toMatch(/throw "Missing boot-time resolution tool/)
   })
@@ -273,6 +281,11 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(restore).toContain("expectedRollbackFiles")
     expect(restore).toContain("Compare-Object")
     expect(restore).toMatch(/elseif\s*\(Test-Path -LiteralPath \$target\)[\s\S]*Remove-Item -LiteralPath \$target/)
+    expect(code).toContain("liveStartWasPresent")
+    expect(code).toContain("external\\start-williamos-live.ps1")
+    expect(restore).toContain("Rollback manifest does not name the exact WilliamOS Live start definition")
+    expect(restore).toMatch(/Copy-Item\s+-LiteralPath\s+\$liveStartRollbackFile\s+-Destination\s+\$LiveStartTarget/)
+    expect(restore).toMatch(/Remove-Item\s+-LiteralPath\s+\$LiveStartTarget/)
   })
 
   it("refuses to stop unrelated processes on either product port", () => {

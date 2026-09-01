@@ -32,6 +32,7 @@ param(
   [string]$Runtime = "C:\HermesLab\williamos-runtime-64034e93-flat",
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
+  [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443,
   [switch]$WithDependencies,
@@ -140,6 +141,10 @@ $standalone = Join-Path $Source ".next\standalone"
 if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
 }
+$liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-williamos-live.ps1"
+if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
+  throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
+}
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
@@ -189,10 +194,13 @@ if (-not $SkipRollbackCapture) {
   $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
   $rollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
+  $liveStartBackup = "external\start-williamos-live.ps1"
+  $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 1
+    version = 2
     nextPresent = (Test-Path -LiteralPath (Join-Path $Runtime ".next") -PathType Container)
     files = @()
+    liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
   }
   if ($rollbackManifest.nextPresent) {
     $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
@@ -207,6 +215,11 @@ if (-not $SkipRollbackCapture) {
       $null = New-Item -ItemType Directory -Path (Split-Path -Parent $rollbackFile) -Force
       Copy-Item -LiteralPath $existing -Destination $rollbackFile -Force
     }
+  }
+  if ($liveStartWasPresent) {
+    $liveStartRollbackFile = Join-Path $rollbackRoot $liveStartBackup
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $liveStartRollbackFile) -Force
+    Copy-Item -LiteralPath $LiveStartTarget -Destination $liveStartRollbackFile -Force
   }
   $rollbackManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
@@ -223,6 +236,12 @@ Start-Sleep -Seconds 2
 Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandFragment "server.js"
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandFragment "hermes-https-proxy.mjs"
 Start-Sleep -Seconds 2
+
+# The task action points at ProgramData, so deploying only the bundle leaves boot semantics on an
+# older hand-placed generation. Install the repository-owned definition before restart; the exact
+# displaced bytes are part of the rollback manifest above.
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
+Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
