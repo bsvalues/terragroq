@@ -32,6 +32,18 @@ describe("execution backends", () => {
     // model is configured; this prevents Windows local snapshot bypass.
     expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: "resident-model", WILLIAMOS_CODEX_EXEC_NODE: "aegis" }))
       .toBeInstanceOf(AegisExecutionBackend)
+    const governed = selectExecutionBackend({
+      WILLIAMOS_EXECUTOR: "resident-model",
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+      WILLIAMOS_HERMES_RUNTIME_ROOT: "C:\\Users\\operator\\.williamos\\hermes-bridge",
+    }) as AegisExecutionBackend
+    expect(governed.runtimeRoot).toBe("/srv/william/hermes")
+    const governedWithRemoteRoot = selectExecutionBackend({
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+      WILLIAMOS_HERMES_RUNTIME_ROOT: "C:\\local-only",
+      WILLIAMOS_AEGIS_RUNTIME_ROOT: "/srv/aegis/hermes",
+    }) as AegisExecutionBackend
+    expect(governedWithRemoteRoot.runtimeRoot).toBe("/srv/aegis/hermes")
     // Absent the opt-in, existing selection is untouched.
     expect(selectExecutionBackend({ WILLIAMOS_CODEX_EXEC_NODE: "aegis" })).toBeInstanceOf(AegisExecutionBackend)
     expect(selectExecutionBackend({})).toBeInstanceOf(LocalExecutionBackend)

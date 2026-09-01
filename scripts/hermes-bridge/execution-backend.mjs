@@ -194,7 +194,7 @@ export class ResidentModelExecutionBackend extends LocalExecutionBackend {
 export class AegisExecutionBackend extends ExecutionBackend {
   constructor({
     host = process.env.WILLIAMOS_CODEX_EXEC_NODE,
-    runtimeRoot = process.env.WILLIAMOS_AEGIS_RUNTIME_ROOT ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT ?? "/srv/william/hermes",
+    runtimeRoot = process.env.WILLIAMOS_AEGIS_RUNTIME_ROOT ?? "/srv/william/hermes",
     repositoryRoot = process.env.WILLIAMOS_AEGIS_REPOSITORY_ROOT ?? "/srv/william/terragroq",
     commandRunner = createCommandRunner(),
     clientFactory,
@@ -322,9 +322,10 @@ export function selectExecutionBackend(env = process.env) {
   // exact local-only opt-in when no governed execution node is configured.
   const host = env?.WILLIAMOS_CODEX_EXEC_NODE
   if (typeof host === "string" && host.trim().length > 0) {
-    const options = { host }
-    const runtimeRoot = env.WILLIAMOS_AEGIS_RUNTIME_ROOT ?? env.WILLIAMOS_HERMES_RUNTIME_ROOT
-    if (runtimeRoot) options.runtimeRoot = runtimeRoot
+    const options = {
+      host,
+      runtimeRoot: env.WILLIAMOS_AEGIS_RUNTIME_ROOT ?? "/srv/william/hermes",
+    }
     if (env.WILLIAMOS_AEGIS_REPOSITORY_ROOT) options.repositoryRoot = env.WILLIAMOS_AEGIS_REPOSITORY_ROOT
     return new AegisExecutionBackend(options)
   }
