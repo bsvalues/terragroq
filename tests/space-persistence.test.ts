@@ -439,6 +439,23 @@ describe("server-owned Space persistence", () => {
     expect(restored!.worldId).toBe("world-uuid-a")
   })
 
+  it("initializes a cold-start WilliamOS project Space with WilliamOS metadata", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/hermeslab/williamos-source", name: "WilliamOS" }
+    const opened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "williamos-world",
+      workspaceAppUrl: null,
+      project,
+    }, store)
+
+    expect(opened).toMatchObject({ worldId: "williamos-world", name: "WilliamOS", project })
+    expect(opened?.space.windows.find((window) => window.kind === "running-app")?.title).toBe("WilliamOS")
+    const persisted = JSON.parse(store.rows.get("williamos-world")!.snapshot)
+    expect(persisted.intent).toBe("WilliamOS")
+    expect(persisted.resources).toContain(`williamos-workspace-name:v1:WilliamOS`)
+  })
+
   it("restores the durable William conversation with its owned Space", async () => {
     const store = new MemoryStore()
     const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }

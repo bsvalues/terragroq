@@ -505,13 +505,13 @@ export function serverRunningAppUrl(_world: WorkingWorldSnapshot, configured?: s
   return validHttpUrl(configured)
 }
 
-export function createDefaultSpace(runningAppUrl: string | null): SpaceState {
+export function createDefaultSpace(runningAppUrl: string | null, runningAppTitle = "TerraFusion"): SpaceState {
   return {
     schemaVersion: 1,
     revision: 0,
     windows: [
       { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 36, y: 44, width: 920, height: 700 }, z: 2, minimized: false },
-      { id: "workspace-running-app", kind: "running-app", title: "TerraFusion", frame: { x: 820, y: 72, width: 860, height: 640 }, z: 1, minimized: false },
+      { id: "workspace-running-app", kind: "running-app", title: runningAppTitle, frame: { x: 820, y: 72, width: 860, height: 640 }, z: 1, minimized: false },
     ],
     openFiles: [],
     panes: [{ id: "workspace-pane", filePath: null }],
@@ -612,7 +612,7 @@ export async function createOwnedProjectSpace(
   const name = canonicalSpaceName(input.name)
   const worldId = (input.newWorldId ?? crypto.randomUUID)()
   const base = createWorkingWorld({ intent: name, resources: projectResources(input.project, name) })
-  const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
+  const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl), input.project.name)
   const world = validateWorkingWorld({ ...base, space })
   const row = {
     id: worldId, userId: input.userId, intent: name,
@@ -722,13 +722,14 @@ export async function loadOrCreateOwnedSpace(
   }
 
   const worldId = (input.newWorldId ?? crypto.randomUUID)()
+  const initialName = input.project?.name.trim() || "TerraFusion"
   const base = createWorkingWorld({
-    intent: "TerraFusion",
+    intent: initialName,
     resources: input.project
-      ? projectResources(input.project, "TerraFusion")
+      ? projectResources(input.project, initialName)
       : input.projectRootIdentity ? [input.projectRootIdentity] : [],
   })
-  const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
+  const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl), initialName)
   const world = validateWorkingWorld({ ...base, space })
   await store.insertOwned({
     id: worldId, userId: input.userId, intent: world.intent,
