@@ -117,10 +117,21 @@ function Test-HttpsCockpit {
 
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandPath)
+  $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
   Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
-      if (-not $process -or -not $process.CommandLine -or $process.CommandLine.IndexOf($ExpectedCommandPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+      $pathMatched = $false
+      if ($process -and $process.CommandLine) {
+        foreach ($match in [regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))')) {
+          $token = @($match.Groups[1].Value, $match.Groups[2].Value, $match.Groups[3].Value) |
+            Where-Object { $_ } | Select-Object -First 1
+          try {
+            if ([IO.Path]::GetFullPath($token).TrimEnd('\') -ieq $expectedPath) { $pathMatched = $true; break }
+          } catch { }
+        }
+      }
+      if (-not $pathMatched) {
         throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS deploy"
       }
       Stop-Process -Id $process.ProcessId -Force

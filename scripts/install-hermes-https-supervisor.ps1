@@ -48,12 +48,25 @@ function Wait-HttpsHealthy {
   return $false
 }
 
+function Get-TaskFileArgument {
+  param([string]$Arguments)
+  if (-not $Arguments) { return $null }
+  $matches = [regex]::Matches($Arguments, '(?i)(?:^|\s)-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))(?=\s|$)')
+  if ($matches.Count -ne 1) { return $null }
+  return @($matches[0].Groups[1].Value, $matches[0].Groups[2].Value, $matches[0].Groups[3].Value) |
+    Where-Object { $_ } | Select-Object -First 1
+}
+
 function Assert-InstalledSupervisor {
   foreach ($required in @($launcherTarget, $proxyTarget)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing installed WilliamOS HTTPS file: $required" }
   }
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-  if ($task.Actions.Execute -ne "powershell.exe" -or $task.Actions.Arguments -notlike "*$launcherTarget*") {
+  $actions = @($task.Actions)
+  $taskFile = if ($actions.Count -eq 1) { Get-TaskFileArgument -Arguments $actions[0].Arguments } else { $null }
+  $expectedLauncher = [IO.Path]::GetFullPath($launcherTarget).TrimEnd('\')
+  $actualLauncher = if ($taskFile) { [IO.Path]::GetFullPath($taskFile).TrimEnd('\') } else { $null }
+  if ($actions.Count -ne 1 -or [IO.Path]::GetFileName($actions[0].Execute) -ine "powershell.exe" -or $actualLauncher -ine $expectedLauncher) {
     throw "The $TaskName action does not invoke the repository-owned launcher at $launcherTarget"
   }
   if ($task.Principal.RunLevel -ne "Limited") { throw "$TaskName unexpectedly has elevated privileges" }

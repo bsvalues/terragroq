@@ -81,6 +81,15 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code.indexOf("CommandLine -notlike")).toBeLessThan(code.indexOf("Stop-Process -Id $process.ProcessId"))
   })
 
+  it("verifies the HTTPS task uses the exact normalized launcher argument", () => {
+    const code = executableOnly(installer)
+    expect(code).toContain("function Get-TaskFileArgument")
+    expect(code).toContain("$matches.Count -ne 1")
+    expect(code).toContain("[IO.Path]::GetFullPath($taskFile)")
+    expect(code).toContain("$actualLauncher -ine $expectedLauncher")
+    expect(code).not.toContain('Arguments -notlike "*$launcherTarget*"')
+  })
+
   it("removes a newly created task and launcher when a fresh install fails", () => {
     const code = executableOnly(installer)
     expect(code).toContain("Unregister-ScheduledTask")
