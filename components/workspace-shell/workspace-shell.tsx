@@ -13,7 +13,7 @@ import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { removeToolRunHistory } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
@@ -372,11 +372,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
   const [switchingSpace, setSwitchingSpace] = useState(false)
   const [runningTools, setRunningTools] = useState<Readonly<Record<"tests" | "terminal", string | null>>>({ tests: null, terminal: null })
+  const continuationSyncRef = useRef<NonNullable<RunAgentTurnInput["onContinuation"]>>(async () => undefined)
+  const relayAutoContinuation = useCallback<NonNullable<RunAgentTurnInput["onContinuation"]>>(
+    (continuation) => continuationSyncRef.current(continuation),
+    [],
+  )
   const agentSessions = useExperienceAgentSessions({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
     worldId: storage === "server" ? worldId : null,
     worker: spine.worker ?? null,
+    autoContinue: storage === "server" && hydrated && spine.outcomeKey !== null,
+    onAutoContinuation: relayAutoContinuation,
   })
   const stateRef = useRef(space)
   const spineRef = useRef(spine)
@@ -682,6 +689,38 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return () => { cancelled = true }
   }, [])
 
+  const refreshPersistedSpaceSelection = useCallback(async (expectedSelectedPath?: string) => {
+    const requestWorldId = worldRef.current
+    const requestEpoch = transitionEpochRef.current
+    if (!requestWorldId || storageRef.current !== "server") throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
+    const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(requestWorldId)}`, { cache: "no-store" })
+    const payload = await response.json() as SpaceEnvelope & { error?: string }
+    if (!response.ok) throw new Error(payload.error ?? `CONTINUATION_SPACE_${response.status}`)
+    if (worldRef.current !== requestWorldId || transitionEpochRef.current !== requestEpoch
+      || payload.worldId !== requestWorldId) throw new Error("CONTINUATION_SPACE_CHANGED")
+    const restored = normalizeSpace(
+      payload.space,
+      defaultSpace(window.innerWidth, window.innerHeight, requestWorldId, payload.name ?? projectRef.current?.name ?? "Space"),
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    if (expectedSelectedPath !== undefined && restored.selectedPath !== expectedSelectedPath) {
+      throw new Error("CONTINUATION_SELECTION_MISMATCH")
+    }
+    revisionRef.current = restored.revision
+    acknowledgedRevisionRef.current = restored.revision
+    pendingPersistRef.current = null
+    setSpace((current) => ({
+      ...current,
+      revision: restored.revision,
+      activeWindowId: restored.activeWindowId,
+      selectedPath: restored.selectedPath,
+      editor: restored.editor,
+    }))
+    if (payload.spine) setSpine(payload.spine)
+    setPersistenceError(null)
+    setPersistencePending(false)
+  }, [])
+
   const refreshWilliamJudgment = useCallback(async () => {
     const id = worldRef.current
     if (!id || storageRef.current !== "server" || judgmentBusy) return
@@ -836,12 +875,24 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (acknowledged >= revisionRef.current) setPersistencePending(false)
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "SPACE_SAVE_REFUSED"
+      if (message === "SPACE_REVISION_STALE"
+        && transitionEpochRef.current === job.epoch
+        && worldRef.current === job.worldId
+        && job.revision >= revisionRef.current) {
+        try {
+          await refreshPersistedSpaceSelection()
+          return
+        } catch {
+          // Preserve the original stale-revision refusal when current truth cannot be reloaded.
+        }
+      }
       if (transitionEpochRef.current === job.epoch && worldRef.current === job.worldId && job.revision >= revisionRef.current) {
-        setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
+        setPersistenceError(message)
         setPersistencePending(false)
       }
     }
-  }, [])
+  }, [refreshPersistedSpaceSelection])
 
   const persist = useCallback((keepalive = false): Promise<number> => {
     const id = worldRef.current
@@ -1366,6 +1417,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  continuationSyncRef.current = async (continuation) => {
+    if (continuation.status === "NEXT_ASSIGNMENT" && continuation.selectedPath) {
+      await refreshPersistedSpaceSelection(continuation.selectedPath)
+    }
+  }
+
   const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
@@ -1692,6 +1749,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
               provider: delegateContext.provider,
               role: delegateContext.role,
               assignment: delegateContext.assignment,
+              onContinuation: async (continuation) => {
+                if (continuation.status === "NEXT_ASSIGNMENT" && continuation.selectedPath) {
+                  await refreshPersistedSpaceSelection(continuation.selectedPath)
+                }
+              },
               ...(delegateContext.provider === "Codex" && delegateContext.kind === "file"
                 ? { target: { kind: "file" as const, path: delegateContext.label } }
                 : {}),

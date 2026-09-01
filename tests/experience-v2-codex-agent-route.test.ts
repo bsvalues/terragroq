@@ -13,6 +13,9 @@ const seams = vi.hoisted(() => ({
   recordLoomEnd: vi.fn(),
   recordLoomCodexAssignment: vi.fn(),
   commitLoomCodexSuccess: vi.fn(),
+  prepareCodexContinuation: vi.fn(),
+  readCodexContinuation: vi.fn(),
+  acquireCodexContinuationClaim: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
   readAccount: vi.fn(),
@@ -45,6 +48,14 @@ vi.mock("@/lib/loom/receipts", () => ({
   recordLoomEnd: seams.recordLoomEnd,
   recordLoomCodexAssignment: seams.recordLoomCodexAssignment,
   commitLoomCodexSuccess: seams.commitLoomCodexSuccess,
+}))
+vi.mock("@/lib/loom/codex-continuation", () => ({
+  prepareCodexContinuation: seams.prepareCodexContinuation,
+  readCodexContinuation: seams.readCodexContinuation,
+}))
+vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
+  codexContinuationDependencies: {},
+  acquireCodexContinuationClaim: seams.acquireCodexContinuationClaim,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
@@ -100,6 +111,9 @@ describe("durable Codex delegate route", () => {
     seams.recordLoomEnd.mockResolvedValue(undefined)
     seams.recordLoomCodexAssignment.mockResolvedValue(undefined)
     seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
+    seams.prepareCodexContinuation.mockResolvedValue({ status: "WORK_ORDER_PATHS_COMPLETE" })
+    seams.readCodexContinuation.mockResolvedValue({ status: "NO_ACTIVE_ASSIGNMENT" })
+    seams.acquireCodexContinuationClaim.mockResolvedValue(vi.fn().mockResolvedValue(undefined))
     seams.deriveCodexAssignment.mockResolvedValue({
       owner: "owner-1",
       worldId: "world-1",
@@ -228,6 +242,7 @@ describe("durable Codex delegate route", () => {
         type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false,
         selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
       },
+      { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
       { type: "result", text: "Implemented the selected change." },
       { type: "done", reason: null, code: 0 },
     ])
@@ -249,6 +264,98 @@ describe("durable Codex delegate route", () => {
       modifiedAt: "2026-08-28T12:00:00.000Z",
     }), expect.any(Object))
     expect(seams.close).toHaveBeenCalledOnce()
+  })
+
+  it("emits the server-derived next assignment after the durable success commit", async () => {
+    seams.prepareCodexContinuation.mockResolvedValueOnce({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/next.ts",
+      task: "Continue Work Order 41 in src/next.ts.",
+    })
+
+    const output = await events(await POST(request({ prompt: "Implement the selected change." })))
+
+    expect(seams.prepareCodexContinuation).toHaveBeenCalledWith({
+      userId: "owner-1",
+      worldId: "world-1",
+      outcomeKey: "OUTCOME-1",
+      workOrderId: 41,
+      grantId: 9,
+      completedPath: "src/selected.ts",
+    }, {})
+    expect(output).toContainEqual({
+      type: "continuation",
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/next.ts",
+      task: "Continue Work Order 41 in src/next.ts.",
+    })
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+  })
+
+  it("starts an automatic turn only from the server-derived pending task", async () => {
+    seams.readCodexContinuation.mockResolvedValueOnce({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/selected.ts",
+      task: "Server-derived continuation task.",
+    })
+
+    const output = await events(await POST(request({ automatic: true })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(seams.readCodexContinuation).toHaveBeenCalledWith("owner-1", "world-1", {})
+    expect(seams.recordLoomCodexAssignment).toHaveBeenCalledWith(expect.objectContaining({
+      taskText: "Server-derived continuation task.",
+    }))
+    expect(seams.runTurn).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining("Server-derived continuation task."),
+    }))
+  })
+
+  it("reapplies the prompt limit to a server-derived automatic task", async () => {
+    const release = vi.fn().mockResolvedValue(undefined)
+    seams.acquireCodexContinuationClaim.mockResolvedValue(release)
+    seams.readCodexContinuation.mockResolvedValueOnce({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/selected.ts",
+      task: "x".repeat(32_001),
+    })
+
+    const response = await POST(request({ automatic: true }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "PROMPT_TOO_LONG" })
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(seams.startThread).not.toHaveBeenCalled()
+  })
+
+  it("refuses a concurrent automatic dispatch when the exact Space claim is held", async () => {
+    seams.acquireCodexContinuationClaim.mockResolvedValue(null)
+
+    const response = await POST(request({ automatic: true }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "CODEX_CONTINUATION_IN_FLIGHT" })
+    expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
+    expect(seams.startThread).not.toHaveBeenCalled()
+  })
+
+  it("releases the automatic Space claim when continuation restoration fails", async () => {
+    const release = vi.fn().mockResolvedValue(undefined)
+    seams.acquireCodexContinuationClaim.mockResolvedValue(release)
+    seams.readCodexContinuation.mockRejectedValue(new Error("database unavailable"))
+
+    await expect(POST(request({ automatic: true }))).rejects.toThrow("database unavailable")
+
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(seams.startThread).not.toHaveBeenCalled()
+  })
+
+  it("rejects browser prompt text on an automatic continuation request", async () => {
+    const response = await POST(request({ automatic: true, prompt: "Widen the assignment." }))
+
+    expect(response.status).toBe(400)
+    expect(seams.readCodexContinuation).not.toHaveBeenCalled()
+    expect(seams.connect).not.toHaveBeenCalled()
   })
 
   it("streams only bounded sanitized agent deltas before the canonical result", async () => {
