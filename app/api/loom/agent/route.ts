@@ -12,13 +12,25 @@ import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/provide
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
+import {
+  cleanupCodexIsolatedWorkspace,
+  createCodexIsolatedWorkspace,
+  inspectCodexIsolatedWorkspace,
+  type CodexIsolatedWorkspace,
+} from "@/lib/loom/codex-isolated-workspace"
+import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import {
+  deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError,
+  type SpaceMutationAuthority,
+} from "@/lib/governance/space-mutation-authority"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const AGENT_BIN = process.env.WILLIAMOS_AGENT_BIN ?? "claude"
 const AGENT_TIMEOUT_MS = 60 * 60_000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -124,11 +136,11 @@ async function diffReviewThreadRecord(sessionId: string): Promise<DiffReviewThre
   }
 }
 
-async function deriveDiffReviewSnapshot(path: string): Promise<WorkspaceFileDiffSnapshot> {
+async function deriveDiffReviewSnapshot(projectRoot: string, path: string): Promise<WorkspaceFileDiffSnapshot> {
   // Keep the Git adapter out of legacy agent/review/preview module initialization. Besides avoiding
   // unnecessary process machinery for those routes, this means only diff-review can reach Git.
   const { deriveWorkspaceFileDiff } = await import("@/lib/loom/workspace-diff")
-  return deriveWorkspaceFileDiff(PROJECT_ROOT, path)
+  return deriveWorkspaceFileDiff(projectRoot, path)
 }
 
 function previewPrompt(evidence: WorkspacePreviewEvidence, ownerPrompt: string): string {
@@ -274,6 +286,10 @@ function reduceLocalFrame(state: LocalStreamState, line: string): string | null 
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   let body: {
     prompt?: unknown
@@ -330,7 +346,7 @@ export async function POST(request: Request) {
     if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
       return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
     }
-    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
     }
@@ -351,7 +367,7 @@ export async function POST(request: Request) {
     if (body.path !== resolved.relative || selectedWorldPath(world) !== resolved.relative) {
       return Response.json({ error: "DIFF_REVIEW_PATH_STALE" }, { status: 409 })
     }
-    const snapshot = await deriveDiffReviewSnapshot(resolved.relative)
+    const snapshot = await deriveDiffReviewSnapshot(projectRoot, resolved.relative)
     if (snapshot.state === "oversize" || Buffer.byteLength(snapshot.patch, "utf8") > MAX_DIFF_REVIEW_PATCH_BYTES) {
       return Response.json({ error: "DIFF_REVIEW_PATCH_UNAVAILABLE" }, { status: 413 })
     }
@@ -419,7 +435,7 @@ export async function POST(request: Request) {
     if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
       return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
     }
-    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
     }
@@ -541,32 +557,41 @@ export async function POST(request: Request) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
 
-  // Generic cloud turns spawn the CLI with acceptEdits against the real checkout, which makes them
-  // the most powerful mutation surface in the application -- strictly broader than /api/loom/edit.
-  // Selected-file review is separately constrained to a read-only tool set below, so requiring write
-  // authority for it would make the receipt lie about what the turn can do. The local path above is
-  // also deliberately ungated because it only produces text.
-  let workContextReceipt: string | null = null
+  // Generic cloud turns can edit the checkout. Their authority therefore comes only from the exact
+  // persisted Space and its server-derived selected path, never from a browser-authored receipt.
+  // Read-only Review, Preview and Local conversation remain outside this mutation boundary.
+  let mutationAuthority: SpaceMutationAuthority | null = null
   let resumeForkedFrom: string | null = null
   if (!reviewMode && !previewMode && !diffReviewMode) {
-    const context = await requireWorkContext()
-    if (!context.ok) return workContextRefusal(context)
-    workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
-    if (forkMode && (!workContextReceipt || priorThread?.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null)) {
-      return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    try {
+      mutationAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: typeof body.worldId === "string" ? body.worldId : "",
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        expected: { actor: "claude", capability: "selected-file-change" },
+        target: { kind: "selected-file" },
+      })
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+      })
     }
-    if (forkMode && priorThread?.workContextReceipt !== workContextReceipt) {
+    const priorMatches = priorThread?.provider === "cloud" && priorThread.mode === "agent"
+      && priorThread.worldId === mutationAuthority.worldId && priorThread.path === mutationAuthority.selectedPath
+    if ((forkMode || resuming) && !priorMatches) {
       return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
     }
     if (resuming && priorThread?.forkedFrom) {
-      if (!workContextReceipt || priorThread.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null) {
-        return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
-      }
-      if (priorThread.workContextReceipt !== workContextReceipt) {
-        return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
-      }
       resumeForkedFrom = priorThread.forkedFrom
     }
+    prompt = [
+      `Work only on the exact server-authorized selected file: ${mutationAuthority.selectedPath}`,
+      "Do not edit, create, delete, rename, or move any other path.",
+      prompt,
+    ].join("\n\n")
   }
 
   // Resume lookup and every earlier await can race the live Space or Git state. Re-earn the exact
@@ -578,13 +603,77 @@ export async function POST(request: Request) {
       || selectedWorldPath(currentWorld) !== diffReviewContext!.path) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
     }
-    const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+    const currentSnapshot = await deriveDiffReviewSnapshot(projectRoot, diffReviewContext!.path)
     const currentIdentity = diffReviewIdentity(currentSnapshot)
     if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
       diffReviewContext!,
       { ...currentIdentity, worldId: diffReviewContext!.worldId },
     )) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+  }
+
+  if (mutationAuthority) {
+    try {
+      const terminal = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        expected: { actor: "claude", capability: "selected-file-change" },
+        target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
+      })
+      if (terminal.worldRevision !== mutationAuthority.worldRevision
+        || terminal.workOrderId !== mutationAuthority.workOrderId || terminal.grantId !== mutationAuthority.grantId
+        || terminal.selectedPath !== mutationAuthority.selectedPath) {
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
+      })
+    }
+  }
+
+  let mutationWorkspace: CodexIsolatedWorkspace | null = null
+  let mutationTarget: Awaited<ReturnType<typeof inspectCodexAssignmentTarget>> | null = null
+  if (mutationAuthority) {
+    try {
+      mutationTarget = await inspectCodexAssignmentTarget(projectRoot, mutationAuthority.selectedPath!)
+      mutationWorkspace = await createCodexIsolatedWorkspace({
+        projectRoot,
+        selectedPath: mutationAuthority.selectedPath!,
+        initialContent: mutationTarget.content,
+      })
+      // Target inspection and detached-worktree creation are asynchronous. Re-earn the exact
+      // actor/capability/path snapshot after both complete and immediately before provider spawn.
+      const spawnAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        expected: { actor: "claude", capability: "selected-file-change" },
+        target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
+      })
+      if (spawnAuthority.worldRevision !== mutationAuthority.worldRevision
+        || spawnAuthority.workOrderId !== mutationAuthority.workOrderId
+        || spawnAuthority.grantId !== mutationAuthority.grantId
+        || spawnAuthority.selectedPath !== mutationAuthority.selectedPath) {
+        await cleanupCodexIsolatedWorkspace(mutationWorkspace)
+        mutationWorkspace = null
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+    } catch (error) {
+      if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+      mutationWorkspace = null
+      if (error instanceof SpaceMutationAuthorityError) {
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+      return Response.json({ error: "CLAUDE_ISOLATION_UNAVAILABLE" }, { status: 503 })
     }
   }
 
@@ -608,7 +697,7 @@ export async function POST(request: Request) {
   delete env.ANTHROPIC_AUTH_TOKEN
 
   const child = spawn(AGENT_BIN, args, {
-    cwd: PROJECT_ROOT,
+    cwd: mutationWorkspace?.root ?? projectRoot,
     shell: false,
     windowsHide: true,
     env,
@@ -702,7 +791,7 @@ export async function POST(request: Request) {
             resumed: resuming,
             ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {
               mode: "agent",
-              ...(workContextReceipt ? { workContextReceipt } : {}),
+              ...(mutationAuthority ? { worldId: mutationAuthority.worldId, path: mutationAuthority.selectedPath } : {}),
               ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             }),
           },
@@ -758,7 +847,8 @@ export async function POST(request: Request) {
               subject: childSessionId,
               metadata: {
                 provider: provider.id, external: provider.external, metered: provider.metered,
-                resumed: false, mode: "agent", workContextReceipt, forkedFrom: forkSourceId,
+                resumed: false, mode: "agent", worldId: mutationAuthority!.worldId,
+                path: mutationAuthority!.selectedPath, forkedFrom: forkSourceId,
               },
             })
           } catch {
@@ -892,6 +982,17 @@ export async function POST(request: Request) {
         const tail = buffer.toString("utf8")
         buffer = Buffer.alloc(0)
         outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
+          // Timeout, abort, explicit Stop, provider error, or output-limit settlement wins forever.
+          // Close is then cleanup confirmation only: never inspect or promote a workspace after the
+          // response has already told the owner that execution did not complete.
+          if (settled) {
+            if (mutationWorkspace) {
+              const abandoned = mutationWorkspace
+              mutationWorkspace = null
+              await cleanupCodexIsolatedWorkspace(abandoned).catch(() => undefined)
+            }
+            return
+          }
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
           else if (previewMode && !previewSessionInitialized) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
           else if (previewMode) {
@@ -961,7 +1062,7 @@ export async function POST(request: Request) {
               finish({ type: "done", reason: "DIFF_REVIEW_CONTEXT_STALE", code: null })
               return
             }
-            const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+            const currentSnapshot = await deriveDiffReviewSnapshot(projectRoot, diffReviewContext!.path)
             const currentIdentity = diffReviewIdentity(currentSnapshot)
             if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
               diffReviewContext!,
@@ -993,6 +1094,60 @@ export async function POST(request: Request) {
             })
             if (!settled) send({ type: "event", event: diffReviewResultEvent })
             finish({ type: "done", reason: null, code })
+          } else if (mutationAuthority && mutationWorkspace && mutationTarget) {
+            if (code !== 0) {
+              await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+              mutationWorkspace = null
+              finish({ type: "done", reason: null, code })
+              return
+            }
+            try {
+              const isolatedResult = await inspectCodexIsolatedWorkspace(mutationWorkspace)
+              await cleanupCodexIsolatedWorkspace(mutationWorkspace)
+              mutationWorkspace = null
+              const baseWriter = workspaceFileWriteDependencies(projectRoot)
+              const promoted = await writeGovernedWorkspaceFile({
+                userId: session.user.id,
+                path: mutationAuthority.selectedPath!,
+                content: isolatedResult.content,
+                modifiedAt: mutationTarget.modifiedAt,
+              }, {
+                ...baseWriter,
+                authorize: async (requestedPath) => {
+                  if (requestedPath !== mutationAuthority!.selectedPath) {
+                    return { ok: false, failure: "FAILED_SCOPE_COLLISION", detail: "Claude promotion escaped the exact Space selection" }
+                  }
+                  try {
+                    const terminal = await deriveSpaceMutationAuthority({
+                      userId: session.user.id,
+                      worldId: mutationAuthority!.worldId,
+                      binding: {
+                        projectId: binding.projectId, projectKey: binding.projectKey,
+                        repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+                      },
+                      expected: { actor: "claude", capability: "selected-file-change" },
+                      target: { kind: "selected-file", requestedPath },
+                    })
+                    return terminal.worldRevision === mutationAuthority!.worldRevision
+                      && terminal.workOrderId === mutationAuthority!.workOrderId
+                      && terminal.grantId === mutationAuthority!.grantId
+                      ? { ok: true }
+                      : { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude Space authority changed before promotion" }
+                  } catch {
+                    return { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude Space authority changed before promotion" }
+                  }
+                },
+              })
+              if (!promoted.ok) {
+                finish({ type: "done", reason: `CLAUDE_PROMOTION_${promoted.error}`, code: null })
+                return
+              }
+              finish({ type: "done", reason: null, code })
+            } catch (error) {
+              if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+              mutationWorkspace = null
+              finish({ type: "done", reason: (error as { code?: string })?.code ?? "CLAUDE_ISOLATION_VIOLATION", code: null })
+            }
           } else finish({ type: "done", reason: null, code })
         })
       })

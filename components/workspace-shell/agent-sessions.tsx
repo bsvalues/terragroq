@@ -1038,7 +1038,8 @@ export function useExperienceAgentSessions({
     }
 
     try {
-      if (input.provider === "Codex" && !boundedText(worldId, 200)) throw new Error("AGENT_SPACE_REQUIRED")
+      if ((input.provider === "Codex" || input.provider === "Claude" && mode !== "review")
+        && !boundedText(worldId, 200)) throw new Error("AGENT_SPACE_REQUIRED")
       const response = await fetch(input.provider === "Codex" ? "/api/loom/codex" : "/api/loom/agent", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1067,6 +1068,7 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : forkMode ? {
           mode: "fork",
+          worldId,
           provider: "cloud",
           sourceSessionId: forkSource!.sessionId,
           prompt,
@@ -1087,6 +1089,7 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
           completedTurns: prior?.completedTurns ?? [],
         } : {
+          worldId,
           prompt,
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,

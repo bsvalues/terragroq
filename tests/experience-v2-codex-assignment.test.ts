@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias,
   inspectCodexAssignmentTarget,
   revalidateCodexAssignment,
   type CodexAssignmentRecord,
@@ -36,7 +37,10 @@ async function repositoryFixture() {
 
 function world(selectedPath = "src/selected.ts", revision = 7): WorkingWorldSnapshot {
   return {
-    ...createWorkingWorld({ intent: "Implement the active outcome" }),
+    ...createWorkingWorld({
+      intent: "Implement the active outcome",
+      resources: ["williamos-workspace-root:v1:c:/work/terrafusion_os_1.0"],
+    }),
     spine: {
       projectId: 1,
       projectName: "WilliamOS",
@@ -68,6 +72,11 @@ function world(selectedPath = "src/selected.ts", revision = 7): WorkingWorldSnap
 function record(overrides: Partial<CodexAssignmentRecord> = {}): CodexAssignmentRecord {
   return {
     world: world(),
+    project: {
+      id: 1,
+      key: "terrafusion",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    },
     outcome: {
       id: 5, outcomeKey: "OUTCOME-1", lifecycleState: "active", activeWorkOrderId: 41, version: 3,
     },
@@ -108,7 +117,36 @@ const target = {
   digest: "a".repeat(64),
 }
 
+const terraFusionProject = {
+  projectId: 1,
+  projectKey: "terrafusion",
+  repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  spaceIdentity: "c:/work/terrafusion_os_1.0",
+}
+
 describe("server-derived Codex assignment", () => {
+  it.each([
+    ["another Project", { world: { ...world(), spine: { ...world().spine, projectId: 2 } } }],
+    ["a foreign workspace resource", { world: { ...world(), resources: ["williamos-workspace-root:v1:c:/work/another-project"] } }],
+  ])("refuses a Space bound to %s before inspecting its selected target", async (_label, overrides) => {
+    let inspected = false
+
+    await expect(deriveCodexAssignment({
+      userId: "owner-1",
+      worldId: "world-1",
+      projectRoot: "C:/physical/terrafusion",
+      projectBinding: terraFusionProject,
+    }, {
+      loadRecord: async () => record(overrides as Partial<CodexAssignmentRecord>),
+      inspectTarget: async () => {
+        inspected = true
+        return target
+      },
+    })).rejects.toMatchObject({ code: "CODEX_ASSIGNMENT_REFUSED" })
+
+    expect(inspected).toBe(false)
+  })
+
   it("binds the persisted active Space file to its outcome, work order, grant, and reservation", async () => {
     const assignment = await deriveCodexAssignment({
       userId: "owner-1",
@@ -165,6 +203,31 @@ describe("server-derived Codex assignment", () => {
     expect(assignment.selectedPath).toBe("src/selected.ts")
     expect(assignment.allowed).toEqual(["src/other.ts", "src/selected.ts"])
     expect(assignment.forbidden).toEqual(["src/forbidden.ts", "src/generated/**"])
+  })
+
+  it("reconstructs an alias-root identity while inspecting only through the verified physical root", async () => {
+    const inspectedRoots: string[] = []
+    const dependencies = {
+      loadRecord: async () => record(),
+      inspectTarget: async (root: string) => {
+        inspectedRoots.push(root)
+        return target
+      },
+    }
+    const physical = await deriveCodexAssignment({
+      userId: "owner-1", worldId: "world-1", projectRoot: "C:/physical/workspace",
+    }, dependencies)
+    const legacyAlias = await deriveCodexAssignmentForVerifiedRootAlias({
+      userId: "owner-1",
+      worldId: "world-1",
+      configuredProjectRoot: "C:/stable/workspace-alias",
+      verifiedProjectRoot: "C:/physical/workspace",
+    }, dependencies)
+
+    expect(inspectedRoots).toEqual(["C:/physical/workspace", "C:/physical/workspace"])
+    expect(legacyAlias.projectRoot).toBe("C:/stable/workspace-alias")
+    expect(legacyAlias.assignmentHash).not.toBe(physical.assignmentHash)
+    expect(legacyAlias.target).toEqual(physical.target)
   })
 
   it.each([

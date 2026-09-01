@@ -56,6 +56,33 @@ describe("delivery commit inspection", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
   })
 
+  it.each([
+    ["leading dot segment", "./src/selected.ts"],
+    ["backslash separator", "src\\selected.ts"],
+    ["surrounding whitespace", " src/selected.ts "],
+    ["embedded space", "src/selected file.ts"],
+    ["embedded tab", "src/selected\tfile.ts"],
+    ["embedded newline", "src/selected\nfile.ts"],
+    ["Unicode NEXT LINE", "src/selected\u0085file.ts"],
+    ["asterisk wildcard", "src/*.ts"],
+    ["question-mark wildcard", "src/selected?.ts"],
+  ])("rejects a noncanonical %s authority path", async (_label, deliveryPath) => {
+    const repo = repository()
+    await expect(inspectGitDelivery(repo.root, repo.baseSha, repo.commitSha, [deliveryPath]))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+  })
+
+  it("rejects duplicate authority path claims instead of collapsing them", async () => {
+    const repo = repository()
+    await expect(inspectGitDelivery(
+      repo.root,
+      repo.baseSha,
+      repo.commitSha,
+      ["src/selected.ts", "src/selected.ts"],
+      { allowMultiple: true },
+    )).rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+  })
+
   it("measures an exact deleted path with a deterministic head-absent representation", async () => {
     const repo = repository()
     fs.unlinkSync(path.join(repo.root, "src", "selected.ts"))
@@ -85,5 +112,26 @@ describe("delivery commit inspection", () => {
       { allowMultiple: true },
     )
     expect(measured).toMatchObject({ commitSha: renamedHead, paths: ["src/renamed.ts", "src/selected.ts"] })
+  })
+
+  it("treats a bracketed Next route as a literal Git pathspec", async () => {
+    const repo = repository()
+    const dynamicRoute = "app/api/environment/spaces/[worldId]/route.ts"
+    const globMatch = "app/api/environment/spaces/w/route.ts"
+    for (const deliveryPath of [dynamicRoute, globMatch]) {
+      fs.mkdirSync(path.dirname(path.join(repo.root, deliveryPath)), { recursive: true })
+      fs.writeFileSync(path.join(repo.root, deliveryPath), "export const value = 1\n")
+    }
+    git(repo.root, "--literal-pathspecs", "add", "--", dynamicRoute, globMatch)
+    git(repo.root, "commit", "-m", "add bracketed route fixture")
+    const bracketBase = git(repo.root, "rev-parse", "HEAD")
+    fs.writeFileSync(path.join(repo.root, dynamicRoute), "export const value = 2\n")
+    fs.writeFileSync(path.join(repo.root, globMatch), "export const value = 3\n")
+    git(repo.root, "--literal-pathspecs", "add", "--", dynamicRoute, globMatch)
+    git(repo.root, "commit", "-m", "change bracketed route and glob lookalike")
+    const bracketHead = git(repo.root, "rev-parse", "HEAD")
+
+    await expect(inspectGitDelivery(repo.root, bracketBase, bracketHead, [dynamicRoute]))
+      .resolves.toMatchObject({ paths: [dynamicRoute], commitSha: bracketHead })
   })
 })

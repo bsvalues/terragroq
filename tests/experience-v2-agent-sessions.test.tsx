@@ -333,7 +333,7 @@ describe("Experience V2 real agent sessions", () => {
       label: "Claude Builder",
       descriptor: { schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Build interaction", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { prompt: "Continue exactly.", provider: "cloud", sessionId: "123e4567-e89b-42d3-a456-426614174000", resume: true },
+      body: { worldId: "world-1", prompt: "Continue exactly.", provider: "cloud", sessionId: "123e4567-e89b-42d3-a456-426614174000", resume: true },
       events: [
         { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "delegate", resumed: true },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174000", result: "Claude continued." } },
@@ -2920,6 +2920,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByRole("button", { name: /Builder · Claude/i })).toBeTruthy()
     expect(screen.getByText("ready · resumable session")).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      worldId: "world-1",
       prompt: "Make the selected change.",
       provider: "cloud",
       sessionId: null,
@@ -3159,6 +3160,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("ready · resumable session")).toBeTruthy()
     expect(expose!.descriptorState).toBe("verified")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      worldId: "world-1",
       prompt: "Continue the work.",
       provider: "cloud",
       sessionId,

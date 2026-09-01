@@ -6,14 +6,14 @@ import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError, type SpaceMutationAuthority } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const SEA_ROOT = process.env.WILLIAMOS_SEA_ROOT ?? "D:/williamos-sea"
 const PYTHON = process.env.WILLIAMOS_PYTHON ?? "python"
 const EDIT_TIMEOUT_MS = 20 * 60_000
@@ -33,10 +33,10 @@ const EDIT_TIMEOUT_MS = 20 * 60_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-
-  // A model editing real files is the most consequential thing this application does.
-  const context = await requireWorkContext()
-  if (!context.ok) return workContextRefusal(context)
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown }
   try {
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
   if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
-  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+  const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
   if (!resolved.ok || !resolved.relative) {
     return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
   }
@@ -59,8 +59,28 @@ export async function POST(request: Request) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
 
+  const worldId = typeof body.worldId === "string" ? body.worldId : ""
+  let mutationAuthority: SpaceMutationAuthority
+  try {
+    mutationAuthority = await deriveSpaceMutationAuthority({
+      userId: session.user.id,
+      worldId,
+      binding: {
+        projectId: binding.projectId,
+        projectKey: binding.projectKey,
+        repositoryIdentity: binding.repositoryIdentity,
+        spaceIdentity: binding.project.identity,
+      },
+      expected: { actor: "sea", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: resolved.relative },
+    })
+  } catch (error) {
+    return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+      status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+    })
+  }
+
   if (body.intent === "improve-diff") {
-    const worldId = typeof body.worldId === "string" ? body.worldId : ""
     const expectedDiffFingerprint = typeof body.expectedDiffFingerprint === "string" ? body.expectedDiffFingerprint : ""
     if (!worldId || worldId.length > 200 || /[\0-\x1f\x7f]/.test(worldId)
       || !expectedDiffFingerprint || expectedDiffFingerprint.length > 16_384) {
@@ -76,7 +96,7 @@ export async function POST(request: Request) {
     }
     // The browser supplies only the expected identity; the server derives current Git truth for
     // the exact persisted selection itself, then rechecks that selection before spawning.
-    const currentDiff = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    const currentDiff = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (currentDiff.state !== "modified" || currentDiff.fingerprint !== expectedDiffFingerprint) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
@@ -91,16 +111,43 @@ export async function POST(request: Request) {
     // Loading the terminal owned Space is itself an await boundary. Re-derive Git identity after it
     // and immediately before spawn so a patch/index/HEAD change during that load cannot cross the
     // mutation boundary under the earlier fingerprint.
-    const terminalDiffSnapshot = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    const terminalDiffSnapshot = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (terminalDiffSnapshot.state !== "modified" || terminalDiffSnapshot.fingerprint !== expectedDiffFingerprint) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
   }
 
+  // Every Space/diff/filesystem await above can race the active Work Order or grant. Re-derive the
+  // exact SEA authority immediately before spawn and reject any snapshot drift.
+  try {
+    const terminalAuthority = await deriveSpaceMutationAuthority({
+      userId: session.user.id,
+      worldId,
+      binding: {
+        projectId: binding.projectId,
+        projectKey: binding.projectKey,
+        repositoryIdentity: binding.repositoryIdentity,
+        spaceIdentity: binding.project.identity,
+      },
+      expected: { actor: "sea", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: resolved.relative },
+    })
+    if (terminalAuthority.worldRevision !== mutationAuthority.worldRevision
+      || terminalAuthority.workOrderId !== mutationAuthority.workOrderId
+      || terminalAuthority.grantId !== mutationAuthority.grantId
+      || terminalAuthority.selectedPath !== mutationAuthority.selectedPath) {
+      return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+    }
+  } catch (error) {
+    return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+      status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
+    })
+  }
+
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL
   const args = [
     "-m", "sea", "worker",
-    "--root", PROJECT_ROOT,
+    "--root", projectRoot,
     "--base-url", LOCAL_ENDPOINT,
     "--model", model,
     "--api", "ollama",

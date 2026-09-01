@@ -43,11 +43,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function useSelectedFileChange({
+  worldId,
   path,
   dirty,
   onVerifiedSuccess,
   isOperationScopeCurrent,
 }: {
+  worldId: string | null
   path: string | null
   dirty: boolean
   onVerifiedSuccess: (path: string) => Promise<ChangeRefreshResult> | ChangeRefreshResult
@@ -182,7 +184,7 @@ export function useSelectedFileChange({
       const response = await fetch("/api/loom/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: operation.path, task, ...(improve ?? {}) }),
+        body: JSON.stringify({ worldId, path: operation.path, task, ...(improve ?? {}) }),
         signal: operation.controller.signal,
         cache: "no-store",
       })
@@ -229,7 +231,7 @@ export function useSelectedFileChange({
     } finally {
       if (active.current === operation) active.current = null
     }
-  }, [dirty, path])
+  }, [dirty, path, worldId])
 
   return { ...state, canStop: state.phase === "streaming", start, stop, reset, refuse, invalidate }
 }

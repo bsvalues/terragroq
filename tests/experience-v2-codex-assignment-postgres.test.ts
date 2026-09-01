@@ -59,6 +59,13 @@ runDatabase("Codex assignment PostgreSQL production query", { timeout: 30_000 },
           CREATE TABLE "working_world" (
             id text PRIMARY KEY, "userId" text NOT NULL, snapshot jsonb NOT NULL
           );
+          CREATE TABLE "project" (
+            id integer PRIMARY KEY, "userId" text NOT NULL, "key" text NOT NULL
+          );
+          CREATE TABLE "project_resource" (
+            "userId" text NOT NULL, "projectId" integer NOT NULL, type text NOT NULL,
+            relationship text NOT NULL, "canonicalIdentity" text NOT NULL
+          );
           CREATE TABLE "outcome_queue_item" (
             id integer PRIMARY KEY, "userId" text NOT NULL, "outcomeKey" text NOT NULL,
             "lifecycleState" text NOT NULL, "activeWorkOrderId" integer, version integer NOT NULL
@@ -78,7 +85,10 @@ runDatabase("Codex assignment PostgreSQL production query", { timeout: 30_000 },
           );
         `)
         const world = {
-          ...createWorkingWorld({ intent: "Implement the active outcome" }),
+          ...createWorkingWorld({
+            intent: "Implement the active outcome",
+            resources: ["williamos-workspace-root:v1:c:/work/terrafusion_os_1.0"],
+          }),
           spine: {
             projectId: 1, projectName: "WilliamOS", threadId: "thread-pg",
             outcomeKey: "OUTCOME-PG", outcomeTitle: "Selected-file change", workOrderId: 41,
@@ -102,6 +112,14 @@ runDatabase("Codex assignment PostgreSQL production query", { timeout: 30_000 },
         await fixturePool.query(
           `INSERT INTO "working_world" (id,"userId",snapshot) VALUES ($1,$2,$3::jsonb)`,
           ["world-pg", "owner-pg", JSON.stringify(world)],
+        )
+        await fixturePool.query(
+          `INSERT INTO "project" (id,"userId","key") VALUES (1,'owner-pg','terrafusion')`,
+        )
+        await fixturePool.query(
+          `INSERT INTO "project_resource"
+            ("userId","projectId",type,relationship,"canonicalIdentity")
+           VALUES ('owner-pg',1,'repo','primary-repo','bsvalues/terrafusion_os_1.0')`,
         )
         await fixturePool.query(
           `INSERT INTO "outcome_queue_item"
@@ -137,6 +155,12 @@ runDatabase("Codex assignment PostgreSQL production query", { timeout: 30_000 },
 
       const assignment = await deriveCodexAssignment({
         userId: "owner-pg", worldId: "world-pg", projectRoot,
+        projectBinding: {
+          projectId: 1,
+          projectKey: "terrafusion",
+          repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+          spaceIdentity: "c:/work/terrafusion_os_1.0",
+        },
       })
 
       expect(assignment).toMatchObject({
@@ -146,6 +170,12 @@ runDatabase("Codex assignment PostgreSQL production query", { timeout: 30_000 },
         workOrderId: 41,
         grantId: 9,
         selectedPath: "src/selected.ts",
+        binding: {
+          projectId: 1,
+          projectKey: "terrafusion",
+          repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+          spaceIdentity: "c:/work/terrafusion_os_1.0",
+        },
       })
     } finally {
       await productionPool?.end()

@@ -4,13 +4,13 @@ import { spawn } from "node:child_process"
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_OUTPUT_BYTES = 2_000_000
 
 /**
@@ -29,8 +29,11 @@ const MAX_OUTPUT_BYTES = 2_000_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -55,13 +58,29 @@ export async function POST(request: Request) {
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
   // could drift away from it.
   if (operation.mutating) {
-    const context = await requireWorkContext()
-    if (!context.ok) return workContextRefusal(context)
+    try {
+      await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: typeof body.worldId === "string" ? body.worldId : "",
+        binding: {
+          projectId: projectBinding.binding.projectId,
+          projectKey: projectBinding.binding.projectKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          spaceIdentity: projectBinding.binding.project.identity,
+        },
+        expected: { actor: "williamos", capability: operation.id },
+        target: { kind: "operation", operation: operation.id },
+      })
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+      })
+    }
   }
 
   const command = operation.command === "node" ? process.execPath : operation.command
   const child = spawn(command, [...operation.args], {
-    cwd: operation.scope === "project" ? PROJECT_ROOT : PROJECT_ROOT,
+    cwd: projectRoot,
     shell: false,
     windowsHide: true,
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },

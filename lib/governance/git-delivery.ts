@@ -31,8 +31,12 @@ async function gitBytes(root: string, args: readonly string[]): Promise<Buffer> 
 }
 
 async function gitBytesIfPresent(root: string, revision: string, deliveryPath: string): Promise<Buffer | null> {
-  const entry = await gitBytes(root, ["ls-tree", "-z", revision, "--", deliveryPath])
+  const entry = await gitBytes(root, ["ls-tree", "-z", revision, "--", `:(literal)${deliveryPath}`])
   return entry.length === 0 ? null : gitBytes(root, ["show", `${revision}:${deliveryPath}`])
+}
+
+function literalPathspecs(paths: readonly string[]): string[] {
+  return paths.map((deliveryPath) => `:(literal)${deliveryPath}`)
 }
 
 function canonicalRemote(value: string): string {
@@ -51,12 +55,14 @@ function canonicalRemote(value: string): string {
 function normalizedPaths(root: string, values: readonly string[]): string[] {
   const seen = new Set<string>()
   for (const raw of values) {
-    const candidate = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "")
+    const candidate = raw
     const absolute = path.resolve(root, candidate)
     const relative = path.relative(path.resolve(root), absolute).replace(/\\/g, "/")
-    if (!candidate || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    if (!candidate || /\p{White_Space}/u.test(candidate) || candidate.includes("\\") || candidate.includes("*") || candidate.includes("?")
+      || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(candidate) || path.isAbsolute(relative)) {
       invalid("the delivery path is not canonical and repository-relative")
     }
+    if (seen.has(relative)) invalid("the delivery path set contains a duplicate claim")
     seen.add(relative)
   }
   return [...seen].sort()
@@ -89,10 +95,11 @@ export async function inspectGitDelivery(
     const measuredCommit = (await git(root, ["rev-parse", `${commitSha}^{commit}`])).trim().toLowerCase()
     if (measuredBase !== baseSha.toLowerCase() || measuredCommit !== commitSha.toLowerCase()) invalid("the exact delivery commits are unavailable")
     await git(root, ["merge-base", "--is-ancestor", measuredBase, measuredCommit])
-    const changed = (await git(root, ["diff", "--no-renames", "--name-only", "-z", measuredBase, measuredCommit, "--", ...paths]))
+    const pathspecs = literalPathspecs(paths)
+    const changed = (await git(root, ["diff", "--no-renames", "--name-only", "-z", measuredBase, measuredCommit, "--", ...pathspecs]))
       .split("\0").filter(Boolean).map((item) => item.replace(/\\/g, "/")).sort()
     if (JSON.stringify(changed) !== JSON.stringify(paths)) invalid("the exact assignment paths are not all changed by this commit")
-    const patch = await git(root, ["diff", "--no-renames", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
+    const patch = await git(root, ["diff", "--no-renames", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...pathspecs])
     if (!patch) invalid("the assignment patch is empty")
     if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
     const delivered = await Promise.all(paths.map(async (deliveryPath) => ({

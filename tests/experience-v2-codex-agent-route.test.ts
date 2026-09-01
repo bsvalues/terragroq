@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import path from "node:path"
 
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   deriveCodexAssignment: vi.fn(),
+  deriveCodexAssignmentForVerifiedRootAlias: vi.fn(),
   revalidateCodexAssignment: vi.fn(),
   createIsolatedWorkspace: vi.fn(),
   inspectIsolatedWorkspace: vi.fn(),
@@ -16,6 +18,7 @@ const seams = vi.hoisted(() => ({
   prepareCodexContinuation: vi.fn(),
   readCodexContinuation: vi.fn(),
   acquireCodexContinuationClaim: vi.fn(),
+  dependenciesForProjectRoot: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
   readAccount: vi.fn(),
@@ -26,12 +29,17 @@ const seams = vi.hoisted(() => ({
   closeAndWait: vi.fn(),
   sanitize: vi.fn(),
   onConstruct: vi.fn(),
+  resolveProjectBinding: vi.fn(),
   clientOptions: [] as unknown[],
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: seams.resolveProjectBinding,
+}))
 vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias: seams.deriveCodexAssignmentForVerifiedRootAlias,
   revalidateCodexAssignment: seams.revalidateCodexAssignment,
 }))
 vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
@@ -54,7 +62,7 @@ vi.mock("@/lib/loom/codex-continuation", () => ({
   readCodexContinuation: seams.readCodexContinuation,
 }))
 vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
-  codexContinuationDependencies: {},
+  codexContinuationDependenciesForProjectRoot: seams.dependenciesForProjectRoot,
   acquireCodexContinuationClaim: seams.acquireCodexContinuationClaim,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
@@ -83,6 +91,7 @@ import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 
 const ASSIGNMENT_HASH = "a".repeat(64)
 const STALE_ASSIGNMENT_HASH = "b".repeat(64)
+const CONFIGURED_ALIAS_ASSIGNMENT_HASH = "c".repeat(64)
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
@@ -102,6 +111,17 @@ describe("durable Codex delegate route", () => {
     vi.resetAllMocks()
     seams.clientOptions.length = 0
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    seams.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: "c:/work/terrafusion_os_1.0", name: "TerraFusion OS" },
+        workspaceRoot: process.cwd(),
+        configuredWorkspaceRoot: process.cwd(),
+      },
+    })
     seams.connect.mockResolvedValue(undefined)
     seams.closeAndWait.mockResolvedValue(undefined)
     seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
@@ -114,6 +134,7 @@ describe("durable Codex delegate route", () => {
     seams.prepareCodexContinuation.mockResolvedValue({ status: "WORK_ORDER_PATHS_COMPLETE" })
     seams.readCodexContinuation.mockResolvedValue({ status: "NO_ACTIVE_ASSIGNMENT" })
     seams.acquireCodexContinuationClaim.mockResolvedValue(vi.fn().mockResolvedValue(undefined))
+    seams.dependenciesForProjectRoot.mockReturnValue({ verified: "physical-terrafusion" })
     seams.deriveCodexAssignment.mockResolvedValue({
       owner: "owner-1",
       worldId: "world-1",
@@ -133,6 +154,10 @@ describe("durable Codex delegate route", () => {
         grantRef: "GRANT-0009",
         grantVersion: "grant-hash",
         reservationVersion: "f".repeat(64),
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
       },
       assignmentHash: ASSIGNMENT_HASH,
       target: {
@@ -142,6 +167,9 @@ describe("durable Codex delegate route", () => {
       },
     })
     seams.revalidateCodexAssignment.mockResolvedValue(undefined)
+    seams.deriveCodexAssignmentForVerifiedRootAlias.mockResolvedValue({
+      assignmentHash: CONFIGURED_ALIAS_ASSIGNMENT_HASH,
+    })
     seams.createIsolatedWorkspace.mockResolvedValue({
       projectRoot: process.cwd(),
       runtimeRoot: "C:/Users/owner/.williamos/loom/codex-worktrees",
@@ -196,6 +224,12 @@ describe("durable Codex delegate route", () => {
     expect(response.status).toBe(200)
     expect(seams.deriveCodexAssignment).toHaveBeenCalledWith({
       userId: "owner-1", worldId: "world-1", projectRoot: process.cwd(),
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
     })
     expect(seams.connect).toHaveBeenCalledOnce()
     expect(seams.readAccount).toHaveBeenCalledOnce()
@@ -282,7 +316,7 @@ describe("durable Codex delegate route", () => {
       workOrderId: 41,
       grantId: 9,
       completedPath: "src/selected.ts",
-    }, {})
+    }, { verified: "physical-terrafusion" })
     expect(output).toContainEqual({
       type: "continuation",
       status: "NEXT_ASSIGNMENT",
@@ -302,7 +336,11 @@ describe("durable Codex delegate route", () => {
     const output = await events(await POST(request({ automatic: true })))
 
     expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
-    expect(seams.readCodexContinuation).toHaveBeenCalledWith("owner-1", "world-1", {})
+    expect(seams.readCodexContinuation).toHaveBeenCalledWith(
+      "owner-1",
+      "world-1",
+      { verified: "physical-terrafusion" },
+    )
     expect(seams.recordLoomCodexAssignment).toHaveBeenCalledWith(expect.objectContaining({
       taskText: "Server-derived continuation task.",
     }))
@@ -421,6 +459,60 @@ describe("durable Codex delegate route", () => {
       type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: true,
       selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
     })
+  })
+
+  it("resumes a durable session recorded against the verified configured workspace alias", async () => {
+    const configuredAlias = path.resolve("C:/stable/terrafusion-alias")
+    const currentAssignment = await seams.deriveCodexAssignment({})
+    seams.deriveCodexAssignment.mockReset()
+    seams.deriveCodexAssignment.mockImplementation(async (input: { projectRoot: string }) => ({
+      ...currentAssignment,
+      projectRoot: input.projectRoot,
+      assignmentHash: ASSIGNMENT_HASH,
+    }))
+    seams.resolveProjectBinding.mockResolvedValueOnce({
+      ok: true,
+      binding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: "c:/work/terrafusion_os_1.0", name: "TerraFusion OS" },
+        workspaceRoot: process.cwd(),
+        configuredWorkspaceRoot: configuredAlias,
+      },
+    })
+    seams.poolQuery.mockResolvedValueOnce({
+      rows: [{ userId: "owner-1", metadata: {
+        provider: "Codex", mode: "delegate", workspace: configuredAlias, committed: true,
+        worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
+        assignmentHash: CONFIGURED_ALIAS_ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
+      } }],
+    })
+
+    const response = await POST(request({
+      prompt: "Continue.",
+      sessionId: "codex-thread-1",
+      resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    await events(response)
+    expect(seams.deriveCodexAssignment).toHaveBeenCalledOnce()
+    expect(seams.deriveCodexAssignmentForVerifiedRootAlias).toHaveBeenCalledWith({
+      userId: "owner-1",
+      worldId: "world-1",
+      configuredProjectRoot: configuredAlias,
+      verifiedProjectRoot: process.cwd(),
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
+    })
+    expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", expect.objectContaining({
+      cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
+    }))
   })
 
   it.each([

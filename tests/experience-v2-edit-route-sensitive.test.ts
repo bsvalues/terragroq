@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const seams = vi.hoisted(() => ({
   spawn: vi.fn(),
   getSession: vi.fn(),
-  requireWorkContext: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
   resolveRealWorkspacePath: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -17,9 +17,18 @@ const seams = vi.hoisted(() => ({
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
 vi.mock("node:fs/promises", () => ({ default: { realpath: vi.fn() } }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: seams.requireWorkContext,
-  workContextRefusal: vi.fn(),
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(),
+    projectId: 7,
+    projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    project: { identity: "c:/terrafusion" },
+  } }),
+}))
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
@@ -45,7 +54,7 @@ class FakeChild extends EventEmitter {
 const request = (path: string) => new Request("http://williamos.test/api/loom/edit", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ path, task: "Apply the selected change." }),
+  body: JSON.stringify({ worldId: "world-a", path, task: "Apply the selected change." }),
 })
 
 const improveRequest = (overrides: Record<string, unknown> = {}) => new Request("http://williamos.test/api/loom/edit", {
@@ -77,7 +86,7 @@ describe("selected-file Change sensitive-path boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
-    seams.requireWorkContext.mockResolvedValue({ ok: true })
+    seams.deriveSpaceMutationAuthority.mockResolvedValue({ worldId: "world-a", selectedPath: "src/app.ts" })
     seams.resolveRealWorkspacePath.mockImplementation(async (_root: string, selectedPath: string) => ({
       ok: true,
       absolute: `C:/workspace/${selectedPath}`,
@@ -135,6 +144,12 @@ describe("selected-file Change sensitive-path boundary", () => {
 
     const response = await POST(improveRequest())
     expect(response.status).toBe(200)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", worldId: "world-a",
+      expected: { actor: "sea", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: "src/app.ts" },
+    }))
     expect(seams.loadOwnedWorkingWorld).toHaveBeenCalledWith("owner-1", "world-a")
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(2)
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenNthCalledWith(1, expect.any(String), "src/app.ts")
@@ -143,6 +158,18 @@ describe("selected-file Change sensitive-path boundary", () => {
     child.stdout.emit("data", Buffer.from(JSON.stringify({ success: true })))
     child.emit("close", 0)
     await response.text()
+  })
+
+  it("refuses Change when its exact Space authority snapshot changes before SEA spawn", async () => {
+    seams.deriveSpaceMutationAuthority
+      .mockResolvedValueOnce({ worldId: "world-a", worldRevision: 3, workOrderId: 41, grantId: 51, selectedPath: "src/app.ts" })
+      .mockResolvedValueOnce({ worldId: "world-a", worldRevision: 4, workOrderId: 41, grantId: 51, selectedPath: "src/app.ts" })
+
+    const response = await POST(request("src/app.ts"))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "SPACE_MUTATION_AUTHORITY_STALE" })
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it.each([

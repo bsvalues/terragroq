@@ -6,9 +6,13 @@ const seams = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
   save: vi.fn(),
+  resolveBinding: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: seams.resolveBinding,
+}))
 vi.mock("@/lib/environment/space-persistence", () => ({
   workspaceProjectFromRoot: () => ({ identity: "c:/project", name: "Project" }),
   browserSpaceStorageKey: () => "opaque-browser-key",
@@ -33,9 +37,21 @@ beforeEach(() => {
   seams.list.mockReset().mockResolvedValue([{ worldId: "a", name: "Alpha", space: { revision: 2 }, updatedAt: "2026-08-28T00:00:00Z" }])
   seams.create.mockReset().mockResolvedValue({ ...current, worldId: "b", name: "Beta", space: { revision: 0 } })
   seams.save.mockReset()
+  seams.resolveBinding.mockReset().mockResolvedValue({ ok: true, binding: {
+    workspaceAppUrl: null,
+    project: { identity: "c:/project", name: "Project" },
+  } })
 })
 
 describe("Experience V2 Space route", () => {
+  it("refuses an unverified Project binding instead of fabricating a TerraFusion Space", async () => {
+    seams.resolveBinding.mockResolvedValueOnce({ ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
+    const response = await GET(new Request("http://localhost/api/environment/space"))
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
+    expect(seams.load).not.toHaveBeenCalled()
+  })
+
   it("returns the exact current envelope with the bounded real collection and opaque preference namespace", async () => {
     const response = await GET(new Request("http://localhost/api/environment/space?worldId=a"))
     expect(response.status).toBe(200)

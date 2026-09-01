@@ -33,6 +33,7 @@ import {
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff, type WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -1026,18 +1027,37 @@ export async function POST(request: Request) {
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
         const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
-        const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
+        const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
+        if (!projectBinding.ok) {
+          return Response.json({ error: projectBinding.error }, { status: 503 })
+        }
+        const selectedObject = await deriveSelectedObjectGrounding(
+          world,
+          projectBinding.binding.workspaceRoot,
+          previewOrigin,
+        )
         if (selectedObject.changesSelected && !selectedObject.exact) {
           return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
         }
         expectedSelectedContext = JSON.stringify({
           persisted: selectedLineContextFingerprint(world),
+          workspaceRoot: projectBinding.binding.workspaceRoot,
           selectedObject: selectedObject.version,
         })
         deriveSelectedContext = async (latest) => {
-          const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
+          // Re-resolve at the persistence CAS boundary. A retargeted junction or changed Git origin
+          // must stale the inference result instead of letting William commit an answer grounded in
+          // a checkout that the rest of the product now refuses.
+          const latestBinding = await resolveTerraFusionWorkspaceBinding(userId)
+          if (!latestBinding.ok) return `WORKSPACE_BINDING_STALE:${latestBinding.error}`
+          const latestSelectedObject = await deriveSelectedObjectGrounding(
+            latest,
+            latestBinding.binding.workspaceRoot,
+            previewOrigin,
+          )
           return JSON.stringify({
             persisted: selectedLineContextFingerprint(latest),
+            workspaceRoot: latestBinding.binding.workspaceRoot,
             selectedObject: latestSelectedObject.version,
           })
         }
