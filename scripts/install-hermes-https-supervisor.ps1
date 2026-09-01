@@ -61,14 +61,16 @@ function Test-CommandLineHasExactPath {
   param([string]$CommandLine, [string]$ExpectedPath)
   if (-not $CommandLine) { return $false }
   $normalizedExpected = [IO.Path]::GetFullPath($ExpectedPath).TrimEnd('\')
-  foreach ($match in [regex]::Matches($CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))')) {
-    $token = @($match.Groups[1].Value, $match.Groups[2].Value, $match.Groups[3].Value) |
+  $tokens = @([regex]::Matches($CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
+    @($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) |
       Where-Object { $_ } | Select-Object -First 1
-    try {
-      if ([IO.Path]::GetFullPath($token).TrimEnd('\') -ieq $normalizedExpected) { return $true }
-    } catch { }
+  })
+  if ($tokens.Count -lt 2 -or [IO.Path]::GetFileName($tokens[0]) -ine "node.exe") { return $false }
+  try {
+    return [IO.Path]::GetFullPath($tokens[1]).TrimEnd('\') -ieq $normalizedExpected
+  } catch {
+    return $false
   }
-  return $false
 }
 
 function Assert-InstalledSupervisor {

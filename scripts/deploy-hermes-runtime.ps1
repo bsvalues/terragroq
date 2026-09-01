@@ -123,11 +123,13 @@ function Stop-ExpectedListener {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
       $pathMatched = $false
       if ($process -and $process.CommandLine) {
-        foreach ($match in [regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))')) {
-          $token = @($match.Groups[1].Value, $match.Groups[2].Value, $match.Groups[3].Value) |
+        $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
+          @($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) |
             Where-Object { $_ } | Select-Object -First 1
+        })
+        if ($tokens.Count -ge 2 -and [IO.Path]::GetFileName($tokens[0]) -ieq "node.exe") {
           try {
-            if ([IO.Path]::GetFullPath($token).TrimEnd('\') -ieq $expectedPath) { $pathMatched = $true; break }
+            $pathMatched = [IO.Path]::GetFullPath($tokens[1]).TrimEnd('\') -ieq $expectedPath
           } catch { }
         }
       }
