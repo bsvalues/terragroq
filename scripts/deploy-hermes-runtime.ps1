@@ -322,6 +322,10 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next\static (exit $LA
 if (Test-Path (Join-Path $Source "public")) {
   $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /MIR /NFL /NDL /NJH /NJS /NP
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying public (exit $LASTEXITCODE)" }
+} elseif (Test-Path -LiteralPath (Join-Path $Runtime "public") -PathType Container) {
+  # The target was captured in rollback manifest v3 above. A generation with no public tree must not
+  # keep serving the previous generation's assets.
+  Remove-Item -LiteralPath (Join-Path $Runtime "public") -Recurse -Force
 }
 
 if ($WithDependencies) {

@@ -208,6 +208,7 @@ describe("the deploy places what the start script needs and can be undone", () =
   it("mirrors public assets so stale files from the outgoing generation cannot survive", () => {
     const code = executableOnly(deployText)
     expect(code).toMatch(/robocopy \(Join-Path \$Source "public"\) \(Join-Path \$Runtime "public"\) \/MIR/)
+    expect(code).toMatch(/elseif \(Test-Path -LiteralPath \(Join-Path \$Runtime "public"\) -PathType Container\)[\s\S]*Remove-Item -LiteralPath \(Join-Path \$Runtime "public"\) -Recurse -Force/)
   })
 
   it("installs the repository-owned WilliamOS Live task definition before restart", () => {
