@@ -14,7 +14,7 @@ import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { removeToolRunHistory } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
@@ -148,6 +148,53 @@ function lineSessionCollectionFingerprint(sessions: readonly unknown[]): string 
   return JSON.stringify([...sessions]
     .map((session) => lineSessionDescriptorFingerprint(session))
     .sort())
+}
+
+// 250 code points remains below Council's 2,000-character history limit even when every
+// code point needs JSON's longest six-character escape.
+const COUNCIL_SNAPSHOT_RESULT_EXCERPT_CODE_POINTS = 250
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function durableCouncilSnapshot(sessionKey: string, descriptor: DurableAgentSession, snapshotAt: string) {
+  const mode = descriptor.preview ? "preview" as const
+    : descriptor.diffReview ? "diff-review" as const
+    : descriptor.reviewPath ? "review" as const
+    : descriptor.forkedFrom ? "fork" as const
+    : descriptor.provider === "Local" ? "conversation" as const
+    : "delegate" as const
+  const target = descriptor.diffReview
+    ? `diff · ${descriptor.diffReview.path} · patch ${descriptor.diffReview.patchHash}`
+    : descriptor.reviewPath ? `file review · ${descriptor.reviewPath}`
+    : descriptor.target ? `file · ${descriptor.target.path}`
+    : descriptor.preview ? `preview · ${descriptor.preview.worldId} · ${descriptor.preview.evidenceFingerprint}`
+    : descriptor.forkedFrom ? `forked from · Claude:${descriptor.forkedFrom}`
+    : "no saved target"
+  const lastTurn = descriptor.completedTurns?.at(-1) ?? null
+  const resultCodePoints = lastTurn ? Array.from(lastTurn.finalResult) : []
+  const result = lastTurn ? {
+    excerpt: resultCodePoints.slice(0, COUNCIL_SNAPSHOT_RESULT_EXCERPT_CODE_POINTS).join(""),
+    digest: await sha256Hex(lastTurn.finalResult),
+    originalCodePoints: resultCodePoints.length,
+  } : null
+  return {
+    kind: "agent-snapshot" as const,
+    sessionKey,
+    role: descriptor.role,
+    provider: descriptor.provider,
+    assignment: descriptor.assignment,
+    mode,
+    target,
+    lastTurn: lastTurn ? {
+      identity: `turn-${descriptor.completedTurns!.length}:${lastTurn.completedAt}`,
+      completedAt: lastTurn.completedAt,
+      result: result!,
+    } : null,
+    snapshotAt,
+  }
 }
 
 export function lineObjectBindingFingerprint(binding: LineObjectBinding | null): string {
@@ -416,6 +463,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const transitionEpochRef = useRef(0)
   const agentPresentationEpochRef = useRef(0)
   const agentSavedSessionsRef = useRef(agentSessions.savedSessions)
+  const agentSelectedSessionKeyRef = useRef(agentSessions.selectedSessionKey)
   const councilViewEpochRef = useRef(0)
   const councilSessionRef = useRef(councilSession)
   const initialSummonConsumedRef = useRef(false)
@@ -443,6 +491,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   persistenceErrorRef.current = persistenceError
   persistencePendingRef.current = persistencePending
   agentSavedSessionsRef.current = agentSessions.savedSessions
+  agentSelectedSessionKeyRef.current = agentSessions.selectedSessionKey
 
   useEffect(() => {
     if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
@@ -1478,12 +1527,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setCouncilBusy(false)
       return
     }
-    if (selectedAgent?.kind === "durable-session") {
-      setCouncilError("Council cannot ground this browser-saved agent session yet. Select a persisted Space object or live world worker.")
-      setCouncilBusy(false)
-      return
-    }
-    const councilSelectedContext = selectedAgent?.kind === "world-worker"
+    const selectedDurableDescriptor = selectedAgent?.kind === "durable-session"
+      ? agentSessions.savedSessions.find((descriptor) => lineSessionKey(descriptor.provider, descriptor.sessionId) === selectedAgent.id) ?? null
+      : null
+    const snapshotDescriptorFingerprint = selectedDurableDescriptor
+      ? lineSessionDescriptorFingerprint(selectedDurableDescriptor)
+      : null
+    const snapshotCollectionFingerprint = selectedDurableDescriptor
+      ? lineSessionCollectionFingerprint(agentSessions.savedSessions)
+      : null
+    const councilSelectedContext = selectedAgent?.kind === "durable-session"
+      ? selectedDurableDescriptor && agentSessions.collectionState === "available"
+        && agentSessions.selectedSessionKey === selectedAgent.id
+        ? await durableCouncilSnapshot(selectedAgent.id, selectedDurableDescriptor, new Date().toISOString())
+        : null
+      : selectedAgent?.kind === "world-worker"
       ? boundExecutionSession?.id === selectedAgent.id
         ? { kind: "agent" as const, workOrderId: boundExecutionSession.workOrderId }
         : null
@@ -1496,6 +1554,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     try {
       await persistBarrierRef.current()
       if (!requestIsCurrent()) return
+      if (councilSelectedContext.kind === "agent-snapshot") {
+        const exactDescriptor = agentSavedSessionsRef.current.find(
+          (descriptor) => lineSessionKey(descriptor.provider, descriptor.sessionId) === councilSelectedContext.sessionKey,
+        )
+        if (agentSelectedSessionKeyRef.current !== councilSelectedContext.sessionKey
+          || !exactDescriptor
+          || lineSessionDescriptorFingerprint(exactDescriptor) !== snapshotDescriptorFingerprint
+          || lineSessionCollectionFingerprint(agentSavedSessionsRef.current) !== snapshotCollectionFingerprint) {
+          setCouncilError("The selected browser-saved session changed before Council dispatch, so no advice was requested.")
+          return
+        }
+      }
       const response = await fetch("/api/environment/council", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2159,8 +2229,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
-    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
-    : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
+    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", "Council", pauseAction, forkAction] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", "Council", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
   const improveUnavailableReason = selectedKind !== "diff" ? null
     : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
