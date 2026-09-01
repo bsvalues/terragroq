@@ -18,6 +18,11 @@ const runFile = promisify(execFile)
 
 export type CodexAssignmentRecord = Readonly<{
   world: WorkingWorldSnapshot
+  project: Readonly<{
+    id: number
+    key: string
+    repositoryIdentity: string
+  }>
   outcome: Readonly<{
     id: number
     outcomeKey: string
@@ -79,6 +84,10 @@ export type CodexAssignment = Readonly<{
     grantRef: string | null
     grantVersion: string
     reservationVersion: string
+    projectId: number
+    projectKey: string
+    repositoryIdentity: string
+    spaceIdentity: string | null
   }>
   assignmentHash: string
   target: CodexAssignmentTarget
@@ -87,6 +96,13 @@ export type CodexAssignment = Readonly<{
 export type CodexAssignmentDependencies = Readonly<{
   loadRecord: (userId: string, worldId: string) => Promise<CodexAssignmentRecord | null>
   inspectTarget: (projectRoot: string, selectedPath: string) => Promise<CodexAssignmentTarget>
+}>
+
+export type CodexAssignmentProjectBinding = Readonly<{
+  projectId: number
+  projectKey: string
+  repositoryIdentity: string
+  spaceIdentity: string
 }>
 
 export class CodexAssignmentError extends Error {
@@ -122,6 +138,7 @@ function assignmentSnapshot(input: {
   record: CodexAssignmentRecord
   allowed: readonly string[]
   forbidden: readonly string[]
+  projectBinding: CodexAssignmentProjectBinding | null
 }) {
   const { record } = input
   return {
@@ -162,6 +179,7 @@ function assignmentSnapshot(input: {
       blockedActions: normalizedReservation(record.grant.blockedActions),
     },
     reservation: { allowed: input.allowed, forbidden: input.forbidden },
+    project: input.projectBinding ?? record.project,
   }
 }
 
@@ -248,6 +266,8 @@ function sameNormalizedReservation(left: readonly string[], right: readonly stri
 async function loadRecord(userId: string, worldId: string): Promise<CodexAssignmentRecord | null> {
   const result = await pool.query(
     `SELECT world."snapshot" AS "worldSnapshot",
+      project_row."id" AS "projectId", project_row."key" AS "projectKey",
+      project_resource."canonicalIdentity" AS "repositoryIdentity",
       outcome."id" AS "outcomeId", outcome."outcomeKey", outcome."lifecycleState",
       outcome."activeWorkOrderId", outcome."version" AS "outcomeVersion",
       work."id" AS "workOrderId", work."ref" AS "workOrderRef", work."status" AS "workOrderStatus",
@@ -262,6 +282,14 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
       authority_row."expiresAt", authority_row."revokedAt", authority_row."contentHash",
       authority_row."createdAt" AS "grantCreatedAt"
     FROM "working_world" world
+    LEFT JOIN "project" project_row
+      ON project_row."userId" = world."userId"
+      AND project_row."id" = (world."snapshot"::jsonb #>> '{spine,projectId}')::integer
+    LEFT JOIN "project_resource" project_resource
+      ON project_resource."userId" = project_row."userId"
+      AND project_resource."projectId" = project_row."id"
+      AND project_resource."type" = 'repo'
+      AND project_resource."relationship" = 'primary-repo'
     LEFT JOIN "outcome_queue_item" outcome
       ON outcome."userId" = world."userId"
       AND outcome."outcomeKey" = (world."snapshot"::jsonb #>> '{spine,outcomeKey}')
@@ -270,17 +298,24 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
     LEFT JOIN "authority_grant" authority_row
       ON authority_row."userId" = world."userId" AND authority_row."id" = work."authorityGrantId"
     WHERE world."userId" = $1 AND world."id" = $2
-    LIMIT 1`,
+    `,
     [userId, worldId],
   )
   const row = result.rows[0] as Record<string, unknown> | undefined
   if (!row) return null
-  if (!row.worldSnapshot || row.outcomeId == null || row.workOrderId == null || row.grantId == null) {
+  if (result.rows.length !== 1 || !row.worldSnapshot || row.projectId == null
+    || row.projectKey == null || row.repositoryIdentity == null
+    || row.outcomeId == null || row.workOrderId == null || row.grantId == null) {
     refuse("the owned Space is not bound to one active outcome, work order, and grant")
   }
   const parsedWorld = typeof row.worldSnapshot === "string" ? JSON.parse(row.worldSnapshot) : row.worldSnapshot
   return {
     world: validateWorkingWorld(parsedWorld),
+    project: {
+      id: Number(row.projectId),
+      key: String(row.projectKey),
+      repositoryIdentity: String(row.repositoryIdentity),
+    },
     outcome: {
       id: Number(row.outcomeId),
       outcomeKey: String(row.outcomeKey),
@@ -329,12 +364,27 @@ async function deriveCodexAssignmentFromRootIdentity(
     worldId: string
     projectRoot: string
     targetProjectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
   }>,
   dependencies: CodexAssignmentDependencies = productionDependencies,
 ): Promise<CodexAssignment> {
   const record = await dependencies.loadRecord(input.userId, input.worldId)
   if (!record) refuse("the requested owned Space does not exist")
   const selectedPath = selectedSpacePath(record.world)
+  if (record.world.spine.projectId !== record.project.id
+    || !record.project.key.trim()
+    || !record.project.repositoryIdentity.trim()) {
+    refuse("the owned Space is not bound to one canonical Project and primary repository")
+  }
+  if (input.projectBinding) {
+    const expectedResource = `williamos-workspace-root:v1:${input.projectBinding.spaceIdentity}`
+    if (record.project.id !== input.projectBinding.projectId
+      || record.project.key !== input.projectBinding.projectKey
+      || record.project.repositoryIdentity !== input.projectBinding.repositoryIdentity
+      || !record.world.resources.includes(expectedResource)) {
+      refuse("the owned Space is not bound to the verified TerraFusion Project and workspace resource")
+    }
+  }
   if (record.world.spine.outcomeKey !== record.outcome.outcomeKey
     || record.world.spine.workOrderId !== record.outcome.activeWorkOrderId
     || record.outcome.activeWorkOrderId !== record.workOrder.id
@@ -377,6 +427,7 @@ async function deriveCodexAssignmentFromRootIdentity(
     record,
     allowed,
     forbidden,
+    projectBinding: input.projectBinding ?? null,
   }))
   const reservationVersion = hashRecord({ allowed, forbidden })
   return {
@@ -398,6 +449,10 @@ async function deriveCodexAssignmentFromRootIdentity(
       grantRef: record.grant.ref,
       grantVersion: record.grant.contentHash ?? record.grant.createdAt,
       reservationVersion,
+      projectId: record.project.id,
+      projectKey: record.project.key,
+      repositoryIdentity: record.project.repositoryIdentity,
+      spaceIdentity: input.projectBinding?.spaceIdentity ?? null,
     },
     assignmentHash,
     target,
@@ -405,7 +460,12 @@ async function deriveCodexAssignmentFromRootIdentity(
 }
 
 export async function deriveCodexAssignment(
-  input: Readonly<{ userId: string; worldId: string; projectRoot: string }>,
+  input: Readonly<{
+    userId: string
+    worldId: string
+    projectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
+  }>,
   dependencies: CodexAssignmentDependencies = productionDependencies,
 ): Promise<CodexAssignment> {
   return deriveCodexAssignmentFromRootIdentity({
@@ -426,6 +486,7 @@ export async function deriveCodexAssignmentForVerifiedRootAlias(
     worldId: string
     configuredProjectRoot: string
     verifiedProjectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
   }>,
   dependencies: CodexAssignmentDependencies = productionDependencies,
 ): Promise<CodexAssignment> {
@@ -434,6 +495,7 @@ export async function deriveCodexAssignmentForVerifiedRootAlias(
     worldId: input.worldId,
     projectRoot: input.configuredProjectRoot,
     targetProjectRoot: input.verifiedProjectRoot,
+    projectBinding: input.projectBinding,
   }, dependencies)
 }
 
@@ -447,6 +509,14 @@ export async function revalidateCodexAssignment(
       userId: assignment.owner,
       worldId: assignment.worldId,
       projectRoot: assignment.projectRoot,
+      ...(assignment.binding.spaceIdentity ? {
+        projectBinding: {
+          projectId: assignment.binding.projectId,
+          projectKey: assignment.binding.projectKey,
+          repositoryIdentity: assignment.binding.repositoryIdentity,
+          spaceIdentity: assignment.binding.spaceIdentity,
+        },
+      } : {}),
     }, dependencies)
   } catch (error) {
     if (error instanceof CodexAssignmentError) {

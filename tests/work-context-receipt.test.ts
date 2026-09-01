@@ -153,6 +153,26 @@ describe("work context receipt", () => {
     expect(receiptToken(proven)).toBe(receiptToken({ ...proven, reservedPaths: ["app/api/loom/", "lib/governance/"] }))
   })
 
+  it("cryptographically binds an exact project and repository when they are present", () => {
+    const bound = {
+      ...proven,
+      projectKey: "terrafusion",
+      repository: "bsvalues/terrafusion_os_1.0",
+    }
+    const issued = issueWorkContextReceipt(bound)
+    expect(issued.ok).toBe(true)
+    expect(verifyWorkContextReceipt(issued.receipt, bound).ok).toBe(true)
+    expect(receiptToken(bound)).not.toBe(receiptToken({ ...bound, projectKey: "williamos" }))
+    expect(receiptToken(bound)).not.toBe(receiptToken({ ...bound, repository: "bsvalues/terragroq" }))
+  })
+
+  it("refuses a half-declared project binding", () => {
+    expect(issueWorkContextReceipt({ ...proven, projectKey: "terrafusion" }))
+      .toMatchObject({ ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN" })
+    expect(issueWorkContextReceipt({ ...proven, repository: "bsvalues/terrafusion_os_1.0" }))
+      .toMatchObject({ ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN" })
+  })
+
   it("gates mutations only", () => {
     expect(requiresWorkContext(true)).toBe(true)
     // Reads stay open: gating them pushes a lane toward working blind instead of proving context.

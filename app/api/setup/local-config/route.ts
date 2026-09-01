@@ -8,6 +8,12 @@ import {
 } from "@/lib/setup/project-root-env"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
+import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
+import { ownerLookup } from "@/lib/governance/owner-lookup"
+import {
+  verifyCanonicalTerraFusionCheckout,
+  verifyTerraFusionWorkspaceRoot,
+} from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const runtime = "nodejs"
@@ -299,6 +305,15 @@ export async function POST(req: Request) {
       )
     }
 
+    const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
+    const owner = assertOwner(session.user.id, ownerId)
+    if (!owner.ok) {
+      return NextResponse.json(
+        { ok: false, message: owner.failure === "NOT_OWNER" ? "Only the WilliamOS owner can change the TerraFusion checkout." : owner.detail },
+        { status: owner.failure === "NOT_OWNER" ? 403 : 409 },
+      )
+    }
+
     let terraFusionRoot: string
     try {
       terraFusionRoot = validateTerraFusionRoot(payload.terraFusionRoot)
@@ -311,6 +326,15 @@ export async function POST(req: Request) {
         { status: 400 },
       )
     }
+
+    const verifiedRoot = await verifyTerraFusionWorkspaceRoot(session.user.id, terraFusionRoot)
+    if (!verifiedRoot.ok) {
+      return NextResponse.json(
+        { ok: false, message: `TerraFusion checkout verification failed: ${verifiedRoot.error}` },
+        { status: 409 },
+      )
+    }
+    terraFusionRoot = verifiedRoot.binding.configuredWorkspaceRoot
 
     try {
       await writeTerraFusionRoot(terraFusionRoot)
@@ -369,6 +393,16 @@ export async function POST(req: Request) {
       { status: 400 },
     )
   }
+
+
+  const verifiedBootstrapRoot = await verifyCanonicalTerraFusionCheckout(validated.terraFusionRoot)
+  if (!verifiedBootstrapRoot.ok) {
+    return NextResponse.json(
+      { ok: false, message: `TerraFusion checkout verification failed: ${verifiedBootstrapRoot.error}` },
+      { status: 409 },
+    )
+  }
+  validated.terraFusionRoot = verifiedBootstrapRoot.binding.configuredWorkspaceRoot
 
   try {
     await writeFullLocalEnv(validated)

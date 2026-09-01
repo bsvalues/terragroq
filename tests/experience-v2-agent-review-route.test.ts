@@ -19,7 +19,11 @@ vi.mock("node:fs/promises", () => ({
 }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(),
+    projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  } }),
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
@@ -327,7 +331,7 @@ describe("selected-file review route", () => {
     })
   })
 
-  it("leaves the existing cloud builder contract unchanged", async () => {
+  it("binds a mutation-capable cloud builder gate to TerraFusion and no invented path", async () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
 
@@ -339,7 +343,11 @@ describe("selected-file review route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.requireWorkContext).toHaveBeenCalledOnce()
+    expect(seams.requireWorkContext).toHaveBeenCalledWith({
+      requestedPath: null,
+      projectKey: "terrafusion",
+      repository: "bsvalues/terrafusion_os_1.0",
+    })
     expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
     expect(seams.spawn.mock.calls[0][1]).toEqual([
       "--print",

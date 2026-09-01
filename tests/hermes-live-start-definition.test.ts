@@ -150,6 +150,7 @@ describe("the cockpit is given a proven governed workspace, or it does not start
       "PROJECT_ROOT_NOT_GOVERNED_WORKSPACE",
       "PROJECT_ROOT_NOT_WORKTREE_ROOT",
       "PROJECT_ROOT_NO_ORIGIN_REMOTE",
+      "PROJECT_ROOT_REPOSITORY_MISMATCH",
     ]) {
       const at = code.indexOf(refusal)
       expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)

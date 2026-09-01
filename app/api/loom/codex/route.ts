@@ -17,7 +17,7 @@ import {
 import { prepareCodexContinuation, readCodexContinuation } from "@/lib/loom/codex-continuation"
 import {
   acquireCodexContinuationClaim,
-  codexContinuationDependencies,
+  codexContinuationDependenciesForProjectRoot,
 } from "@/lib/loom/codex-continuation-runtime"
 import {
   cleanupCodexIsolatedWorkspace,
@@ -109,6 +109,13 @@ export async function POST(request: Request) {
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
   const configuredProjectRoot = path.resolve(projectBinding.binding.configuredWorkspaceRoot)
+  const assignmentProjectBinding = {
+    projectId: projectBinding.binding.projectId,
+    projectKey: projectBinding.binding.projectKey,
+    repositoryIdentity: projectBinding.binding.repositoryIdentity,
+    spaceIdentity: projectBinding.binding.project.identity,
+  }
+  const continuationDependencies = codexContinuationDependenciesForProjectRoot(projectRoot)
 
   let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
   try {
@@ -168,6 +175,7 @@ export async function POST(request: Request) {
       userId: session.user.id,
       worldId,
       projectRoot,
+      projectBinding: assignmentProjectBinding,
     })
   } catch (error) {
     await releaseClaim()
@@ -187,7 +195,7 @@ export async function POST(request: Request) {
       continuation = await readCodexContinuation(
         session.user.id,
         worldId,
-        codexContinuationDependencies,
+        continuationDependencies,
       )
     } catch (error) {
       await releaseClaim()
@@ -237,6 +245,7 @@ export async function POST(request: Request) {
           worldId,
           configuredProjectRoot,
           verifiedProjectRoot: projectRoot,
+          projectBinding: assignmentProjectBinding,
         })
         assignmentHashMatches = descriptor.assignmentHash === configuredRootAssignment.assignmentHash
       } catch {
@@ -549,7 +558,7 @@ export async function POST(request: Request) {
                     workOrderId: assignment.workOrderId,
                     grantId: assignment.grantId,
                     completedPath: assignment.selectedPath,
-                  }, codexContinuationDependencies)
+                  }, continuationDependencies)
                   continuationFrame = { type: "continuation", ...continuation }
                 } catch {
                   continuationFrame = { type: "continuation", status: "CONTINUATION_BLOCKED" }

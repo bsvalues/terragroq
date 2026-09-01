@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import {
   normalizeRepositoryIdentity,
   resolveTerraFusionWorkspaceBinding,
+  verifyCanonicalTerraFusionCheckout,
   type WorkspaceProjectBindingDependencies,
 } from "@/lib/projects/workspace-project-binding"
 import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-env"
@@ -87,6 +88,26 @@ describe("TerraFusion workspace Project binding", () => {
     process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/william-os-devops"
     await expect(resolveTerraFusionWorkspaceBinding(
       "owner",
+      dependencies(undefined, "git@github.com:bsvalues/terragroq.git"),
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
+  })
+
+  it("verifies a bootstrap checkout against canonical TerraFusion without trusting the browser", async () => {
+    await expect(verifyCanonicalTerraFusionCheckout(
+      "/repos/terrafusion_os_1.0",
+      undefined,
+      dependencies(),
+    )).resolves.toEqual({
+      ok: true,
+      binding: {
+        configuredWorkspaceRoot: expect.stringMatching(/terrafusion_os_1\.0$/),
+        workspaceRoot: expect.stringMatching(/terrafusion_os_1\.0$/),
+      },
+    })
+
+    await expect(verifyCanonicalTerraFusionCheckout(
+      "/repos/william-os-devops",
+      undefined,
       dependencies(undefined, "git@github.com:bsvalues/terragroq.git"),
     )).resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
   })

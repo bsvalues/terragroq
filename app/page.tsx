@@ -1,9 +1,11 @@
-import { redirect } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 
 import { getUserId } from "@/lib/session"
 import { Desk } from "@/components/desk/desk"
 import { isSummonedSurface } from "@/lib/environment/summon"
 import { ensureCanonicalOwnerProjects } from "@/lib/projects/owner-project-provisioning"
+import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
+import { ownerLookup } from "@/lib/governance/owner-lookup"
 
 /**
  * `/` IS the working environment.
@@ -44,6 +46,8 @@ export default async function WilliamOSRoot({
     userId = null
   }
   if (!userId) redirect("/sign-in")
+  const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
+  if (!assertOwner(userId, ownerId).ok) notFound()
   // The first authenticated landing is also the retryable provisioning seam for the owner's
   // canonical Projects. Signup cannot safely own this: its post-create hooks run after the user
   // transaction commits, so a transient failure could otherwise strand a valid owner with no

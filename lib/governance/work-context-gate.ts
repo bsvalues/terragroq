@@ -19,7 +19,15 @@ export const WORK_CONTEXT_HEADER = "x-williamos-work-context"
  * and the current doctrine digest, so a receipt issued ten minutes and three merges ago fails here
  * without anything having to expire it.
  */
-export async function requireWorkContext(requestedPath?: string): Promise<WorkContextVerdict> {
+export type WorkContextMutationScope = Readonly<{
+  requestedPath?: string | null
+  projectKey: string
+  repository: string
+}>
+
+export function requireWorkContext(requestedPath?: string): Promise<WorkContextVerdict>
+export function requireWorkContext(scope?: WorkContextMutationScope): Promise<WorkContextVerdict>
+export async function requireWorkContext(scope?: string | WorkContextMutationScope): Promise<WorkContextVerdict> {
   const presented = (await headers()).get(WORK_CONTEXT_HEADER)?.trim()
   if (!presented) {
     return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "no work context receipt was presented" }
@@ -55,8 +63,11 @@ export async function requireWorkContext(requestedPath?: string): Promise<WorkCo
     mainSha: live.mainSha,
     doctrineDigest: live.doctrineDigest,
   })
-  if (!verified.ok || requestedPath === undefined) return verified
-  return reservationCoversRequestedPath(requestedPath, stored.reservedPaths)
+  if (!verified.ok || scope === undefined) return verified
+  // Compatibility for the existing writer dependency interface. TerraFusion mutation routes must
+  // use the object form above; a string carries path scope only and cannot cross a Project boundary.
+  if (typeof scope === "string") return reservationCoversRequestedPath(scope, stored.reservedPaths)
+  return receiptCoversMutationScope(stored, scope)
 }
 
 type PathScopeVerdict =
@@ -94,6 +105,44 @@ export function reservationCoversRequestedPath(
     failure: "FAILED_SCOPE_COLLISION",
     detail: `${requested} is outside the receipt path reservation`,
   }
+}
+
+/**
+ * A path-only legacy receipt says nothing about which Project or repository owns that path. Once a
+ * route is pointed at TerraFusion, accepting such a token would silently transplant WilliamOS
+ * authority into another checkout. Repository mutations therefore require all three identities.
+ */
+export function receiptCoversMutationScope(
+  receipt: Pick<WorkContextFacts, "reservedPaths" | "projectKey" | "repository">,
+  scope: WorkContextMutationScope,
+): PathScopeVerdict {
+  const receiptProject = receipt.projectKey?.trim().toLowerCase()
+  const receiptRepository = receipt.repository?.trim().toLowerCase()
+  const requestedProject = scope.projectKey.trim().toLowerCase()
+  const requestedRepository = scope.repository.trim().toLowerCase()
+  if (!receiptProject || !receiptRepository) {
+    return {
+      ok: false,
+      failure: "FAILED_SCOPE_COLLISION",
+      detail: "the receipt has no exact project and repository binding",
+    }
+  }
+  if (!requestedProject || !requestedRepository
+    || receiptProject !== requestedProject || receiptRepository !== requestedRepository) {
+    return {
+      ok: false,
+      failure: "FAILED_SCOPE_COLLISION",
+      detail: `${scope.projectKey || "unknown project"}/${scope.repository || "unknown repository"} is outside the receipt project and repository binding`,
+    }
+  }
+  if (!scope.requestedPath) {
+    return {
+      ok: false,
+      failure: "FAILED_SCOPE_COLLISION",
+      detail: "the mutation has no exact requested path",
+    }
+  }
+  return reservationCoversRequestedPath(scope.requestedPath, receipt.reservedPaths)
 }
 
 /** Shape a refusal the same way everywhere, so a blocked lane always learns which premise failed. */

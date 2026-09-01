@@ -18,6 +18,7 @@ const seams = vi.hoisted(() => ({
   prepareCodexContinuation: vi.fn(),
   readCodexContinuation: vi.fn(),
   acquireCodexContinuationClaim: vi.fn(),
+  dependenciesForProjectRoot: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
   readAccount: vi.fn(),
@@ -61,7 +62,7 @@ vi.mock("@/lib/loom/codex-continuation", () => ({
   readCodexContinuation: seams.readCodexContinuation,
 }))
 vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
-  codexContinuationDependencies: {},
+  codexContinuationDependenciesForProjectRoot: seams.dependenciesForProjectRoot,
   acquireCodexContinuationClaim: seams.acquireCodexContinuationClaim,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
@@ -112,7 +113,14 @@ describe("durable Codex delegate route", () => {
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.resolveProjectBinding.mockResolvedValue({
       ok: true,
-      binding: { workspaceRoot: process.cwd(), configuredWorkspaceRoot: process.cwd() },
+      binding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: "c:/work/terrafusion_os_1.0", name: "TerraFusion OS" },
+        workspaceRoot: process.cwd(),
+        configuredWorkspaceRoot: process.cwd(),
+      },
     })
     seams.connect.mockResolvedValue(undefined)
     seams.closeAndWait.mockResolvedValue(undefined)
@@ -126,6 +134,7 @@ describe("durable Codex delegate route", () => {
     seams.prepareCodexContinuation.mockResolvedValue({ status: "WORK_ORDER_PATHS_COMPLETE" })
     seams.readCodexContinuation.mockResolvedValue({ status: "NO_ACTIVE_ASSIGNMENT" })
     seams.acquireCodexContinuationClaim.mockResolvedValue(vi.fn().mockResolvedValue(undefined))
+    seams.dependenciesForProjectRoot.mockReturnValue({ verified: "physical-terrafusion" })
     seams.deriveCodexAssignment.mockResolvedValue({
       owner: "owner-1",
       worldId: "world-1",
@@ -145,6 +154,10 @@ describe("durable Codex delegate route", () => {
         grantRef: "GRANT-0009",
         grantVersion: "grant-hash",
         reservationVersion: "f".repeat(64),
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
       },
       assignmentHash: ASSIGNMENT_HASH,
       target: {
@@ -211,6 +224,12 @@ describe("durable Codex delegate route", () => {
     expect(response.status).toBe(200)
     expect(seams.deriveCodexAssignment).toHaveBeenCalledWith({
       userId: "owner-1", worldId: "world-1", projectRoot: process.cwd(),
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
     })
     expect(seams.connect).toHaveBeenCalledOnce()
     expect(seams.readAccount).toHaveBeenCalledOnce()
@@ -297,7 +316,7 @@ describe("durable Codex delegate route", () => {
       workOrderId: 41,
       grantId: 9,
       completedPath: "src/selected.ts",
-    }, {})
+    }, { verified: "physical-terrafusion" })
     expect(output).toContainEqual({
       type: "continuation",
       status: "NEXT_ASSIGNMENT",
@@ -317,7 +336,11 @@ describe("durable Codex delegate route", () => {
     const output = await events(await POST(request({ automatic: true })))
 
     expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
-    expect(seams.readCodexContinuation).toHaveBeenCalledWith("owner-1", "world-1", {})
+    expect(seams.readCodexContinuation).toHaveBeenCalledWith(
+      "owner-1",
+      "world-1",
+      { verified: "physical-terrafusion" },
+    )
     expect(seams.recordLoomCodexAssignment).toHaveBeenCalledWith(expect.objectContaining({
       taskText: "Server-derived continuation task.",
     }))
@@ -450,6 +473,10 @@ describe("durable Codex delegate route", () => {
     seams.resolveProjectBinding.mockResolvedValueOnce({
       ok: true,
       binding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: "c:/work/terrafusion_os_1.0", name: "TerraFusion OS" },
         workspaceRoot: process.cwd(),
         configuredWorkspaceRoot: configuredAlias,
       },
@@ -476,6 +503,12 @@ describe("durable Codex delegate route", () => {
       worldId: "world-1",
       configuredProjectRoot: configuredAlias,
       verifiedProjectRoot: process.cwd(),
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
     })
     expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", expect.objectContaining({
       cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",

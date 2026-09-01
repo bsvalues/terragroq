@@ -35,11 +35,8 @@ export async function POST(request: Request) {
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
   const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const projectRoot = projectBinding.binding.workspaceRoot
-
-  // A model editing real files is the most consequential thing this application does.
-  const context = await requireWorkContext()
-  if (!context.ok) return workContextRefusal(context)
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown }
   try {
@@ -61,6 +58,16 @@ export async function POST(request: Request) {
   if (isSensitiveWorkspacePath(resolved.relative)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
+
+  // A model editing real files is the most consequential thing this application does. Bind the
+  // receipt only after the server has derived the canonical target path and Project identity; an
+  // old WilliamOS path-only receipt must not become TerraFusion write authority.
+  const context = await requireWorkContext({
+    requestedPath: resolved.relative,
+    projectKey: binding.projectKey,
+    repository: binding.repositoryIdentity,
+  })
+  if (!context.ok) return workContextRefusal(context)
 
   if (body.intent === "improve-diff") {
     const worldId = typeof body.worldId === "string" ? body.worldId : ""

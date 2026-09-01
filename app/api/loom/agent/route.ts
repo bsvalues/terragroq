@@ -276,7 +276,8 @@ export async function POST(request: Request) {
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
   const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const projectRoot = projectBinding.binding.workspaceRoot
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   let body: {
     prompt?: unknown
@@ -552,7 +553,14 @@ export async function POST(request: Request) {
   let workContextReceipt: string | null = null
   let resumeForkedFrom: string | null = null
   if (!reviewMode && !previewMode && !diffReviewMode) {
-    const context = await requireWorkContext()
+    // Generic Claude Builder runs with acceptEdits and is not mechanically confined to a selected
+    // file. Do not invent an exact path for it: the project/repository-bound gate must fail closed
+    // until this surface is backed by a genuinely path-bound assignment.
+    const context = await requireWorkContext({
+      requestedPath: null,
+      projectKey: binding.projectKey,
+      repository: binding.repositoryIdentity,
+    })
     if (!context.ok) return workContextRefusal(context)
     workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
     if (forkMode && (!workContextReceipt || priorThread?.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null)) {

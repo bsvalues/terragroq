@@ -169,6 +169,19 @@ $originRemote = Invoke-GitProbe -Directory $resolvedProjectRoot -GitArgs @("remo
 if ($originRemote.ExitCode -ne 0 -or -not $originRemote.Output) {
   Deny-Boot "PROJECT_ROOT_NO_ORIGIN_REMOTE" "'$resolvedProjectRoot' has no origin remote, so 'git fetch origin main' cannot run and no work-context receipt can be issued."
 }
+$canonicalTerraFusionRepository = "bsvalues/terrafusion_os_1.0"
+$normalizedOrigin = ("$($originRemote.Output)".Trim() -replace '\.git$', '')
+if ($normalizedOrigin -match '^git@github\.com:(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^https?://github\.com/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+}
+$normalizedOrigin = $normalizedOrigin.Trim('/').ToLowerInvariant()
+if ($normalizedOrigin -ne $canonicalTerraFusionRepository) {
+  Deny-Boot "PROJECT_ROOT_REPOSITORY_MISMATCH" "the declared workspace origin is not the canonical TerraFusion repository ($canonicalTerraFusionRepository)."
+}
 
 Write-Boot "BOOT_PROJECT_ROOT $resolvedProjectRoot"
 
