@@ -82,9 +82,14 @@ foreach ($required in @($launcherSource, $proxyTarget)) {
 $backupRoot = Join-Path $InstallRoot ("rollback\https-supervisor-{0}" -f [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ"))
 $null = New-Item -ItemType Directory -Path $backupRoot -Force
 $oldTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$oldTaskWasRunning = $null -ne $oldTask -and $oldTask.State -eq "Running"
 if ($oldTask) {
   Export-ScheduledTask -TaskName $TaskName | Out-File -LiteralPath (Join-Path $backupRoot "task.xml") -Encoding unicode
 }
+[ordered]@{
+  taskWasPresent = $null -ne $oldTask
+  taskWasRunning = $oldTaskWasRunning
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupRoot "task-state.json") -Encoding utf8
 if (Test-Path -LiteralPath $launcherTarget) {
   Copy-Item -LiteralPath $launcherTarget -Destination (Join-Path $backupRoot "start-williamos-https.ps1") -Force
 }
@@ -130,7 +135,7 @@ try {
   }
   if (Test-Path -LiteralPath (Join-Path $backupRoot "task.xml")) {
     Register-ScheduledTask -TaskName $TaskName -Xml (Get-Content -LiteralPath (Join-Path $backupRoot "task.xml") -Raw) -Force | Out-Null
-    Start-ScheduledTask -TaskName $TaskName
+    if ($oldTaskWasRunning) { Start-ScheduledTask -TaskName $TaskName }
   } else {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   }

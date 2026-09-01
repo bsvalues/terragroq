@@ -23,6 +23,15 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
     expect(invoke).toContain('@("--bundles", "msi,nsis")')
   })
 
+  it("fetches the locked Cargo graph before staging on a fresh checkout", () => {
+    const fetchIndex = invoke.indexOf("cargo fetch")
+    const stageIndex = invoke.indexOf("stage-webview2-loader.ps1")
+    expect(fetchIndex).toBeGreaterThan(-1)
+    expect(fetchIndex).toBeLessThan(stageIndex)
+    expect(invoke).toMatch(/cargo fetch --manifest-path \$manifest --locked/)
+    expect(invoke).toMatch(/if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
+  })
+
   it("provides the already-installed MinGW dlltool to cargo and every dependency", () => {
     expect(invoke).toContain('C:\\msys64\\mingw64\\bin')
     expect(invoke).toContain('Join-Path $mingwBin "dlltool.exe"')

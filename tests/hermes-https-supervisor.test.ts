@@ -68,4 +68,16 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code).toContain("Unregister-ScheduledTask")
     expect(code).toMatch(/elseif\s*\(Test-Path -LiteralPath \$launcherTarget\)[\s\S]*Remove-Item -LiteralPath \$launcherTarget/)
   })
+
+  it("restores an existing task to its prior running or stopped state", () => {
+    const code = executableOnly(installer)
+    const rollback = code.slice(code.lastIndexOf("} catch {"))
+    const captureIndex = code.indexOf('$oldTaskWasRunning = $null -ne $oldTask -and $oldTask.State -eq "Running"')
+    const stopIndex = code.indexOf("Stop-ScheduledTask", captureIndex)
+    expect(captureIndex).toBeGreaterThan(-1)
+    expect(captureIndex).toBeLessThan(stopIndex)
+    expect(code).toContain("task-state.json")
+    expect(rollback).toMatch(/if \(\$oldTaskWasRunning\) \{ Start-ScheduledTask -TaskName \$TaskName \}/)
+    expect(rollback).not.toMatch(/Register-ScheduledTask[^\n]*\n\s*Start-ScheduledTask -TaskName \$TaskName/)
+  })
 })
