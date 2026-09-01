@@ -647,7 +647,32 @@ export async function POST(request: Request) {
         selectedPath: mutationAuthority.selectedPath!,
         initialContent: mutationTarget.content,
       })
-    } catch {
+      // Target inspection and detached-worktree creation are asynchronous. Re-earn the exact
+      // actor/capability/path snapshot after both complete and immediately before provider spawn.
+      const spawnAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        binding: {
+          projectId: binding.projectId, projectKey: binding.projectKey,
+          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+        },
+        expected: { actor: "claude", capability: "selected-file-change" },
+        target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
+      })
+      if (spawnAuthority.worldRevision !== mutationAuthority.worldRevision
+        || spawnAuthority.workOrderId !== mutationAuthority.workOrderId
+        || spawnAuthority.grantId !== mutationAuthority.grantId
+        || spawnAuthority.selectedPath !== mutationAuthority.selectedPath) {
+        await cleanupCodexIsolatedWorkspace(mutationWorkspace)
+        mutationWorkspace = null
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+    } catch (error) {
+      if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+      mutationWorkspace = null
+      if (error instanceof SpaceMutationAuthorityError) {
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
       return Response.json({ error: "CLAUDE_ISOLATION_UNAVAILABLE" }, { status: 503 })
     }
   }
@@ -957,6 +982,17 @@ export async function POST(request: Request) {
         const tail = buffer.toString("utf8")
         buffer = Buffer.alloc(0)
         outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
+          // Timeout, abort, explicit Stop, provider error, or output-limit settlement wins forever.
+          // Close is then cleanup confirmation only: never inspect or promote a workspace after the
+          // response has already told the owner that execution did not complete.
+          if (settled) {
+            if (mutationWorkspace) {
+              const abandoned = mutationWorkspace
+              mutationWorkspace = null
+              await cleanupCodexIsolatedWorkspace(abandoned).catch(() => undefined)
+            }
+            return
+          }
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
           else if (previewMode && !previewSessionInitialized) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
           else if (previewMode) {

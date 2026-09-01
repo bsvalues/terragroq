@@ -190,11 +190,11 @@ describe("Preview debugger route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(3)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
     }))
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
       worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
     }))
     const prompt = (seams.spawn.mock.calls[0][1] as string[]).at(-1)

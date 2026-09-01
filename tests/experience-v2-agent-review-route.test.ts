@@ -372,11 +372,11 @@ describe("selected-file review route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(3)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
     }))
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
       worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/example.ts" },
     }))
     expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
@@ -409,10 +409,30 @@ describe("selected-file review route", () => {
     }))
     expect(seams.spawn.mock.calls[0][2]).toMatchObject({ cwd: "C:/runtime/delegate-1" })
     expect(seams.inspectIsolated).toHaveBeenCalledOnce()
-    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(seams.cleanupIsolated).toHaveBeenCalledOnce())
     expect(seams.writeGoverned).toHaveBeenCalledWith(expect.objectContaining({
       path: "src/example.ts", content: "after", modifiedAt: "2026-08-30T00:00:00.000Z",
     }), expect.any(Object))
+  })
+
+  it("cleans the disposable checkout and refuses before spawn when authority changes during isolation setup", async () => {
+    seams.deriveSpaceMutationAuthority
+      .mockResolvedValueOnce(mutationAuthority)
+      .mockResolvedValueOnce(mutationAuthority)
+      .mockResolvedValueOnce({ ...mutationAuthority, worldRevision: mutationAuthority.worldRevision + 1 })
+
+    const response = await POST(request({
+      provider: "cloud", worldId: "world-a", prompt: "Apply the bounded fix.",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000", resume: false,
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "SPACE_MUTATION_AUTHORITY_STALE" })
+    expect(seams.createIsolated).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.inspectIsolated).not.toHaveBeenCalled()
+    expect(seams.writeGoverned).not.toHaveBeenCalled()
   })
 
   it("records review receipts as read-only path-bound work", async () => {
@@ -597,6 +617,9 @@ describe("Claude Builder fork route", () => {
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
     expect(events).toEqual([{ type: "done", reason: "CANCELLED", code: null }])
+    await vi.waitFor(() => expect(seams.cleanupIsolated).toHaveBeenCalledOnce())
+    expect(seams.inspectIsolated).not.toHaveBeenCalled()
+    expect(seams.writeGoverned).not.toHaveBeenCalled()
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.recordLoomEnd).not.toHaveBeenCalled()
   })
