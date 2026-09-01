@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { createHash } from "node:crypto"
 
 import { describe, expect, it } from "vitest"
 
@@ -50,6 +51,9 @@ describe("execution backends", () => {
     fs.mkdirSync(workspacePath, { recursive: true })
     fs.writeFileSync(path.join(workspacePath, "present.txt"), "yes")
     expect(await backend.stat({ workspacePath, relPath: "present.txt" })).toEqual({ exists: true, isFile: true })
+    expect(await backend.snapshotFile({ workspacePath, relPath: "present.txt" })).toEqual({
+      sha256: createHash("sha256").update("yes").digest("hex"),
+    })
     expect(await backend.validate({ workspacePath, commands: [{ command: "npm", args: ["test"], timeoutMs: 1000 }] }))
       .toEqual([{ exitCode: 0, stdout: "ok", stderr: "" }])
     expect(await backend.git({ workspacePath, args: ["status"] })).toEqual({ exitCode: 0, stdout: "ok" })
@@ -103,6 +107,7 @@ describe("execution backends", () => {
       commandRunner: async (call: Call) => {
         calls.push(call)
         if (call.args.at(-1)?.includes("'test' '-e' '/worker/runtime/worktrees/goal-8/file.txt' '-a' '-f'")) return { code: 0 }
+        if (call.args.at(-1)?.includes("exec 'python3' '-c'")) return { code: 0, stdout: `${"c".repeat(64)}\n` }
         return { code: 0, stdout: "remote", stderr: "" }
       },
     })
@@ -111,12 +116,14 @@ describe("execution backends", () => {
     await backend.runCommand({ workspacePath, command: "npm", args: ["test", "it's-safe"], timeoutMs: 9000,
       env: { NEXT_TELEMETRY_DISABLED: "1" } })
     expect(await backend.stat({ workspacePath, relPath: "file.txt" })).toEqual({ exists: true, isFile: true })
+    expect(await backend.snapshotFile({ workspacePath, relPath: "file.txt" })).toEqual({ sha256: "c".repeat(64) })
     await backend.git({ workspacePath, args: ["status", "--short"] })
     await backend.cleanup({ workspacePath })
 
     for (const call of calls) expect(call).toMatchObject({ command: "ssh", args: ["-o", "BatchMode=yes", "aegis-worker", expect.any(String)] })
     expect(calls[2].args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'add'")
     expect(calls[3].args.at(-1)).toContain("cd -- '/worker/runtime/worktrees/goal-8' && NEXT_TELEMETRY_DISABLED='1' exec 'npm' 'test' 'it'\"'\"'s-safe'")
+    expect(calls.some((call) => call.args.at(-1)?.includes("os.O_NOFOLLOW"))).toBe(true)
     expect(calls.at(-1)?.args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'remove'")
   })
 
@@ -125,6 +132,7 @@ describe("execution backends", () => {
     await expect(local.stat({ workspacePath: "/safe/work", relPath: "../secret" })).rejects.toThrow("escapes")
     const remote = new AegisExecutionBackend({ host: "aegis", commandRunner: async () => ({ code: 0 }) })
     await expect(remote.stat({ workspacePath: "/safe/work", relPath: "../secret" })).rejects.toThrow("escapes")
+    await expect(remote.snapshotFile({ workspacePath: "/safe/work", relPath: "../secret" })).rejects.toThrow("escapes")
     await expect(remote.cleanup({ workspacePath: "/unowned/work" })).rejects.toThrow("owned worktree root")
     expect(() => new AegisExecutionBackend({ host: "-oProxyCommand=bad" })).toThrow("safe SSH destination")
   })

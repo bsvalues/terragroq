@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
+import { createHash } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
 import { createHermesKernelClient, HERMES_KERNEL_INVOKER_RELATIVE, HERMES_KERNEL_POLICY_RELATIVE } from "./hermes-kernel-client.mjs"
@@ -62,12 +63,38 @@ function shellQuote(value) {
   return `'${text.replaceAll("'", `'"'"'`)}'`
 }
 
+const ATOMIC_SNAPSHOT_SCRIPT = `
+import hashlib, os, stat, sys
+root = os.path.realpath(sys.argv[1])
+candidate = os.path.abspath(os.path.join(root, sys.argv[2]))
+if os.path.commonpath([root, candidate]) != root:
+    raise SystemExit(20)
+fd = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    opened = os.fstat(fd)
+    if not stat.S_ISREG(opened.st_mode):
+        raise SystemExit(21)
+    resolved = os.path.realpath('/proc/self/fd/' + str(fd))
+    if os.path.commonpath([root, resolved]) != root:
+        raise SystemExit(22)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    print(digest.hexdigest())
+finally:
+    os.close(fd)
+`
+
 /** Contract implemented by execution contexts used by the Hermes orchestrator. */
 export class ExecutionBackend {
   async prepareWorkspace(_request) { throw new Error("prepareWorkspace is not implemented") }
   async runCodexClient(_request) { throw new Error("runCodexClient is not implemented") }
   async runCommand(_request) { throw new Error("runCommand is not implemented") }
   async stat(_request) { throw new Error("stat is not implemented") }
+  async snapshotFile(_request) { throw new Error("snapshotFile is not implemented") }
   async validate(_request) { throw new Error("validate is not implemented") }
   async git(_request) { throw new Error("git is not implemented") }
   async cleanup(_request) { throw new Error("cleanup is not implemented") }
@@ -125,6 +152,14 @@ export class LocalExecutionBackend extends ExecutionBackend {
     if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) throw new Error("relPath escapes workspace")
     const value = fs.statSync(candidate, { throwIfNoEntry: false })
     return { exists: Boolean(value), isFile: value?.isFile() === true }
+  }
+
+  async snapshotFile({ workspacePath, relPath } = {}) {
+    const { readSafeUntrackedSnapshotFile } = await import("./repository-lifecycle.mjs")
+    const contents = readSafeUntrackedSnapshotFile(
+      this.#workspace(workspacePath), requiredString(relPath, "relPath"),
+    )
+    return { sha256: createHash("sha256").update(contents).digest("hex") }
   }
 
   async validate({ workspacePath, commands = [] } = {}) {
@@ -261,6 +296,20 @@ export class AegisExecutionBackend extends ExecutionBackend {
     const exists = await this.#remote("test", ["-e", candidate])
     if (![0, 1].includes(exists.exitCode)) throw new Error(`remote stat exited ${exists.exitCode}: ${exists.stderr}`)
     return { exists: exists.exitCode === 0, isFile: false }
+  }
+
+  async snapshotFile({ workspacePath, relPath } = {}) {
+    const root = path.posix.resolve(requiredString(workspacePath, "workspacePath"))
+    const relative = requiredString(relPath, "relPath").replaceAll("\\", "/")
+    if (relative.startsWith("/") || relative.split("/").includes("..")) {
+      throw new Error("relPath escapes workspace")
+    }
+    const result = await this.#remote("python3", ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative])
+    const digest = result.stdout.trim()
+    if (result.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(digest)) {
+      throw new Error(`remote atomic snapshot exited ${result.exitCode}`)
+    }
+    return { sha256: digest }
   }
 
   async validate({ workspacePath, commands = [] } = {}) {

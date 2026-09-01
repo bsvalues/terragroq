@@ -76,21 +76,25 @@ function inside(root, candidate) {
 export function readSafeUntrackedSnapshotFile(worktreePath, relativePath) {
   const root = path.resolve(worktreePath)
   const candidate = path.resolve(root, safeRelativePath(relativePath))
-  let file
-  let canonicalRoot
-  let canonicalCandidate
+  let handle
   try {
-    file = fs.lstatSync(candidate)
-    canonicalRoot = fs.realpathSync(root)
-    canonicalCandidate = fs.realpathSync(candidate)
+    handle = fs.openSync(candidate, "r")
+    const opened = fs.fstatSync(handle, { bigint: true })
+    const link = fs.lstatSync(candidate)
+    const canonicalRoot = fs.realpathSync(root)
+    const canonicalCandidate = fs.realpathSync(candidate)
+    const observed = fs.statSync(candidate, { bigint: true })
+    if (!inside(root, candidate) || link.isSymbolicLink() || !opened.isFile()
+      || !observed.isFile() || opened.dev !== observed.dev || opened.ino !== observed.ino
+      || !inside(canonicalRoot, canonicalCandidate)) {
+      wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+    }
+    return fs.readFileSync(handle)
   } catch {
     wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle)
   }
-  if (!inside(root, candidate) || file.isSymbolicLink() || !file.isFile()
-    || !inside(canonicalRoot, canonicalCandidate)) {
-    wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
-  }
-  return fs.readFileSync(candidate)
 }
 
 function branchName(value) {
@@ -1171,15 +1175,12 @@ export function createRepositoryLifecycle(options) {
     const untrackedFiles = []
     for (const relativePath of untrackedPaths) {
       if (executionBackend && !executionBackend.isLocal) {
-        const link = await run("test", ["-L", relativePath], {
-          cwd: record.worktreePath, credentialAccess: false, allowFailure: true,
-        })
-        if (link.code === 0) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", `${relativePath} is a symbolic link`)
-        if (link.code !== 1) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
-        const digestResult = await run("sha256sum", [relativePath], {
-          cwd: record.worktreePath, credentialAccess: false,
-        })
-        const digest = digestResult.stdout.trim().split(/\s+/)[0]
+        if (typeof executionBackend.snapshotFile !== "function") {
+          wall("HERMES_REPOSITORY_SNAPSHOT_WALL", "backend lacks atomic snapshot support")
+        }
+        const digest = (await executionBackend.snapshotFile({
+          workspacePath: record.worktreePath, relPath: relativePath,
+        }))?.sha256
         if (!/^[0-9a-f]{64}$/.test(digest)) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
         untrackedFiles.push({ path: relativePath, sha256: digest })
       } else {

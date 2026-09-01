@@ -61,23 +61,53 @@ function recoveryExecution() {
   }
 }
 
-function queuePool(execution: ReturnType<typeof recoveryExecution>, { drift = false } = {}) {
+function queuePool(execution: ReturnType<typeof recoveryExecution>, {
+  drift = false, authorityRevoked = false,
+} = {}) {
   const queue = execution.metadata.outcome.queueBinding
   const recovery = execution.metadata.deterministicValidatorCircuit.recovery
   let receipt: any = null
   let mutations = 0
-  const query = vi.fn(async (sql: string, args: any[] = []) => {
-    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.includes("pg_advisory_xact_lock")) {
+  let version = drift ? queue.expectedVersion + 1 : queue.expectedVersion
+  let fence = queue.fencingToken
+  let acquisitionFence = queue.fencingToken
+  let validators = recovery.oldContract.validationCommands.map(
+    ({ command, args }: any) => `${command} ${args.join(" ")}`,
+  )
+  let lockOwner: object | null = null
+  const lockWaiters: Array<() => void> = []
+  const releaseLock = (clientState: any) => {
+    if (lockOwner !== clientState) return
+    lockOwner = null
+    clientState.hasLock = false
+    lockWaiters.shift()?.()
+  }
+  const query = vi.fn(async (sql: string, args: any[] = [], clientState: any = {}) => {
+    if (sql === "BEGIN") return { rows: [] }
+    if (sql === "COMMIT" || sql === "ROLLBACK") {
+      releaseLock(clientState)
       return { rows: [] }
     }
-    if (sql.includes('FROM "outcome_queue_mutation_receipt"') && sql.includes('"idempotencyKey"')) {
+    if (sql.includes("pg_advisory_xact_lock")) {
+      if (!clientState.hasLock) {
+        while (lockOwner !== null) await new Promise<void>((resolve) => lockWaiters.push(resolve))
+        lockOwner = clientState
+        clientState.hasLock = true
+      }
+      return { rows: [] }
+    }
+    if (!sql.includes('FROM "outcome_queue_item"')
+      && sql.includes('FROM "outcome_queue_mutation_receipt"') && sql.includes('"idempotencyKey"')) {
       return { rows: receipt ? [receipt] : [] }
     }
     if (sql.includes("clock_timestamp")) return { rows: [{ now: "2026-08-31T12:00:01.000Z" }] }
     if (sql.includes('FROM "outcome_queue_item"')) {
-      return { rows: [{
-        version: drift ? queue.expectedVersion + 1 : queue.expectedVersion,
-        fencingToken: queue.fencingToken,
+      return { rows: authorityRevoked ? [] : [{
+        goalId: 40,
+        goalRef: "GOAL-0040",
+        outcomeKey: "goal:GOAL-0040",
+        version,
+        fencingToken: fence,
         executionBinding: queue.executionBinding,
         leaseHolder: queue.leaseHolder,
         leaseToken: queue.leaseToken,
@@ -87,17 +117,18 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, { drift = fa
         lifecycleState: "active",
       }] }
     }
-    if (sql.includes('operation = \'workbench_execution.authorize\'')) {
-      return { rows: [{ id: 91, resultBinding: { workContract: recovery.oldContract } }] }
+    if (sql.includes("operation IN ('workbench_execution.authorize', 'runtime_finding.derive')")) {
+      return { rows: [{ id: 91, operation: "workbench_execution.authorize", resultBinding: { workContract: recovery.oldContract } }] }
     }
     if (sql.includes('FROM "outcome_queue_acquisition_receipt"')) {
-      return { rows: [{ id: 92, latestFencingToken: queue.fencingToken }] }
+      return { rows: [{ id: 92, latestFencingToken: acquisitionFence }] }
     }
     if (sql.includes('FROM "work_order"')) {
       return { rows: [{
         id: queue.activeWorkOrderId,
         allowedFiles: recovery.oldContract.reservations,
-        validators: recovery.oldContract.validationCommands.map(({ command, args }: any) => `${command} ${args.join(" ")}`),
+        goal: "GOAL-0040",
+        validators,
       }] }
     }
     if (sql.includes('INSERT INTO "outcome_queue_mutation_receipt"')) {
@@ -110,14 +141,38 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, { drift = fa
       }
       return { rows: [{ id: 93 }] }
     }
+    if (sql.includes('UPDATE "outcome_queue_item"')) {
+      version = args[2]
+      fence = args[3]
+      return { rows: [{ id: 1 }] }
+    }
+    if (sql.includes('UPDATE "outcome_queue_acquisition_receipt"')) {
+      acquisitionFence = args[3]
+      return { rows: [{ id: 1 }] }
+    }
+    if (sql.includes('UPDATE "work_order"')) {
+      validators = args[2]
+      return { rows: [{ id: 1 }] }
+    }
     if (sql.includes("UPDATE") || sql.includes('INSERT INTO "governance_event"')) return { rows: [{ id: 1 }] }
     throw new Error(`unexpected SQL: ${sql}`)
   })
-  const client = { query, release: vi.fn() }
+  const connect = vi.fn(async () => {
+    const clientState = { hasLock: false }
+    return {
+      query: (sql: string, args: any[] = []) => query(sql, args, clientState),
+      release: vi.fn(() => releaseLock(clientState)),
+    }
+  })
   return {
-    pool: { connect: vi.fn(async () => client) },
+    pool: { connect },
     query,
     mutations: () => mutations,
+    advanceAuthoritativeQueue: () => {
+      version += 1
+      fence += 1
+      acquisitionFence += 1
+    },
   }
 }
 
@@ -145,5 +200,40 @@ describe("authoritative deterministic validator queue recovery", () => {
     await expect(recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }))
       .rejects.toMatchObject({ code: "HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL" })
     expect(value.mutations()).toBe(0)
+  })
+
+  it("rejects a durable receipt replay after the authoritative queue advances", async () => {
+    const execution = recoveryExecution()
+    const value = queuePool(execution)
+    await recoverDeterministicValidatorQueue({ execution, pool: value.pool as any })
+    value.advanceAuthoritativeQueue()
+
+    await expect(recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }))
+      .rejects.toMatchObject({ code: "HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL" })
+    expect(value.mutations()).toBe(1)
+  })
+
+  it("fails closed when the exact live authority graph no longer admits the outcome", async () => {
+    const execution = recoveryExecution()
+    const value = queuePool(execution, { authorityRevoked: true })
+    await expect(recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }))
+      .rejects.toMatchObject({ code: "HERMES_DETERMINISTIC_QUEUE_RECOVERY_CAS_WALL" })
+    const authorityQuery = value.query.mock.calls.find(([sql]) => String(sql).includes('FROM "outcome_queue_item"'))?.[0]
+    expect(authorityQuery).toContain('workbench_execution.authorize')
+    expect(authorityQuery).toContain('"revokedAt" IS NULL')
+    expect(authorityQuery).toContain('exact_execution_goal')
+    expect(authorityQuery).toContain('exact_implementation_grant')
+  })
+
+  it("serializes two database clients so only one CAS mutation wins", async () => {
+    const execution = recoveryExecution()
+    const value = queuePool(execution)
+    const [first, second] = await Promise.all([
+      recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }),
+      recoverDeterministicValidatorQueue({ execution, pool: value.pool as any }),
+    ])
+    expect(first).toEqual(second)
+    expect(value.mutations()).toBe(1)
+    expect(value.pool.connect).toHaveBeenCalledTimes(2)
   })
 })
