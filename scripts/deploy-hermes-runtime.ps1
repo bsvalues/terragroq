@@ -31,7 +31,9 @@ param(
   [string]$Source,
   [string]$Runtime = "C:\HermesLab\williamos-runtime-64034e93-flat",
   [string]$TaskName = "WilliamOS Live",
+  [string]$HttpsTaskName = "WilliamOS HTTPS",
   [int]$Port = 3100,
+  [int]$HttpsPort = 3443,
   [switch]$WithDependencies,
   [switch]$VerifyOnly,
   [switch]$SkipRollbackCapture
@@ -89,10 +91,49 @@ function Get-RunningSha {
   return $null
 }
 
+function Test-HttpsCockpit {
+  param([int]$Port, [int]$TimeoutSeconds = 60)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $response = Invoke-WebRequest -Uri "https://192.168.88.9:$Port/api/health" -UseBasicParsing -TimeoutSec 10
+      if ($response.StatusCode -eq 200) { return $true }
+    } catch {
+      Start-Sleep -Seconds 3
+    }
+  }
+  return $false
+}
+
+function Stop-ExpectedListener {
+  param([int]$ListenerPort, [string]$ExpectedCommandFragment)
+  Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+      if (-not $process -or $process.CommandLine -notlike "*$ExpectedCommandFragment*") {
+        throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS deploy"
+      }
+      Stop-Process -Id $process.ProcessId -Force
+    }
+}
+
 if ($VerifyOnly) {
-  if (Test-Cockpit -Port $Port) { Write-Output "healthy: /sign-in answered 200 on port $Port"; exit 0 }
-  Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
-  exit 1
+  if (-not (Test-Cockpit -Port $Port)) {
+    Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
+    exit 1
+  }
+  if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
+    Write-Error "unhealthy: the canonical HTTPS origin did not answer on port $HttpsPort"
+    exit 1
+  }
+  $runningSha = Get-RunningSha -Port $Port
+  $looseSha = Get-BuiltSha -StandaloneRoot $Runtime
+  if (-not $runningSha -or $runningSha -ne $looseSha) {
+    Write-Error "provenance mismatch: running '$runningSha', loose runtime '$looseSha'"
+    exit 1
+  }
+  Write-Output "healthy: HTTP $Port and HTTPS $HttpsPort answer; running and loose provenance agree at $runningSha"
+  exit 0
 }
 
 $standalone = Join-Path $Source ".next\standalone"
@@ -151,22 +192,27 @@ if (-not $SkipRollbackCapture) {
     $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying .next (exit $LASTEXITCODE)" }
   }
-  foreach ($file in @("server.js", "package.json")) {
+  foreach ($file in @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")) {
     $existing = Join-Path $Runtime $file
-    if (Test-Path $existing) { Copy-Item $existing (Join-Path $rollbackRoot $file) -Force }
+    if (Test-Path $existing) {
+      $rollbackFile = Join-Path $rollbackRoot $file
+      $null = New-Item -ItemType Directory -Path (Split-Path -Parent $rollbackFile) -Force
+      Copy-Item $existing $rollbackFile -Force
+    }
   }
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
-  Write-Output "to restore: robocopy `"$rollbackRoot\.next`" `"$Runtime\.next`" /MIR ; copy server.js and package.json back ; Start-ScheduledTask -TaskName `"$TaskName`""
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Source\scripts\restore-hermes-runtime.ps1`" -RollbackRoot `"$rollbackRoot`" -Runtime `"$Runtime`" -TaskName `"$TaskName`" -HttpsTaskName `"$HttpsTaskName`""
 }
 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
+Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandFragment "server.js"
+Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandFragment "hermes-https-proxy.mjs"
 Start-Sleep -Seconds 2
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
@@ -177,6 +223,24 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next (exit $LASTEXITC
 foreach ($file in @("server.js", "package.json")) {
   Copy-Item (Join-Path $standalone $file) (Join-Path $Runtime $file) -Force
 }
+
+# Keep the loose runtime provenance record identical to the compiled health route. Operators and
+# rollback tooling inspect this file directly; leaving an older copy beside a newer running bundle
+# creates two contradictory answers for the same deployment.
+$provenanceRelative = "lib\generated\build-provenance.json"
+$provenanceSource = Join-Path $standalone $provenanceRelative
+if (-not (Test-Path $provenanceSource)) { throw "Missing standalone build provenance: $provenanceSource" }
+$provenanceTarget = Join-Path $Runtime $provenanceRelative
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $provenanceTarget) -Force
+Copy-Item $provenanceSource $provenanceTarget -Force
+
+# The HTTPS proxy is part of the exact deployed product, not an independently hand-placed script.
+$httpsProxyRelative = "scripts\hermes-https-proxy.mjs"
+$httpsProxySource = Join-Path $Source $httpsProxyRelative
+if (-not (Test-Path $httpsProxySource)) { throw "Missing HTTPS proxy in the source tree: $httpsProxySource" }
+$httpsProxyTarget = Join-Path $Runtime $httpsProxyRelative
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget) -Force
+Copy-Item $httpsProxySource $httpsProxyTarget -Force
 
 # Static assets and public/ live outside the standalone tree by design.
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /NFL /NDL /NJH /NJS /NP
@@ -273,4 +337,16 @@ if ($runningSha -ne $builtSha) {
   exit 1
 }
 
-Write-Output "deployed and verified: running $runningSha, /sign-in 200 on port $Port"
+$deployedLooseSha = Get-BuiltSha -StandaloneRoot $Runtime
+if ($deployedLooseSha -ne $builtSha) {
+  Write-Error "STALE LOOSE PROVENANCE: built and running $builtSha but $provenanceTarget reports $deployedLooseSha. The runtime is internally contradictory."
+  exit 1
+}
+
+Start-ScheduledTask -TaskName $HttpsTaskName
+if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
+  Write-Error "The application is live on loopback, but the supervised HTTPS product origin did not answer on port $HttpsPort. Treating the deploy as failed."
+  exit 1
+}
+
+Write-Output "deployed and verified: running $runningSha, loose provenance agrees, HTTP $Port and HTTPS $HttpsPort healthy"

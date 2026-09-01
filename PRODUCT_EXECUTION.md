@@ -41,6 +41,24 @@ Until the owner changes lanes, the priority is the WilliamOS W1 UI/UX experience
 
 The purpose is a WilliamOS interface the owner can actually use.
 
+### W1 deployment topology: two installations, one HERMES anchor
+
+The owner-facing WilliamOS product has two client installations:
+
+- **HERMES installation:** the running anchor. HERMES hosts the authoritative WilliamOS service at
+  `https://192.168.88.9:3443` and a local native WilliamOS Cockpit connected to that origin.
+- **OMEN installation:** the second owner-facing WilliamOS client and the active UI/UX development
+  cockpit. It consumes the same HERMES origin; OMEN does not replace HERMES as the running anchor.
+
+This is one product with two installed client surfaces, not two competing control planes. HERMES is
+the service, persistence, and runtime authority unless a later explicit owner decision changes that
+topology. OMEN may build and validate product UI/UX, but an OMEN browser is not a mandatory HERMES
+acceptance surface merely because it is available.
+
+The separate HERMES appliance/observability experiment is **not** the HERMES WilliamOS installation
+or anchor. WilliamOS product execution must not modify, repurpose, or depend on that appliance unless
+the owner explicitly brings it into scope.
+
 ### W1 product boundary: WilliamOS is the development cockpit
 
 For W1, WilliamOS is the **software-development cockpit used to build TerraFusion**. TerraFusion is the software project being worked on inside WilliamOS.

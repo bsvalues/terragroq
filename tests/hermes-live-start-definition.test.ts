@@ -207,4 +207,43 @@ describe("the deploy places what the start script needs and can be undone", () =
   it("still proves the runtime's .env.local survived the copy", () => {
     expect(executableOnly(deployText)).toMatch(/\$envNow -ne \$envGuard/)
   })
+
+  it("deploys and verifies the loose provenance record inspected by operators", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("lib\\generated\\build-provenance.json")
+    expect(code).toMatch(/Copy-Item\s+\$provenanceSource\s+\$provenanceTarget/)
+    expect(code).toMatch(/\$deployedLooseSha\s+-ne\s+\$builtSha/)
+  })
+
+  it("treats the HTTPS proxy as part of the exact deployment and restarts its supervisor", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("scripts\\hermes-https-proxy.mjs")
+    expect(code).toMatch(/Stop-ScheduledTask\s+-TaskName\s+\$HttpsTaskName/)
+    expect(code).toMatch(/Start-ScheduledTask\s+-TaskName\s+\$HttpsTaskName/)
+    expect(code).toContain("Test-HttpsCockpit")
+  })
+
+  it("makes verify-only prove both product origins and agreement between both provenance surfaces", () => {
+    const code = executableOnly(deployText)
+    const verify = code.slice(code.indexOf('if ($VerifyOnly)'))
+    expect(verify).toContain("Test-Cockpit")
+    expect(verify).toContain("Test-HttpsCockpit")
+    expect(verify).toMatch(/\$runningSha\s+-ne\s+\$looseSha/)
+  })
+
+  it("captures every loose file it overwrites in the rollback", () => {
+    const code = executableOnly(deployText)
+    for (const file of ["server.js", "package.json", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs"]) {
+      expect(code).toContain(file)
+    }
+    expect(code).toContain("restore-hermes-runtime.ps1")
+  })
+
+  it("refuses to stop unrelated processes on either product port", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("Stop-ExpectedListener")
+    expect(code).toContain('ExpectedCommandFragment "server.js"')
+    expect(code).toContain('ExpectedCommandFragment "hermes-https-proxy.mjs"')
+    expect(code).toContain("owned by an unrelated process")
+  })
 })
