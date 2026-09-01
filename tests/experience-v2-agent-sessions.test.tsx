@@ -2984,7 +2984,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url.startsWith("/api/environment/execution?")) {
         executionReads += 1
         if (executionReads === 1) return olderRead
-        return Promise.resolve(Response.json({ ...spine, session: successfulSession }))
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: successfulSession }))
       }
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
@@ -3001,6 +3001,92 @@ describe("Experience V2 real agent sessions", () => {
 
     await act(async () => settleOlderRead(new Response(null, { status: 503 })))
     expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
+  it("marks assignment refresh truthfully, removes mismatches, recovers automatically, and keeps Mission Control unknown", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const session: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish assignment freshness",
+      status: "implementing",
+      evidence: "tests: focused suite · PASS",
+      observedAt: "2026-09-01T19:00:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    let executionRead = 0
+    let poll: (() => void) | null = null
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      poll = callback as () => void
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as unknown as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        spaces: [{ worldId: "server-world", name: "Experience V2", updatedAt: "2026-09-01T19:00:00.000Z", space: spaceToServer(space) }],
+        multiSpaceAvailable: true,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionRead += 1
+        if (executionRead === 2) return Promise.resolve(new Response(null, { status: 503 }))
+        if (executionRead === 3) return Promise.resolve(new Response(null, { status: 409 }))
+        if (executionRead === 5) return Promise.reject(new Error("network unavailable"))
+        if (executionRead === 7) return Promise.resolve(Response.json({
+          worldId: "foreign-world",
+          ...spine,
+          session: { ...session, worldId: "foreign-world", id: "world-worker:foreign-world:41:hermes-codex-bridge" },
+        }))
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+    const executionPoll = poll!
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Assignment refresh unavailable · last persisted observation 2026-09-01T19:00:00.000Z · runtime liveness unverified")).toBeTruthy()
+    expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect((await screen.findAllByText("Agent activity unknown")).length).toBeGreaterThan(0)
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Work Order #41 assignment could not be verified for this Space")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeNull()
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    expect(screen.queryByText(/assignment could not be verified/)).toBeNull()
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Assignment refresh unavailable · last persisted observation 2026-09-01T19:00:00.000Z · runtime liveness unverified")).toBeTruthy()
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    await waitFor(() => expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull())
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Work Order #41 assignment could not be verified for this Space")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeNull()
   })
 
   it("opens and deduplicates the exact persisted HERMES assignment Inspector without appliance probes", async () => {
@@ -3041,7 +3127,7 @@ describe("Experience V2 real agent sessions", () => {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine, judgment: null }))
       }
-      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ ...spine, session: executionSession }))
+      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))

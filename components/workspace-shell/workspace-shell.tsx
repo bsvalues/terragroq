@@ -42,6 +42,12 @@ type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
 type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | null
 type LineMode = "default" | "change" | "review" | "fork"
+type ExecutionObservation = Readonly<{
+  worldId: string
+  workOrderId: number
+  state: "fresh" | "stale" | "mismatch"
+  observedAt: string | null
+}>
 type StandardDelegateContext = Readonly<{
   kind: "file" | "preview" | "diff" | "space" | "agent" | "conversation"
   label: string
@@ -363,9 +369,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [councilError, setCouncilError] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
   const [executionSession, setExecutionSession] = useState<ProjectedWorldWorkerSession | null>(null)
+  const [executionObservation, setExecutionObservation] = useState<ExecutionObservation | null>(null)
   const boundExecutionSession = executionSession?.worldId === worldId
     && executionSession.workOrderId === spine.workOrderId
     ? executionSession
+    : null
+  const boundExecutionObservation = executionObservation?.worldId === worldId
+    && executionObservation.workOrderId === spine.workOrderId
+    ? executionObservation
     : null
   const [judgment, setJudgment] = useState<WilliamJudgment | null>(null)
   const [judgmentBusy, setJudgmentBusy] = useState(false)
@@ -849,8 +860,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   useEffect(() => {
     const outcomeKey = spine.outcomeKey
-    if (!hydrated || storage !== "server" || !worldId || !outcomeKey) {
+    if (!hydrated || storage !== "server" || !worldId || !outcomeKey || spine.workOrderId === null) {
       setExecutionSession(null)
+      setExecutionObservation(null)
       return
     }
     let cancelled = false
@@ -864,24 +876,52 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
         if (!response.ok) {
           if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
-            setExecutionSession(null)
+            if (response.status === 409) {
+              setExecutionSession(null)
+              setExecutionObservation({ worldId: executionWorldId, workOrderId: executionWorkOrderId, state: "mismatch", observedAt: null })
+            } else {
+              setExecutionObservation((current) => ({
+                worldId: executionWorldId,
+                workOrderId: executionWorkOrderId,
+                state: "stale",
+                observedAt: current?.worldId === executionWorldId && current.workOrderId === executionWorkOrderId
+                  ? current.observedAt
+                  : null,
+              }))
+            }
           }
           return
         }
-        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence" | "outcomeKey" | "workOrderId"> & { session: ProjectedWorldWorkerSession | null }
+        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence" | "outcomeKey" | "workOrderId"> & { worldId?: unknown; session: ProjectedWorldWorkerSession | null }
         if (cancelled || readId !== latestRead || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch
           || spineRef.current.outcomeKey !== outcomeKey || spineRef.current.workOrderId !== executionWorkOrderId) return
-        if (live.outcomeKey !== outcomeKey || live.workOrderId !== executionWorkOrderId
-          || live.session && live.session.workOrderId !== executionWorkOrderId) {
+        if (live.worldId !== executionWorldId || live.outcomeKey !== outcomeKey || live.workOrderId !== executionWorkOrderId
+          || live.session && (live.session.worldId !== executionWorldId || live.session.workOrderId !== executionWorkOrderId)) {
           setExecutionSession(null)
+          setExecutionObservation({ worldId: executionWorldId, workOrderId: executionWorkOrderId, state: "mismatch", observedAt: null })
           return
         }
         setSpine((current) => current.outcomeKey === outcomeKey && current.workOrderId === executionWorkOrderId
           ? { ...current, execution: live.execution, worker: live.worker, evidence: live.evidence }
           : current)
         setExecutionSession(live.session?.worldId === executionWorldId ? live.session : null)
+        setExecutionObservation({
+          worldId: executionWorldId,
+          workOrderId: executionWorkOrderId,
+          state: "fresh",
+          observedAt: live.session?.worldId === executionWorldId ? live.session.observedAt : new Date().toISOString(),
+        })
       } catch {
-        // Preserve the last canonical observation until the next successful read.
+        if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
+          setExecutionObservation((current) => ({
+            worldId: executionWorldId,
+            workOrderId: executionWorkOrderId,
+            state: "stale",
+            observedAt: current?.worldId === executionWorldId && current.workOrderId === executionWorkOrderId
+              ? current.observedAt
+              : null,
+          }))
+        }
       }
     }
     void readExecution()
@@ -2349,7 +2389,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
   }
-  const currentAgentCollectionKnown = agentSessions.collectionState === "available" || agentSessions.collectionState === "missing"
+  const executionAssignmentExpected = storage === "server" && Boolean(worldId) && Boolean(spine.outcomeKey) && spine.workOrderId !== null
+  const currentAgentCollectionKnown = (agentSessions.collectionState === "available" || agentSessions.collectionState === "missing")
+    && (!executionAssignmentExpected || boundExecutionObservation?.state === "fresh")
   const currentMissionAgents = currentAgentCollectionKnown
     ? agentSessions.sessions
     : agentSessions.sessions.filter((agent) => agent.truth !== "resume-unverified")
@@ -2409,6 +2451,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       error: persistenceError,
     },
   })
+  const assignmentRefreshMessage = boundExecutionObservation?.state === "stale"
+    ? `Assignment refresh unavailable · last persisted observation ${boundExecutionObservation.observedAt ?? "not recorded"} · runtime liveness unverified`
+    : boundExecutionObservation?.state === "mismatch"
+      ? `Work Order #${boundExecutionObservation.workOrderId} assignment could not be verified for this Space`
+      : null
 
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
@@ -2660,6 +2707,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
+        <div className={spatial.agentPresence}>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
           if (agent.kind === "world-worker") {
@@ -2705,6 +2753,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             setLineReply(null)
           }
         }} />
+        {assignmentRefreshMessage ? <span className={spatial.assignmentRefresh} role="status">{assignmentRefreshMessage}</span> : null}
+        </div>
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
       </header>
 
