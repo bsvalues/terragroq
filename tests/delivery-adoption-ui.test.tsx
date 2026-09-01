@@ -64,6 +64,20 @@ describe("prospective delivery adoption UI", () => {
     })
   })
 
+  it("returns to exact-target selection when the restored artifact head is stale", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({
+      error: "DELIVERY_SEAL_DIFF_INVALID",
+      detail: "the requested artifact is not the exact current open pull-request head",
+    }, 409))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} />)
+
+    expect(await screen.findByLabelText("Pull request number")).toBeTruthy()
+    expect(screen.getByLabelText("Expected exact head SHA")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
   it("rejects malformed target identity locally without duplicating errors or contacting the server", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" }, 409))
     vi.stubGlobal("fetch", fetchMock)

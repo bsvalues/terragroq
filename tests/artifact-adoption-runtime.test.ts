@@ -210,7 +210,12 @@ describe("persisted prospective artifact adoption", () => {
     expect(lifecycle.inspectPullRequest).toHaveBeenCalledWith(1117, { allowRemediationBranch: true })
     expect(sealed.seal.payload).toMatchObject({ version: "williamos-delivery-seal.v2", delivery: { commitSha: head, paths } })
     expect(sealed.sealBlock).toBe(["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(sealed.seal, null, 2), "```"].join("\n"))
-    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(6)
+    await expect(runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      seal: sealed.seal,
+      sealBlock: sealed.sealBlock,
+    })
+    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(7)
 
     const replayed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
     expect(replayed.seal).toEqual(sealed.seal)

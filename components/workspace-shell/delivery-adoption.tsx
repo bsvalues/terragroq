@@ -167,13 +167,15 @@ export function DeliveryAdoption({
       })
       const value = await payload(response)
       const failureCode = isRecord(value) && typeof value.error === "string" ? value.error : null
-      if (!response.ok && restoreOnly && failureCode === "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND") {
+      const targetMustBeReselected = failureCode === "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND"
+        || failureCode === "DELIVERY_SEAL_DIFF_INVALID"
+      if (!response.ok && restoreOnly && targetMustBeReselected) {
         setPreview(null)
         setStage("absent")
         onAvailabilityChange?.(false)
         return
       }
-      if (!response.ok && !restoreOnly && failureCode === "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND") {
+      if (!response.ok && !restoreOnly && targetMustBeReselected) {
         setPreview(null)
         setStage("target")
         return

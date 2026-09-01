@@ -523,7 +523,14 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       )
       if (sealed.rows[0]) {
         const metadata = object(sealed.rows[0].metadata)
-        return { ...ready, status: "SEALED" as const, adoptionHash: authorization.adoptionHash, seal: metadata.seal as WilliamOSDeliverySeal }
+        const seal = metadata.seal as WilliamOSDeliverySeal
+        return {
+          ...ready,
+          status: "SEALED" as const,
+          adoptionHash: authorization.adoptionHash,
+          seal,
+          sealBlock: sealBlock(seal),
+        }
       }
       return {
         ...ready,
