@@ -86,4 +86,25 @@ describe("delivery commit inspection", () => {
     )
     expect(measured).toMatchObject({ commitSha: renamedHead, paths: ["src/renamed.ts", "src/selected.ts"] })
   })
+
+  it("treats a bracketed Next route as a literal Git pathspec", async () => {
+    const repo = repository()
+    const dynamicRoute = "app/api/environment/spaces/[worldId]/route.ts"
+    const globMatch = "app/api/environment/spaces/w/route.ts"
+    for (const deliveryPath of [dynamicRoute, globMatch]) {
+      fs.mkdirSync(path.dirname(path.join(repo.root, deliveryPath)), { recursive: true })
+      fs.writeFileSync(path.join(repo.root, deliveryPath), "export const value = 1\n")
+    }
+    git(repo.root, "--literal-pathspecs", "add", "--", dynamicRoute, globMatch)
+    git(repo.root, "commit", "-m", "add bracketed route fixture")
+    const bracketBase = git(repo.root, "rev-parse", "HEAD")
+    fs.writeFileSync(path.join(repo.root, dynamicRoute), "export const value = 2\n")
+    fs.writeFileSync(path.join(repo.root, globMatch), "export const value = 3\n")
+    git(repo.root, "--literal-pathspecs", "add", "--", dynamicRoute, globMatch)
+    git(repo.root, "commit", "-m", "change bracketed route and glob lookalike")
+    const bracketHead = git(repo.root, "rev-parse", "HEAD")
+
+    await expect(inspectGitDelivery(repo.root, bracketBase, bracketHead, [dynamicRoute]))
+      .resolves.toMatchObject({ paths: [dynamicRoute], commitSha: bracketHead })
+  })
 })

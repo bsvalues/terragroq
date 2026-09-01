@@ -76,7 +76,7 @@ function exactPath(value: string): boolean {
   const normalized = value.replace(/\\/g, "/")
   return value === normalized && value.length > 0 && value.trim() === value
     && !value.startsWith("/") && !/^[A-Za-z]:/.test(value) && !value.endsWith("/")
-    && !value.includes("*") && !value.includes("?") && !value.includes("[")
+    && !value.includes("*") && !value.includes("?")
     && !value.split("/").some((part) => !part || part === "." || part === "..")
 }
 

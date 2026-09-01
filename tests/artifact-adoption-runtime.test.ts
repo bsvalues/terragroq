@@ -37,6 +37,9 @@ function authorityRow(overrides: Record<string, unknown> = {}) {
 }
 
 function harness(row = authorityRow()) {
+  const artifactPaths = Array.isArray(row.allowedFiles)
+    ? row.allowedFiles.filter((value): value is string => typeof value === "string")
+    : paths
   const events: Array<{ type: string; entity: string; metadata: unknown }> = []
   const grants: Array<Record<string, unknown>> = []
   let expireGrantAtFence = false
@@ -104,7 +107,7 @@ function harness(row = authorityRow()) {
   const db = { query, connect: vi.fn(async () => ({ query: txQuery, release: vi.fn() })) }
   const lifecycle = {
     inspectPullRequest: vi.fn(async (_number: number, _options?: { allowRemediationBranch?: boolean }): Promise<Record<string, unknown>> => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
-    inspectPullRequestFiles: vi.fn(async (_number: number): Promise<readonly string[]> => paths),
+    inspectPullRequestFiles: vi.fn(async (_number: number): Promise<readonly string[]> => artifactPaths),
   }
   const deriveBaseSha = vi.fn(async (_root: string, _repository: string, _pullRequest: number, _headSha: string) => ({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base }))
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
@@ -113,7 +116,7 @@ function harness(row = authorityRow()) {
     workspaceExists: vi.fn(async () => true),
     createLifecycle: vi.fn(() => lifecycle),
     deriveBaseSha,
-    inspectDelivery: vi.fn(async () => ({ repository: "https://github.com/bsvalues/terragroq", baseSha: base, commitSha: head, paths, patchDigest: "d".repeat(64), contentDigest: "e".repeat(64) })),
+    inspectDelivery: vi.fn(async () => ({ repository: "https://github.com/bsvalues/terragroq", baseSha: base, commitSha: head, paths: artifactPaths, patchDigest: "d".repeat(64), contentDigest: "e".repeat(64) })),
     signingKey: { keyId: "test-key", privateKey, publicKey },
     now: () => new Date("2026-08-31T20:00:00.000Z"),
   })
@@ -166,6 +169,26 @@ describe("persisted prospective artifact adoption", () => {
       },
     })).runtime.preview("owner-1", "space-1", target))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+  })
+
+  it("accepts a canonical literal Next route path containing a dynamic segment", async () => {
+    const dynamicRoutePaths = ["app/api/environment/spaces/[worldId]/route.ts"]
+    const row = authorityRow({
+      allowedFiles: dynamicRoutePaths,
+      grantAllowed: dynamicRoutePaths,
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: dynamicRoutePaths,
+          pullRequest: { number: 1117, headSha: head },
+        },
+      },
+    })
+
+    await expect(harness(row).runtime.preview("owner-1", "space-1", target)).resolves.toMatchObject({
+      paths: dynamicRoutePaths,
+    })
   })
 
   it("binds the preview to the Space repository and owner-confirmed exact PR head when resolving its base", async () => {
