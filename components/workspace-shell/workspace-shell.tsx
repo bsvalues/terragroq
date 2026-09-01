@@ -111,6 +111,7 @@ type StandardDelegateContext = Readonly<{
     proofSource: "space" | "file"
   }>
   fileAssignmentProofs?: Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>
+  fileAssignmentProofSource?: "space" | "file"
   previewDebugBinding?: Readonly<{
     worldId: string
     transitionEpoch: number
@@ -533,7 +534,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [resumeSessionInFlightKeys, setResumeSessionInFlightKeys] = useState<readonly string[]>([])
   const [lineSessionObservedRunningKey, setLineSessionObservedRunningKey] = useState<string | null>(null)
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
-  const [spaceDelegateEligibility, setSpaceDelegateEligibility] = useState<SpaceDelegateEligibility | null>(null)
+  const [spaceDelegateEligibility, setSpaceDelegateEligibility] = useState<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const [spaceDelegateEligibilityPending, setSpaceDelegateEligibilityPending] = useState(false)
   const [fileDelegateEligibility, setFileDelegateEligibility] = useState<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const [fileDelegateEligibilityPending, setFileDelegateEligibilityPending] = useState(false)
@@ -551,7 +552,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const automaticSpaceContinueOperationIdRef = useRef<string | null>(null)
   const automaticSpaceContinueBaselineTurnIdsRef = useRef<ReadonlySet<string>>(new Set())
   const spaceDelegateEligibilityRequestRef = useRef(0)
-  const spaceDelegateEligibilityRef = useRef<SpaceDelegateEligibility | null>(null)
+  const spaceDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const fileDelegateEligibilityRequestRef = useRef(0)
   const fileDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const fileAssignmentOperationRef = useRef<{
@@ -682,7 +683,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function exactFileAssignmentBindingIsCurrent(binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]>): boolean {
     const proof = binding.proofSource === "space"
-      ? spaceDelegateEligibilityRef.current
+      ? spaceDelegateEligibilityRef.current[binding.actor] ?? null
       : fileDelegateEligibilityRef.current[binding.actor] ?? null
     return worldRef.current === binding.worldId
       && transitionEpochRef.current === binding.transitionEpoch
@@ -2700,7 +2701,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   useEffect(() => {
     const requestId = spaceDelegateEligibilityRequestRef.current + 1
     spaceDelegateEligibilityRequestRef.current = requestId
-    setSpaceDelegateEligibility(null)
+    setSpaceDelegateEligibility({})
     const path = space.selectedPath
     const baselineReady = selectedKind === "space" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
@@ -2717,12 +2718,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     const controller = new AbortController()
     setSpaceDelegateEligibilityPending(true)
-    void fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor: "codex", path }).toString()}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => null)
-      const proof = response.ok ? parseSpaceDelegateEligibility(payload) : null
+    void Promise.all((["codex", "claude"] as const).map(async (actor) => {
+      try {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path }).toString()}`, {
+          cache: "no-store", signal: controller.signal,
+        })
+        const payload = await response.json().catch(() => null)
+        const proof = response.ok ? parseSpaceDelegateEligibility(payload) : null
+        return proof?.actor === actor ? proof : null
+      } catch {
+        return null
+      }
+    })).then((proofs) => {
       if (controller.signal.aborted || spaceDelegateEligibilityRequestRef.current !== requestId
         || worldRef.current !== guard.worldId || transitionEpochRef.current !== guard.transitionEpoch
         || projectRef.current?.identity !== guard.projectIdentity
@@ -2730,11 +2737,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         || spineRef.current.outcomeKey !== guard.outcomeKey || spineRef.current.workOrderId !== guard.workOrderId
         || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
         || acknowledgedRevisionRef.current !== guard.revision || revisionRef.current !== guard.revision) return
-      setSpaceDelegateEligibility(proof
+      const exact = Object.fromEntries(proofs.flatMap((proof) => proof
         && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
         && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
-        && proof.actor === "codex" && proof.selectedPath === guard.path
-        ? proof : null)
+        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+      setSpaceDelegateEligibility(exact)
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted && spaceDelegateEligibilityRequestRef.current === requestId) {
         setSpaceDelegateEligibilityPending(false)
@@ -3011,18 +3018,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
       ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
       : null
-  const spaceDelegateProofMatches = Boolean(spaceDelegateEligibility
-    && spaceDelegateEligibility.worldId === worldId
-    && spaceDelegateEligibility.worldRevision === space.revision
-    && spaceDelegateEligibility.outcomeKey === spine.outcomeKey
-    && spaceDelegateEligibility.workOrderId === spine.workOrderId
-    && spaceDelegateEligibility.actor === "codex"
-    && spaceDelegateEligibility.selectedPath === space.selectedPath)
+  const spaceDelegateProofMatches = (["codex", "claude"] as const).some((actor) => {
+    const proof = spaceDelegateEligibility[actor]
+    return Boolean(proof
+      && proof.worldId === worldId
+      && proof.worldRevision === space.revision
+      && proof.outcomeKey === spine.outcomeKey
+      && proof.workOrderId === spine.workOrderId
+      && proof.actor === actor
+      && proof.selectedPath === space.selectedPath)
+  })
   const spaceDelegateUnavailableReason = spaceDelegateBaselineUnavailableReason
     ?? (spaceDelegateEligibilityPending
-      ? "Delegate is checking exact-path authority for Codex."
+      ? "Delegate is checking exact-path authority for Codex and Claude."
       : !spaceDelegateProofMatches
-        ? "Delegate requires a current server-derived exact-path authority proof for Codex."
+        ? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude."
         : null)
   const fileDelegateBaselineUnavailableReason = selectedKind !== "file" ? null
     : storage !== "server" || !worldId || !project
@@ -3713,10 +3723,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const path = space.selectedPath
         const outcomeKey = spine.outcomeKey
         const workOrderId = spine.workOrderId
-        const proof = spaceDelegateEligibility
-        if (spaceDelegateUnavailableReason || !proof || !worldId || !project || !path || !outcomeKey || workOrderId === null) {
+        const proofs = spaceDelegateEligibility
+        if (spaceDelegateUnavailableReason || (!proofs.codex && !proofs.claude)
+          || !worldId || !project || !path || !outcomeKey || workOrderId === null) {
           setTransitionMessage(spaceDelegateUnavailableReason
-            ?? "Delegate requires a current server-derived exact-path authority proof for Codex.")
+            ?? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")
           return
         }
         if (!agentSessions.selectSession(null)) return
@@ -3728,18 +3739,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           provider: null,
           role: "Builder",
           assignment: label,
-          fileAssignmentBinding: {
-            worldId,
-            transitionEpoch: transitionEpochRef.current,
-            projectIdentity: project.identity,
-            outcomeKey,
-            workOrderId,
-            grantId: proof.grantId,
-            worldRevision: proof.worldRevision,
-            path,
-            actor: "codex",
-            proofSource: "space",
-          },
+          fileAssignmentProofs: proofs,
+          fileAssignmentProofSource: "space",
         })
       } else if (selectedKind === "file") {
         const path = space.selectedPath
@@ -3806,7 +3807,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         worldRevision: proof.worldRevision,
         path: proof.selectedPath,
         actor,
-        proofSource: "file",
+        proofSource: current.fileAssignmentProofSource ?? "file",
       }
       return exactFileAssignmentBindingIsCurrent(binding)
         ? { ...current, provider, fileAssignmentBinding: binding }

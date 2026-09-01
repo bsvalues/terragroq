@@ -119,6 +119,74 @@ describe("Experience V2 selected Space actions", () => {
     expect(stored).not.toContain("src/other.ts")
   })
 
+  it("offers only Claude when the Space exact-path proof belongs to Claude", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174212"
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({
+      ...base,
+      revision: 7,
+      activeWindowId: null,
+      selectedPath: "src/app.ts",
+      editor: {
+        ...base.editor,
+        openFiles: ["src/app.ts"],
+        activePaneId: "primary",
+        panes: [{ id: "primary", activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      },
+    })
+    const agentBodies: Record<string, unknown>[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T20:00:00.000Z" })
+      }
+      if (url.startsWith("/api/loom/agent?") && !init?.method) {
+        const actor = new URL(url, "http://localhost").searchParams.get("actor")
+        return Response.json(actor === "claude" ? {
+          eligible: true, worldId: "world-a", worldRevision: 8,
+          outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1121, grantId: 45,
+          actor: "claude", selectedPath: "src/app.ts",
+        } : { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
+      }
+      if (url === "/api/loom/agent" && init?.method === "POST") {
+        agentBodies.push(JSON.parse(String(init.body)))
+        return ndjson(
+          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false,
+            worldId: "world-a", worldRevision: 8, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+            workOrderId: 1121, grantId: 45, actor: "claude", selectedPath: "src/app.ts" },
+          { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Claude changed only the exact selected file." } },
+          { type: "done", code: 0, reason: null },
+        )
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    expect(within(line).getByText("Space assignment · exact selected file src/app.ts")).toBeTruthy()
+    expect((within(line).getByRole("button", { name: "Codex unavailable" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(within(line).getByRole("button", { name: "Claude" }))
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Implement this exact Space assignment." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+
+    await waitFor(() => expect(agentBodies).toHaveLength(1))
+    expect(agentBodies[0]).toEqual({
+      worldId: "world-a", prompt: "Owner request: Implement this exact Space assignment.",
+      provider: "cloud", sessionId: null, resume: false,
+    })
+    expect(await within(line).findByText("Claude changed only the exact selected file.")).toBeTruthy()
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
+    expect(stored).toContain('"provider":"Claude"')
+    expect(stored).toContain('"target":{"kind":"file","path":"src/app.ts"}')
+  })
+
   it("shows Space Delegate unavailable when no exact selected-file authority is bound", async () => {
     const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
     const serverSpace = spaceToServer({ ...base, activeWindowId: null, selectedPath: "src/app.ts" })
@@ -182,7 +250,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(await screen.findByText("Delegate requires a current server-derived exact-path authority proof for Codex.")).toBeTruthy()
+    expect(await screen.findByText("Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")).toBeTruthy()
     expect(agentRequests).toEqual([])
   })
 
