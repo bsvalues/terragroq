@@ -366,13 +366,14 @@ describe("Experience V2 Preview evidence interaction", () => {
     vi.stubGlobal("fetch", fetchStub)
     const first = render(<WorkspaceShell />)
 
+    await screen.findByRole("button", { name: "Explain" })
     fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     const codex = screen.getByRole("button", { name: "Codex unavailable" }) as HTMLButtonElement
     expect(codex.disabled).toBe(true)
     expect(codex.title).toContain("Preview diagnostic transport")
     fireEvent.click(screen.getByRole("button", { name: "Claude" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain the failed frame." } })
-    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
 
     expect(await screen.findByText("Preview debugger · Claude")).toBeTruthy()
     expect(await screen.findByText("The frame is reachable and admitted.")).toBeTruthy()
@@ -389,6 +390,133 @@ describe("Experience V2 Preview evidence interaction", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
     expect(await screen.findByText("The same read-only diagnosis resumed.")).toBeTruthy()
     expect(previewTurns).toBe(2)
+  })
+
+  it("captures exact Preview context before provider choice and refuses dispatch after Preview drift", async () => {
+    const baseFetch = installFetch(() => attached)
+    const fetchStub = vi.fn(baseFetch)
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    await screen.findByRole("button", { name: "Explain" })
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+
+    expect(screen.getByText("Preview debugger · Claude · read-only")).toBeTruthy()
+    expect(screen.getByText("Read-only Preview debugger session")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain only the admitted frame failure." } })
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" }))
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(false)
+  })
+
+  it("does not dispatch Preview Delegate until the exact captured Space revision is durably acknowledged", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174021"
+    const baseFetch = installFetch(() => attached)
+    let deferWrites = false
+    let resolveWrite: (() => void) | null = null
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && init?.method === "PUT" && deferWrites) {
+        return new Promise<Response>((resolve) => {
+          resolveWrite = () => { void baseFetch(input, init).then(resolve) }
+        })
+      }
+      if (url === "/api/loom/agent") return ndjsonResponse([
+        { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "ACKNOWLEDGED REVISION DIAGNOSIS" } },
+        { type: "done", reason: null, code: 0 },
+      ])
+      return baseFetch(input, init)
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(fetchStub.mock.calls.filter(([input, init]) => (
+      String(input) === "/api/environment/space" && (init as RequestInit | undefined)?.method === "PUT"
+    )).length).toBeGreaterThan(0))
+    deferWrites = true
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" }))
+    fireEvent.click(screen.getByRole("button", { name: "Restore Developer preview" }))
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+
+    await waitFor(() => expect(resolveWrite).not.toBeNull())
+    expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/loom/agent")).toHaveLength(0)
+    expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
+
+    resolveWrite?.()
+    await waitFor(() => expect((screen.getByRole("button", { name: "Explain" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose the acknowledged Preview revision." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    expect(await screen.findByText("ACKNOWLEDGED REVISION DIAGNOSIS")).toBeTruthy()
+    expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/loom/agent")).toHaveLength(1)
+  })
+
+  it("refuses Preview Delegate while another Preview diagnostic owns the sole operation slot", async () => {
+    const baseFetch = installFetch(() => attached)
+    let resolveDiagnostic!: (response: Response) => void
+    let diagnosticSignal: AbortSignal | null = null
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      diagnosticSignal = init?.signal ?? null
+      return diagnostic
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Debug" }))
+    expect(await screen.findByRole("button", { name: "Stop Preview debug" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+
+    expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
+    expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/loom/agent")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "Stop Preview debug" }))
+    await waitFor(() => expect(diagnosticSignal?.aborted).toBe(true))
+    resolveDiagnostic(ndjsonResponse([
+      { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174022", resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174022", result: "WRONG PREVIEW OPERATION" } },
+      { type: "done", reason: null, code: 0 },
+    ]))
+    expect(screen.queryByText("WRONG PREVIEW OPERATION")).toBeNull()
+  })
+
+  it("stops and discards a delegated Preview result when the exact Preview drifts during inference", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174020"
+    const baseFetch = installFetch(() => attached)
+    let resolveDiagnostic!: (response: Response) => void
+    let diagnosticSignal: AbortSignal | null = null
+    const diagnostic = new Promise<Response>((resolve) => { resolveDiagnostic = resolve })
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      diagnosticSignal = init?.signal ?? null
+      return diagnostic
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    await screen.findByRole("button", { name: "Explain" })
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain only the admitted frame failure." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(await screen.findByRole("button", { name: "Stop Preview debug" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" }))
+    resolveDiagnostic(ndjsonResponse([
+      { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "STALE DELEGATED PREVIEW ADVICE" } },
+      { type: "done", reason: null, code: 0 },
+    ]))
+
+    await waitFor(() => expect(diagnosticSignal?.aborted).toBe(true))
+    expect(screen.queryByText("STALE DELEGATED PREVIEW ADVICE")).toBeNull()
+    expect([...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n"))
+      .not.toContain(sessionId)
   })
 
   it("keeps provider-unavailable Preview Debug truthful without materializing a session", async () => {
@@ -419,10 +547,11 @@ describe("Experience V2 Preview evidence interaction", () => {
       ])
     }))
     render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Explain" })
     fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Claude" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose." } })
-    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
 
     expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
     expect(screen.queryByText("Foreign result")).toBeNull()
