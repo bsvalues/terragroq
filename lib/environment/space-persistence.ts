@@ -384,7 +384,13 @@ export async function loadOwnedCouncilHistory(
 
 /** CAS-add one completed advisory while retaining all concurrent Space and Line state. */
 export async function saveOwnedCouncilSession(
-  input: Readonly<{ userId: string; worldId: string; session: CouncilSession }>,
+  input: Readonly<{
+    userId: string
+    worldId: string
+    session: CouncilSession
+    expectedContext?: string
+    deriveContext?: (world: WorkingWorldSnapshot) => string | Promise<string>
+  }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
 ): Promise<readonly CouncilSession[]> {
   const session = validateCouncilSession(input.session)
@@ -392,6 +398,11 @@ export async function saveOwnedCouncilSession(
     const row = await store.findOwned(input.userId, input.worldId)
     if (!row) throw new Error("WORLD_NOT_FOUND")
     const latest = validateWorkingWorld(JSON.parse(row.snapshot))
+    if (input.expectedContext !== undefined) {
+      if (!input.deriveContext) throw new Error("COUNCIL_CONTEXT_MISMATCH")
+      const actualContext = await input.deriveContext(latest)
+      if (actualContext !== input.expectedContext) throw new Error("COUNCIL_CONTEXT_MISMATCH")
+    }
     const councilHistory = addCouncilSession(latest.councilHistory, session)
     const updated = validateWorkingWorld({ ...latest, councilHistory })
     if (await store.updateOwned(

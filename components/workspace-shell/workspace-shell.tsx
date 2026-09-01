@@ -1456,6 +1456,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   async function summonCouncil(question: string) {
     invalidateCouncilView()
+    const requestCouncilViewEpoch = councilViewEpochRef.current
+    const requestWorldId = worldId
+    const requestWorkOrderId = spine.workOrderId
+    const requestTransitionEpoch = transitionEpochRef.current
+    const requestIsCurrent = () => (
+      councilViewEpochRef.current === requestCouncilViewEpoch
+      && worldRef.current === requestWorldId
+      && spineRef.current.workOrderId === requestWorkOrderId
+      && transitionEpochRef.current === requestTransitionEpoch
+    )
     setCouncilView("convening")
     setCouncilQuestion(question)
     setCouncilSession(null)
@@ -1463,7 +1473,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setCouncilError(null)
     setCouncilBusy(true)
     setOverlay("council")
-    if (!worldId) {
+    if (!requestWorldId) {
       setCouncilError("Council needs an open persistent Space.")
       setCouncilBusy(false)
       return
@@ -1473,26 +1483,38 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setCouncilBusy(false)
       return
     }
+    const councilSelectedContext = selectedAgent?.kind === "world-worker"
+      ? boundExecutionSession?.id === selectedAgent.id
+        ? { kind: "agent" as const, workOrderId: boundExecutionSession.workOrderId }
+        : null
+      : { kind: selectedKind, label: selectedLabel }
+    if (!councilSelectedContext) {
+      setCouncilError("That persisted assignment is no longer bound to this Space.")
+      setCouncilBusy(false)
+      return
+    }
     try {
       await persistBarrierRef.current()
+      if (!requestIsCurrent()) return
       const response = await fetch("/api/environment/council", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          worldId,
+          worldId: requestWorldId,
           question,
-          selectedContext: { kind: selectedKind, label: selectedLabel },
+          selectedContext: councilSelectedContext,
         }),
         cache: "no-store",
       })
       const payload = await response.json() as { error?: string; detail?: string; session?: BrainCouncilSession }
+      if (!requestIsCurrent()) return
       if (!response.ok || !payload.session) throw new Error(payload.detail ?? payload.error ?? `COUNCIL_${response.status}`)
       setCouncilSession(payload.session)
       setCouncilHistory((current) => [...current.filter((entry) => entry.id !== payload.session!.id), payload.session!].slice(-6))
     } catch (error) {
-      setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
+      if (requestIsCurrent()) setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
     } finally {
-      setCouncilBusy(false)
+      if (requestIsCurrent()) setCouncilBusy(false)
     }
   }
 

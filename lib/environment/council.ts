@@ -9,10 +9,19 @@ import type { WorkingWorldSnapshot } from "@/lib/environment/working-world"
 
 export type { CouncilSession } from "@/lib/environment/council-session"
 
-const selectedContextSchema = z.object({
-  kind: z.enum(["space", "file", "preview", "diff", "agent", "selection"]),
-  label: z.string().trim().min(1).max(500),
-}).strict()
+const selectedContextSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.enum(["space", "file", "preview", "diff", "selection"]),
+    label: z.string().trim().min(1).max(500),
+  }).strict(),
+  // A selected persisted worker is only a stale guard from the browser. Every descriptive fact
+  // shown to Council is re-derived from the owned Space; the browser cannot supply identity,
+  // provider, status, Outcome, or evidence.
+  z.object({
+    kind: z.literal("agent"),
+    workOrderId: z.number().int().positive(),
+  }).strict(),
+])
 
 export const councilRequestSchema = z.object({
   worldId: z.string().uuid(),
@@ -21,6 +30,14 @@ export const councilRequestSchema = z.object({
 }).strict()
 
 export type CouncilRequest = z.infer<typeof councilRequestSchema>
+
+export type CouncilAssignmentGrounding = Readonly<{
+  workOrderId: number
+  assignee: string
+  agent: string | null
+  role: "HERMES" | "Executor"
+  providerLabel: string
+}>
 
 const roleResponseSchema = z.object({
   perspective: z.string().trim().min(1).max(4_000),
@@ -86,6 +103,8 @@ type GroundedCouncilContext = Readonly<{
   kind: CouncilRequest["selectedContext"]["kind"]
   label: string
   outcomeTitle: string | null
+  outcomeKey: string | null
+  workOrderId: number | null
   execution: string
   worker: string | null
   evidence: CouncilSession["evidence"]
@@ -172,7 +191,11 @@ function groundedSpaceName(world: WorkingWorldSnapshot): string {
   return (world.spine.projectName?.trim() || world.intent.trim()).slice(0, 500)
 }
 
-function groundCouncilContext(input: CouncilRequest, world: WorkingWorldSnapshot): GroundedCouncilContext {
+function groundCouncilContext(
+  input: CouncilRequest,
+  world: WorkingWorldSnapshot,
+  assignment: CouncilAssignmentGrounding | null = null,
+): GroundedCouncilContext {
   const spaceName = groundedSpaceName(world)
   const requested = input.selectedContext
   let label: string | null = null
@@ -188,18 +211,31 @@ function groundCouncilContext(input: CouncilRequest, world: WorkingWorldSnapshot
     if (!window || window.kind !== expectedKind) throw new CouncilContextError()
     label = window.title
   } else if (requested.kind === "agent") {
-    label = world.spine.worker?.lane ?? null
+    if (world.spine.workOrderId !== requested.workOrderId || !world.spine.outcomeKey || !world.spine.outcomeTitle
+      || !assignment || assignment.workOrderId !== requested.workOrderId) {
+      throw new CouncilContextError()
+    }
+    label = `Work Order #${world.spine.workOrderId} · ${assignment.role} · ${assignment.providerLabel} · ${world.spine.execution}`
   }
 
   if (!label) throw new CouncilContextError()
 
+  const assignmentEvidence: CouncilSession["evidence"] = requested.kind === "agent" ? [
+    { id: "assignment-outcome", label: "Outcome", detail: `${world.spine.outcomeKey} · ${world.spine.outcomeTitle}` },
+    { id: "assignment-work-order", label: "Work Order", detail: `#${world.spine.workOrderId}` },
+    { id: "assignment-executor", label: "Executor / provider", detail: `${assignment!.role} · ${assignment!.providerLabel}` },
+    { id: "assignment-identity", label: "Persisted identity", detail: `${assignment!.assignee}${assignment!.agent ? ` · ${assignment!.agent}` : ""}` },
+    { id: "assignment-status", label: "Persisted status", detail: world.spine.execution },
+  ] : []
+  const retainedEvidence = world.spine.evidence.slice(-(11 - assignmentEvidence.length))
   const evidence: CouncilSession["evidence"] = [
     {
       id: "selected-context",
       label: `Selected ${requested.kind}`,
       detail: `${label} in ${spaceName}`,
     },
-    ...world.spine.evidence.slice(-11).map((record, index) => ({
+    ...assignmentEvidence,
+    ...retainedEvidence.map((record, index) => ({
       id: `world-evidence-${index + 1}`,
       label: `${record.kind} · ${record.result ?? "recorded"}`,
       detail: record.detail,
@@ -211,10 +247,21 @@ function groundCouncilContext(input: CouncilRequest, world: WorkingWorldSnapshot
     kind: requested.kind,
     label,
     outcomeTitle: world.spine.outcomeTitle,
+    outcomeKey: world.spine.outcomeKey,
+    workOrderId: world.spine.workOrderId,
     execution: world.spine.execution,
     worker: world.spine.worker?.lane ?? null,
     evidence,
   }
+}
+
+/** Exact server-derived facts used to fence inference and persistence against Space drift. */
+export function councilContextFingerprint(
+  input: CouncilRequest,
+  world: WorkingWorldSnapshot,
+  assignment: CouncilAssignmentGrounding | null = null,
+): string {
+  return JSON.stringify(groundCouncilContext(input, world, assignment))
 }
 
 function contextPrompt(input: CouncilRequest, grounded: GroundedCouncilContext): string {
@@ -224,14 +271,20 @@ function contextPrompt(input: CouncilRequest, grounded: GroundedCouncilContext):
     `Selected Space: ${grounded.spaceName}`,
     `Selected ${grounded.kind}: ${grounded.label}`,
     grounded.outcomeTitle ? `Current outcome: ${grounded.outcomeTitle}` : "Current outcome: none bound",
+    grounded.outcomeKey ? `Outcome key: ${grounded.outcomeKey}` : null,
+    grounded.workOrderId !== null ? `Work Order: #${grounded.workOrderId}` : null,
     `Execution: ${grounded.execution}`,
     grounded.worker ? `Active worker: ${grounded.worker}` : "Active worker: none",
     `Evidence:\n${evidence}`,
   ].filter(Boolean).join("\n")
 }
 
-export async function conveneCouncil(input: CouncilRequest, world: WorkingWorldSnapshot): Promise<CouncilSession> {
-  const grounded = groundCouncilContext(input, world)
+export async function conveneCouncil(
+  input: CouncilRequest,
+  world: WorkingWorldSnapshot,
+  assignment: CouncilAssignmentGrounding | null = null,
+): Promise<CouncilSession> {
+  const grounded = groundCouncilContext(input, world, assignment)
   const context = contextPrompt(input, grounded)
   const provider = inferenceProvider()
   let model = CHAT_MODEL
