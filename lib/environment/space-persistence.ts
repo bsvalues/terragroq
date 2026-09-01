@@ -566,7 +566,7 @@ export async function listOwnedProjectSpaces(
       return [{
         worldId: row.id,
         name: persistedSpaceName(world, row.intent.trim() || input.project.name),
-        space: restoredSpace(world, input.workspaceAppUrl),
+        space: restoredSpace(world, input.workspaceAppUrl, input.project.name),
         updatedAt: row.updatedAt.toISOString(),
       }]
     } catch {
@@ -641,9 +641,9 @@ export async function removeOwnedProjectSpace(
   return { removedWorldId: input.worldId }
 }
 
-function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null): SpaceState {
+function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null, runningAppTitle = "TerraFusion"): SpaceState {
   const runningAppUrl = serverRunningAppUrl(world, configured)
-  if (!world.space) return createDefaultSpace(runningAppUrl)
+  if (!world.space) return createDefaultSpace(runningAppUrl, runningAppTitle)
 
   const persisted = validateSpaceState(world.space)
   const preview = persisted.windows.find((window) => window.kind === "running-app")
@@ -705,7 +705,7 @@ export async function loadOrCreateOwnedSpace(
       if (exact) throw new Error("SPACE_PROJECT_MISMATCH")
       row = null
     } else {
-      const space = restoredSpace(world, input.workspaceAppUrl)
+      const space = restoredSpace(world, input.workspaceAppUrl, input.project?.name)
       const restoredWorld = validateWorkingWorld({ ...world, space })
       return {
         worldId: row.id,

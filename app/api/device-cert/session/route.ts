@@ -29,13 +29,6 @@ export async function GET(request: Request) {
   const device = (await headers()).get("x-williamos-device-cert")
   if (!device) return new Response(null, { status: 303, headers: { location: "/sign-in" } })
 
-  // A pre-provisioned Cockpit returns here on every startup. Preserve an already valid owner
-  // session instead of minting another 90-day database row and replacing its cookie each time.
-  const existingSession = await getSession()
-  if (existingSession?.user) {
-    return new Response(null, { status: 303, headers: { location: destination, "cache-control": "no-store" } })
-  }
-
   // The certificate proves a trusted DEVICE; it must still resolve to the right operator. Taking the
   // oldest row was wrong: this database also holds abandoned rows from setup and diagnostics, and
   // the oldest of those is not the owner. Resolve explicitly, and refuse to guess when ambiguous --
@@ -47,6 +40,13 @@ export async function GET(request: Request) {
     return new Response(null, { status: 303, headers: { location: "/sign-in" } })
   }
   if (!userId) return new Response(null, { status: 303, headers: { location: "/sign-in?reason=owner-unresolved" } })
+
+  // A pre-provisioned Cockpit returns here on every startup. Preserve an already valid OWNER
+  // session, but never let an abandoned setup/diagnostic account override the certificate's owner.
+  const existingSession = await getSession()
+  if (existingSession?.user.id === userId) {
+    return new Response(null, { status: 303, headers: { location: destination, "cache-control": "no-store" } })
+  }
 
   const context = await auth.$context
   const session = await context.internalAdapter.createSession(userId, false)

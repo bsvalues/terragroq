@@ -517,6 +517,24 @@ describe("server-owned Space persistence", () => {
     ])
   })
 
+  it("restores a layout-less WilliamOS world with its bound project title", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/repos/williamos", name: "WilliamOS" }
+    const world = createWorkingWorld({
+      intent: "WilliamOS",
+      resources: [`williamos-workspace-root:v1:${project.identity}`],
+    })
+    store.rows.set("legacy-williamos", {
+      id: "legacy-williamos", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date(),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "legacy-williamos", project,
+    }, store)
+    expect(restored!.space.windows.find((window) => window.kind === "running-app")?.title).toBe("WilliamOS")
+  })
+
   it("returns to an older bound Space after a different repository became the latest world", async () => {
     const store = new MemoryStore()
     const projectA = { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" }

@@ -130,7 +130,18 @@ function Stop-ExpectedListener {
 function Assert-LiveTaskUsesLauncher {
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
   $actions = @($task.Actions)
-  if ($actions.Count -ne 1 -or -not $actions[0].Arguments -or $actions[0].Arguments.IndexOf($LiveStartTarget, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+  if ($actions.Count -ne 1 -or [IO.Path]::GetFileName($actions[0].Execute) -ine "powershell.exe" -or -not $actions[0].Arguments) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+  $fileArguments = [regex]::Matches($actions[0].Arguments, '(?i)(?:^|\s)-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))(?=\s|$)')
+  if ($fileArguments.Count -ne 1) {
+    throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
+  }
+  $selectedArgument = @($fileArguments[0].Groups[1].Value, $fileArguments[0].Groups[2].Value, $fileArguments[0].Groups[3].Value) |
+    Where-Object { $_ } | Select-Object -First 1
+  $expectedLauncher = [IO.Path]::GetFullPath($LiveStartTarget).TrimEnd('\')
+  $actualLauncher = [IO.Path]::GetFullPath($selectedArgument).TrimEnd('\')
+  if ($actualLauncher -ine $expectedLauncher) {
     throw "$TaskName does not invoke the selected Live launcher '$LiveStartTarget'; refusing a deploy that would install unused boot semantics"
   }
 }

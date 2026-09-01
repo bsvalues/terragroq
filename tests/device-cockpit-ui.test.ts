@@ -35,7 +35,8 @@ describe("device cockpit web integration", () => {
     const createSession = source.indexOf("internalAdapter.createSession")
     expect(existingSession).toBeGreaterThan(-1)
     expect(createSession).toBeGreaterThan(existingSession)
-    expect(source).toContain("if (existingSession?.user)")
+    expect(source).toContain("if (existingSession?.user.id === userId)")
+    expect(source.indexOf("resolveOwnerUserId")).toBeLessThan(existingSession)
   })
   it("routes an authenticated credential-less Cockpit to explicit enrollment", async () => {
     const replace = vi.fn()
