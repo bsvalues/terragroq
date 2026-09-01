@@ -56,6 +56,29 @@ describe("delivery commit inspection", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
   })
 
+  it.each([
+    ["leading dot segment", "./src/selected.ts"],
+    ["backslash separator", "src\\selected.ts"],
+    ["surrounding whitespace", " src/selected.ts "],
+    ["asterisk wildcard", "src/*.ts"],
+    ["question-mark wildcard", "src/selected?.ts"],
+  ])("rejects a noncanonical %s authority path", async (_label, deliveryPath) => {
+    const repo = repository()
+    await expect(inspectGitDelivery(repo.root, repo.baseSha, repo.commitSha, [deliveryPath]))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+  })
+
+  it("rejects duplicate authority path claims instead of collapsing them", async () => {
+    const repo = repository()
+    await expect(inspectGitDelivery(
+      repo.root,
+      repo.baseSha,
+      repo.commitSha,
+      ["src/selected.ts", "src/selected.ts"],
+      { allowMultiple: true },
+    )).rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
+  })
+
   it("measures an exact deleted path with a deterministic head-absent representation", async () => {
     const repo = repository()
     fs.unlinkSync(path.join(repo.root, "src", "selected.ts"))

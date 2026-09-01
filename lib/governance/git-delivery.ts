@@ -55,12 +55,14 @@ function canonicalRemote(value: string): string {
 function normalizedPaths(root: string, values: readonly string[]): string[] {
   const seen = new Set<string>()
   for (const raw of values) {
-    const candidate = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "")
+    const candidate = raw
     const absolute = path.resolve(root, candidate)
     const relative = path.relative(path.resolve(root), absolute).replace(/\\/g, "/")
-    if (!candidate || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    if (!candidate || candidate !== candidate.trim() || candidate.includes("\\") || candidate.includes("*") || candidate.includes("?")
+      || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(candidate) || path.isAbsolute(relative)) {
       invalid("the delivery path is not canonical and repository-relative")
     }
+    if (seen.has(relative)) invalid("the delivery path set contains a duplicate claim")
     seen.add(relative)
   }
   return [...seen].sort()
