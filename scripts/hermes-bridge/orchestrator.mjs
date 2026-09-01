@@ -2134,11 +2134,14 @@ export function createHermesOrchestrator(options = {}) {
       if (!abandoned && Date.parse(current.lease.expiresAt) > now().getTime()) {
         return { result: "LEASE_HELD", outcomeId }
       }
+      const deterministicRecovery = current.metadata?.deterministicValidatorQueueRecovery
+      const deterministicRecoveryNeedsBinding = deterministicRecovery === null
+        || Date.parse(deterministicRecovery?.recoveredLeaseExpiresAt ?? "") <= now().getTime()
       if (current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
-        && current.metadata?.deterministicValidatorQueueRecovery === null) {
+        && deterministicRecoveryNeedsBinding) {
         const recoveryBinding = await recoverDeterministicQueue({ execution: current })
         state.bindDeterministicValidatorQueueRecovery({
-          idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}`,
+          idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}:${recoveryBinding.receiptId}`,
           outcomeId,
           expectedFencingToken: current.fencingToken,
           expectedCheckpointSequence: current.checkpoint.sequence,

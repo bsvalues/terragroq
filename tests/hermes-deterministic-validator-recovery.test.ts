@@ -155,10 +155,30 @@ describe("Hermes deterministic validator recovery", () => {
         replacementContract: replacement.replacementContract,
       },
     })
+    now = Date.parse(bound.queueRecovery.recoveredLeaseExpiresAt) + 1_000
+    const continued = restarted.bindDeterministicValidatorQueueRecovery({
+      idempotencyKey: "bind-44-continuation", outcomeId: "44",
+      expectedFencingToken: lease.fencingToken,
+      expectedCheckpointSequence: bound.checkpointSequence,
+      recoveryBinding: {
+        version: "hermes-deterministic-validator-queue-recovery.v1",
+        recoveryId: replacement.recoveryId,
+        fingerprint: evidence.fingerprint,
+        sourceExpectedVersion: 20,
+        sourceFencingToken: 19,
+        recoveredExpectedVersion: 22,
+        recoveredFencingToken: 21,
+        recoveredLeaseExpiresAt: new Date(now + 60_000).toISOString(),
+        recordedAt: new Date(now).toISOString(),
+        continuationCount: 1,
+        receiptId: 912,
+        replacementContract: replacement.replacementContract,
+      },
+    })
     const recovery = restarted.activateDeterministicValidatorRecovery({
       idempotencyKey: "activate-44", outcomeId: "44",
       expectedFencingToken: lease.fencingToken,
-      expectedCheckpointSequence: bound.checkpointSequence,
+      expectedCheckpointSequence: continued.checkpointSequence,
       holderId: "supervisor-b", leaseDurationMs: 60_000,
     })
     expect(recovery.fencingToken).toBeGreaterThan(lease.fencingToken)
@@ -166,7 +186,7 @@ describe("Hermes deterministic validator recovery", () => {
     expect(() => restarted.activateDeterministicValidatorRecovery({
       idempotencyKey: "activate-44-racer", outcomeId: "44",
       expectedFencingToken: lease.fencingToken,
-      expectedCheckpointSequence: bound.checkpointSequence,
+      expectedCheckpointSequence: continued.checkpointSequence,
       holderId: "supervisor-c", leaseDurationMs: 60_000,
     })).toThrow()
 

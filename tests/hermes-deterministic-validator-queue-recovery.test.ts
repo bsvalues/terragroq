@@ -67,11 +67,13 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
   const queue = execution.metadata.outcome.queueBinding
   const recovery = execution.metadata.deterministicValidatorCircuit.recovery
   let receipt: any = null
+  const continuationReceipts: any[] = []
   let mutations = 0
   let version = drift ? queue.expectedVersion + 1 : queue.expectedVersion
   let fence = queue.fencingToken
   let acquisitionFence = queue.fencingToken
   let leaseExpiresAt = "2026-08-31T12:05:00.000Z"
+  let clockNow = "2026-08-31T12:00:01.000Z"
   let validators = recovery.oldContract.validationCommands.map(
     ({ command, args }: any) => `${command} ${args.join(" ")}`,
   )
@@ -101,7 +103,10 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
       && sql.includes('FROM "outcome_queue_mutation_receipt"') && sql.includes('"idempotencyKey"')) {
       return { rows: receipt ? [receipt] : [] }
     }
-    if (sql.includes("clock_timestamp")) return { rows: [{ now: "2026-08-31T12:00:01.000Z" }] }
+    if (sql.includes("operation = 'deterministic_validator.continue'")) {
+      return { rows: continuationReceipts }
+    }
+    if (sql.includes("clock_timestamp")) return { rows: [{ now: clockNow }] }
     if (sql.includes('FROM "outcome_queue_item"')) {
       return { rows: authorityRevoked || workOrderInvalid ? [] : [{
         goalId: 40,
@@ -135,13 +140,16 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
     }
     if (sql.includes('INSERT INTO "outcome_queue_mutation_receipt"')) {
       mutations += 1
-      receipt = {
-        id: 93,
+      const isContinuation = sql.includes("'deterministic_validator.continue'")
+      const inserted = {
+        id: isContinuation ? 94 + continuationReceipts.length : 93,
         requestHash: args[3],
         requestBinding: JSON.parse(args[4]),
         resultBinding: JSON.parse(args[5]),
       }
-      return { rows: [{ id: 93 }] }
+      if (isContinuation) continuationReceipts.push(inserted)
+      else receipt = inserted
+      return { rows: [{ id: inserted.id }] }
     }
     if (sql.includes('UPDATE "outcome_queue_item"')) {
       version = args[2]
@@ -171,6 +179,7 @@ function queuePool(execution: ReturnType<typeof recoveryExecution>, {
     pool: { connect },
     query,
     mutations: () => mutations,
+    advanceClock: (iso: string) => { clockNow = iso },
     advanceAuthoritativeQueue: () => {
       version += 1
       fence += 1
@@ -194,8 +203,30 @@ describe("authoritative deterministic validator queue recovery", () => {
       recoveredFencingToken: 35,
       recoveredLeaseExpiresAt: "2026-08-31T12:50:01.000Z",
       receiptId: 93,
+      continuationCount: 0,
     })
     expect(value.mutations()).toBe(1)
+  })
+
+  it("continues an expired committed recovery with a fresh monotonic fence and durable receipt", async () => {
+    const execution = recoveryExecution()
+    const value = queuePool(execution)
+    const first = await recoverDeterministicValidatorQueue({ execution, pool: value.pool as any })
+    value.advanceClock("2026-08-31T13:00:01.000Z")
+    const continued = await recoverDeterministicValidatorQueue({ execution, pool: value.pool as any })
+    const replay = await recoverDeterministicValidatorQueue({ execution, pool: value.pool as any })
+
+    expect(continued).toEqual(replay)
+    expect(continued).toMatchObject({
+      sourceExpectedVersion: first.sourceExpectedVersion,
+      recoveredExpectedVersion: first.recoveredExpectedVersion + 1,
+      sourceFencingToken: first.sourceFencingToken,
+      recoveredFencingToken: first.recoveredFencingToken + 1,
+      recoveredLeaseExpiresAt: "2026-08-31T13:50:01.000Z",
+      continuationCount: 1,
+      receiptId: 94,
+    })
+    expect(value.mutations()).toBe(2)
   })
 
   it("fails closed when another writer has advanced the queue version", async () => {
@@ -239,6 +270,7 @@ describe("authoritative deterministic validator queue recovery", () => {
     expect(query).toContain('projected_work."authorityGrantId"')
     expect(query).toContain('q."leaseHolder" = $5')
     expect(query).toContain('projected_work.validators = $6::text[]')
+    expect(query).toContain('FOR UPDATE OF q, projected_work, work_contract_receipt')
     expect(value.mutations()).toBe(0)
   })
 

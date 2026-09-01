@@ -126,42 +126,17 @@ finally:
             pass
 `
 
-const WINDOWS_ISOLATED_SNAPSHOT_SCRIPT = `
-const fs=require('node:fs'),path=require('node:path');
-try{
-  const root=path.resolve(process.argv[1]),relative=process.argv[2],parts=relative.split('/');
-  if(!parts.length||parts.some((part)=>!part||part==='.'||part==='..'||part.includes('\\0')))process.exit(20);
-  let prefix=root;
-  for(let i=0;i<parts.length;i++){
-    prefix=path.join(prefix,parts[i]);
-    const value=fs.lstatSync(prefix,{bigint:true});
-    if(value.isSymbolicLink()||(i===parts.length-1?!value.isFile():!value.isDirectory()))process.exit(21);
-  }
-  const candidate=prefix,canonicalRoot=fs.realpathSync.native(root),canonicalCandidate=fs.realpathSync.native(candidate);
-  const relativeCanonical=path.relative(canonicalRoot,canonicalCandidate);
-  if(!relativeCanonical||relativeCanonical.startsWith('..')||path.isAbsolute(relativeCanonical))process.exit(22);
-  const flags=fs.constants.O_RDONLY|fs.constants.O_NONBLOCK|(fs.constants.O_NOFOLLOW||0),fd=fs.openSync(candidate,flags);
-  try{
-    const opened=fs.fstatSync(fd,{bigint:true}),observed=fs.statSync(candidate,{bigint:true});
-    if(!opened.isFile()||!observed.isFile()||opened.dev!==observed.dev||opened.ino!==observed.ino)process.exit(23);
-    prefix=root;
-    for(let i=0;i<parts.length;i++){
-      prefix=path.join(prefix,parts[i]);
-      if(fs.lstatSync(prefix).isSymbolicLink())process.exit(24);
-    }
-    process.stdout.write(fs.readFileSync(fd));
-  }finally{fs.closeSync(fd)}
-}catch{process.exit(25)}
-`
-
 export function readSafeUntrackedSnapshotFile(worktreePath, relativePath) {
   const root = path.resolve(worktreePath)
   const relative = safeRelativePath(relativePath)
-  const executable = process.platform === "win32" ? process.execPath : "python3"
-  const args = process.platform === "win32"
-    ? ["-e", WINDOWS_ISOLATED_SNAPSHOT_SCRIPT, root, relative]
-    : ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative, "bytes"]
-  const result = spawnSync(executable, args, {
+  // Node does not expose a Windows handle-relative open primitive that can
+  // reject reparse points on every path component. Fail closed locally rather
+  // than race a junction swap; the governed AEGIS backend supplies the POSIX
+  // dirfd/O_NOFOLLOW snapshot path for execution worktrees.
+  if (process.platform === "win32") {
+    wall("HERMES_REPOSITORY_SNAPSHOT_WALL", "Windows local untracked snapshots require the governed AEGIS backend")
+  }
+  const result = spawnSync("python3", ["-c", ATOMIC_SNAPSHOT_SCRIPT, root, relative, "bytes"], {
     encoding: "buffer", windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 * 1024,
   })
   if (result.status !== 0 || result.error || !Buffer.isBuffer(result.stdout)) {

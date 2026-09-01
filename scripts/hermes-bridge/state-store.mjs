@@ -541,10 +541,14 @@ function metadata(input = {}, current = {}) {
       || !Number.isSafeInteger(deterministicValidatorQueueRecovery.recoveredExpectedVersion)
       || deterministicValidatorQueueRecovery.recoveredExpectedVersion
         !== deterministicValidatorQueueRecovery.sourceExpectedVersion + 1
+          + (deterministicValidatorQueueRecovery.continuationCount ?? 0)
       || !Number.isSafeInteger(deterministicValidatorQueueRecovery.sourceFencingToken)
       || !Number.isSafeInteger(deterministicValidatorQueueRecovery.recoveredFencingToken)
       || deterministicValidatorQueueRecovery.recoveredFencingToken
-        <= deterministicValidatorQueueRecovery.sourceFencingToken
+        !== deterministicValidatorQueueRecovery.sourceFencingToken + 1
+          + (deterministicValidatorQueueRecovery.continuationCount ?? 0)
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.continuationCount ?? 0)
+      || (deterministicValidatorQueueRecovery.continuationCount ?? 0) < 0
       || typeof deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt !== "string"
       || !Number.isFinite(Date.parse(deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt))
       || Date.parse(deterministicValidatorQueueRecovery.recoveredLeaseExpiresAt)
@@ -1865,18 +1869,40 @@ export function bindDeterministicValidatorQueueRecovery(filePath, request, optio
     const circuit = validateDeterministicValidatorCircuit(current.metadata.deterministicValidatorCircuit)
     const binding = request.recoveryBinding
     const queue = current.metadata.outcome?.queueBinding
+    const previousBinding = current.metadata.deterministicValidatorQueueRecovery
+    const initialBind = previousBinding === null
+    const continuationBind = previousBinding !== null
+      && current.checkpoint.state === "DETERMINISTIC_CONTRACT_RECOVERY_BOUND"
+      && previousBinding.recoveryId === binding?.recoveryId
+      && previousBinding.fingerprint === binding?.fingerprint
+      && previousBinding.sourceExpectedVersion === binding?.sourceExpectedVersion
+      && previousBinding.sourceFencingToken === binding?.sourceFencingToken
+      && previousBinding.recoveredExpectedVersion + 1 === binding?.recoveredExpectedVersion
+      && previousBinding.recoveredFencingToken + 1 === binding?.recoveredFencingToken
+      && (previousBinding.continuationCount ?? 0) + 1 === binding?.continuationCount
+      && previousBinding.receiptId < binding?.receiptId
+      && Date.parse(previousBinding.recoveredLeaseExpiresAt) <= Date.parse(binding?.recordedAt ?? "")
     if (!circuit || circuit.status !== "DETERMINISTIC_CONTRACT_RECOVERY"
       || current.lease.status !== "ABANDONED"
       || current.fencingToken !== request.expectedFencingToken
       || current.checkpoint.sequence !== request.expectedCheckpointSequence
-      || current.checkpoint.state !== "DETERMINISTIC_CONTRACT_RECOVERY"
-      || current.metadata.deterministicValidatorQueueRecovery !== null
+      || !(initialBind
+        ? current.checkpoint.state === "DETERMINISTIC_CONTRACT_RECOVERY"
+        : continuationBind)
       || !binding || binding.recoveryId !== circuit.recovery.recoveryId
       || binding.fingerprint !== circuit.fingerprint
-      || binding.sourceExpectedVersion !== queue?.expectedVersion
-      || binding.sourceFencingToken !== queue?.fencingToken
-      || binding.recoveredExpectedVersion !== queue.expectedVersion + 1
-      || binding.recoveredFencingToken <= queue.fencingToken
+      || binding.sourceExpectedVersion !== (initialBind
+        ? queue?.expectedVersion
+        : previousBinding.sourceExpectedVersion)
+      || binding.sourceFencingToken !== (initialBind
+        ? queue?.fencingToken
+        : previousBinding.sourceFencingToken)
+      || binding.recoveredExpectedVersion !== binding.sourceExpectedVersion + 1
+        + (binding.continuationCount ?? 0)
+      || binding.recoveredFencingToken !== binding.sourceFencingToken + 1
+        + (binding.continuationCount ?? 0)
+      || !Number.isSafeInteger(binding.continuationCount ?? 0)
+      || (binding.continuationCount ?? 0) < 0
       || typeof binding.recoveredLeaseExpiresAt !== "string"
       || !Number.isFinite(Date.parse(binding.recoveredLeaseExpiresAt))
       || Date.parse(binding.recoveredLeaseExpiresAt) <= Date.parse(binding.recordedAt)
@@ -1895,6 +1921,7 @@ export function bindDeterministicValidatorQueueRecovery(filePath, request, optio
       recoveredLeaseExpiresAt: binding.recoveredLeaseExpiresAt,
       recordedAt: binding.recordedAt,
       receiptId: binding.receiptId,
+      continuationCount: binding.continuationCount ?? 0,
     }
     const bound = {
       ...current,
