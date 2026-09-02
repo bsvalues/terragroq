@@ -250,7 +250,7 @@ function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
   spaceRevision: number
   outcome: Readonly<{ id: number; key: string; version: number }>
   workOrder: Readonly<{ id: number; ref: string | null; version: string }>
-  implementationGrant: Readonly<{ id: number; ref: string | null; version: string }>
+  implementationGrant: Readonly<{ id: number; ref: string | null; version: string | null }>
   anchorAllowed: readonly string[]
   anchorForbidden: readonly string[]
   implementationAllowed: readonly string[]
