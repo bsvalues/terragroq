@@ -38,6 +38,7 @@ describe("County Development package contract", () => {
   it("packages a user-token runtime without host security mutation", () => {
     const manager = read("deploy/county-development/Manage-WilliamOSCountyDevelopment.ps1")
     const launcher = read("deploy/county-development/WilliamOS-County-Development.cmd")
+    const example = JSON.parse(read("deploy/county-development/county-development.config.example.json"))
     const forbiddenCommands = [
       "New-NetFirewallRule",
       "Set-NetFirewallProfile",
@@ -63,6 +64,10 @@ describe("County Development package contract", () => {
     expect(manager).toContain("function Normalize-OllamaModelName")
     expect(manager).toContain("Get-CimInstance -ClassName Win32_Process")
     expect(manager).toContain("STALE_PID_DISCARDED")
+    expect(manager).toContain('[string]$PreviewUrl')
+    expect(manager).toContain('http://127.0.0.1:3102/')
+    expect(manager).toContain("PREVIEW_URL_INVALID")
+    expect(example.previewUrl).toBe("http://127.0.0.1:3102/")
   })
 
   it("builds source-pinned application and model artifacts on Windows", () => {
@@ -91,8 +96,10 @@ describe("County Development package contract", () => {
     expect(builder).toContain("PORTABLE_POSTGRES_DATA_REFUSED")
     expect(builder).not.toContain('Copy-Tree $PostgresRoot (Join-Path $stageRoot "runtime\\postgres")')
     expect(acceptance).toContain("REAL_FILE_EDIT_SAVED")
+    expect(acceptance).toContain("BOUNDED_PROJECT_OPERATION_EXECUTED")
+    expect(acceptance).toContain("DEVELOPER_PREVIEW_ATTACHED")
     expect(acceptance).toContain("LOCAL_ASSISTANT_RESPONDED")
-    expect(acceptance).toContain("CONVERSATION_RESTORED")
+    expect(acceptance).toContain("CONVERSATION_AND_PREVIEW_LAYOUT_RESTORED")
     expect(health).toContain("liveRuntime.model === runtime.chatModel")
     expect(health).toContain("exactCountyModelReady")
   })
