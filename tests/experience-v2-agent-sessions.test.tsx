@@ -69,8 +69,8 @@ async function openWilliamConversation() {
   return screen.findByRole("complementary", { name: "William conversation" })
 }
 
-function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, executionSession, autoContinue, onAutoContinuation })
+function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", projectKey = "terrafusion", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; projectKey?: "williamos" | "terrafusion" | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, projectKey, executionSession, autoContinue, onAutoContinuation })
   expose = controller
   return (
     <AgentSessionStrip
@@ -85,6 +85,18 @@ function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("fails closed without the active canonical project and does not probe a provider or continuation", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness projectKey={null} autoContinue />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." })
+    })).rejects.toThrow("AGENT_PROJECT_REQUIRED")
+    await act(async () => { await Promise.resolve() })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it("restores and starts a pending server continuation after reload", async () => {
     const onAutoContinuation = vi.fn()
     const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
@@ -112,7 +124,7 @@ describe("Experience V2 real agent sessions", () => {
     ]))
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(onAutoContinuation).toHaveBeenCalledWith({ status: "WORK_ORDER_PATHS_COMPLETE" })
-    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1")
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1&projectKey=terrafusion")
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
   })
 
@@ -254,6 +266,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       automatic: true,
       sessionId: null,
       resume: false,
@@ -372,7 +385,7 @@ describe("Experience V2 real agent sessions", () => {
       label: "Local Thinker",
       descriptor: { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
+      body: { worldId: "world-1", prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
       events: [
         { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Local", mode: "delegate", resumed: true, continuity: "browser-replayed" },
         { type: "result", text: "Local continued." }, { type: "done", code: 0, reason: null },
@@ -401,7 +414,7 @@ describe("Experience V2 real agent sessions", () => {
     await act(async () => { await expose!.continueSession({ sessionKey, prompt: "Continue exactly." }) })
 
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(url)
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(body)
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ projectKey: "terrafusion", ...body })
     const stored = JSON.parse(String(window.localStorage.getItem(key)))
     expect(stored.sessions).toEqual([expect.objectContaining({
       provider: descriptor.provider,
@@ -1299,7 +1312,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem("williamos:agent-session:owner-b:project-b", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${bId}`, sessions: [descriptor(bId, "B only")] }))
     const observed: string[][] = []
     function Probe({ ownerScope, worldScope }: { ownerScope: string; worldScope: string }) {
-      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, executionSession: null })
+      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, projectKey: "terrafusion", executionSession: null })
       observed.push(controller.sessions.map((session) => session.assignment))
       return <span>{controller.sessions.map((session) => session.assignment).join(",") || "No sessions"}</span>
     }
@@ -2436,6 +2449,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Selected file: src/app.ts\nOwner request: Fix the defect.",
       sessionId: null,
       resume: false,
@@ -2537,6 +2551,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/loom/codex")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Continue.",
       sessionId,
       resume: true,
@@ -2692,6 +2707,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).has("x-williamos-work-context")).toBe(false)
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-authorized",
+      projectKey: "terrafusion",
       prompt: "Work.",
       sessionId: null,
       resume: false,
@@ -2812,7 +2828,7 @@ describe("Experience V2 real agent sessions", () => {
       sessions: [{ provider: "Local", sessionId, role: "Thinker", assignment: "Conversation", completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
     })
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
-      prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
+      worldId: "world-1", projectKey: "terrafusion", prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
     })
 
     first.unmount()
@@ -3319,6 +3335,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("ready · resumable session")).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Make the selected change.",
       provider: "cloud",
       sessionId: null,
@@ -3642,6 +3659,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.descriptorState).toBe("verified")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Continue the work.",
       provider: "cloud",
       sessionId,
@@ -3788,7 +3806,7 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(report).toBe("Review report")
     expect(expose!.sessions[0]).toMatchObject({ mode: "review", reviewPath: "src/app.ts" })
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", focus: "Security", provider: "cloud", sessionId, resume: true })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", focus: "Security", provider: "cloud", sessionId, resume: true })
   })
 
   it.each([

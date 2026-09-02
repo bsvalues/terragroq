@@ -92,7 +92,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-      mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
     })
   })
 
@@ -128,7 +128,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByText(/Streaming draft must not duplicate/)).toBeNull()
     expect(document.querySelector("img")).toBeNull()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false })
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false })
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
   })
 
@@ -272,6 +272,7 @@ describe("Experience V2 selected-file Review", () => {
     const agentRequests = fetcher.mock.calls.filter(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
     expect(JSON.parse(String(agentRequests[1]?.[1]?.body))).toEqual({
       mode: "review",
+      projectKey: "terrafusion",
       path: "src/app.ts",
       focus: "Why is this unsafe?",
       provider: "cloud",
@@ -328,6 +329,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(agentRequests).toHaveLength(1)
     expect(JSON.parse(String(agentRequests[0]?.[1]?.body))).toEqual({
       mode: "review",
+      projectKey: "terrafusion",
       path: "src/app.ts",
       focus: "Recheck the owner boundary.",
       provider: "cloud",
@@ -398,6 +400,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(agentRequests).toHaveLength(2)
     expect(JSON.parse(String(agentRequests[1]?.[1]?.body))).toEqual({
       mode: "review",
+      projectKey: "terrafusion",
       path: "src/app.ts",
       focus: "Recheck without changing files.",
       provider: "cloud",
@@ -455,7 +458,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.getByRole("button", { name: "Stop review" })).toBeTruthy()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-      mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
     })
 
     resolveReview(stream(

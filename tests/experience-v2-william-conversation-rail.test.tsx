@@ -6,6 +6,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
+import { persistToolRunTranscript } from "@/components/workspace-shell/tool-run-history"
 import { defaultSpace, normalizeSpace, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
@@ -72,6 +73,54 @@ async function openWilliamConversation() {
 }
 
 describe("durable William conversation rail", () => {
+  it("waits for the active Space to hydrate before rail or Line dispatch", async () => {
+    let resolveSpace!: (response: Response) => void
+    const spaceResponse = new Promise<Response>((resolve) => { resolveSpace = resolve })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return spaceResponse
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "Hydrated response", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await userEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+    const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    expect(composer.disabled).toBe(true)
+    expect((screen.getByRole("button", { name: "Send to William" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(composer, { target: { value: "Too early from the rail" } })
+    fireEvent.submit(composer.closest("form")!)
+    expect(lineBodies).toEqual([])
+
+    await userEvent.click(screen.getByRole("button", { name: "Close William conversation" }))
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    const lineInput = screen.getByRole("textbox", { name: "The Line" }) as HTMLInputElement
+    expect(lineInput.disabled).toBe(true)
+    fireEvent.change(lineInput, { target: { value: "Too early from The Line" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(lineBodies).toEqual([])
+
+    resolveSpace(Response.json(spaceEnvelope()))
+    await waitFor(() => expect(lineInput.disabled).toBe(false))
+    fireEvent.change(lineInput, { target: { value: "Now use the hydrated Space" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    await waitFor(() => expect(lineBodies).toEqual([{
+      worldId: "world-a",
+      projectKey: "terrafusion",
+      text: "Now use the hydrated Space",
+    }]))
+    expect(await screen.findByText("Hydrated response")).toBeTruthy()
+  })
+
   it("disables Override while an existing William turn is pending and dispatches nothing else", async () => {
     let resolveLine!: (response: Response) => void
     const lineResponse = new Promise<Response>((resolve) => { resolveLine = resolve })
@@ -102,7 +151,7 @@ describe("durable William conversation rail", () => {
     expect(override.disabled).toBe(true)
     await userEvent.click(override)
     expect(composer.value).toBe("Finish the earlier turn")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Finish the earlier turn" }])
 
     resolveLine(Response.json({ worldId: "world-a", say: "Earlier turn complete.", spine: EMPTY_SPINE }))
     await screen.findByText("Earlier turn complete.")
@@ -140,7 +189,7 @@ describe("durable William conversation rail", () => {
 
     await screen.findByText("Earlier turn complete.")
     expect(composer.value).toBe("Newer unsent draft")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Finish the earlier turn" }])
   })
 
   it("opens a focused editable override draft for the exact validated judgment and sends it through William", async () => {
@@ -178,6 +227,7 @@ describe("durable William conversation rail", () => {
     await screen.findByText("I have reconsidered it against your reason.")
     expect(lineBodies).toEqual([{
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: `${draft}A narrower reservation already prevents concurrent writes.`,
     }])
   })
@@ -247,10 +297,194 @@ describe("durable William conversation rail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
 
     await screen.findByText("I would keep the narrow revision check.")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Should we keep it narrow?" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Should we keep it narrow?" }])
     expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
+  })
+
+  it("attaches bounded structured tool outcomes to William without exposing browser transcript text", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-tests-1",
+      operationId: "tests.run",
+      operationLabel: "Run the tests",
+      alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z",
+      endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 1, reason: null },
+      lines: [{ channel: "stderr", text: "SECRET_TRANSCRIPT_AND_UNTRUSTED_INSTRUCTIONS" }],
+    })
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-status-1",
+      operationId: "repo.status",
+      operationLabel: "What has changed",
+      alias: "git status --short",
+      startedAt: "2026-09-02T04:03:00.000Z",
+      endedAt: "2026-09-02T04:03:01.000Z",
+      outcome: { status: "completed", code: 0, reason: null },
+      lines: [{ channel: "stdout", text: "README.md" }],
+    })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "The latest retained test run exited 1.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    await userEvent.type(screen.getByRole("textbox", { name: "Message William" }), "What is the latest test outcome?")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await screen.findByText("The latest retained test run exited 1.")
+
+    expect(lineBodies).toHaveLength(1)
+    expect(lineBodies[0]).toMatchObject({
+      worldId: "world-a",
+      text: "What is the latest test outcome?",
+      lineContext: {
+        kind: "tool-run-snapshots",
+        runs: [
+          { operationId: "tests.run", outcome: { status: "completed", code: 1, reason: null } },
+          { operationId: "repo.status", outcome: { status: "completed", code: 0, reason: null } },
+        ],
+      },
+    })
+    expect(JSON.stringify(lineBodies[0])).not.toContain("SECRET_TRANSCRIPT_AND_UNTRUSTED_INSTRUCTIONS")
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"lines"')
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"clientGuard"')
+  })
+
+  it("attaches bounded tool outcomes through The Line for natural pass or fail wording", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-tests-line-1",
+      operationId: "tests.run",
+      operationLabel: "Run the tests",
+      alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z",
+      endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 0, reason: null },
+      lines: [{ channel: "stdout", text: "SECRET_LINE_TRANSCRIPT" }],
+    })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "The retained test run passed.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Open William conversation" })
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    await userEvent.type(screen.getByRole("textbox", { name: "The Line" }), "Did the tests pass?")
+    await userEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => expect(screen.getAllByText(/The retained test run passed\./).length).toBeGreaterThan(0))
+
+    expect(lineBodies).toHaveLength(1)
+    expect(lineBodies[0]).toMatchObject({
+      worldId: "world-a",
+      text: "Did the tests pass?",
+      lineContext: {
+        kind: "tool-run-snapshots",
+        runs: [{ operationId: "tests.run", outcome: { status: "completed", code: 0, reason: null } }],
+      },
+    })
+    expect(JSON.stringify(lineBodies[0])).not.toContain("SECRET_LINE_TRANSCRIPT")
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"lines"')
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"clientGuard"')
+  })
+
+  it("does not attach browser tool history to an unrelated William question", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1, id: "run-tests-1", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z", endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 1, reason: null }, lines: [],
+    })
+    let lineBody: Record<string, unknown> | null = null
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBody = JSON.parse(String(init.body)) as Record<string, unknown>
+        return Response.json({ worldId: "world-a", say: "Inspect the selected source next.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    await userEvent.type(screen.getByRole("textbox", { name: "Message William" }), "What should I inspect next?")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await screen.findByText("Inspect the selected source next.")
+
+    expect(lineBody).toEqual({ worldId: "world-a", projectKey: "terrafusion", text: "What should I inspect next?" })
+  })
+
+  it("rejects a tool-grounded reply when browser history changes during inference", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1, id: "run-tests-1", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z", endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 1, reason: null }, lines: [],
+    })
+    let resolveLine!: (response: Response) => void
+    const lineResponse = new Promise<Response>((resolve) => { resolveLine = resolve })
+    let lineRequested = false
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineRequested = true
+        return lineResponse
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    await userEvent.type(composer, "What is the latest test state?")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await waitFor(() => expect(lineRequested).toBe(true))
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1, id: "run-tests-2", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
+      startedAt: "2026-09-02T04:03:00.000Z", endedAt: "2026-09-02T04:04:00.000Z",
+      outcome: { status: "completed", code: 0, reason: null }, lines: [],
+    })
+    resolveLine(Response.json({ worldId: "world-a", say: "The stale run exited 1.", spine: EMPTY_SPINE }))
+
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send to William" }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByText("The stale run exited 1.")).toBeNull()
+    expect(composer.value).toBe("What is the latest test state?")
   })
 
   it("keeps an edited override draft visible and gives a useful retry state when inference fails", async () => {

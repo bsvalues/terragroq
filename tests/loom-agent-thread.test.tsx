@@ -37,6 +37,20 @@ async function submit(text: string) {
 }
 
 describe("Loom Local conversation continuity", () => {
+  it("sends the selected WilliamOS project for server-derived Workroom grounding", async () => {
+    const agentBodies: Record<string, unknown>[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/loom/models") return Response.json({ models: [], default: "" })
+      agentBodies.push(JSON.parse(String(init?.body)))
+      return localTurn("WilliamOS context")
+    }))
+    render(<AgentThread projectKey="williamos" />)
+
+    await submit("Identify this project")
+
+    expect(agentBodies[0]).toMatchObject({ projectKey: "williamos", provider: "local" })
+  })
+
   it("replays the prior canonical completed Local turn on the second request without changing the first request shape", async () => {
     const agentBodies: Record<string, unknown>[] = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -49,13 +63,14 @@ describe("Loom Local conversation continuity", () => {
     await submit("First owner prompt")
     await submit("Second owner prompt")
 
-    expect(agentBodies[0]).toEqual({ prompt: "First owner prompt", sessionId: null, resume: false, provider: "local", model: "" })
+    expect(agentBodies[0]).toEqual({ prompt: "First owner prompt", sessionId: null, resume: false, provider: "local", model: "", projectKey: "terrafusion" })
     expect(agentBodies[1]).toEqual({
       prompt: "Second owner prompt",
       sessionId: SESSION_ID,
       resume: true,
       provider: "local",
       model: "",
+      projectKey: "terrafusion",
       completedTurns: [{
         ownerPrompt: "First owner prompt",
         finalResult: "First canonical answer",

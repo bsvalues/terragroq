@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
+import type { CanonicalWorkspaceProjectKey } from "@/lib/projects/workspace-project-binding"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
@@ -738,6 +739,7 @@ export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
   worldId,
+  projectKey,
   executionSession,
   autoContinue = false,
   onAutoContinuation,
@@ -745,6 +747,7 @@ export function useExperienceAgentSessions({
   ownerScope: string
   worldScope: string
   worldId: string | null
+  projectKey: CanonicalWorkspaceProjectKey | null
   executionSession: ProjectedWorldWorkerSession | null
   autoContinue?: boolean
   onAutoContinuation?: RunAgentTurnInput["onContinuation"]
@@ -878,7 +881,7 @@ export function useExperienceAgentSessions({
     setVerifiedSessions([])
     setDurableSession(null)
     setLoadedStorageKey(key)
-  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, worldScope])
+  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, projectKey, worldScope])
 
   useEffect(() => () => {
     const operations = [...operationsRef.current.values()]
@@ -937,6 +940,9 @@ export function useExperienceAgentSessions({
     automatic?: boolean
     onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
   }) => {
+    if (projectKey !== "williamos" && projectKey !== "terrafusion") {
+      throw new Error("AGENT_PROJECT_REQUIRED")
+    }
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
     }
@@ -1095,6 +1101,7 @@ export function useExperienceAgentSessions({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(diffReviewMode ? {
           mode: "diff-review",
+          projectKey,
           worldId: reviewWorldId,
           path: reviewPath,
           expectedDiffFingerprint,
@@ -1104,6 +1111,7 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : mode === "review" ? {
           mode: "review",
+          projectKey,
           path: reviewPath,
           ...(focus ? { focus } : {}),
           provider: "cloud",
@@ -1111,6 +1119,7 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : previewMode ? {
           mode: "preview",
+          projectKey,
           worldId,
           prompt,
           provider: "cloud",
@@ -1118,21 +1127,26 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : forkMode ? {
           mode: "fork",
+          projectKey,
           worldId,
           provider: "cloud",
           sourceSessionId: forkSource!.sessionId,
           prompt,
         } : input.provider === "Codex" ? input.automatic ? {
           worldId,
+          projectKey,
           automatic: true,
           sessionId: null,
           resume: false,
         } : {
           worldId,
+          projectKey,
           prompt,
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
         } : input.provider === "Local" ? {
+          worldId,
+          projectKey,
           prompt,
           provider: "local",
           sessionId: prior?.sessionId ?? null,
@@ -1140,6 +1154,7 @@ export function useExperienceAgentSessions({
           completedTurns: prior?.completedTurns ?? [],
         } : {
           worldId,
+          projectKey,
           prompt,
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
@@ -1459,7 +1474,7 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [loadedStorageKey, ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
+  }, [loadedStorageKey, ownerScope, persistCanonicalCollection, projectKey, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback(async (input: RunAgentTurnInput) => {
     let current = input
@@ -1498,7 +1513,7 @@ export function useExperienceAgentSessions({
 
   useEffect(() => {
     const exactStorageKey = storageKey(ownerScope, worldScope)
-    if (!autoContinue || !worldId || loadedStorageKey !== exactStorageKey
+    if (!autoContinue || !worldId || projectKey !== "williamos" && projectKey !== "terrafusion" || loadedStorageKey !== exactStorageKey
       || operationsRef.current.size > 0) return
     const exactWorldId = worldId
     const attemptKey = `${exactStorageKey}:${exactWorldId}`
@@ -1516,7 +1531,7 @@ export function useExperienceAgentSessions({
     async function read(attempt: number): Promise<void> {
       let response: Response
       try {
-        response = await fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(exactWorldId)}`, { cache: "no-store" })
+        response = await fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(exactWorldId)}&projectKey=${encodeURIComponent(projectKey ?? "")}`, { cache: "no-store" })
       } catch (cause) {
         if (cancelled) return
         if (attempt < 3) return retry(attempt)
@@ -1557,7 +1572,7 @@ export function useExperienceAgentSessions({
       if (retryTimer) clearTimeout(retryTimer)
       if (autoContinuationAttemptRef.current === attemptKey) autoContinuationAttemptRef.current = null
     }
-  }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, runAgentTurn, worldId, worldScope])
+  }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, projectKey, runAgentTurn, worldId, worldScope])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
   const runPreviewDiagnostic = useCallback((input: RunPreviewDiagnosticInput) => executeTurn({
     ...input, provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview",

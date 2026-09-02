@@ -98,6 +98,7 @@ describe("Experience V2 exact selected-file Delegate", () => {
     await waitFor(() => expect(agentBodies).toHaveLength(1))
     expect(agentBodies[0]).toEqual({
       worldId: "world-a", prompt: "Owner request: Implement this exact file change.",
+      projectKey: "terrafusion",
       provider: "cloud", sessionId: null, resume: false,
     })
     expect(await within(line).findByText("Changed the exact selected file.")).toBeTruthy()

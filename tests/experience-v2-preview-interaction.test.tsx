@@ -207,6 +207,7 @@ describe("Experience V2 Preview evidence interaction", () => {
       if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
       expect(JSON.parse(String(init?.body))).toEqual({
         mode: "preview",
+        projectKey: "terrafusion",
         provider: "cloud",
         worldId: "world-a",
         prompt: "Diagnose the exact current Developer Preview using only its server-derived admitted evidence. State reachability, framing, and evidence limits; do not infer DOM, console, network, or business UI state.",
@@ -350,10 +351,10 @@ describe("Experience V2 Preview evidence interaction", () => {
       previewTurns += 1
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       expect(body).toEqual(previewTurns === 1 ? {
-        mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Explain the failed frame.",
+        mode: "preview", projectKey: "terrafusion", provider: "cloud", worldId: "world-a", prompt: "Explain the failed frame.",
         sessionId: null, resume: false,
       } : {
-        mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Continue the diagnosis.",
+        mode: "preview", projectKey: "terrafusion", provider: "cloud", worldId: "world-a", prompt: "Continue the diagnosis.",
         sessionId, resume: true,
       })
       const frames = [

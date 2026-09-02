@@ -207,7 +207,7 @@ describe("server-derived workspace diff grounding", () => {
     vi.resetModules()
     vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
     vi.doMock("@/lib/projects/workspace-project-binding", () => ({
-      resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+      resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
     }))
     vi.doMock("@/lib/loom/workspace-diff", () => ({ deriveWorkspaceFileDiff: derive }))
     const { GET } = await import("@/app/api/loom/diff/route")
@@ -233,7 +233,7 @@ describe("server-derived workspace diff grounding", () => {
     vi.resetModules()
     vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
     vi.doMock("@/lib/projects/workspace-project-binding", () => ({
-      resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+      resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
     }))
     vi.doMock("@/lib/loom/workspace-diff", () => ({ deriveWorkspaceFileDiff: derive }))
     const { GET } = await import("@/app/api/loom/diff/route")
@@ -262,7 +262,7 @@ describe("server-derived workspace diff grounding", () => {
     vi.resetModules()
     vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
     vi.doMock("@/lib/projects/workspace-project-binding", () => ({
-      resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+      resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
     }))
     const { GET } = await import("@/app/api/loom/diff/route")
 

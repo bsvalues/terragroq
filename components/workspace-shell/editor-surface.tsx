@@ -13,6 +13,11 @@ const SourceEditor = dynamic(() => import("./source-editor").then((module) => mo
 })
 
 type Entry = Readonly<{ name: string; path: string; directory: boolean }>
+type WorkspaceProjectKey = "terrafusion" | "williamos"
+
+function fileEndpoint(path: string, projectKey: WorkspaceProjectKey): string {
+  return `/api/loom/files?path=${encodeURIComponent(path)}${projectKey === "williamos" ? "&projectKey=williamos" : ""}`
+}
 export type FileBuffer = Readonly<{
   path: string
   content: string
@@ -30,10 +35,11 @@ export function acknowledgeSavedBuffer(
   return { ...current, savedContent: submittedContent, modifiedAt, saving: false, error: null }
 }
 
-function TreeNode({ entry, depth, selectedPath, onOpen }: {
+function TreeNode({ entry, depth, selectedPath, projectKey, onOpen }: {
   entry: Entry
   depth: number
   selectedPath: string | null
+  projectKey: WorkspaceProjectKey
   onOpen: (path: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -49,7 +55,7 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
     setLoading(true)
     setFailed(false)
     try {
-      const response = await fetch(`/api/loom/files?path=${encodeURIComponent(entry.path)}`, { cache: "no-store" })
+      const response = await fetch(fileEndpoint(entry.path, projectKey), { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setChildren(payload.entries ?? [])
@@ -80,7 +86,7 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
           {loading ? <li className={styles.treeNote} style={{ paddingLeft: depth * 13 + 25 }}>opening…</li> : null}
           {failed ? <li className={styles.treeError} style={{ paddingLeft: depth * 13 + 25 }}>directory unavailable</li> : null}
           {(children ?? []).map((child) => (
-            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} />
+            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} projectKey={projectKey} onOpen={onOpen} />
           ))}
         </ul>
       ) : null}
@@ -88,8 +94,9 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ projectName = "Project", space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
+export function EditorSurface({ projectName = "Project", projectKey = "terrafusion", space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
   projectName?: string
+  projectKey?: WorkspaceProjectKey
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
   onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
@@ -108,7 +115,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
   const loadRoots = useCallback(async () => {
     setTreeError(null)
     try {
-      const response = await fetch("/api/loom/files?path=", { cache: "no-store" })
+      const response = await fetch(fileEndpoint("", projectKey), { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setRoots(payload.entries ?? [])
@@ -116,7 +123,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
       setRoots([])
       setTreeError(error instanceof Error ? error.message : "WORKSPACE_UNAVAILABLE")
     }
-  }, [])
+  }, [projectKey])
 
   useEffect(() => { void loadRoots() }, [loadRoots])
 
@@ -125,7 +132,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
       if (buffers[path] || loadingFiles.current.has(path)) continue
       loadingFiles.current.add(path)
       const epoch = bufferEpoch.current.get(path) ?? 0
-      void fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+      void fetch(fileEndpoint(path, projectKey), { cache: "no-store" })
         .then(async (response) => {
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
@@ -144,7 +151,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
         })
         .finally(() => loadingFiles.current.delete(path))
     }
-  }, [buffers, space.editor.openFiles])
+  }, [buffers, projectKey, space.editor.openFiles])
 
   useEffect(() => {
     if (!reloadPath || completedReloadKey.current === reloadKey) return
@@ -157,7 +164,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
     completedReloadKey.current = reloadKey
     const epoch = (bufferEpoch.current.get(reloadPath) ?? 0) + 1
     bufferEpoch.current.set(reloadPath, epoch)
-    void fetch(`/api/loom/files?path=${encodeURIComponent(reloadPath)}`, { cache: "no-store" })
+    void fetch(fileEndpoint(reloadPath, projectKey), { cache: "no-store" })
       .then(async (response) => {
         const payload = await response.json()
         if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
@@ -177,7 +184,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
         setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
         onReloadSettled?.(reloadPath, reloadKey, "failed")
       })
-  }, [buffers, onReloadSettled, reloadKey, reloadPath])
+  }, [buffers, onReloadSettled, projectKey, reloadKey, reloadPath])
 
   const selectedBuffer = space.selectedPath ? buffers[space.selectedPath] : null
   useEffect(() => {
@@ -198,7 +205,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
     if (!buffers[path]) {
       try {
         const epoch = bufferEpoch.current.get(path) ?? 0
-        const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+        const response = await fetch(fileEndpoint(path, projectKey), { cache: "no-store" })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")
@@ -218,7 +225,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
     const openFiles = space.editor.openFiles.includes(path) ? space.editor.openFiles : [...space.editor.openFiles, path]
     const panes = space.editor.panes.map((pane) => pane.id === targetPaneId ? { ...pane, activePath: path, selection: null } : pane)
     updatePanes(panes, openFiles, path, targetPaneId)
-  }, [buffers, space.editor.activePaneId, space.editor.openFiles, space.editor.panes, updatePanes])
+  }, [buffers, projectKey, space.editor.activePaneId, space.editor.openFiles, space.editor.panes, updatePanes])
 
   const save = useCallback(async (path: string) => {
     const buffer = buffers[path]
@@ -229,7 +236,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
       const response = await fetch("/api/loom/files", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, content: submittedContent, modifiedAt: buffer.modifiedAt }),
+        body: JSON.stringify({ path, content: submittedContent, modifiedAt: buffer.modifiedAt, ...(projectKey === "williamos" ? { projectKey } : {}) }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -247,7 +254,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
       } }))
     }
-  }, [buffers])
+  }, [buffers, projectKey])
 
   const split = useCallback(() => {
     if (space.editor.panes.length > 1) return
@@ -269,7 +276,7 @@ export function EditorSurface({ projectName = "Project", space, onEditorChange, 
         {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
         <ul>
           {(roots ?? []).map((entry) => (
-            <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} onOpen={(path) => void openFile(path)} />
+            <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} projectKey={projectKey} onOpen={(path) => void openFile(path)} />
           ))}
         </ul>
       </nav>

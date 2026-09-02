@@ -69,7 +69,7 @@ describe("Experience V2 developer tools", () => {
     vi.stubGlobal("fetch", fetcher)
 
     const view = render(<DeveloperToolsSurface kind="tests" selectedPath={null} active={false} />)
-    const runButton = screen.getByRole("button", { name: "Run full test suite" })
+    const runButton = screen.getByRole("button", { name: "Run repository tests" })
     expect((runButton as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText("Focus Tests before running validation.")).toBeTruthy()
 
@@ -264,12 +264,12 @@ describe("Experience V2 developer tools", () => {
     ))
     vi.stubGlobal("fetch", fetcher)
 
-    render(<DeveloperToolsSurface kind="tests" selectedPath={null} />)
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    render(<DeveloperToolsSurface kind="tests" projectKey="williamos" selectedPath={null} />)
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
 
     expect(await screen.findByText("7 tests passed", { exact: false })).toBeTruthy()
     expect(await screen.findByText("exit 0", { exact: false })).toBeTruthy()
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run" })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run", projectKey: "williamos" })
   })
 
   it("reports the exact running tool identity until streamed settlement", async () => {
@@ -278,7 +278,7 @@ describe("Experience V2 developer tools", () => {
     vi.stubGlobal("fetch", fetcher)
     const onRunningChange = vi.fn()
     render(<DeveloperToolsSurface kind="tests" selectedPath={null} onRunningChange={onRunningChange} />)
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
     await waitFor(() => expect(onRunningChange).toHaveBeenCalledWith({ kind: "tests", operationId: "tests.run" }))
     resolve(ndjson({ type: "exit", code: 0, reason: null }))
     await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(null))
@@ -293,7 +293,7 @@ describe("Experience V2 developer tools", () => {
     vi.stubGlobal("fetch", fetcher)
 
     const first = render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
     expect(await screen.findByText("Transcript saved in this browser.")).toBeTruthy()
     first.unmount()
 

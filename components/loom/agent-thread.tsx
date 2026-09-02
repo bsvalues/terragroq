@@ -46,7 +46,7 @@ function appendBoundedLocalTurn(turns: readonly LocalCompletedTurn[], turn: Loca
  * or edits, each command it runs. That is the difference between this and every other page in the
  * cockpit, which can only show rows written after the fact by something the operator could not see.
  */
-export function AgentThread() {
+export function AgentThread({ projectKey = "terrafusion" }: { projectKey?: "terrafusion" | "williamos" }) {
   const [entries, setEntries] = useState<Entry[]>([])
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
@@ -57,6 +57,16 @@ export function AgentThread() {
   const controller = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const localCompletedTurns = useRef<readonly LocalCompletedTurn[]>([])
+
+  useEffect(() => {
+    controller.current?.abort()
+    controller.current = null
+    localCompletedTurns.current = []
+    setEntries([])
+    setPrompt("")
+    setBusy(false)
+    setSessionId(null)
+  }, [projectKey])
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
@@ -133,6 +143,7 @@ export function AgentThread() {
           resume: requestedSessionId !== null,
           provider: selectedProvider,
           model,
+          projectKey,
           ...(selectedProvider === "local" && requestedSessionId !== null ? { completedTurns: replayTurns } : {}),
         }),
         signal: abort.signal,
@@ -243,7 +254,7 @@ export function AgentThread() {
       setBusy(false)
       controller.current = null
     }
-  }, [prompt, busy, sessionId, provider, model, push, absorb])
+  }, [prompt, busy, sessionId, provider, model, push, absorb, projectKey])
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-3">

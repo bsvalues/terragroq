@@ -10,6 +10,7 @@ const terminalRouteSeams = vi.hoisted(() => ({
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
   deriveSpaceMutationAuthority: vi.fn(),
+  resolveProject: vi.fn(),
 }))
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -18,11 +19,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }))
 vi.mock("@/lib/session", () => ({ getSession: terminalRouteSeams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
-    workspaceRoot: process.platform === "win32" ? "C:\\work\\repo" : "/work/repo",
-    projectId: 7, projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
-    project: { identity: "c:/terrafusion" },
-  } }),
+  resolveCanonicalWorkspaceProjectBinding: terminalRouteSeams.resolveProject,
 }))
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: terminalRouteSeams.recordLoomStart,
@@ -57,6 +54,10 @@ describe("Experience V2 bounded Terminal route", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     terminalRouteSeams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: ROOT, projectId: 7, projectKey: "terrafusion",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+    } })
   })
 
   it("spawns the exact server-derived argv for an allowed read-only inspection command", async () => {
@@ -95,6 +96,27 @@ describe("Experience V2 bounded Terminal route", () => {
     } finally {
       process.env.NODE_ENV = originalNodeEnv
     }
+  })
+
+  it("runs a WilliamOS Space operation only in its server-derived WilliamOS checkout", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: "C:/HermesLab/williamos-source", projectId: 8, projectKey: "williamos",
+      repositoryIdentity: "bsvalues/terragroq", project: { identity: "c:/hermeslab/williamos-source" },
+    } })
+
+    const response = await POST(terminalRequest({ operation: "tests.run", projectKey: "williamos" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.resolveProject).toHaveBeenCalledWith("owner-1", "williamos")
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+      "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent", "--config", "vitest.ci.config.ts",
+    ], expect.objectContaining({
+      cwd: "C:/HermesLab/williamos-source",
+    }))
+    child.emit("close", 0)
+    await response.text()
   })
 
   it("injects the default commit bound when a typed log inspection omits one", async () => {

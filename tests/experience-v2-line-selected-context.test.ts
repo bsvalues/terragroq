@@ -33,6 +33,7 @@ vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
 }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: harness.resolveProjectBinding,
+  resolveCanonicalWorkspaceProjectBinding: harness.resolveProjectBinding,
 }))
 vi.mock("@/lib/environment/current-work-db", () => ({
   answerCurrentWork: harness.answerCurrentWork,
@@ -63,11 +64,38 @@ vi.mock("@/lib/db", () => ({
 }))
 
 const roots: string[] = []
+const terraFusionProjectIdentity = "c:/spaces/terrafusion"
+
+function boundTerraFusionWorld(space: SpaceState): WorkingWorldSnapshot {
+  return {
+    ...createWorkingWorld({
+      intent: "TerraFusion",
+      resources: [`williamos-workspace-root:v1:${terraFusionProjectIdentity}`],
+    }),
+    spine: {
+      projectId: 41,
+      projectName: "TerraFusion",
+      threadId: null,
+      outcomeKey: null,
+      outcomeTitle: null,
+      workOrderId: null,
+      execution: "idle",
+      worker: null,
+      evidence: [],
+    },
+    space,
+  }
+}
 
 beforeEach(() => {
   harness.resolveProjectBinding.mockImplementation(async () => ({
     ok: true,
-    binding: { workspaceRoot: process.env.WILLIAMOS_TERRAFUSION_ROOT ?? process.cwd() },
+    binding: {
+      workspaceRoot: process.env.WILLIAMOS_TERRAFUSION_ROOT ?? process.cwd(),
+      projectId: 41,
+      projectName: "TerraFusion",
+      project: { identity: terraFusionProjectIdentity, name: "TerraFusion" },
+    },
   }))
   harness.getWorkOrders.mockResolvedValue([{
     id: 41,
@@ -123,6 +151,135 @@ describe("server-derived Line selected-object grounding", () => {
     },
     snapshotAt: "2026-09-01T18:05:00.000Z",
   }
+  const toolRunSnapshotsContext = {
+    kind: "tool-run-snapshots" as const,
+    runs: [
+      {
+        id: "run-tests-1",
+        operationId: "tests.run",
+        operationLabel: "Run the tests",
+        alias: "test",
+        startedAt: "2026-09-02T04:00:00.000Z",
+        endedAt: "2026-09-02T04:02:00.000Z",
+        outcome: { status: "completed" as const, code: 1, reason: null },
+      },
+      {
+        id: "run-status-1",
+        operationId: "repo.status",
+        operationLabel: "What has changed",
+        alias: "git status --short",
+        startedAt: "2026-09-02T04:03:00.000Z",
+        endedAt: "2026-09-02T04:03:01.000Z",
+        outcome: { status: "completed" as const, code: 0, reason: null },
+      },
+    ],
+  }
+
+  it("grounds William in bounded browser-saved tool outcomes without treating repository prose as runtime evidence", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        schemaVersion: 1,
+        revision: 4,
+        windows: [{
+          id: "editor",
+          kind: "editor",
+          title: "Source",
+          frame: { x: 0, y: 0, width: 800, height: 600 },
+          z: 1,
+          minimized: false,
+        }],
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", filePath: "README.md", selection: { anchor: 0, head: 0 } }],
+        selection: { filePath: "README.md", anchor: 0, head: 0 },
+        activeWindowId: "editor",
+        activePaneId: "primary",
+        runningAppUrl: null,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    let system = ""
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages?: { role?: string; content?: string }[] }
+      system = body.messages?.find((message) => message.role === "system")?.content ?? ""
+      return Response.json({ choices: [{ message: { content: "The latest retained test run completed with exit code 1; detailed counts are unavailable." } }] })
+    }))
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "What should I inspect next?", lineContext: toolRunSnapshotsContext }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(system).toContain("Browser-saved tool result snapshots")
+    expect(system).toContain("runtime liveness is unverified")
+    expect(system).toContain("use the tests.run entry if present")
+    expect(system).toContain("test counts are unavailable and must not be inferred from repository prose")
+    expect(system).toContain('"selectedPath": "README.md"')
+    const encoded = system.match(/UNTRUSTED_BROWSER_TOOL_SNAPSHOTS_BASE64:([A-Za-z0-9+/=]+)/)?.[1]
+    expect(encoded).toBeTruthy()
+    expect(JSON.parse(Buffer.from(encoded!, "base64").toString("utf8"))).toEqual(toolRunSnapshotsContext.runs)
+    expect(harness.save).not.toHaveBeenCalled()
+  })
+
+  it("answers latest test-state questions from the exact retained outcome without asking inference to invent details", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        schemaVersion: 1,
+        revision: 4,
+        windows: [{ id: "editor", kind: "editor", title: "Source", frame: { x: 0, y: 0, width: 800, height: 600 }, z: 1, minimized: false }],
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", filePath: "README.md", selection: { anchor: 0, head: 0 } }],
+        selection: { filePath: "README.md", anchor: 0, head: 0 },
+        activeWindowId: "editor",
+        activePaneId: "primary",
+        runningAppUrl: null,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "What was the test outcome?", lineContext: toolRunSnapshotsContext }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      say: "Selected file: README.md. Latest browser-retained Tests result: completed with exit code 1 at 2026-09-02T04:02:00.000Z. Detailed output and test counts are unavailable in this bounded snapshot; current runtime liveness is unverified.",
+    })
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { ...toolRunSnapshotsContext, extra: true },
+    { ...toolRunSnapshotsContext, runs: [{ ...toolRunSnapshotsContext.runs[0], lines: [{ channel: "stdout", text: "raw" }] }] },
+    { ...toolRunSnapshotsContext, runs: [{ ...toolRunSnapshotsContext.runs[0], alias: "git status" }] },
+    { ...toolRunSnapshotsContext, runs: [toolRunSnapshotsContext.runs[0], { ...toolRunSnapshotsContext.runs[0], id: "run-tests-2" }] },
+  ])("rejects malformed or fabricated tool-run snapshots before inference or persistence", async (lineContext) => {
+    harness.snapshot = JSON.stringify(createWorkingWorld({ intent: "Finish Experience V2" }))
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "What is the latest test state?", lineContext }),
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "INVALID_LINE_CONTEXT" })
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
+  })
 
   it("grounds Ask William to a strict browser-saved session snapshot as quoted untrusted advisory evidence", async () => {
     const world = createWorkingWorld({ intent: "Finish Experience V2" })
@@ -598,11 +755,26 @@ describe("server-derived Line selected-object grounding", () => {
       activePaneId: "workspace-pane",
       runningAppUrl: "http://tf.test:5000/real-preview",
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    const projectIdentity = "c:/spaces/terrafusion"
+    harness.snapshot = JSON.stringify({
+      ...createWorkingWorld({ intent: "TerraFusion", resources: [`williamos-workspace-root:v1:${projectIdentity}`] }),
+      spine: {
+        projectId: 41, projectName: "TerraFusion", threadId: null, outcomeKey: null, outcomeTitle: null,
+        workOrderId: null, execution: "idle", worker: null, evidence: [],
+      },
+      space,
+    })
     process.env.WILLIAMOS_TERRAFUSION_ROOT = path.join(root, "raw-configured-alias")
     harness.resolveProjectBinding.mockResolvedValue({
       ok: true,
-      binding: { workspaceRoot: root },
+      binding: {
+        workspaceRoot: root,
+        projectId: 41,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: projectIdentity, name: "TerraFusion" },
+      },
     })
     process.env.WILLIAMOS_WORKSPACE_APP_URL = change === "secret-configuration" || change === "secret-to-valid"
       ? "http://tf.test:5000/real-preview?token=server-secret"
@@ -648,6 +820,7 @@ describe("server-derived Line selected-object grounding", () => {
         text: "Explain the exact current developer Preview.",
         lineContext: {
           kind: "preview-explain",
+          projectKey: "terrafusion",
           previewFingerprint: expectedPreview.fingerprint,
           selectedPath: "src/authoritative.ts",
         },
@@ -712,6 +885,44 @@ describe("server-derived Line selected-object grounding", () => {
     expect(harness.save).not.toHaveBeenCalled()
   })
 
+  it("refuses an ordinary William turn when the owned Space belongs to another project", async () => {
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld({
+      schemaVersion: 1,
+      revision: 1,
+      windows: [],
+      openFiles: [],
+      panes: [],
+      selection: null,
+      activeWindowId: null,
+      activePaneId: null,
+      runningAppUrl: null,
+    }))
+    harness.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: {
+        workspaceRoot: process.cwd(),
+        projectId: 42,
+        projectName: "WilliamOS",
+        project: { identity: "c:/spaces/williamos", name: "WilliamOS" },
+      },
+    })
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", projectKey: "williamos", text: "What is this Space doing?" }),
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORLD_PROJECT_MISMATCH" })
+    expect(harness.resolveProjectBinding).toHaveBeenCalledWith("owner-a", "williamos")
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
+  })
+
   it("reads the persisted selected file even when client text names another path", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-context-"))
     roots.push(root)
@@ -732,7 +943,7 @@ describe("server-derived Line selected-object grounding", () => {
       activePaneId: "primary",
       runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     const authoritativePath = path.join(root, "src", "authoritative.ts")
     const beforeBytes = await fs.readFile(authoritativePath)
     harness.save.mockImplementationOnce(async (input: {
@@ -755,7 +966,7 @@ describe("server-derived Line selected-object grounding", () => {
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST",
       headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Review src/client-decoy.ts" }),
+      body: JSON.stringify({ worldId: "world-a", projectKey: "terrafusion", text: "Review src/client-decoy.ts" }),
     }))
 
     expect(response.status).toBe(409)
@@ -828,7 +1039,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "Compare this with src/b.ts", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -890,7 +1101,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A do?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -960,7 +1171,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A do?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1032,7 +1243,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A guarantee?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1088,7 +1299,7 @@ describe("server-derived Line selected-object grounding", () => {
       activePaneId: "primary",
       runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     const first = {
       path: "src/authoritative.ts", state: "modified", status: " M src/authoritative.ts",
       patch: "diff --git a/src/authoritative.ts b/src/authoritative.ts\n-old\n+server-derived-patch\n",
@@ -1157,7 +1368,7 @@ describe("server-derived Line selected-object grounding", () => {
       activePaneId: "primary",
       runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     const diff = {
       path: "generated/large.bin", state: "untracked", status: "", patch: "", baseHash: "base-a",
       indexHash: createHash("sha256").update("").digest("hex"), patchHash: createHash("sha256").update("").digest("hex"), fingerprint: "untracked-version", reason: null,
@@ -1180,7 +1391,7 @@ describe("server-derived Line selected-object grounding", () => {
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST",
       headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Review the current ignored binary change" }),
+      body: JSON.stringify({ worldId: "world-a", projectKey: "terrafusion", text: "Review the current ignored binary change" }),
     }))
 
     expect(response.status).toBe(409)
@@ -1203,7 +1414,7 @@ describe("server-derived Line selected-object grounding", () => {
       openFiles: ["src/authoritative.ts"], panes: [{ id: "primary", filePath: "src/authoritative.ts" }],
       selection: { filePath: "src/authoritative.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     const first = {
       path: "src/authoritative.ts", state: "modified", status: "MM src/authoritative.ts",
       patch: "+same-worktree\n", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-same",
@@ -1226,7 +1437,7 @@ describe("server-derived Line selected-object grounding", () => {
 
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Review the current staged change" }),
+      body: JSON.stringify({ worldId: "world-a", projectKey: "terrafusion", text: "Review the current staged change" }),
     }))
 
     expect(response.status).toBe(409)
@@ -1256,7 +1467,7 @@ describe("server-derived Line selected-object grounding", () => {
       openFiles: [selectedPath], panes: [{ id: "primary", filePath: selectedPath }],
       selection: { filePath: selectedPath, anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
     vi.stubGlobal("fetch", inference)
@@ -1265,7 +1476,7 @@ describe("server-derived Line selected-object grounding", () => {
 
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Review the current change" }),
+      body: JSON.stringify({ worldId: "world-a", projectKey: "terrafusion", text: "Review the current change" }),
     }))
 
     expect(response.status).toBe(409)
@@ -1293,7 +1504,7 @@ describe("server-derived Line selected-object grounding", () => {
       openFiles: ["src/slow.ts"], panes: [{ id: "primary", filePath: "src/slow.ts" }],
       selection: { filePath: "src/slow.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.snapshot = JSON.stringify(boundTerraFusionWorld(space))
     harness.diff.mockResolvedValue({
       path: "src/slow.ts", state: "modified", status: " M src/slow.ts", patch: "+slow\n",
       baseHash: "base", indexHash: "index", patchHash: "patch", fingerprint: "diff", reason: null,
@@ -1313,7 +1524,7 @@ describe("server-derived Line selected-object grounding", () => {
 
     const pending = POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Review the current change" }),
+      body: JSON.stringify({ worldId: "world-a", projectKey: "terrafusion", text: "Review the current change" }),
     }))
     await vi.advanceTimersByTimeAsync(0)
     expect(open).toHaveBeenCalledOnce()
@@ -1338,7 +1549,26 @@ describe("server-derived Line selected-object grounding", () => {
       openFiles: ["src/exact.ts"], panes: [{ id: "primary", filePath: "src/exact.ts" }],
       selection: { filePath: "src/exact.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "WilliamOS" }), space })
+    const projectIdentity = "c:/spaces/terrafusion"
+    harness.snapshot = JSON.stringify({
+      ...createWorkingWorld({ intent: "WilliamOS", resources: [`williamos-workspace-root:v1:${projectIdentity}`] }),
+      spine: {
+        projectId: 41, projectName: "TerraFusion", threadId: null, outcomeKey: null, outcomeTitle: null,
+        workOrderId: null, execution: "idle", worker: null, evidence: [],
+      },
+      space,
+    })
+    harness.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: {
+        workspaceRoot: root,
+        projectId: 41,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: projectIdentity, name: "TerraFusion" },
+      },
+    })
     const identity = { path: "src/exact.ts", state: "modified", status: " M src/exact.ts", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-a" }
     const snapshot = { ...identity, patch: "-old\n+exact-current-patch\n", fingerprint: JSON.stringify(identity), reason: null }
     harness.diff.mockResolvedValue(snapshot)
@@ -1355,7 +1585,7 @@ describe("server-derived Line selected-object grounding", () => {
     const { POST } = await import("@/app/api/environment/line/route")
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Challenge the exact current patch for the selected file.", lineContext: { kind: "diff-challenge", path: identity.path, baseHash: identity.baseHash, indexHash: identity.indexHash, patchHash: identity.patchHash, fingerprint: snapshot.fingerprint } }),
+      body: JSON.stringify({ worldId: "world-a", text: "Challenge the exact current patch for the selected file.", lineContext: { kind: "diff-challenge", projectKey: "terrafusion", path: identity.path, baseHash: identity.baseHash, indexHash: identity.indexHash, patchHash: identity.patchHash, fingerprint: snapshot.fingerprint } }),
     }))
 
     expect(response.status).toBe(200)

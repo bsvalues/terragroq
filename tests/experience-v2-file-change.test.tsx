@@ -122,6 +122,48 @@ async function openChange(task = "Use the verified helper.") {
 }
 
 describe("Experience V2 selected-file Change", () => {
+  it("binds a WilliamOS selected-file Change request to the active project", async () => {
+    const editBodies: Record<string, unknown>[] = []
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space?projectKey=williamos" && !init?.method) {
+        return Promise.resolve(Response.json({
+          worldId: "world-a",
+          name: "WilliamOS",
+          space: spaceToServer(initialSpace()),
+          spine: EMPTY_SPINE,
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" },
+          storage: "server",
+        }))
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
+      if (url === "/api/loom/files?path=&projectKey=williamos" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts&projectKey=williamos" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts&projectKey=williamos" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") {
+        editBodies.push(JSON.parse(String(init.body)))
+        return Promise.resolve(ndjson(
+          { type: "started", file: "src/app.ts" },
+          { type: "done", receipt: { success: false } },
+        ))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell projectKey="williamos" />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+
+    await waitFor(() => expect(editBodies).toHaveLength(1))
+    expect(editBodies[0]).toMatchObject({
+      worldId: "world-a",
+      projectKey: "williamos",
+      path: "src/app.ts",
+      task: "Use the verified helper.",
+    })
+  })
+
   it("runs Improve for the exact live current patch through structured edit and refreshes its outcome", async () => {
     let diffReads = 0
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })

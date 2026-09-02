@@ -244,6 +244,7 @@ describe("Experience V2 current Changes Review", () => {
     })
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
       mode: "diff-review", worldId: WORLD_ID, path: PATH, expectedDiffFingerprint: FINGERPRINT,
+      projectKey: "terrafusion",
       provider: "cloud", sessionId: null, resume: false,
     })
   })
@@ -280,6 +281,7 @@ describe("Experience V2 current Changes Review", () => {
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
       mode: "diff-review",
       worldId: WORLD_ID,
+      projectKey: "terrafusion",
       path: PATH,
       expectedDiffFingerprint: FINGERPRINT,
       provider: "cloud",
@@ -334,6 +336,7 @@ describe("Experience V2 current Changes Review", () => {
     expect(JSON.parse(String(requests[1]?.[1]?.body))).toEqual({
       mode: "diff-review",
       worldId: WORLD_ID,
+      projectKey: "terrafusion",
       path: PATH,
       expectedDiffFingerprint: FINGERPRINT,
       focus: "Recheck the failure mode.",
