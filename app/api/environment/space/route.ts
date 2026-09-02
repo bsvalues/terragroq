@@ -207,6 +207,7 @@ if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalExactLiteralStrings = exactLiteralStrings
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact = mergedExternalSpaceRevisionIsExact
   ;(globalThis as Record<string, unknown>).__williamosConfiguredDeliveryVerificationKeys = configuredDeliveryVerificationKeys
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryPathsAreExact = mergedExternalDeliveryPathsAreExact
 }
 
 function canonicalRepository(value: unknown): string {
@@ -225,6 +226,93 @@ function jsonRecord(value: unknown): Record<string, unknown> {
   } catch {
     throw new Error("MERGED_EXTERNAL_DELIVERY_EVIDENCE_INVALID")
   }
+}
+
+function mergedExternalDeliveryPathsAreExact(input: Readonly<{
+  anchorPaths: readonly string[]
+  artifactPaths: readonly string[]
+  reservationPaths: readonly string[]
+  deliveryPaths: readonly string[]
+}>): boolean {
+  return exactCanonicalPaths(input.anchorPaths, input.anchorPaths)
+    && exactCanonicalPaths(input.artifactPaths, input.reservationPaths)
+    && exactCanonicalPaths(input.artifactPaths, input.deliveryPaths)
+    && input.artifactPaths.every((artifactPath) => input.anchorPaths.includes(artifactPath))
+}
+
+function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
+  authorizationMetadata: Record<string, unknown> | null
+  userId: string
+  worldId: string
+  repository: string
+  pullRequest: number
+  headSha: string
+  spaceRevision: number
+  outcome: Readonly<{ id: number; key: string; version: number }>
+  workOrder: Readonly<{ id: number; ref: string | null; version: string }>
+  implementationGrant: Readonly<{ id: number; ref: string | null; version: string }>
+  anchorAllowed: readonly string[]
+  anchorForbidden: readonly string[]
+  implementationAllowed: readonly string[]
+  implementationBlocked: readonly string[]
+  signedAdoptionHash: string
+  signedReservation: Readonly<{ allowed: readonly string[]; forbidden: readonly string[]; version: string }>
+}>): boolean {
+  try {
+    if (!input.authorizationMetadata) return false
+    const context = record(input.authorizationMetadata.context)
+    const artifact = record(input.authorizationMetadata.artifact)
+    const contextOutcome = record(context.outcome)
+    const contextWorkOrder = record(context.workOrder)
+    const contextGrant = record(context.grant)
+    const anchorReservation = record(context.anchorReservation)
+    const artifactReservation = record(context.reservation)
+    const anchorAllowed = Array.isArray(anchorReservation.allowed) ? anchorReservation.allowed.map(String) : []
+    const anchorForbidden = Array.isArray(anchorReservation.forbidden) ? anchorReservation.forbidden.map(String) : []
+    const artifactAllowed = Array.isArray(artifactReservation.allowed) ? artifactReservation.allowed.map(String) : []
+    const artifactForbidden = Array.isArray(artifactReservation.forbidden) ? artifactReservation.forbidden.map(String) : []
+    const artifactPaths = Array.isArray(artifact.paths) ? artifact.paths.map(String) : []
+    const previewDigest = hashRecord({
+      version: "williamos-delivery-seal.v2",
+      value: { context, artifact },
+    })
+    const adoptionHash = hashRecord({
+      version: "williamos-delivery-seal.v2",
+      authorityKind: "prospective_artifact_adoption",
+      previewDigest,
+      idempotencyKey: input.authorizationMetadata.idempotencyKey,
+    })
+    return input.authorizationMetadata.previewDigest === previewDigest
+      && input.authorizationMetadata.adoptionHash === adoptionHash
+      && adoptionHash === input.signedAdoptionHash
+      && context.owner === input.userId && context.worldId === input.worldId
+      && context.spaceRevision === input.spaceRevision
+      && canonicalRepository(context.repository) === input.repository
+      && context.pullRequest === input.pullRequest && context.admittedHeadSha === input.headSha
+      && contextOutcome.id === input.outcome.id && contextOutcome.key === input.outcome.key
+      && contextOutcome.version === input.outcome.version
+      && contextWorkOrder.id === input.workOrder.id && contextWorkOrder.ref === input.workOrder.ref
+      && contextWorkOrder.version === input.workOrder.version
+      && contextGrant.id === input.implementationGrant.id && contextGrant.ref === input.implementationGrant.ref
+      && contextGrant.version === input.implementationGrant.version
+      && exactCanonicalPaths(anchorAllowed, input.anchorAllowed)
+      && exactLiteralStrings(anchorForbidden, input.anchorForbidden)
+      && exactCanonicalPaths(anchorAllowed, input.implementationAllowed)
+      && exactLiteralStrings(anchorForbidden, input.implementationBlocked)
+      && exactCanonicalPaths(artifactAllowed, input.signedReservation.allowed)
+      && exactLiteralStrings(artifactForbidden, input.signedReservation.forbidden)
+      && artifactReservation.version === input.signedReservation.version
+      && artifact.pullRequest === input.pullRequest && artifact.headSha === input.headSha
+      && SHA.test(String(artifact.pullRequestBaseSha)) && SHA.test(String(artifact.baseRefSha))
+      && SHA.test(String(artifact.baseSha))
+      && exactCanonicalPaths(artifactPaths, input.signedReservation.allowed)
+  } catch {
+    return false
+  }
+}
+
+if (process.env.NODE_ENV === "test") {
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalAuthorizationBindingIsExact = mergedExternalAuthorizationBindingIsExact
 }
 
 async function reconcileMergedExternalAdoption(
@@ -300,7 +388,10 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
   }
   const adoption = seal.payload.adoption
   const artifact = adoption.artifact
-  const paths = Array.isArray(binding.reservedPaths) ? binding.reservedPaths.map(String) : []
+  const anchorPaths = Array.isArray(binding.reservedPaths) ? binding.reservedPaths.map(String) : []
+  const artifactPaths = Array.isArray(artifact.paths) ? artifact.paths.map(String) : []
+  const reservationPaths = Array.isArray(adoption.reservation.allowed) ? adoption.reservation.allowed.map(String) : []
+  const deliveryPaths = Array.isArray(seal.payload.delivery.paths) ? seal.payload.delivery.paths.map(String) : []
   const world = record(JSON.parse(String(row.snapshot)))
   const spine = record(world.spine)
   const repository = canonicalRepository(binding.repository ?? external.repository)
@@ -320,10 +411,9 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     && spine.workOrderId === Number(row.workOrderId)
     && artifact.pullRequest === Number(externalPullRequest.number)
     && artifact.headSha === String(externalPullRequest.headSha)
-    && exactCanonicalPaths(artifact.paths, paths)
+    && mergedExternalDeliveryPathsAreExact({ anchorPaths, artifactPaths, reservationPaths, deliveryPaths })
     && canonicalRepository(seal.payload.delivery.repository) === repository
     && seal.payload.delivery.commitSha === artifact.headSha
-    && exactCanonicalPaths(seal.payload.delivery.paths, paths)
   if (!contextExact) throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_INVALID")
   const terminalRefs = Array.isArray(row.terminalEvidenceRefs) ? row.terminalEvidenceRefs.map(String) : []
   const terminal = row.lifecycleState === "completed" && row.workOrderStatus === "closed"
@@ -344,7 +434,7 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     repository,
     pullRequest: artifact.pullRequest,
     headSha: artifact.headSha,
-    paths,
+    paths: artifactPaths,
     admissionDigest: hashRecord({ resultBinding: binding, requestBinding }),
     seal,
     terminal,
@@ -483,10 +573,8 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && implementationGrant.workOrderId === expected.workOrderId
       && implementationGrant.grantedBy === userId && implementationGrant.grantedTo === "codex"
       && implementationGrant.authorityLevel === "A2_WRITE_OWN"
-      && exactCanonicalPaths(work?.allowedFiles ?? [], signedAdoption.reservation.allowed)
-      && exactCanonicalPaths(implementationGrant.allowedActions, signedAdoption.reservation.allowed)
-      && exactLiteralStrings(work?.forbiddenFiles ?? [], signedAdoption.reservation.forbidden)
-      && exactLiteralStrings(implementationGrant.blockedActions, signedAdoption.reservation.forbidden))
+      && exactCanonicalPaths(work?.allowedFiles ?? [], implementationGrant.allowedActions)
+      && exactLiteralStrings(work?.forbiddenFiles ?? [], implementationGrant.blockedActions))
     const queueExact = Boolean(queueGrant
       && queueGrant.ref === lockedBinding?.queueGrantRef
       && queueGrant.workOrderId === expected.workOrderId
@@ -508,6 +596,33 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && deliveryScope?.headSha === expected.headSha
       && exactCanonicalPaths(deliveryGrant.allowedActions, expected.paths)
       && exactLiteralStrings(deliveryGrant.blockedActions, ["implementation:mutate", "authority:widen", "artifact:retarget"]))
+    const authorizationExact = Boolean(outcome && work && implementationGrant
+      && mergedExternalAuthorizationBindingIsExact({
+        authorizationMetadata,
+        userId,
+        worldId: expected.worldId,
+        repository: expected.repository,
+        pullRequest: expected.pullRequest,
+        headSha: expected.headSha,
+        spaceRevision: signedAdoption.spaceRevision,
+        outcome: { id: expected.outcomeId, key: expected.outcomeKey, version: signedAdoption.outcome.version },
+        workOrder: {
+          id: expected.workOrderId,
+          ref: signedAdoption.workOrder.ref,
+          version: signedAdoption.workOrder.version,
+        },
+        implementationGrant: {
+          id: expected.implementationGrantId,
+          ref: implementationGrant.ref,
+          version: implementationGrant.contentHash,
+        },
+        anchorAllowed: work.allowedFiles,
+        anchorForbidden: work.forbiddenFiles,
+        implementationAllowed: implementationGrant.allowedActions,
+        implementationBlocked: implementationGrant.blockedActions,
+        signedAdoptionHash: signedAdoption.adoptionHash,
+        signedReservation: signedAdoption.reservation,
+      }))
     const exact = outcome?.outcomeKey === expected.outcomeKey && work?.id === expected.workOrderId
       && mergedExternalSpaceRevisionIsExact({
         persistedRevision: persistedSpace?.revision,
@@ -534,7 +649,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && validationEvidence?.headSha === expected.headSha && reviewEvidence?.headSha === expected.headSha
       && grants.length === expectedGrantIds.size
       && grants.every((grant) => expectedGrantIds.has(grant.id) && grant.workOrderId === expected.workOrderId)
-      && implementationExact && queueExact && deliveryExact
+      && authorizationExact && implementationExact && queueExact && deliveryExact
     if (!exact) throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE")
     const refs = [`pr:${expected.pullRequest}`, `head:${expected.headSha}`, `merge:${inspection.mergeSha}`]
     const evidenceHash = hashRecord({

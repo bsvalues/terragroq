@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from "node:crypto"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { hashRecord } from "@/lib/governance/hash"
 
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -295,6 +296,64 @@ describe("merged external Space delivery finalization", () => {
     const replay = { ...active, lifecycleState: "completed", workOrderStatus: "closed" }
     expect(exact({ ...replay, persistedRevision: 8 })).toBe(true)
     expect(exact({ ...replay, persistedRevision: 6 })).toBe(false)
+  })
+
+  it("keeps the signed artifact reservation distinct from its hash-bound anchor reservation", () => {
+    const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalAuthorizationBindingIsExact as (input: Record<string, unknown>) => boolean
+    const anchorAllowed = ["app/api/environment/space/route.ts", "lib/environment/space-persistence.ts", "tests/experience-v2-space-route.test.ts"]
+    const artifactAllowed = [anchorAllowed[0], anchorAllowed[2]]
+    const forbidden = ["production:mutate", "release:create", "secret:access", "spend:increase"]
+    const context = {
+      owner: "owner", worldId: "space-1", spaceRevision: 0,
+      workspace: "C:/HermesLab/williamos-source", repository: "https://github.com/bsvalues/terragroq",
+      pullRequest: 1124, admittedHeadSha: "a".repeat(40),
+      outcome: { id: 48, key: "external:anchor", version: 1 },
+      workOrder: { id: 74, ref: "WO-74", version: "2026-09-01T19:07:15.475Z" },
+      grant: { id: 79, ref: "GRANT-79", version: "b".repeat(64), expiresAt: "2026-09-04T19:07:15.475Z" },
+      anchorReservation: { allowed: anchorAllowed, forbidden },
+      reservation: { allowed: artifactAllowed, forbidden, version: "c".repeat(64) },
+    }
+    const artifact = {
+      pullRequest: 1124, headSha: "a".repeat(40), pullRequestBaseSha: "d".repeat(40),
+      baseRefSha: "e".repeat(40), baseSha: "f".repeat(40), paths: artifactAllowed,
+    }
+    const previewDigest = hashRecord({ version: "williamos-delivery-seal.v2", value: { context, artifact } })
+    const idempotencyKey = "adopt-1124"
+    const adoptionHash = hashRecord({
+      version: "williamos-delivery-seal.v2", authorityKind: "prospective_artifact_adoption",
+      previewDigest, idempotencyKey,
+    })
+    const base = {
+      authorizationMetadata: { adoptionHash, previewDigest, idempotencyKey, context, artifact },
+      userId: "owner", worldId: "space-1", repository: "bsvalues/terragroq",
+      pullRequest: 1124, headSha: "a".repeat(40), spaceRevision: 0,
+      outcome: context.outcome, workOrder: context.workOrder,
+      implementationGrant: { id: 79, ref: "GRANT-79", version: "b".repeat(64) },
+      anchorAllowed, anchorForbidden: forbidden,
+      implementationAllowed: anchorAllowed, implementationBlocked: forbidden,
+      signedAdoptionHash: adoptionHash, signedReservation: context.reservation,
+    }
+    expect(exact(base)).toBe(true)
+    expect(exact({ ...base, anchorAllowed: artifactAllowed })).toBe(false)
+    expect(exact({ ...base, implementationAllowed: artifactAllowed })).toBe(false)
+    expect(exact({ ...base, signedReservation: { ...context.reservation, allowed: anchorAllowed } })).toBe(false)
+    expect(exact({ ...base, authorizationMetadata: { ...base.authorizationMetadata, previewDigest: "0".repeat(64) } })).toBe(false)
+  })
+
+  it("loads an exact delivery subset without conflating it with the full anchor reservation", () => {
+    const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryPathsAreExact as (input: Record<string, unknown>) => boolean
+    const anchorPaths = [
+      "app/api/environment/space/route.ts",
+      "lib/environment/space-persistence.ts",
+      "tests/experience-v2-space-route.test.ts",
+    ]
+    const artifactPaths = [anchorPaths[0], anchorPaths[2]]
+    const base = { anchorPaths, artifactPaths, reservationPaths: artifactPaths, deliveryPaths: artifactPaths }
+    expect(exact(base)).toBe(true)
+    expect(exact({ ...base, artifactPaths: [anchorPaths[1], ...artifactPaths] })).toBe(false)
+    expect(exact({ ...base, reservationPaths: anchorPaths })).toBe(false)
+    expect(exact({ ...base, deliveryPaths: anchorPaths })).toBe(false)
+    expect(exact({ ...base, anchorPaths: [artifactPaths[0]] })).toBe(false)
   })
 
   it("loads historical Ed25519 verification keys from the configured public-key ring", () => {
