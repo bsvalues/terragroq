@@ -904,6 +904,7 @@ describe("Experience V2 selected Space actions", () => {
     await screen.findByRole("button", { name: "Stop Local Thinker turn" })
     expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
     expect(agentRequests).toEqual([{
+      worldId: "world-a",
       prompt: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "local",
       sessionId: LOCAL_ID,
