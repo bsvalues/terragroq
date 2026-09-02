@@ -10,6 +10,38 @@ afterEach(() => {
 })
 
 describe("WindowFrame resize persistence", () => {
+  it("lets window controls minimize without the frame reactivating itself", () => {
+    const onActivate = vi.fn()
+    const onMinimize = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <WindowFrame
+        id="editor"
+        title="Source"
+        geometry={{ x: 20, y: 30, width: 640, height: 480, z: 1, minimized: false }}
+        active={false}
+        onActivate={onActivate}
+        onGeometry={() => undefined}
+        onMinimize={onMinimize}
+        onClose={onClose}
+      >
+        <button type="button">Run validation</button>
+      </WindowFrame>,
+    )
+
+    const minimize = screen.getByRole("button", { name: "Minimize Source" })
+    fireEvent.pointerDown(minimize, { button: 0 })
+    expect(onActivate).not.toHaveBeenCalled()
+    fireEvent.click(minimize)
+    expect(onMinimize).toHaveBeenCalledTimes(1)
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Close Source" }), { button: 0 })
+    expect(onActivate).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Run validation" }), { button: 0 })
+    expect(onActivate).toHaveBeenCalledTimes(1)
+  })
+
   it("persists the border-box size without shrinking on content-box observations", () => {
     const onGeometry = vi.fn()
     render(
