@@ -52,6 +52,7 @@ const MAX_SPACE_BYTES = 256_000
 const FINALIZE_MERGED_EXTERNAL_DELIVERY = "space.external_work_order.finalize_merged_delivery"
 const SHA = /^[0-9a-f]{40}$/
 const EXTERNAL_QUEUE_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:access", "spend:increase"] as const
+const HERMES_LEGACY_TIME_ZONE = "America/Los_Angeles"
 
 type MergedExternalContext = Readonly<{
   worldId: string
@@ -157,14 +158,35 @@ function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
     || typeof input.signedDeliveryExpiry !== "string"
     || input.liveAnchorExpiry === null
     || input.persistedExpiry !== input.signedAnchorExpiry) return false
-  const liveAnchor = Date.parse(input.liveAnchorExpiry)
-  const signedAnchor = Date.parse(input.signedAnchorExpiry)
-  const persisted = Date.parse(input.persistedExpiry)
-  const signedDelivery = Date.parse(input.signedDeliveryExpiry)
-  const projection = signedAnchor - liveAnchor
-  return [liveAnchor, signedAnchor, persisted, signedDelivery].every(Number.isFinite)
-    && projection !== 0 && Math.abs(projection) <= 14 * 60 * 60 * 1_000
-    && signedDelivery === persisted + projection
+  return hermesLegacyRawPgExpiryProjection(input.liveAnchorExpiry) === input.signedAnchorExpiry
+    && hermesLegacyRawPgExpiryProjection(input.persistedExpiry) === input.signedDeliveryExpiry
+}
+
+function hermesLegacyRawPgExpiryProjection(value: string): string | null {
+  const wall = Date.parse(value)
+  if (!Number.isFinite(wall)) return null
+  const partsAt = (instant: number) => Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: HERMES_LEGACY_TIME_ZONE,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(instant)).filter((part) => part.type !== "literal")
+    .map((part) => [part.type, Number(part.value)]))
+  const offsetAt = (instant: number) => {
+    const parts = partsAt(instant)
+    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+      - Math.trunc(instant / 1_000) * 1_000
+  }
+  let projected = wall - offsetAt(wall)
+  projected = wall - offsetAt(projected)
+  const projectedParts = partsAt(projected)
+  const wallDate = new Date(wall)
+  if (projectedParts.year !== wallDate.getUTCFullYear()
+    || projectedParts.month !== wallDate.getUTCMonth() + 1
+    || projectedParts.day !== wallDate.getUTCDate()
+    || projectedParts.hour !== wallDate.getUTCHours()
+    || projectedParts.minute !== wallDate.getUTCMinutes()
+    || projectedParts.second !== wallDate.getUTCSeconds()) return null
+  return new Date(projected).toISOString()
 }
 
 function mergedExternalWorkOrderIsExact(input: Readonly<{
@@ -235,6 +257,7 @@ if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact = mergedExternalOutcomeVersionIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalActiveAuthorityIsFresh = mergedExternalActiveAuthorityIsFresh
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryGrantExpiryIsExact = mergedExternalDeliveryGrantExpiryIsExact
+  ;(globalThis as Record<string, unknown>).__williamosHermesLegacyRawPgExpiryProjection = hermesLegacyRawPgExpiryProjection
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalWorkOrderIsExact = mergedExternalWorkOrderIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalExactLiteralStrings = exactLiteralStrings
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact = mergedExternalSpaceRevisionIsExact
