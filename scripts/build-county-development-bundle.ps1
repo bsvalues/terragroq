@@ -63,7 +63,24 @@ Copy-Tree $appStage (Join-Path $stageRoot "app")
 
 New-Item -ItemType Directory -Path (Join-Path $stageRoot "runtime\node") -Force | Out-Null
 Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $stageRoot "runtime\node\node.exe") -Force
-Copy-Tree $PostgresRoot (Join-Path $stageRoot "runtime\postgres")
+
+# The EnterpriseDB/Chocolatey source tree may contain a build-only initialized data cluster.
+# County media carries only the portable PostgreSQL runtime, never that cluster, password verifier,
+# configuration, or log state.
+$postgresStage = Join-Path $stageRoot "runtime\postgres"
+foreach ($directory in @("bin", "lib", "share")) {
+  Copy-Tree (Require-Directory (Join-Path $PostgresRoot $directory)) (Join-Path $postgresStage $directory)
+}
+foreach ($notice in @("COPYRIGHT", "LICENSE", "README")) {
+  $candidate = Join-Path $PostgresRoot $notice
+  if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+    Copy-Item -LiteralPath $candidate -Destination (Join-Path $postgresStage $notice) -Force
+  }
+}
+if (Test-Path -LiteralPath (Join-Path $postgresStage "data")) {
+  throw "PORTABLE_POSTGRES_DATA_REFUSED: a build-time database cluster entered the County bundle"
+}
+
 Copy-Tree $OllamaRoot (Join-Path $stageRoot "runtime\ollama")
 
 New-Item -ItemType Directory -Path (Join-Path $stageRoot "cockpit") -Force | Out-Null
