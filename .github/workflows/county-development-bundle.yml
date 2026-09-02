@@ -173,7 +173,10 @@ jobs:
           if (-not $bundle) { throw 'County application bundle was not created.' }
           $package = "$env:RUNNER_TEMP\county-smoke-package"
           Expand-Archive -LiteralPath $bundle.FullName -DestinationPath $package -Force
-          $packageRoot = Get-ChildItem $package -Directory | Select-Object -First 1 -ExpandProperty FullName
+          $packageRoot = $package
+          if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'manifest.json') -PathType Leaf)) {
+            throw 'Extracted County package root does not contain manifest.json.'
+          }
           $fakeTf = "$env:RUNNER_TEMP\terrafusion_os_1.0"
           New-Item -ItemType Directory -Path $fakeTf -Force | Out-Null
           git -C $fakeTf init
@@ -242,12 +245,16 @@ jobs:
               if ($process.HasExited) { throw "County Cockpit exited during startup with code $($process.ExitCode)." }
             } while ($process.MainWindowHandle -eq 0 -and [DateTimeOffset]::UtcNow -lt $deadline)
 
+            if ($process.MainWindowHandle -eq 0) { throw 'County Cockpit did not expose a native main window.' }
+            if ($process.MainWindowTitle -ne 'WilliamOS County Development') {
+              throw "County Cockpit exposed the wrong native title: $($process.MainWindowTitle)"
+            }
             $observation = [ordered]@{
               schema = 'williamos.county-development.cockpit-acceptance.v1'
               result = 'PASS'
               observedAt = [DateTimeOffset]::UtcNow.ToString('o')
               processId = $process.Id
-              mainWindowObserved = $process.MainWindowHandle -ne 0
+              mainWindowObserved = $true
               mainWindowTitle = $process.MainWindowTitle
               processAlive = -not $process.HasExited
               configuredOrigin = 'http://127.0.0.1:3200'
