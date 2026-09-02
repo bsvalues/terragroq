@@ -11,5 +11,5 @@ export function Desk({
   initialSummon?: SummonedSurface | null
   projectKey?: "terrafusion" | "williamos"
 } = {}) {
-  return <WorkspaceShell initialSummon={initialSummon} projectKey={projectKey} />
+  return <WorkspaceShell key={projectKey} initialSummon={initialSummon} projectKey={projectKey} />
 }

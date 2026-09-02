@@ -206,7 +206,7 @@ describe("WilliamOS Experience V2 shell", () => {
     const source = shell()
     expect(page).toContain('params.project === "williamos" ? "williamos" : "terrafusion"')
     expect(page).toContain("projectKey={projectKey}")
-    expect(desk).toContain("<WorkspaceShell initialSummon={initialSummon} projectKey={projectKey} />")
+    expect(desk).toContain("<WorkspaceShell key={projectKey} initialSummon={initialSummon} projectKey={projectKey} />")
     expect(source).toContain('projectKey?: "terrafusion" | "williamos"')
     expect(source).toContain("fetch(spaceEndpoint(projectKey)")
     expect(source).toContain("spaceMutationBody(projectKey, { worldId: id")
