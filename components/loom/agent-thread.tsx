@@ -143,7 +143,7 @@ export function AgentThread({ projectKey = "terrafusion" }: { projectKey?: "terr
           resume: requestedSessionId !== null,
           provider: selectedProvider,
           model,
-          ...(projectKey === "williamos" ? { projectKey } : {}),
+          projectKey,
           ...(selectedProvider === "local" && requestedSessionId !== null ? { completedTurns: replayTurns } : {}),
         }),
         signal: abort.signal,

@@ -63,13 +63,14 @@ describe("Loom Local conversation continuity", () => {
     await submit("First owner prompt")
     await submit("Second owner prompt")
 
-    expect(agentBodies[0]).toEqual({ prompt: "First owner prompt", sessionId: null, resume: false, provider: "local", model: "" })
+    expect(agentBodies[0]).toEqual({ prompt: "First owner prompt", sessionId: null, resume: false, provider: "local", model: "", projectKey: "terrafusion" })
     expect(agentBodies[1]).toEqual({
       prompt: "Second owner prompt",
       sessionId: SESSION_ID,
       resume: true,
       provider: "local",
       model: "",
+      projectKey: "terrafusion",
       completedTurns: [{
         ownerPrompt: "First owner prompt",
         finalResult: "First canonical answer",

@@ -1,10 +1,25 @@
 import { readCodexContinuation } from "@/lib/loom/codex-continuation"
 import { codexContinuationDependenciesForProjectRoot } from "@/lib/loom/codex-continuation-runtime"
-import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type WorkspaceProjectBinding,
+} from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
+
+function worldMatchesWorkspaceProject(
+  world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  return world.spine.projectId === binding.projectId
+    && world.spine.projectName === binding.projectName
+    && world.resources.includes(`${WORKSPACE_ROOT_RESOURCE}${binding.project.identity}`)
+}
 
 export async function GET(request: Request): Promise<Response> {
   const session = await getSession()
@@ -25,6 +40,11 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ error: projectBinding.error }, { status: 503 })
   }
   try {
+    const world = await loadOwnedWorkingWorld(session.user.id, worldId)
+    if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    if (!worldMatchesWorkspaceProject(world, projectBinding.binding)) {
+      return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
+    }
     const continuation = await readCodexContinuation(
       session.user.id,
       worldId,

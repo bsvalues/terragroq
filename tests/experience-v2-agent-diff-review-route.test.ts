@@ -23,7 +23,7 @@ vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
   resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
-    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
+    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion", projectName: "TerraFusion",
     repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
   } }),
 }))
@@ -82,6 +82,8 @@ const snapshot = {
 function world(input: { path?: string; activeWindowId?: string; minimized?: boolean } = {}) {
   const selectedPath = input.path ?? PATH
   return {
+    spine: { projectId: 7, projectName: "TerraFusion" },
+    resources: ["williamos-workspace-root:v1:c:/terrafusion"],
     space: {
       activeWindowId: input.activeWindowId ?? "diff",
       activePaneId: "primary",
@@ -146,6 +148,21 @@ describe("server-grounded diff Reviewer route", () => {
     seams.recordLoomEnd.mockResolvedValue(undefined)
     seams.requireWorkContext.mockResolvedValue({ ok: true })
     seams.poolQuery.mockResolvedValue({ rows: [] })
+  })
+
+  it("refuses a diff review when the owned Space belongs to another project", async () => {
+    seams.loadOwnedWorkingWorld.mockResolvedValue({
+      ...world(),
+      spine: { projectId: 8, projectName: "WilliamOS" },
+      resources: ["williamos-workspace-root:v1:c:/williamos"],
+    })
+
+    const response = await POST(request(diffReviewBody()))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORLD_PROJECT_MISMATCH" })
+    expect(seams.deriveWorkspaceFileDiff).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it("uses only the server-derived patch and publishes the canonical result after terminal CAS", async () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   readCodexContinuation: vi.fn(),
+  loadOwnedWorkingWorld: vi.fn(),
   resolveProjectBinding: vi.fn(),
   dependenciesForProjectRoot: vi.fn(),
 }))
@@ -13,6 +14,9 @@ vi.mock("@/lib/loom/codex-continuation", () => ({
 }))
 vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
   codexContinuationDependenciesForProjectRoot: seams.dependenciesForProjectRoot,
+}))
+vi.mock("@/lib/environment/space-persistence", () => ({
+  loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld,
 }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveCanonicalWorkspaceProjectBinding: seams.resolveProjectBinding,
@@ -26,7 +30,14 @@ describe("Codex continuation restoration route", () => {
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.resolveProjectBinding.mockResolvedValue({
       ok: true,
-      binding: { workspaceRoot: "C:/physical/terrafusion" },
+      binding: {
+        workspaceRoot: "C:/physical/terrafusion", projectId: 7, projectName: "TerraFusion",
+        project: { identity: "c:/terrafusion" },
+      },
+    })
+    seams.loadOwnedWorkingWorld.mockResolvedValue({
+      spine: { projectId: 7, projectName: "TerraFusion" },
+      resources: ["williamos-workspace-root:v1:c:/terrafusion"],
     })
     seams.dependenciesForProjectRoot.mockReturnValue({ verified: "physical-terrafusion" })
   })
@@ -69,6 +80,19 @@ describe("Codex continuation restoration route", () => {
 
     expect(response.status).toBe(400)
     expect(seams.resolveProjectBinding).not.toHaveBeenCalled()
+    expect(seams.readCodexContinuation).not.toHaveBeenCalled()
+  })
+
+  it("refuses continuation projection when the owned Space belongs to another project", async () => {
+    seams.loadOwnedWorkingWorld.mockResolvedValue({
+      spine: { projectId: 8, projectName: "WilliamOS" },
+      resources: ["williamos-workspace-root:v1:c:/williamos"],
+    })
+
+    const response = await GET(new Request("http://williamos.test/api/loom/codex/continuation?worldId=world-1&projectKey=terrafusion"))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORLD_PROJECT_MISMATCH" })
     expect(seams.readCodexContinuation).not.toHaveBeenCalled()
   })
 })

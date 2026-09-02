@@ -19,6 +19,7 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
   resolveCanonicalWorkspaceProjectBinding: async (_userId: string, projectKey: unknown) => ({ ok: true, binding: {
     workspaceRoot: process.cwd(), projectId: 7, projectKey,
+    projectName: projectKey === "williamos" ? "WilliamOS" : "TerraFusion",
     repositoryIdentity: projectKey === "williamos" ? "bsvalues/terragroq" : "bsvalues/terrafusion_os_1.0",
     project: { identity: projectKey === "williamos" ? "c:/williamos" : "c:/terrafusion" },
   } }),
@@ -72,6 +73,8 @@ describe("durable Local model conversation route", () => {
     vi.unstubAllGlobals()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.loadOwnedWorkingWorld.mockResolvedValue({
+      spine: { projectId: 7, projectName: "TerraFusion" },
+      resources: ["williamos-workspace-root:v1:c:/terrafusion"],
       space: {
         activePaneId: "primary",
         panes: [{ id: "primary", filePath: "README.md" }],
@@ -144,6 +147,26 @@ describe("durable Local model conversation route", () => {
     expect(system).toContain('canonical project "williamos"')
     expect(system).toContain('repository "bsvalues/terragroq"')
     expect(seams.loadOwnedWorkingWorld).not.toHaveBeenCalled()
+  })
+
+  it("refuses Space-backed Local grounding when the Space belongs to another project", async () => {
+    seams.loadOwnedWorkingWorld.mockResolvedValue({
+      spine: { projectId: 8, projectName: "WilliamOS" },
+      resources: ["williamos-workspace-root:v1:c:/williamos"],
+      space: {
+        activePaneId: "primary",
+        panes: [{ id: "primary", filePath: "README.md" }],
+        selection: { filePath: "README.md", anchor: 0, head: 0 },
+      },
+    })
+    const upstream = vi.fn()
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await POST(request({ provider: "local", prompt: "Explain this design." }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORLD_PROJECT_MISMATCH" })
+    expect(upstream).not.toHaveBeenCalled()
   })
 
   it("uses an installed chat model when the server default is absent without overriding an explicit choice", async () => {

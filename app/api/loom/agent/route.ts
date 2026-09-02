@@ -26,7 +26,10 @@ import {
   SpaceMutationAuthorityError,
   type SpaceMutationAuthority,
 } from "@/lib/governance/space-mutation-authority"
-import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type WorkspaceProjectBinding,
+} from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -53,6 +56,16 @@ const MAX_CLOUD_PROVIDER_STREAM_BYTES = 4_194_304
 const MAX_DIFF_REVIEW_PATCH_BYTES = 20_000
 const MAX_DIFF_REVIEW_PROMPT_UNITS = 24_000
 const ELIGIBILITY_HEADERS = { "cache-control": "no-store" }
+const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
+
+function worldMatchesWorkspaceProject(
+  world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  return world.spine.projectId === binding.projectId
+    && world.spine.projectName === binding.projectName
+    && world.resources.includes(`${WORKSPACE_ROOT_RESOURCE}${binding.project.identity}`)
+}
 
 function exactEligibilityPath(value: string | null): string | null {
   if (!value || value !== value.trim() || value.length > 1_000 || /[\\\u0000-\u001f\u007f]/.test(value)
@@ -426,6 +439,9 @@ export async function POST(request: Request) {
     diffReviewWorldId = body.worldId
     const world = await loadOwnedWorkingWorld(session.user.id, diffReviewWorldId)
     if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    if (!worldMatchesWorkspaceProject(world, binding)) {
+      return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
+    }
     if (!hasActiveDiff(world)) {
       return Response.json({ error: "DIFF_REVIEW_NOT_ACTIVE" }, { status: 409 })
     }
@@ -472,6 +488,9 @@ export async function POST(request: Request) {
     previewWorldId = body.worldId
     const world = await loadOwnedWorkingWorld(session.user.id, previewWorldId)
     if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    if (!worldMatchesWorkspaceProject(world, binding)) {
+      return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
+    }
     const active = world.space?.windows.find((window) => window.id === world.space!.activeWindowId)
     if (!active || active.kind !== "running-app" || active.minimized) {
       return Response.json({ error: "PREVIEW_NOT_ACTIVE" }, { status: 409 })
@@ -572,6 +591,9 @@ export async function POST(request: Request) {
       const worldId = body.worldId as string
       const localWorld = await loadOwnedWorkingWorld(session.user.id, worldId)
       if (!localWorld) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+      if (!worldMatchesWorkspaceProject(localWorld, binding)) {
+        return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
+      }
       const selectedPath = selectedWorldPath(localWorld)
       grounding = [
         "You are the sovereign Local conversation inside WilliamOS. This session is advisory and non-mutating: it is not a writing assignment and cannot edit files, run commands, or dispatch work.",
