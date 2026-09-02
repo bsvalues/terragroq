@@ -422,11 +422,13 @@ function Test-HealthyCountyRuntime {
   param([object]$Health, [object]$Config)
   if (-not $Health) { return $false }
   return $Health.deployment.profile -eq "county-development" -and
+    $Health.deployment.deploymentId -eq [string]$Config.deploymentId -and
     [bool]$Health.deployment.valid -and
     [bool]$Health.deployment.localOnlyInference -and
     $Health.deployment.serviceOrigin -eq "http://127.0.0.1:$([int]$Config.appPort)" -and
     [bool]$Health.checks.runtime.ok -and
-    $Health.checks.runtime.chatModel -eq [string]$Config.chatModel
+    $Health.checks.runtime.chatModel -eq [string]$Config.chatModel -and
+    $Health.checks.runtime.embeddingModel -eq [string]$Config.embeddingModel
 }
 
 function Start-WilliamOS {
@@ -488,12 +490,15 @@ function Start-WilliamOS {
 function Get-OwnerCount {
   param([object]$Config, [object]$Secrets)
   $psql = Join-Path $InstallRoot "runtime\postgres\bin\psql.exe"
-  $result = $null
-  With-PostgresPassword $Secrets {
+  $previous = $env:PGPASSWORD
+  try {
+    $env:PGPASSWORD = [string]$Secrets.postgresPassword
     $result = & $psql -h 127.0.0.1 -p ([int]$Config.postgresPort) -U williamos -d williamos -tAc 'SELECT count(*) FROM "user";' 2>$null
+    if ($LASTEXITCODE -ne 0) { return 0 }
+    return [int](("$result").Trim())
+  } finally {
+    $env:PGPASSWORD = $previous
   }
-  if ($LASTEXITCODE -ne 0) { return 0 }
-  return [int](("$result").Trim())
 }
 
 function Open-OwnerSurface {
@@ -594,7 +599,10 @@ function Start-Installed {
 
 switch ($Action) {
   "Launch" {
-    if (Test-Path -LiteralPath (Join-Path $InstallRoot "app\server.js")) { Start-Installed }
+    $installationComplete = (Test-Path -LiteralPath (Join-Path $InstallRoot "app\server.js") -PathType Leaf) -and
+      (Test-Path -LiteralPath $ConfigPath -PathType Leaf) -and
+      (Test-Path -LiteralPath $SecretsPath -PathType Leaf)
+    if ($installationComplete) { Start-Installed }
     else { Install-Package }
   }
   "Install" { Install-Package }
