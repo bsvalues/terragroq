@@ -1,10 +1,12 @@
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const fsp = require("node:fs/promises")
+const http = require("node:http")
 const path = require("node:path")
 const { chromium } = require("playwright")
 
 const origin = (process.env.COUNTY_ACCEPTANCE_ORIGIN || "http://127.0.0.1:3200").replace(/\/$/, "")
+const previewOrigin = (process.env.COUNTY_ACCEPTANCE_PREVIEW_ORIGIN || "http://127.0.0.1:3102").replace(/\/$/, "")
 const terraFusionRoot = process.env.COUNTY_ACCEPTANCE_TERRAFUSION_ROOT
 const evidenceRoot = process.env.COUNTY_ACCEPTANCE_EVIDENCE_ROOT || path.join(process.cwd(), "county-acceptance-evidence")
 const expectedDeploymentId = process.env.COUNTY_ACCEPTANCE_EXPECTED_DEPLOYMENT_ID || "ci-county-development"
@@ -44,6 +46,44 @@ async function poll(description, operation, timeoutMs = 60_000, intervalMs = 500
   throw new Error(`${description} did not become true before timeout${lastError ? `: ${lastError.message}` : ""}`)
 }
 
+async function startPreviewServer() {
+  const previewUrl = new URL(previewOrigin)
+  if (previewUrl.protocol !== "http:" || !loopbackHosts.has(previewUrl.hostname.toLowerCase()) || !previewUrl.port) {
+    throw new Error("COUNTY_ACCEPTANCE_PREVIEW_ORIGIN must be one loopback HTTP origin with an explicit port")
+  }
+  const html = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TerraFusion County Preview</title></head>
+<body>
+  <main>
+    <h1 data-testid="terrafusion-county-preview">TerraFusion County Preview</h1>
+    <p data-testid="terrafusion-preview-boundary">Local County developer preview</p>
+  </main>
+</body>
+</html>`
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-williamos-workspace-app": "TerraFusion",
+    })
+    response.end(html)
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(Number(previewUrl.port), previewUrl.hostname, () => {
+      server.off("error", reject)
+      resolve()
+    })
+  })
+  return server
+}
+
+async function closeServer(server) {
+  if (!server) return
+  await new Promise((resolve) => server.close(() => resolve()))
+}
+
 async function openWilliam(page) {
   const rail = page.getByTestId("william-conversation-rail")
   if ((await rail.getAttribute("data-open")) !== "true") {
@@ -57,6 +97,7 @@ async function main() {
   await fsp.mkdir(evidenceRoot, { recursive: true })
   const originalReadme = await fsp.readFile(readmePath, "utf8")
   const marker = `COUNTY_BROWSER_ACCEPTANCE_${Date.now()}`
+  const previewServer = await startPreviewServer()
   const browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } })
   const page = await context.newPage()
@@ -123,6 +164,26 @@ async function main() {
     assert.match(await restoredEditor.innerText(), new RegExp(marker))
     observe("SPACE_FILE_AND_LAYOUT_RESTORED")
 
+    await page.getByRole("button", { name: /^(Restore|Focus) Terminal$/ }).click()
+    const terminal = page.getByRole("region", { name: "Project terminal" })
+    await terminal.waitFor({ state: "visible", timeout: 30_000 })
+    const statusButton = terminal.getByRole("button", { name: "What has changed" })
+    await statusButton.waitFor({ state: "visible", timeout: 30_000 })
+    await statusButton.click()
+    await poll("bounded project operation", async () => {
+      const text = await terminal.innerText()
+      return text.includes("README.md") && text.includes("exit 0") ? text : ""
+    }, 60_000)
+    observe("BOUNDED_PROJECT_OPERATION_EXECUTED", { operation: "repo.status" })
+
+    await page.getByRole("button", { name: /^(Restore|Focus) Developer preview$/ }).click()
+    const previewFrameElement = page.locator('iframe[title="Running TerraFusion application"]')
+    await previewFrameElement.waitFor({ state: "visible", timeout: 60_000 })
+    const previewFrame = page.frameLocator('iframe[title="Running TerraFusion application"]')
+    await previewFrame.getByTestId("terrafusion-county-preview").waitFor({ state: "visible", timeout: 60_000 })
+    assert.match(await previewFrame.getByTestId("terrafusion-preview-boundary").innerText(), /Local County developer preview/i)
+    observe("DEVELOPER_PREVIEW_ATTACHED", { previewOrigin })
+
     const rail = await openWilliam(page)
     const composer = page.getByLabel("Message William")
     await composer.waitFor({ state: "visible", timeout: 30_000 })
@@ -145,10 +206,14 @@ async function main() {
     await page.screenshot({ path: path.join(evidenceRoot, "02-county-workspace-local-ai.png"), fullPage: true })
 
     await page.reload({ waitUntil: "networkidle", timeout: 90_000 })
+    await page.getByRole("tab", { name: /README\.md/ }).waitFor({ state: "visible", timeout: 30_000 })
+    await page.locator('iframe[title="Running TerraFusion application"]').waitFor({ state: "visible", timeout: 60_000 })
+    await page.frameLocator('iframe[title="Running TerraFusion application"]')
+      .getByTestId("terrafusion-county-preview").waitFor({ state: "visible", timeout: 60_000 })
     const restoredRail = await openWilliam(page)
     await poll("persisted owner prompt", async () => (await restoredRail.innerText()).includes(prompt), 60_000)
     await poll("persisted William response", async () => (await restoredRail.innerText()).includes(responseText), 60_000)
-    observe("CONVERSATION_RESTORED")
+    observe("CONVERSATION_AND_PREVIEW_LAYOUT_RESTORED")
 
     assert.deepEqual(externalRequests, [], `External browser requests were observed: ${externalRequests.join(", ")}`)
     assert.deepEqual(pageErrors, [], `Page errors were observed: ${pageErrors.join(" | ")}`)
@@ -160,6 +225,7 @@ async function main() {
       result: "PASS",
       observedAt: new Date().toISOString(),
       origin,
+      previewOrigin,
       expectedDeploymentId,
       terraFusionRoot,
       file: "README.md",
@@ -177,6 +243,7 @@ async function main() {
       result: "FAIL",
       observedAt: new Date().toISOString(),
       origin,
+      previewOrigin,
       expectedDeploymentId,
       terraFusionRoot,
       error: error instanceof Error ? error.stack || error.message : String(error),
@@ -188,6 +255,7 @@ async function main() {
     throw error
   } finally {
     await browser.close()
+    await closeServer(previewServer)
     // The checkout is a disposable acceptance fixture, but restoring it makes the script safe to run locally too.
     await fsp.writeFile(readmePath, originalReadme)
   }
