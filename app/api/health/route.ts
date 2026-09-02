@@ -4,6 +4,7 @@ import { buildRuntimeStatus } from "@/lib/ai/runtime"
 import { INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { isLoopbackInferenceBase, resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { getBuildProvenance } from "@/lib/build-provenance"
+import { getDeploymentStatus } from "@/lib/deployment/profile"
 
 export const dynamic = "force-dynamic"
 
@@ -14,6 +15,7 @@ type Check = {
 }
 
 export async function GET() {
+  const deployment = getDeploymentStatus()
   const runtime = buildRuntimeStatus()
   const liveRuntime = isLoopbackInferenceBase(INFERENCE_BASE_URL)
     ? await resolveOllamaChatModel(INFERENCE_BASE_URL, runtime.chatModel)
@@ -39,7 +41,10 @@ export async function GET() {
     warnings: authWarnings.length > 0 ? authWarnings : undefined,
   }
 
-  const healthy = readiness.ready
+  // Preserve the established HERMES aggregate-health behavior. County Development additionally
+  // requires a valid local-only compartment and the configured local model to be available.
+  const countyRuntimeReady = deployment.profile !== "county-development" || liveRuntime.available
+  const healthy = readiness.ready && deployment.valid && countyRuntimeReady
 
   return NextResponse.json(
     {
@@ -48,7 +53,12 @@ export async function GET() {
       // The commit this running artifact was built from. The deploy verifies this equals the commit
       // it built, so a stale standalone can never pass as a fresh deploy (#762 deploy doctrine).
       build: getBuildProvenance(),
+      deployment,
       checks: {
+        deployment: {
+          ok: deployment.valid,
+          detail: deployment.valid ? undefined : deployment.violations.join(" "),
+        },
         database,
         auth,
         runtime: {
