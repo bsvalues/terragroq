@@ -265,7 +265,7 @@ describe("Experience V2 developer tools", () => {
     vi.stubGlobal("fetch", fetcher)
 
     render(<DeveloperToolsSurface kind="tests" projectKey="williamos" selectedPath={null} />)
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run deterministic suite" }))
 
     expect(await screen.findByText("7 tests passed", { exact: false })).toBeTruthy()
     expect(await screen.findByText("exit 0", { exact: false })).toBeTruthy()

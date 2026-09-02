@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { DEFAULT_PROVIDER, LOOM_PROVIDERS, type LoomProviderId } from "@/lib/loom/providers"
-import { useWorkbenchContext } from "@/components/workbench/workbench-context"
 
 type Entry =
   | { kind: "you"; text: string }
@@ -47,9 +46,7 @@ function appendBoundedLocalTurn(turns: readonly LocalCompletedTurn[], turn: Loca
  * or edits, each command it runs. That is the difference between this and every other page in the
  * cockpit, which can only show rows written after the fact by something the operator could not see.
  */
-export function AgentThread() {
-  const workbench = useWorkbenchContext()
-  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
+export function AgentThread({ projectKey = "terrafusion" }: { projectKey?: "terrafusion" | "williamos" }) {
   const [entries, setEntries] = useState<Entry[]>([])
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)

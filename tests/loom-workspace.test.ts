@@ -110,7 +110,9 @@ describe("Experience V2 bounded Terminal route", () => {
 
     expect(response.status).toBe(200)
     expect(terminalRouteSeams.resolveProject).toHaveBeenCalledWith("owner-1", "williamos")
-    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, expect.any(Array), expect.objectContaining({
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+      "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent", "--config", "vitest.ci.config.ts",
+    ], expect.objectContaining({
       cwd: "C:/HermesLab/williamos-source",
     }))
     child.emit("close", 0)

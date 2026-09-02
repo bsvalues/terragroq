@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { useWorkbenchContext } from "@/components/workbench/workbench-context"
-
 type Operation = {
   id: string
   label: string
@@ -22,9 +20,7 @@ type Line = { channel: "stdout" | "stderr" | "meta"; text: string }
  * stop. Here the machine's own bytes arrive as they are produced, the operator can stop the process,
  * and leaving the page kills it rather than orphaning it.
  */
-export function LiveConsole() {
-  const workbench = useWorkbenchContext()
-  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
+export function LiveConsole({ projectKey = "terrafusion" }: { projectKey?: "terrafusion" | "williamos" }) {
   const [operations, setOperations] = useState<Operation[]>([])
   const [lines, setLines] = useState<Line[]>([])
   const [running, setRunning] = useState<string | null>(null)

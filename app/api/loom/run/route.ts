@@ -53,6 +53,9 @@ export async function POST(request: Request) {
     return Response.json({ error: resolution.refusal }, { status: resolution.refusal === "UNKNOWN_OPERATION" ? 404 : 409 })
   }
   const operation = resolution.operation
+  const operationArgs = operation.id === "tests.run" && projectBinding.binding.projectKey === "williamos"
+    ? [...operation.args, "--config", "vitest.ci.config.ts"]
+    : [...operation.args]
 
   // Reading repository state or tailing a log proves nothing and changes nothing; restarting the
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
@@ -79,7 +82,7 @@ export async function POST(request: Request) {
   }
 
   const command = operation.command === "node" ? process.execPath : operation.command
-  const child = spawn(command, [...operation.args], {
+  const child = spawn(command, operationArgs, {
     cwd: projectRoot,
     shell: false,
     windowsHide: true,

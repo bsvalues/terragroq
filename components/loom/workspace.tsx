@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 
-import { useWorkbenchContext } from "@/components/workbench/workbench-context"
-
 // CodeMirror touches the DOM on construction, so it is loaded in the browser only.
 const CodeEditor = dynamic(() => import("@/components/loom/code-editor").then((module) => module.CodeEditor), {
   ssr: false,
@@ -85,9 +83,7 @@ function TreeNode({
  * actually changed against HEAD without moving to another surface or trusting a summary. Saving is
  * refused if the file changed underneath, because the agent may be editing the same tree.
  */
-export function Workspace() {
-  const workbench = useWorkbenchContext()
-  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
+export function Workspace({ projectKey = "terrafusion" }: { projectKey?: "terrafusion" | "williamos" }) {
   const [roots, setRoots] = useState<Entry[]>([])
   const [open, setOpen] = useState<OpenFile | null>(null)
   const [draft, setDraft] = useState("")
