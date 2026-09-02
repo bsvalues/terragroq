@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "county-development-cockpit",
+  "description": "The County loopback WilliamOS origin may request only device key generation and proof signing.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:3200/*"]
+  },
+  "permissions": [
+    "allow-device-generate-key",
+    "allow-device-bind-credential",
+    "allow-device-credential",
+    "allow-device-sign"
+  ]
+}
