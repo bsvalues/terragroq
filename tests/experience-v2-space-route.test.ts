@@ -330,11 +330,14 @@ describe("merged external Space delivery finalization", () => {
       outcome: context.outcome, workOrder: context.workOrder,
       implementationGrant: { id: 79, ref: "GRANT-79", version: "b".repeat(64) },
       anchorAllowed, anchorForbidden: forbidden,
+      admittedAllowed: anchorAllowed, admittedForbidden: forbidden,
       implementationAllowed: anchorAllowed, implementationBlocked: forbidden,
       signedAdoptionHash: adoptionHash, signedReservation: context.reservation,
     }
     expect(exact(base)).toBe(true)
     expect(exact({ ...base, anchorAllowed: artifactAllowed })).toBe(false)
+    expect(exact({ ...base, admittedAllowed: artifactAllowed })).toBe(false)
+    expect(exact({ ...base, admittedForbidden: [...forbidden].reverse() })).toBe(false)
     expect(exact({ ...base, implementationAllowed: artifactAllowed })).toBe(false)
     expect(exact({ ...base, signedReservation: { ...context.reservation, allowed: anchorAllowed } })).toBe(false)
     expect(exact({ ...base, authorizationMetadata: { ...base.authorizationMetadata, previewDigest: "0".repeat(64) } })).toBe(false)

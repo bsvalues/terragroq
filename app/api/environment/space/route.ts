@@ -253,6 +253,8 @@ function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
   implementationGrant: Readonly<{ id: number; ref: string | null; version: string | null }>
   anchorAllowed: readonly string[]
   anchorForbidden: readonly string[]
+  admittedAllowed: readonly string[]
+  admittedForbidden: readonly string[]
   implementationAllowed: readonly string[]
   implementationBlocked: readonly string[]
   signedAdoptionHash: string
@@ -297,6 +299,8 @@ function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
       && contextGrant.version === input.implementationGrant.version
       && exactCanonicalPaths(anchorAllowed, input.anchorAllowed)
       && exactLiteralStrings(anchorForbidden, input.anchorForbidden)
+      && exactCanonicalPaths(anchorAllowed, input.admittedAllowed)
+      && exactLiteralStrings(anchorForbidden, input.admittedForbidden)
       && exactCanonicalPaths(anchorAllowed, input.implementationAllowed)
       && exactLiteralStrings(anchorForbidden, input.implementationBlocked)
       && exactCanonicalPaths(artifactAllowed, input.signedReservation.allowed)
@@ -618,6 +622,8 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
         },
         anchorAllowed: work.allowedFiles,
         anchorForbidden: work.forbiddenFiles,
+        admittedAllowed: Array.isArray(lockedBinding?.reservedPaths) ? lockedBinding.reservedPaths.map(String) : [],
+        admittedForbidden: Array.isArray(lockedBinding?.forbiddenPaths) ? lockedBinding.forbiddenPaths.map(String) : [],
         implementationAllowed: implementationGrant.allowedActions,
         implementationBlocked: implementationGrant.blockedActions,
         signedAdoptionHash: signedAdoption.adoptionHash,
