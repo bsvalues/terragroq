@@ -73,6 +73,54 @@ async function openWilliamConversation() {
 }
 
 describe("durable William conversation rail", () => {
+  it("waits for the active Space to hydrate before rail or Line dispatch", async () => {
+    let resolveSpace!: (response: Response) => void
+    const spaceResponse = new Promise<Response>((resolve) => { resolveSpace = resolve })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return spaceResponse
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "Hydrated response", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await userEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+    const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    expect(composer.disabled).toBe(true)
+    expect((screen.getByRole("button", { name: "Send to William" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(composer, { target: { value: "Too early from the rail" } })
+    fireEvent.submit(composer.closest("form")!)
+    expect(lineBodies).toEqual([])
+
+    await userEvent.click(screen.getByRole("button", { name: "Close William conversation" }))
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    const lineInput = screen.getByRole("textbox", { name: "The Line" }) as HTMLInputElement
+    expect(lineInput.disabled).toBe(true)
+    fireEvent.change(lineInput, { target: { value: "Too early from The Line" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(lineBodies).toEqual([])
+
+    resolveSpace(Response.json(spaceEnvelope()))
+    await waitFor(() => expect(lineInput.disabled).toBe(false))
+    fireEvent.change(lineInput, { target: { value: "Now use the hydrated Space" } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    await waitFor(() => expect(lineBodies).toEqual([{
+      worldId: "world-a",
+      projectKey: "terrafusion",
+      text: "Now use the hydrated Space",
+    }]))
+    expect(await screen.findByText("Hydrated response")).toBeTruthy()
+  })
+
   it("disables Override while an existing William turn is pending and dispatches nothing else", async () => {
     let resolveLine!: (response: Response) => void
     const lineResponse = new Promise<Response>((resolve) => { resolveLine = resolve })
