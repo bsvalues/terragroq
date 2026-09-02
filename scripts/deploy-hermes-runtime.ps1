@@ -220,9 +220,43 @@ if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
 }
 
-# The restore command is operator-facing, executable rollback evidence. Values must be serialized as
-# PowerShell data, not interpolated into double-quoted source where `$` and backticks are evaluated.
-# Single-quoted literals preserve every Windows path metacharacter; apostrophes double inside them.
+# Next's pnpm standalone trace can contain the exact dependency closure only inside
+# node_modules\.pnpm, while the runtime requires ordinary package paths such as
+# node_modules\styled-jsx. Materialize that closure before rollback capture or task control so a
+# missing package cannot turn a dependency refresh into an outage.
+$deploymentNodeModules = Join-Path $standalone "node_modules"
+$materializedNodeModulesRoot = $null
+if ($WithDependencies) {
+  $requiredRuntimePackages = @("next\package.json", "styled-jsx\package.json", "@swc\helpers\package.json")
+  $hasFlatDependencyTree = $true
+  foreach ($required in $requiredRuntimePackages) {
+    if (-not (Test-Path -LiteralPath (Join-Path $deploymentNodeModules $required) -PathType Leaf)) {
+      $hasFlatDependencyTree = $false
+      break
+    }
+  }
+
+  if (-not $hasFlatDependencyTree) {
+    $materializer = Join-Path $Source "scripts\materialize-standalone-dependencies.ps1"
+    if (-not (Test-Path -LiteralPath $materializer -PathType Leaf)) {
+      throw "Missing standalone dependency materializer: $materializer"
+    }
+    $materializedNodeModulesRoot = Join-Path $env:TEMP ("williamos-standalone-dependencies-{0}" -f [guid]::NewGuid().ToString("N"))
+    $deploymentNodeModules = Join-Path $materializedNodeModulesRoot "node_modules"
+    & $materializer -SourceNodeModules (Join-Path $standalone "node_modules") -DestinationNodeModules $deploymentNodeModules | Out-Null
+  }
+
+  foreach ($required in $requiredRuntimePackages) {
+    if (-not (Test-Path -LiteralPath (Join-Path $deploymentNodeModules $required) -PathType Leaf)) {
+      throw "Refusing dependency deployment: the prepared runtime tree is missing '$required'"
+    }
+  }
+}
+
+try {
+  # The restore command is operator-facing, executable rollback evidence. Values must be serialized as
+  # PowerShell data, not interpolated into double-quoted source where `$` and backticks are evaluated.
+  # Single-quoted literals preserve every Windows path metacharacter; apostrophes double inside them.
 function ConvertTo-PowerShellLiteral {
   param([string]$Value)
   if ($Value -match "[`r`n`0]") { throw "Cannot render a multiline or NUL-containing rollback argument" }
@@ -400,7 +434,7 @@ if (Test-Path (Join-Path $Source "public")) {
 
 if ($WithDependencies) {
   # /MIR would delete .env.local and anything else living beside it, so this targets node_modules only.
-  $null = robocopy (Join-Path $standalone "node_modules") (Join-Path $Runtime "node_modules") /MIR /NFL /NDL /NJH /NJS /NP
+  $null = robocopy $deploymentNodeModules (Join-Path $Runtime "node_modules") /MIR /XJ /NFL /NDL /NJH /NJS /NP
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying node_modules (exit $LASTEXITCODE)" }
 }
 
@@ -503,3 +537,8 @@ if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
 }
 
 Write-Output "deployed and verified: running $runningSha, loose provenance agrees, HTTP $Port and HTTPS $HttpsPort healthy"
+} finally {
+  if ($materializedNodeModulesRoot -and (Test-Path -LiteralPath $materializedNodeModulesRoot)) {
+    Remove-Item -LiteralPath $materializedNodeModulesRoot -Recurse -Force
+  }
+}

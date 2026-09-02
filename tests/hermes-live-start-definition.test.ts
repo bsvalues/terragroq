@@ -21,10 +21,12 @@ import path from "node:path"
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
 const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
+const MATERIALIZE_DEPENDENCIES_SCRIPT = path.join(process.cwd(), "scripts", "materialize-standalone-dependencies.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
 const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
+const materializeDependenciesText = fs.readFileSync(MATERIALIZE_DEPENDENCIES_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -188,6 +190,26 @@ describe("the cockpit is given a proven governed workspace, or it does not start
 })
 
 describe("the deploy places what the start script needs and can be undone", () => {
+  it("materializes pnpm standalone dependencies before stopping production", () => {
+    const code = executableOnly(deployText)
+    const materializer = executableOnly(materializeDependenciesText)
+    const prepareIndex = code.indexOf("materialize-standalone-dependencies.ps1")
+    const rollbackIndex = code.indexOf("rollback captured")
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+
+    expect(prepareIndex).toBeGreaterThan(-1)
+    expect(prepareIndex).toBeLessThan(rollbackIndex)
+    expect(prepareIndex).toBeLessThan(stopIndex)
+    expect(code).toContain("styled-jsx\\package.json")
+    expect(code).toContain("@swc\\helpers\\package.json")
+    expect(code).toMatch(/robocopy \$deploymentNodeModules/)
+    expect(materializer).toContain('Join-Path $resolvedSource ".pnpm"')
+    expect(materializer).toContain("Materialized standalone dependencies are incomplete")
+    expect(materializer).toContain("Materialized standalone dependencies still contain a reparse point")
+    expect(materializer).toContain("Refusing unsafe standalone dependency destination")
+    expect(code).toMatch(/finally\s*\{[\s\S]*Remove-Item -LiteralPath \$materializedNodeModulesRoot/)
+  })
+
   it("copies the boot-time tooling Next's tracer does not include", () => {
     const code = executableOnly(deployText)
     // The whole fabric mjs directory, not a hand-listed pair: the resolver's import closure reaches
