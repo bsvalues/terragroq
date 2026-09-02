@@ -216,6 +216,43 @@ describe("Experience V2 Space route", () => {
 })
 
 describe("merged external Space delivery finalization", () => {
+  it("accepts only the known raw-pg delivery expiry representation while live authority is fresh", async () => {
+    await import("@/app/api/environment/space/route")
+    const expiryIsExact = (globalThis as Record<string, unknown>)
+      .__williamosMergedExternalDeliveryGrantExpiryIsExact as (input: {
+        persistedExpiry: string | null
+        signedDeliveryExpiry: unknown
+        signedAnchorExpiry: unknown
+        activeAuthorityFresh: boolean
+      }) => boolean
+
+    const persistedExpiry = "2026-09-04T19:07:15.475Z"
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      activeAuthorityFresh: true,
+    })).toBe(true)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: persistedExpiry,
+      signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      activeAuthorityFresh: true,
+    })).toBe(true)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      activeAuthorityFresh: false,
+    })).toBe(false)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      activeAuthorityFresh: true,
+    })).toBe(false)
+  })
+
   it("accepts only the signed active version or its exact completed replay successor", () => {
     const versionIsExact = (globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact as (input: {
       signedVersion: number

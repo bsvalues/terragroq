@@ -137,6 +137,24 @@ function mergedExternalActiveAuthorityIsFresh(input: Readonly<{
       && grant.expiresAt instanceof Date && grant.expiresAt.getTime() > input.now.getTime())
 }
 
+function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
+  persistedExpiry: string | null
+  signedDeliveryExpiry: unknown
+  signedAnchorExpiry: unknown
+  activeAuthorityFresh: boolean
+}>): boolean {
+  if (!input.activeAuthorityFresh || input.persistedExpiry === null) return false
+  if (input.persistedExpiry === input.signedDeliveryExpiry) return true
+  // Historical prospective-adoption evidence was written through raw node-pg on HERMES before
+  // UTC-wall timestamps were normalized at that boundary. The inserted delivery grant retained the
+  // authorization's exact anchor expiry, while RETURNING serialized the same wall clock through the
+  // host offset before persisting it in deliveryGrant.expiresAt. Accept only that one recognizable
+  // representation defect, and only while the complete live Space/Work Order/grant chain is fresh.
+  // A widened/expired grant, a changed anchor, or any other timestamp remains fail-closed.
+  return typeof input.signedAnchorExpiry === "string"
+    && input.persistedExpiry === input.signedAnchorExpiry
+}
+
 function mergedExternalWorkOrderIsExact(input: Readonly<{
   persistedRef: unknown
   persistedUpdatedAt: unknown
@@ -204,6 +222,7 @@ function configuredDeliveryVerificationKeys(): Readonly<Record<string, KeyObject
 if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact = mergedExternalOutcomeVersionIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalActiveAuthorityIsFresh = mergedExternalActiveAuthorityIsFresh
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryGrantExpiryIsExact = mergedExternalDeliveryGrantExpiryIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalWorkOrderIsExact = mergedExternalWorkOrderIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalExactLiteralStrings = exactLiteralStrings
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact = mergedExternalSpaceRevisionIsExact
@@ -595,7 +614,12 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && deliveryGrant.workOrderId === expected.workOrderId
       && deliveryGrant.grantedBy === userId && deliveryGrant.grantedTo === "williamos-delivery"
       && deliveryGrant.authorityLevel === "A8_PUSH"
-      && deliveryExpiry === (deliveryGrantBinding?.expiresAt ?? null)
+      && mergedExternalDeliveryGrantExpiryIsExact({
+        persistedExpiry: deliveryExpiry,
+        signedDeliveryExpiry: deliveryGrantBinding?.expiresAt,
+        signedAnchorExpiry: anchorGrant?.expiresAt,
+        activeAuthorityFresh,
+      })
       && canonicalRepository(deliveryScope?.repository) === expected.repository
       && Number(deliveryScope?.pullRequest) === expected.pullRequest
       && deliveryScope?.headSha === expected.headSha
