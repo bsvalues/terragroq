@@ -17,6 +17,7 @@ param(
   [string]$OwnerEmail,
   [string]$TerraFusionRoot,
   [string]$DeploymentId,
+  [string]$PreviewUrl,
   [string]$ModelSource,
   [switch]$NonInteractive,
   [switch]$SkipCockpit,
@@ -179,6 +180,11 @@ function Resolve-InitialConfiguration {
     Deny "OWNER_EMAIL_REQUIRED" "Provide the County account that will become this installation's owner."
   }
   $resolvedRoot = Assert-TerraFusionCheckout $root
+  $preview = if ($PreviewUrl) { $PreviewUrl.Trim() } else { "http://127.0.0.1:3102/" }
+  if (-not (Test-LoopbackUrl $preview @('http', 'https'))) {
+    Deny "PREVIEW_URL_INVALID" "County developer Preview must be one loopback HTTP(S) URL."
+  }
+  $preview = ([Uri]$preview).AbsoluteUri
   $id = if ($DeploymentId) { $DeploymentId } else { "benton-county-development-$($env:COMPUTERNAME.ToLowerInvariant())" }
   if ($id -notmatch '^[a-z0-9][a-z0-9.-]{2,79}$') {
     Deny "DEPLOYMENT_ID_INVALID" "Use 3-80 lowercase letters, digits, dots, or hyphens."
@@ -194,7 +200,7 @@ function Resolve-InitialConfiguration {
     aiPort = 11434
     chatModel = "qwen2.5-coder:1.5b"
     embeddingModel = "snowflake-arctic-embed2"
-    previewUrl = $null
+    previewUrl = $preview
     packageSourceSha = [string]$Manifest.sourceSha
   }
   Write-JsonFile $ConfigPath $config
