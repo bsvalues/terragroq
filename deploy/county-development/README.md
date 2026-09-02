@@ -56,11 +56,25 @@ The launcher:
 
 No Windows service, scheduled task, firewall rule, Docker engine, WSL distribution, or machine-wide environment variable is created.
 
+## TerraFusion developer preview
+
+County Development binds its Preview surface to the canonical local TerraFusion preview origin `http://127.0.0.1:3102/`. Start the real preview from the verified TerraFusion checkout with:
+
+```powershell
+pnpm run dev:preview
+```
+
+WilliamOS admits that runtime only after it is reachable, frameable, and identifies itself as TerraFusion. The County package does not silently start a simulated preview or treat a health response as the product experience. A different County-approved loopback origin may be supplied during installation with `-PreviewUrl`; non-loopback preview targets are refused.
+
 ## Commands
 
 ```powershell
 # Start or install from the extracted package
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Launch
+
+# Install with an alternate approved loopback TerraFusion preview
+.\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Install `
+  -PreviewUrl http://127.0.0.1:3102/
 
 # Current evidence
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Status
