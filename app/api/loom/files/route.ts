@@ -6,7 +6,7 @@ import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
 import { isIgnoredEntry, isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -22,11 +22,11 @@ export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const url = new URL(request.url)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey") ?? "terrafusion")
   if (!projectBinding.ok) return refuse(projectBinding.error, 503)
   const binding = projectBinding.binding
 
-  const url = new URL(request.url)
   const resolved = await resolveRealWorkspacePath(binding.workspaceRoot, url.searchParams.get("path") ?? "", fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
   if (isSensitiveWorkspacePath(resolved.relative ?? "")) return refuse("SENSITIVE_PATH", 403)
@@ -83,10 +83,6 @@ export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
-  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
-  const binding = projectBinding.binding
-
   const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
   const owner = assertOwner(session.user.id, ownerId)
   if (!owner.ok) {
@@ -98,8 +94,11 @@ export async function PUT(request: Request) {
 
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
-  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown }
+  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown; projectKey?: unknown }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
+  const binding = projectBinding.binding
 
   const result = await writeManualOwnerWorkspaceFile({
     path: body.path,

@@ -134,7 +134,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
           }),
         })
       }
-      if (url === "/api/loom/files?path=" && !init?.method) {
+      if (url === "/api/loom/files?path=&projectKey=williamos" && !init?.method) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) })
       }
       if (url.startsWith("/api/loom/files?path=") && !init?.method) {
@@ -221,7 +221,7 @@ describe("EditorSurface in-flight save reconciliation", () => {
       },
     }
 
-    render(<EditorSurface space={space} onEditorChange={() => undefined} />)
+    render(<EditorSurface projectKey="williamos" space={space} onEditorChange={() => undefined} />)
     const editor = await screen.findByLabelText("Source content")
     fireEvent.change(editor, { target: { value: "content actually submitted\n" } })
     fireEvent.click(screen.getByRole("button", { name: "Save src/real.ts" }))
@@ -238,6 +238,6 @@ describe("EditorSurface in-flight save reconciliation", () => {
     await waitFor(() => expect((screen.getByRole("button", { name: "Save src/real.ts" }) as HTMLButtonElement).disabled).toBe(false))
     expect(screen.getByLabelText("Unsaved")).toBeTruthy()
     const put = fetchStub.mock.calls.find(([input, init]) => String(input) === "/api/loom/files" && init?.method === "PUT")
-    expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ content: "content actually submitted\n" })
+    expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ content: "content actually submitted\n", projectKey: "williamos" })
   })
 })

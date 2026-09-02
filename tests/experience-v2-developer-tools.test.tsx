@@ -264,12 +264,12 @@ describe("Experience V2 developer tools", () => {
     ))
     vi.stubGlobal("fetch", fetcher)
 
-    render(<DeveloperToolsSurface kind="tests" selectedPath={null} />)
+    render(<DeveloperToolsSurface kind="tests" projectKey="williamos" selectedPath={null} />)
     fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
 
     expect(await screen.findByText("7 tests passed", { exact: false })).toBeTruthy()
     expect(await screen.findByText("exit 0", { exact: false })).toBeTruthy()
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run" })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run", projectKey: "williamos" })
   })
 
   it("reports the exact running tool identity until streamed settlement", async () => {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import { getSession } from "@/lib/session"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -21,11 +21,12 @@ export const runtime = "nodejs"
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const url = new URL(request.url)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey") ?? "terrafusion")
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = projectBinding.binding.workspaceRoot
 
-  const requested = new URL(request.url).searchParams.get("path")
+  const requested = url.searchParams.get("path")
   if (requested === null || requested === "") return Response.json({ error: "DIFF_PATH_REQUIRED" }, { status: 400 })
   if (isSensitiveWorkspacePath(requested)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 400 })

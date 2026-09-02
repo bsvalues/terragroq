@@ -39,8 +39,9 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
+export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
+  projectKey?: "terrafusion" | "williamos"
   worldId?: string | null
   selectedPath: string | null
   active?: boolean
@@ -104,7 +105,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     }
     liveDiffContextChanged.current?.(null)
     setError(null)
-    const query = path ? `?path=${encodeURIComponent(path)}` : ""
+    const query = path ? `?path=${encodeURIComponent(path)}${projectKey === "williamos" ? "&projectKey=williamos" : ""}` : projectKey === "williamos" ? "?projectKey=williamos" : ""
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
     try {
@@ -150,7 +151,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
-  }, [selectedPath])
+  }, [projectKey, selectedPath])
 
   useEffect(() => {
     if (kind !== "diff") return
@@ -317,8 +318,8 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     try {
       const response = await fetch("/api/loom/run", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand
-          ? { ...(worldId ? { worldId } : {}), operation, terminalCommand }
-          : { ...(worldId ? { worldId } : {}), operation }),
+          ? { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), operation, terminalCommand }
+          : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
       if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
@@ -370,7 +371,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
       if (controller.current === abort) controller.current = null
     }
-  }, [kind, operations, settleRun, stop])
+  }, [kind, operations, projectKey, settleRun, stop, worldId])
 
   const executeCommand = useCallback(() => {
     const operation = resolveProjectTerminalCommand(command)

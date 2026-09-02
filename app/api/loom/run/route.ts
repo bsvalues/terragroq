@@ -5,7 +5,7 @@ import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -29,16 +29,16 @@ const MAX_OUTPUT_BYTES = 2_000_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
-  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const projectRoot = projectBinding.binding.workspaceRoot
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown; projectKey?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   const terminalOperation = body.terminalCommand === undefined ? null : resolveProjectTerminalCommand(body.terminalCommand)
   const resolution = terminalOperation

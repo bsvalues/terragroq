@@ -12,7 +12,7 @@ const writeMocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: sessionMocks.getSession }))
-vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveTerraFusionWorkspaceBinding: bindingMocks.resolve }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveCanonicalWorkspaceProjectBinding: bindingMocks.resolve }))
 vi.mock("@/lib/governance/owner", () => ownerMocks)
 vi.mock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
 vi.mock("@/lib/loom/workspace-file-write", () => ({
