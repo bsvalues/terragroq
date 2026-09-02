@@ -318,7 +318,7 @@ export function normalizeSpace(
       x: 120, y: 90, width: 560, height: 480, z: 3, minimized: false,
     }, viewport)]]
   }))
-  const inspectorSeeds = Object.fromEntries(rawWindows.flatMap((window) => {
+  const rawInspectorSeeds = Object.fromEntries(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string"
@@ -335,8 +335,35 @@ export function normalizeSpace(
       ...(persistedPayload ? { payload: item.surfacePayload as string } : {}),
     } satisfies InspectorSeed]]
   }))
+  const retainedInspectorIds = new Set<string>()
+  const summonedSingletons = new Map<string, string>()
+  for (const [id, seed] of Object.entries(rawInspectorSeeds)) {
+    if (!isSummonedSurface(seed.kind)) {
+      retainedInspectorIds.add(id)
+      continue
+    }
+    const key = `${seed.kind}\0${seed.subject}`
+    const retainedId = summonedSingletons.get(key)
+    if (!retainedId) {
+      summonedSingletons.set(key, id)
+      retainedInspectorIds.add(id)
+      continue
+    }
+    const retainedGeometry = rawInspectorWindows[retainedId]
+    const candidateGeometry = rawInspectorWindows[id]
+    const preferCandidate = candidate.activeWindowId === id
+      || candidate.activeWindowId !== retainedId && (candidateGeometry?.z ?? -1) > (retainedGeometry?.z ?? -1)
+    if (preferCandidate) {
+      retainedInspectorIds.delete(retainedId)
+      retainedInspectorIds.add(id)
+      summonedSingletons.set(key, id)
+    }
+  }
+  const inspectorSeeds = Object.fromEntries(
+    Object.entries(rawInspectorSeeds).filter(([id]) => retainedInspectorIds.has(id)),
+  ) as Record<string, InspectorSeed>
   const inspectorWindows = Object.fromEntries(
-    Object.entries(rawInspectorWindows).filter(([id]) => Boolean(inspectorSeeds[id])),
+    Object.entries(rawInspectorWindows).filter(([id]) => retainedInspectorIds.has(id)),
   ) as Record<string, WindowGeometry>
   const normalizeWindow = (id: WindowId): WindowGeometry => {
     const input = windowsByKind.get(id) as Record<string, unknown> | undefined

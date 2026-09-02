@@ -61,6 +61,35 @@ describe("HERMES inside the WilliamOS environment", () => {
     expect(restored.activeWindowId).toBe("inspector-hermes")
   })
 
+  it("collapses duplicate persisted HERMES windows to the active singleton", () => {
+    const base = defaultSpace(1400, 900)
+    const persisted = spaceToServer({
+      ...base,
+      inspectorWindows: {
+        "inspector-hermes": { x: 80, y: 70, width: 560, height: 480, z: 8, minimized: false },
+        "inspector-hermes:1": { x: 160, y: 90, width: 720, height: 560, z: 14, minimized: false },
+      },
+      inspectorSeeds: {
+        "inspector-hermes": { kind: "hermes", subject: "HERMES appliance" },
+        "inspector-hermes:1": { kind: "hermes", subject: "HERMES appliance" },
+      },
+      activeWindowId: "inspector-hermes:1",
+    })
+
+    const restored = normalizeSpace(persisted, base, { width: 1400, height: 900 })
+
+    expect(Object.keys(restored.inspectorWindows)).toEqual(["inspector-hermes:1"])
+    expect(Object.keys(restored.inspectorSeeds)).toEqual(["inspector-hermes:1"])
+    expect(restored.inspectorWindows["inspector-hermes:1"]).toMatchObject({
+      x: 160,
+      y: 90,
+      width: 720,
+      height: 560,
+    })
+    expect(restored.activeWindowId).toBe("inspector-hermes:1")
+    expect(spaceToServer(restored).windows.filter((window) => window.kind === "inspector")).toHaveLength(1)
+  })
+
   it("answers the owner first and keeps infrastructure detail progressive", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json(status)))
     render(<HermesOperationalSurface />)

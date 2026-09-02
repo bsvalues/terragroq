@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
-import type { SummonedSurface } from "@/lib/environment/summon"
+import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
@@ -858,6 +858,9 @@ export function WorkspaceShell({
         ? parseAgentSessionInspectorPayload(surface.payload) : null
       const exactIdentity = binding ? diffReviewInspectorIdentity(binding)
         : agentSnapshot ? agentSessionInspectorIdentity(agentSnapshot) : surface.identity ?? null
+      const singletonExisting = !exactIdentity && isSummonedSurface(surface.kind)
+        ? [...inspectors, ...incoming].find((candidate) => candidate.kind === surface.kind && candidate.subject === surface.subject)
+        : null
       const exactExisting = exactIdentity ? [...inspectors, ...incoming].find((candidate) => {
         const candidateBinding = candidate.kind === "review" ? diffReviewInspectorBinding(candidate.payload) : null
         const candidateAgentSnapshot = candidate.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
@@ -867,7 +870,7 @@ export function WorkspaceShell({
         return candidate.kind === surface.kind && candidateIdentity === exactIdentity
           && (surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
             || surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND || candidate.subject === surface.subject)
-      }) : null
+      }) : singletonExisting
       if (exactExisting) {
         incoming.push({ ...surface, identity: exactIdentity ?? undefined, id: exactExisting.id })
       } else {
