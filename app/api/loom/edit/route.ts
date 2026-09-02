@@ -9,7 +9,7 @@ import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/r
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError, type SpaceMutationAuthority } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -33,17 +33,17 @@ const EDIT_TIMEOUT_MS = 20 * 60_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
-  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const binding = projectBinding.binding
-  const projectRoot = binding.workspaceRoot
 
-  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown }
+  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown; projectKey?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   const task = typeof body.task === "string" ? body.task.trim() : ""
   if (!task) return Response.json({ error: "TASK_REQUIRED" }, { status: 400 })

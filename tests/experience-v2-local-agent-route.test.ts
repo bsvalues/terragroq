@@ -17,6 +17,11 @@ vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveCanonicalWorkspaceProjectBinding: async (_userId: string, projectKey: unknown) => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(), projectId: 7, projectKey,
+    repositoryIdentity: projectKey === "williamos" ? "bsvalues/terragroq" : "bsvalues/terrafusion_os_1.0",
+    project: { identity: projectKey === "williamos" ? "c:/williamos" : "c:/terrafusion" },
+  } }),
 }))
 vi.mock("@/lib/governance/work-context-gate", () => ({
   requireWorkContext: seams.requireWorkContext,
@@ -124,6 +129,19 @@ describe("durable Local model conversation route", () => {
     })
     expect(JSON.parse(String(upstream.mock.calls[0]?.[1]?.body)).messages[0].content)
       .toContain("cannot edit files, run commands, or dispatch work")
+  })
+
+  it("grounds a worldless Workroom Local turn in the server-derived WilliamOS project", async () => {
+    const upstream = vi.fn().mockResolvedValue(ollama({ message: { content: "WilliamOS context" }, done: true }))
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await POST(rawRequest({ provider: "local", prompt: "Identify this project.", projectKey: "williamos" }))
+
+    expect(response.status).toBe(200)
+    const system = JSON.parse(String(upstream.mock.calls[0]?.[1]?.body)).messages[0].content
+    expect(system).toContain('canonical project "williamos"')
+    expect(system).toContain('repository "bsvalues/terragroq"')
+    expect(seams.loadOwnedWorkingWorld).not.toHaveBeenCalled()
   })
 
   it("uses an installed chat model when the server default is absent without overriding an explicit choice", async () => {

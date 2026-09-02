@@ -31,6 +31,10 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
     repositoryIdentity: "bsvalues/terrafusion_os_1.0",
     project: { identity: "c:/terrafusion" },
   } }),
+  resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+  } }),
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),

@@ -22,6 +22,7 @@ vi.mock("node:fs/promises", () => ({ default: { realpath: vi.fn(), stat: vi.fn()
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({

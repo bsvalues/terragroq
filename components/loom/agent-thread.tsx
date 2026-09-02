@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { DEFAULT_PROVIDER, LOOM_PROVIDERS, type LoomProviderId } from "@/lib/loom/providers"
+import { useWorkbenchContext } from "@/components/workbench/workbench-context"
 
 type Entry =
   | { kind: "you"; text: string }
@@ -47,6 +48,8 @@ function appendBoundedLocalTurn(turns: readonly LocalCompletedTurn[], turn: Loca
  * cockpit, which can only show rows written after the fact by something the operator could not see.
  */
 export function AgentThread() {
+  const workbench = useWorkbenchContext()
+  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
   const [entries, setEntries] = useState<Entry[]>([])
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
@@ -57,6 +60,16 @@ export function AgentThread() {
   const controller = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const localCompletedTurns = useRef<readonly LocalCompletedTurn[]>([])
+
+  useEffect(() => {
+    controller.current?.abort()
+    controller.current = null
+    localCompletedTurns.current = []
+    setEntries([])
+    setPrompt("")
+    setBusy(false)
+    setSessionId(null)
+  }, [projectKey])
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
@@ -133,6 +146,7 @@ export function AgentThread() {
           resume: requestedSessionId !== null,
           provider: selectedProvider,
           model,
+          ...(projectKey === "williamos" ? { projectKey } : {}),
           ...(selectedProvider === "local" && requestedSessionId !== null ? { completedTurns: replayTurns } : {}),
         }),
         signal: abort.signal,
@@ -243,7 +257,7 @@ export function AgentThread() {
       setBusy(false)
       controller.current = null
     }
-  }, [prompt, busy, sessionId, provider, model, push, absorb])
+  }, [prompt, busy, sessionId, provider, model, push, absorb, projectKey])
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-3">

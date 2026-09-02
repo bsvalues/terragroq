@@ -320,7 +320,8 @@ function exactToolRunStatusAnswer(
   text: string,
   context: ToolRunSnapshotsLineContext,
 ): string | null {
-  const asksForTests = /\btests?\b/i.test(text) && /\b(latest|current|state|status|result|ran|run)\b/i.test(text)
+  const asksForTests = /\btests?\b/i.test(text)
+    && /\b(latest|current|state|status|result|ran|run|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
   if (!asksForTests) return null
   const run = context.runs.find((candidate) => candidate.operationId === "tests.run")
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId) ?? null

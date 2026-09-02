@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AgentThread } from "@/components/loom/agent-thread"
+import { WorkbenchContextProvider } from "@/components/workbench/workbench-context"
 
 const SESSION_ID = "723e4567-e89b-42d3-a456-426614174000"
 
@@ -37,6 +38,27 @@ async function submit(text: string) {
 }
 
 describe("Loom Local conversation continuity", () => {
+  it("sends the selected WilliamOS project for server-derived Workroom grounding", async () => {
+    const agentBodies: Record<string, unknown>[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/loom/models") return Response.json({ models: [], default: "" })
+      agentBodies.push(JSON.parse(String(init?.body)))
+      return localTurn("WilliamOS context")
+    }))
+    render(
+      <WorkbenchContextProvider value={{
+        focusThread: () => undefined,
+        selectedProject: { id: 7, key: "williamos", name: "WilliamOS" },
+      }}>
+        <AgentThread />
+      </WorkbenchContextProvider>,
+    )
+
+    await submit("Identify this project")
+
+    expect(agentBodies[0]).toMatchObject({ projectKey: "williamos", provider: "local" })
+  })
+
   it("replays the prior canonical completed Local turn on the second request without changing the first request shape", async () => {
     const agentBodies: Record<string, unknown>[] = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

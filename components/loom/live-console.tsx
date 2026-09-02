@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { useWorkbenchContext } from "@/components/workbench/workbench-context"
+
 type Operation = {
   id: string
   label: string
@@ -21,12 +23,22 @@ type Line = { channel: "stdout" | "stderr" | "meta"; text: string }
  * and leaving the page kills it rather than orphaning it.
  */
 export function LiveConsole() {
+  const workbench = useWorkbenchContext()
+  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
   const [operations, setOperations] = useState<Operation[]>([])
   const [lines, setLines] = useState<Line[]>([])
   const [running, setRunning] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<Operation | null>(null)
   const controller = useRef<AbortController | null>(null)
   const output = useRef<HTMLPreElement>(null)
+
+  useEffect(() => {
+    controller.current?.abort()
+    controller.current = null
+    setLines([])
+    setRunning(null)
+    setConfirming(null)
+  }, [projectKey])
 
   useEffect(() => {
     fetch("/api/loom/run", { cache: "no-store" })
@@ -60,7 +72,7 @@ export function LiveConsole() {
       const response = await fetch("/api/loom/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operation: operation.id, confirmed }),
+        body: JSON.stringify({ operation: operation.id, confirmed, ...(projectKey === "williamos" ? { projectKey } : {}) }),
         signal: abort.signal,
         cache: "no-store",
       })
@@ -101,7 +113,7 @@ export function LiveConsole() {
       setRunning(null)
       controller.current = null
     }
-  }, [stop])
+  }, [projectKey, stop])
 
   return (
     <section className="flex flex-col gap-4">

@@ -25,6 +25,10 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
     workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
     repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
   } }),
+  resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+  } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/environment/workspace-app", async (importOriginal) => ({

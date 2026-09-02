@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 
+import { useWorkbenchContext } from "@/components/workbench/workbench-context"
+
 // CodeMirror touches the DOM on construction, so it is loaded in the browser only.
 const CodeEditor = dynamic(() => import("@/components/loom/code-editor").then((module) => module.CodeEditor), {
   ssr: false,
@@ -17,11 +19,13 @@ function TreeNode({
   entry,
   depth,
   activePath,
+  projectKey,
   onOpen,
 }: {
   entry: Entry
   depth: number
   activePath: string | null
+  projectKey: "terrafusion" | "williamos"
   onOpen: (path: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -35,7 +39,7 @@ function TreeNode({
     if (next && children === null) {
       setLoading(true)
       try {
-        const response = await fetch(`/api/loom/files?path=${encodeURIComponent(entry.path)}`, { cache: "no-store" })
+        const response = await fetch(`/api/loom/files?path=${encodeURIComponent(entry.path)}${projectKey === "williamos" ? "&projectKey=williamos" : ""}`, { cache: "no-store" })
         const payload = await response.json()
         setChildren(response.ok ? (payload.entries ?? []) : [])
       } catch {
@@ -44,7 +48,7 @@ function TreeNode({
         setLoading(false)
       }
     }
-  }, [entry, expanded, children, onOpen])
+  }, [entry, expanded, children, onOpen, projectKey])
 
   const active = activePath === entry.path
 
@@ -65,7 +69,7 @@ function TreeNode({
         <ul>
           {loading ? <li className="py-1 pl-6 text-xs text-muted-foreground">…</li> : null}
           {(children ?? []).map((child) => (
-            <TreeNode key={child.path} entry={child} depth={depth + 1} activePath={activePath} onOpen={onOpen} />
+            <TreeNode key={child.path} entry={child} depth={depth + 1} activePath={activePath} projectKey={projectKey} onOpen={onOpen} />
           ))}
         </ul>
       ) : null}
@@ -82,6 +86,8 @@ function TreeNode({
  * refused if the file changed underneath, because the agent may be editing the same tree.
  */
 export function Workspace() {
+  const workbench = useWorkbenchContext()
+  const projectKey = workbench?.selectedProject?.key === "williamos" ? "williamos" : "terrafusion"
   const [roots, setRoots] = useState<Entry[]>([])
   const [open, setOpen] = useState<OpenFile | null>(null)
   const [draft, setDraft] = useState("")
@@ -94,16 +100,23 @@ export function Workspace() {
   const [progress, setProgress] = useState<string[]>([])
 
   useEffect(() => {
-    fetch("/api/loom/files?path=", { cache: "no-store" })
+    let active = true
+    setRoots([])
+    setOpen(null)
+    setDraft("")
+    setDiff("")
+    setNote(null)
+    fetch(`/api/loom/files?path=${projectKey === "williamos" ? "&projectKey=williamos" : ""}`, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : { entries: [] }))
-      .then((payload) => setRoots(payload.entries ?? []))
-      .catch(() => setRoots([]))
-  }, [])
+      .then((payload) => { if (active) setRoots(payload.entries ?? []) })
+      .catch(() => { if (active) setRoots([]) })
+    return () => { active = false }
+  }, [projectKey])
 
   const openFile = useCallback(async (path: string) => {
     setNote(null)
     try {
-      const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+      const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}${projectKey === "williamos" ? "&projectKey=williamos" : ""}`, { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok) return setNote(payload.error ?? "could not open")
       if (payload.kind === "binary") { setOpen(null); return setNote(`${path} is binary`) }
@@ -113,19 +126,19 @@ export function Workspace() {
     } catch (error) {
       setNote(String(error))
     }
-  }, [])
+  }, [projectKey])
 
   const loadDiff = useCallback(async (path: string | null) => {
-    const query = path ? `?path=${encodeURIComponent(path)}` : ""
+    const query = new URLSearchParams({ ...(path ? { path } : {}), ...(projectKey === "williamos" ? { projectKey } : {}) }).toString()
     try {
-      const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store" })
+      const response = await fetch(`/api/loom/diff${query ? `?${query}` : ""}`, { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok) return setDiff(`could not load diff: ${payload.error ?? response.status}`)
       setDiff(payload.untracked ? payload.note : payload.diff || "No changes against HEAD.")
     } catch (error) {
       setDiff(String(error))
     }
-  }, [])
+  }, [projectKey])
 
   useEffect(() => {
     if (view === "diff") void loadDiff(open?.path ?? null)
@@ -139,7 +152,7 @@ export function Workspace() {
       const response = await fetch("/api/loom/files", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: open.path, content: draft, modifiedAt: open.modifiedAt }),
+        body: JSON.stringify({ path: open.path, content: draft, modifiedAt: open.modifiedAt, ...(projectKey === "williamos" ? { projectKey } : {}) }),
       })
       const payload = await response.json()
       if (response.status === 409) {
@@ -155,7 +168,7 @@ export function Workspace() {
     } finally {
       setSaving(false)
     }
-  }, [open, draft, saving])
+  }, [open, draft, saving, projectKey])
 
   /**
    * Ask the local model to make a change, through the structured-edit adapter.
@@ -173,7 +186,7 @@ export function Workspace() {
       const response = await fetch("/api/loom/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: open.path, task: task.trim() }),
+        body: JSON.stringify({ path: open.path, task: task.trim(), ...(projectKey === "williamos" ? { projectKey } : {}) }),
       })
       if (!response.ok || !response.body) {
         setNote(`could not start the local edit (${response.status})`)
@@ -210,7 +223,7 @@ export function Workspace() {
     } finally {
       setEditing(false)
     }
-  }, [open, editing, task, openFile])
+  }, [open, editing, task, openFile, projectKey])
 
   const dirty = open !== null && draft !== open.content
 
@@ -219,7 +232,7 @@ export function Workspace() {
       <nav className="min-h-0 overflow-auto border-r border-border bg-muted/20 py-2" aria-label="Files">
         <ul>
           {roots.map((entry) => (
-            <TreeNode key={entry.path} entry={entry} depth={0} activePath={open?.path ?? null} onOpen={(path) => void openFile(path)} />
+            <TreeNode key={entry.path} entry={entry} depth={0} activePath={open?.path ?? null} projectKey={projectKey} onOpen={(path) => void openFile(path)} />
           ))}
         </ul>
       </nav>

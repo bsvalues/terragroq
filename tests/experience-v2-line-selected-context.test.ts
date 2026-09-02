@@ -219,7 +219,7 @@ describe("server-derived Line selected-object grounding", () => {
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST",
       headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Summarize the current selected file and the latest test state.", lineContext: toolRunSnapshotsContext }),
+      body: JSON.stringify({ worldId: "world-a", text: "Did the tests pass?", lineContext: toolRunSnapshotsContext }),
     }))
 
     expect(response.status).toBe(200)

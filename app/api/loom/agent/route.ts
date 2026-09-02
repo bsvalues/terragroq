@@ -26,7 +26,7 @@ import {
   SpaceMutationAuthorityError,
   type SpaceMutationAuthority,
 } from "@/lib/governance/space-mutation-authority"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding, resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -351,10 +351,6 @@ function reduceLocalFrame(state: LocalStreamState, line: string): string | null 
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
-  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const binding = projectBinding.binding
-  const projectRoot = binding.workspaceRoot
 
   let body: {
     prompt?: unknown
@@ -369,12 +365,17 @@ export async function POST(request: Request) {
     sourceSessionId?: unknown
     worldId?: unknown
     expectedDiffFingerprint?: unknown
+    projectKey?: unknown
   }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
 
   const reviewMode = body.mode === "review"
   const diffReviewMode = body.mode === "diff-review"
@@ -563,6 +564,7 @@ export async function POST(request: Request) {
       grounding = [
         "You are the sovereign Local conversation inside the WilliamOS Workroom.",
         "This session is advisory and non-mutating: it is not a writing assignment and cannot edit files, run commands, or dispatch work.",
+        `The Workroom is attached to the server-derived canonical project ${JSON.stringify(binding.projectKey)} in repository ${JSON.stringify(binding.repositoryIdentity)}.`,
         "No active Space or selected file is attached to this Workroom turn. Do not invent either.",
       ].join("\n")
     } else {
