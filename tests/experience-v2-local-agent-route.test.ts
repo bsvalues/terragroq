@@ -37,7 +37,9 @@ import { POST } from "@/app/api/loom/agent/route"
 const SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
-  const exactBody = body.provider === "local" && body.worldId === undefined ? { ...body, worldId: "world-a" } : body
+  const exactBody = body.provider === "local" && body.worldId === undefined
+    ? { projectKey: "terrafusion", ...body, worldId: "world-a" }
+    : { projectKey: "terrafusion", ...body }
   return rawRequest(exactBody, signal)
 }
 

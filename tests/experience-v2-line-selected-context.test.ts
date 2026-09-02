@@ -33,6 +33,7 @@ vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
 }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: harness.resolveProjectBinding,
+  resolveCanonicalWorkspaceProjectBinding: harness.resolveProjectBinding,
 }))
 vi.mock("@/lib/environment/current-work-db", () => ({
   answerCurrentWork: harness.answerCurrentWork,
@@ -219,7 +220,7 @@ describe("server-derived Line selected-object grounding", () => {
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST",
       headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Did the tests pass?", lineContext: toolRunSnapshotsContext }),
+      body: JSON.stringify({ worldId: "world-a", text: "What was the test outcome?", lineContext: toolRunSnapshotsContext }),
     }))
 
     expect(response.status).toBe(200)
@@ -727,11 +728,26 @@ describe("server-derived Line selected-object grounding", () => {
       activePaneId: "workspace-pane",
       runningAppUrl: "http://tf.test:5000/real-preview",
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    const projectIdentity = "c:/spaces/terrafusion"
+    harness.snapshot = JSON.stringify({
+      ...createWorkingWorld({ intent: "TerraFusion", resources: [`williamos-workspace-root:v1:${projectIdentity}`] }),
+      spine: {
+        projectId: 41, projectName: "TerraFusion", threadId: null, outcomeKey: null, outcomeTitle: null,
+        workOrderId: null, execution: "idle", worker: null, evidence: [],
+      },
+      space,
+    })
     process.env.WILLIAMOS_TERRAFUSION_ROOT = path.join(root, "raw-configured-alias")
     harness.resolveProjectBinding.mockResolvedValue({
       ok: true,
-      binding: { workspaceRoot: root },
+      binding: {
+        workspaceRoot: root,
+        projectId: 41,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: projectIdentity, name: "TerraFusion" },
+      },
     })
     process.env.WILLIAMOS_WORKSPACE_APP_URL = change === "secret-configuration" || change === "secret-to-valid"
       ? "http://tf.test:5000/real-preview?token=server-secret"
@@ -777,6 +793,7 @@ describe("server-derived Line selected-object grounding", () => {
         text: "Explain the exact current developer Preview.",
         lineContext: {
           kind: "preview-explain",
+          projectKey: "terrafusion",
           previewFingerprint: expectedPreview.fingerprint,
           selectedPath: "src/authoritative.ts",
         },
@@ -957,7 +974,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "Compare this with src/b.ts", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1019,7 +1036,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A do?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1089,7 +1106,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A do?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1161,7 +1178,7 @@ describe("server-derived Line selected-object grounding", () => {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({
         worldId: "world-a", text: "What does A guarantee?", lineContext: {
-          kind: "file-ask", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
+          kind: "file-ask", projectKey: "terrafusion", path: "src/a.ts", projectIdentity: stableIdentity, revision: 7,
           activePaneId: "primary", selection: { anchor: 3, head: 9 },
         },
       }),
@@ -1467,7 +1484,26 @@ describe("server-derived Line selected-object grounding", () => {
       openFiles: ["src/exact.ts"], panes: [{ id: "primary", filePath: "src/exact.ts" }],
       selection: { filePath: "src/exact.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
-    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "WilliamOS" }), space })
+    const projectIdentity = "c:/spaces/terrafusion"
+    harness.snapshot = JSON.stringify({
+      ...createWorkingWorld({ intent: "WilliamOS", resources: [`williamos-workspace-root:v1:${projectIdentity}`] }),
+      spine: {
+        projectId: 41, projectName: "TerraFusion", threadId: null, outcomeKey: null, outcomeTitle: null,
+        workOrderId: null, execution: "idle", worker: null, evidence: [],
+      },
+      space,
+    })
+    harness.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: {
+        workspaceRoot: root,
+        projectId: 41,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        project: { identity: projectIdentity, name: "TerraFusion" },
+      },
+    })
     const identity = { path: "src/exact.ts", state: "modified", status: " M src/exact.ts", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-a" }
     const snapshot = { ...identity, patch: "-old\n+exact-current-patch\n", fingerprint: JSON.stringify(identity), reason: null }
     harness.diff.mockResolvedValue(snapshot)
@@ -1484,7 +1520,7 @@ describe("server-derived Line selected-object grounding", () => {
     const { POST } = await import("@/app/api/environment/line/route")
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
-      body: JSON.stringify({ worldId: "world-a", text: "Challenge the exact current patch for the selected file.", lineContext: { kind: "diff-challenge", path: identity.path, baseHash: identity.baseHash, indexHash: identity.indexHash, patchHash: identity.patchHash, fingerprint: snapshot.fingerprint } }),
+      body: JSON.stringify({ worldId: "world-a", text: "Challenge the exact current patch for the selected file.", lineContext: { kind: "diff-challenge", projectKey: "terrafusion", path: identity.path, baseHash: identity.baseHash, indexHash: identity.indexHash, patchHash: identity.patchHash, fingerprint: snapshot.fingerprint } }),
     }))
 
     expect(response.status).toBe(200)

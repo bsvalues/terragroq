@@ -35,7 +35,7 @@ import { isContinueIntent } from "@/lib/environment/start-work"
 import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff, type WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding, resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -103,6 +103,7 @@ type LineReply = Readonly<{
 type ExecutionAssignmentLineContext = Readonly<{ kind: "execution-assignment"; workOrderId: number }>
 const previewExplainLineContextSchema = z.object({
   kind: z.literal("preview-explain"),
+  projectKey: z.enum(["terrafusion", "williamos"]),
   previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   selectedPath: z.string().min(1).max(4_096),
 }).strict()
@@ -110,6 +111,7 @@ type PreviewExplainLineContext = z.infer<typeof previewExplainLineContextSchema>
 
 const fileAskLineContextSchema = z.object({
   kind: z.literal("file-ask"),
+  projectKey: z.enum(["terrafusion", "williamos"]),
   path: z.string().min(1).max(4_096),
   projectIdentity: z.string().min(1).max(4_096),
   revision: z.number().int().nonnegative(),
@@ -123,6 +125,7 @@ type FileAskLineContext = z.infer<typeof fileAskLineContextSchema>
 
 const diffChallengeLineContextSchema = z.object({
   kind: z.literal("diff-challenge"),
+  projectKey: z.enum(["terrafusion", "williamos"]),
   path: z.string().min(1).max(4_096),
   baseHash: z.string().min(1).max(128),
   indexHash: z.string().min(1).max(128),
@@ -321,7 +324,7 @@ function exactToolRunStatusAnswer(
   context: ToolRunSnapshotsLineContext,
 ): string | null {
   const asksForTests = /\btests?\b/i.test(text)
-    && /\b(latest|current|state|status|result|ran|run|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
+    && /\b(latest|current|state|status|result|outcome|ran|run|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
   if (!asksForTests) return null
   const run = context.runs.find((candidate) => candidate.operationId === "tests.run")
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId) ?? null
@@ -1073,8 +1076,8 @@ async function deriveDiffChallengeGrounding(
   context: DiffChallengeLineContext,
   previewOrigin: string,
 ): Promise<Readonly<{ facts: string; version: string }> | null> {
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
-  if (!projectBinding.ok) return null
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(userId, context.projectKey)
+  if (!projectBinding.ok || !worldMatchesWorkspaceProject(world, projectBinding.binding)) return null
   const selected = await deriveSelectedObjectGrounding(world, projectBinding.binding.workspaceRoot, previewOrigin)
   if (!selected.changesSelected || !selected.exact) return null
   let diffVersion: unknown = null
@@ -1092,6 +1095,7 @@ async function deriveDiffChallengeGrounding(
     ].join("\n"),
     version: JSON.stringify({
       persisted: selectedLineContextFingerprint(world),
+      projectKey: projectBinding.binding.projectKey,
       workspaceRoot: projectBinding.binding.workspaceRoot,
       selectedObject: selected.version,
     }),
@@ -1109,8 +1113,8 @@ async function derivePreviewExplainGrounding(
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
   const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
   if (selectedPath !== context.selectedPath) return null
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
-  if (!projectBinding.ok) return null
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(userId, context.projectKey)
+  if (!projectBinding.ok || !worldMatchesWorkspaceProject(world, projectBinding.binding)) return null
   const selected = await deriveSelectedObjectGrounding(world, projectBinding.binding.workspaceRoot, previewOrigin)
   let previewFingerprint: unknown = null
   try {
@@ -1127,6 +1131,7 @@ async function derivePreviewExplainGrounding(
     ].join("\n"),
     version: JSON.stringify({
       persisted: selectedLineContextFingerprint(world),
+      projectKey: projectBinding.binding.projectKey,
       workspaceRoot: projectBinding.binding.workspaceRoot,
       selectedObject: selected.version,
     }),
@@ -1164,7 +1169,7 @@ async function deriveFileAskGrounding(
     || space.selection?.filePath !== context.path
     || space.selection.anchor !== context.selection.anchor
     || space.selection.head !== context.selection.head) return null
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(userId, context.projectKey)
   if (!projectBinding.ok
     || context.projectIdentity !== projectBinding.binding.project.identity
     || !worldMatchesWorkspaceProject(world, projectBinding.binding)) return null
@@ -1185,6 +1190,7 @@ async function deriveFileAskGrounding(
     ].join("\n"),
     version: JSON.stringify({
       persisted: selectedLineContextFingerprint(world),
+      projectKey: projectBinding.binding.projectKey,
       project: {
         id: projectBinding.binding.projectId,
         name: projectBinding.binding.projectName,

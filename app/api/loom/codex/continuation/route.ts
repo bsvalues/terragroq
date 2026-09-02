@@ -1,6 +1,6 @@
 import { readCodexContinuation } from "@/lib/loom/codex-continuation"
 import { codexContinuationDependenciesForProjectRoot } from "@/lib/loom/codex-continuation-runtime"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
@@ -9,11 +9,18 @@ export const runtime = "nodejs"
 export async function GET(request: Request): Promise<Response> {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const worldId = new URL(request.url).searchParams.get("worldId")?.trim() ?? ""
+  const url = new URL(request.url)
+  const queryKeys = [...url.searchParams.keys()].sort().join("\0")
+  if (queryKeys !== "projectKey\0worldId"
+    || url.searchParams.getAll("worldId").length !== 1
+    || url.searchParams.getAll("projectKey").length !== 1) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  const worldId = url.searchParams.get("worldId")?.trim() ?? ""
   if (!worldId || worldId.length > 200 || worldId.includes("\0")) {
     return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })
   }
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey"))
   if (!projectBinding.ok) {
     return Response.json({ error: projectBinding.error }, { status: 503 })
   }

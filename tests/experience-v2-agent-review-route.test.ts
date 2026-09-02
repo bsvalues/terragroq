@@ -80,7 +80,7 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/agent", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ projectKey: "terrafusion", ...body }),
     signal,
   })
 }

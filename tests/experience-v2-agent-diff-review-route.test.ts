@@ -22,7 +22,10 @@ vi.mock("node:fs/promises", () => ({ default: { realpath: vi.fn(), stat: vi.fn()
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
-  resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+  } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
@@ -96,7 +99,7 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/agent", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ projectKey: "terrafusion", ...body }),
     signal,
   })
 }

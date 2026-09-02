@@ -109,6 +109,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(agentRequests).toHaveLength(1))
     expect(agentRequests[0]).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       prompt: "Owner request: Implement the bounded fix.",
       sessionId: null,
       resume: false,
@@ -179,6 +180,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(agentBodies).toHaveLength(1))
     expect(agentBodies[0]).toEqual({
       worldId: "world-a", prompt: "Owner request: Implement this exact Space assignment.",
+      projectKey: "terrafusion",
       provider: "cloud", sessionId: null, resume: false,
     })
     expect(await within(line).findByText("Claude changed only the exact selected file.")).toBeTruthy()
@@ -709,7 +711,7 @@ describe("Experience V2 selected Space actions", () => {
     expect(within(line).getByRole("button", { name: "Stop Space continuation" })).toBeTruthy()
     await waitFor(() => expect(requests).toHaveLength(1))
     expect(requests).toEqual([{ url: "/api/loom/agent", body: {
-      mode: "review", path: "src/app.ts",
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts",
       focus: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "cloud", sessionId: CLAUDE_REVIEW_ID, resume: true,
     } }])
@@ -905,6 +907,7 @@ describe("Experience V2 selected Space actions", () => {
     expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
     expect(agentRequests).toEqual([{
       worldId: "world-a",
+      projectKey: "terrafusion",
       prompt: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "local",
       sessionId: LOCAL_ID,

@@ -35,7 +35,7 @@ const seams = vi.hoisted(() => ({
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: seams.resolveProjectBinding,
+  resolveCanonicalWorkspaceProjectBinding: seams.resolveProjectBinding,
 }))
 vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
@@ -97,7 +97,7 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ worldId: "world-1", ...body }),
+    body: JSON.stringify({ worldId: "world-1", projectKey: "terrafusion", ...body }),
     signal,
   })
 }
@@ -215,6 +215,17 @@ describe("durable Codex delegate route", () => {
         assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
       } }],
     })
+  })
+
+  it("fails closed when the active canonical project is absent", async () => {
+    seams.resolveProjectBinding.mockResolvedValue({ ok: false, error: "SPACE_PROJECT_INVALID" })
+
+    const response = await POST(request({ prompt: "Do the work.", projectKey: undefined }))
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: "SPACE_PROJECT_INVALID" })
+    expect(seams.resolveProjectBinding).toHaveBeenCalledWith("owner-1", undefined)
+    expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
   })
 
   it("starts one exact-workspace non-ephemeral Codex Builder turn and emits one strict settlement", async () => {

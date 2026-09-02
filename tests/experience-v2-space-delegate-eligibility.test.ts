@@ -8,7 +8,7 @@ const seams = vi.hoisted(() => ({
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: seams.resolveBinding,
+  resolveCanonicalWorkspaceProjectBinding: seams.resolveBinding,
 }))
 vi.mock("@/lib/governance/space-mutation-authority", () => ({
   deriveSpaceMutationAuthority: seams.deriveAuthority,
@@ -40,7 +40,7 @@ beforeEach(() => {
 
 describe("Space Delegate exact-path eligibility", () => {
   it("projects only the exact server-derived Codex selected-file authority", async () => {
-    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts"))
+    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts&projectKey=williamos"))
 
     expect(response.status).toBe(200)
     expect(response.headers.get("cache-control")).toBe("no-store")
@@ -74,7 +74,7 @@ describe("Space Delegate exact-path eligibility", () => {
       actor: "claude", selectedPath: "src/app.ts",
     })
 
-    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=claude&path=src%2Fapp.ts"))
+    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=claude&path=src%2Fapp.ts&projectKey=williamos"))
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual(expect.objectContaining({
@@ -89,7 +89,7 @@ describe("Space Delegate exact-path eligibility", () => {
     const AuthorityError = (await import("@/lib/governance/space-mutation-authority")).SpaceMutationAuthorityError
     seams.deriveAuthority.mockRejectedValue(new AuthorityError("secret reservation details"))
 
-    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts"))
+    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts&projectKey=williamos"))
 
     expect(response.status).toBe(200)
     expect(response.headers.get("cache-control")).toBe("no-store")
@@ -97,7 +97,7 @@ describe("Space Delegate exact-path eligibility", () => {
   })
 
   it("rejects a sensitive canonical selected path before authority derivation", async () => {
-    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=.env"))
+    const response = await GET(new Request("http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=.env&projectKey=williamos"))
 
     expect(response.status).toBe(200)
     expect(response.headers.get("cache-control")).toBe("no-store")
@@ -106,11 +106,12 @@ describe("Space Delegate exact-path eligibility", () => {
   })
 
   it.each([
-    ["missing world", "http://localhost/api/loom/agent?actor=codex&path=src%2Fapp.ts"],
-    ["unsupported actor", "http://localhost/api/loom/agent?worldId=world-a&actor=sea&path=src%2Fapp.ts"],
-    ["non-canonical path", "http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=%20src%2Fapp.ts"],
-    ["client-authored authority field", "http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts&grantId=44"],
-    ["duplicate world guard", "http://localhost/api/loom/agent?worldId=world-a&worldId=world-b&actor=codex&path=src%2Fapp.ts"],
+    ["missing world", "http://localhost/api/loom/agent?actor=codex&path=src%2Fapp.ts&projectKey=williamos"],
+    ["missing project", "http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts"],
+    ["unsupported actor", "http://localhost/api/loom/agent?worldId=world-a&actor=sea&path=src%2Fapp.ts&projectKey=williamos"],
+    ["non-canonical path", "http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=%20src%2Fapp.ts&projectKey=williamos"],
+    ["client-authored authority field", "http://localhost/api/loom/agent?worldId=world-a&actor=codex&path=src%2Fapp.ts&projectKey=williamos&grantId=44"],
+    ["duplicate world guard", "http://localhost/api/loom/agent?worldId=world-a&worldId=world-b&actor=codex&path=src%2Fapp.ts&projectKey=williamos"],
   ])("fails closed for %s", async (_label, url) => {
     const response = await GET(new Request(url))
     expect(response.status).toBe(400)

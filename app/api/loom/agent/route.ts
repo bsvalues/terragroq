@@ -26,7 +26,7 @@ import {
   SpaceMutationAuthorityError,
   type SpaceMutationAuthority,
 } from "@/lib/governance/space-mutation-authority"
-import { resolveCanonicalWorkspaceProjectBinding, resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -68,10 +68,11 @@ export async function GET(request: Request) {
   }
   const url = new URL(request.url)
   const queryKeys = [...url.searchParams.keys()].sort()
-  const exactQuery = queryKeys.join("\0") === "actor\0path\0worldId"
+  const exactQuery = queryKeys.join("\0") === "actor\0path\0projectKey\0worldId"
     && url.searchParams.getAll("worldId").length === 1
     && url.searchParams.getAll("actor").length === 1
     && url.searchParams.getAll("path").length === 1
+    && url.searchParams.getAll("projectKey").length === 1
   const worldId = url.searchParams.get("worldId")
   const actor = url.searchParams.get("actor")
   const selectedPath = exactEligibilityPath(url.searchParams.get("path"))
@@ -82,7 +83,7 @@ export async function GET(request: Request) {
   if (isSensitiveWorkspacePath(selectedPath)) {
     return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
   }
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey"))
   if (!projectBinding.ok) {
     return Response.json({ eligible: false, reason: "PROJECT_BINDING_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
   }
@@ -372,7 +373,7 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const binding = projectBinding.binding
   const projectRoot = binding.workspaceRoot

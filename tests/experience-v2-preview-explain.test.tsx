@@ -99,7 +99,7 @@ describe("Experience V2 Developer Preview Explain", () => {
     expect(lineBody).toEqual({
       worldId: "world-a",
       text: "Explain the exact current developer Preview.",
-      lineContext: { kind: "preview-explain", previewFingerprint: "a".repeat(64), selectedPath },
+      lineContext: { kind: "preview-explain", projectKey: "terrafusion", previewFingerprint: "a".repeat(64), selectedPath },
     })
     expect(await screen.findByText(/Preview attached · TerraFusion · http:\/\/tf\.test:5000/)).toBeTruthy()
     expect(screen.getByText(/DOM unavailable · console unavailable · network unavailable/)).toBeTruthy()
@@ -173,7 +173,7 @@ describe("Experience V2 Developer Preview Explain", () => {
     expect(lineBody).toEqual({
       worldId: "world-a",
       text: "Explain the exact current developer Preview.",
-      lineContext: { kind: "preview-explain", previewFingerprint: "b".repeat(64), selectedPath },
+      lineContext: { kind: "preview-explain", projectKey: "terrafusion", previewFingerprint: "b".repeat(64), selectedPath },
     })
     expect(await screen.findByText("CURRENT PREVIEW ADVICE")).toBeTruthy()
   })

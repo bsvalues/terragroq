@@ -33,7 +33,7 @@ import {
   CodexAppServerClient,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -105,7 +105,16 @@ function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  let body: { worldId?: unknown; projectKey?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
+  try {
+    body = await request.json()
+  } catch {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "projectKey", "prompt", "sessionId", "resume", "automatic"].includes(key))) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
   const configuredProjectRoot = path.resolve(projectBinding.binding.configuredWorkspaceRoot)
@@ -116,16 +125,6 @@ export async function POST(request: Request) {
     spaceIdentity: projectBinding.binding.project.identity,
   }
   const continuationDependencies = codexContinuationDependenciesForProjectRoot(projectRoot)
-
-  let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
-  try {
-    body = await request.json()
-  } catch {
-    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
-  }
-  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "prompt", "sessionId", "resume", "automatic"].includes(key))) {
-    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
-  }
   const worldId = typeof body.worldId === "string" ? body.worldId.trim() : ""
   if (!worldId || worldId.length > 200 || worldId.includes("\0")) {
     return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })

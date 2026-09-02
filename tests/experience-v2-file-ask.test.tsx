@@ -85,6 +85,7 @@ describe("Experience V2 exact selected-file Ask", () => {
       text: "What invariant does this file enforce?",
       lineContext: {
         kind: "file-ask",
+        projectKey: "terrafusion",
         path: "src/a.ts",
         projectIdentity: "c:/repos/williamos",
         revision: 8,

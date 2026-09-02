@@ -52,6 +52,7 @@ type AgentSnapshotLineContext = DurableLineSnapshot & Readonly<{
 }>
 type DiffChallengeLineContext = Readonly<{
   kind: "diff-challenge"
+  projectKey: "terrafusion" | "williamos"
   path: string
   baseHash: string
   indexHash: string
@@ -61,6 +62,7 @@ type DiffChallengeLineContext = Readonly<{
 }>
 type PreviewExplainLineContext = Readonly<{
   kind: "preview-explain"
+  projectKey: "terrafusion" | "williamos"
   previewFingerprint: string
   selectedPath: string
   clientGuard: Readonly<{
@@ -76,6 +78,7 @@ type PreviewExplainLineContext = Readonly<{
 }>
 type FileAskLineContext = Readonly<{
   kind: "file-ask"
+  projectKey: "terrafusion" | "williamos"
   path: string
   projectIdentity: string
   revision: number
@@ -259,7 +262,7 @@ function lineSessionCollectionFingerprint(sessions: readonly unknown[]): string 
     .sort())
 }
 
-function liveModifiedDiffIdentity(context: LiveDiffContext | null): Omit<DiffChallengeLineContext, "kind" | "clientGuard"> | null {
+function liveModifiedDiffIdentity(context: LiveDiffContext | null): Omit<DiffChallengeLineContext, "kind" | "projectKey" | "clientGuard"> | null {
   if (!context) return null
   try {
     const value = JSON.parse(context.fingerprint) as Record<string, unknown>
@@ -554,7 +557,7 @@ function captureToolRunSnapshots(
 
 function shouldAttachToolRunSnapshots(text: string): boolean {
   return /\b(tests?|build|terminal|tool)\b/i.test(text)
-    && /\b(latest|current|state|status|result|ran|run|output|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
+    && /\b(latest|current|state|status|result|outcome|ran|run|output|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
 }
 
 function spaceEndpoint(projectKey: "terrafusion" | "williamos", worldId?: string): string {
@@ -688,6 +691,7 @@ export function WorkspaceShell({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
     worldId: storage === "server" ? worldId : null,
+    projectKey,
     executionSession: boundExecutionSession,
     autoContinue: storage === "server" && hydrated && spine.outcomeKey !== null,
     onAutoContinuation: relayAutoContinuation,
@@ -1667,6 +1671,7 @@ export function WorkspaceShell({
 
   const change = useSelectedFileChange({
     worldId,
+    projectKey,
     path: changeTarget,
     dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
@@ -2038,6 +2043,7 @@ export function WorkspaceShell({
     const live = liveDiffContextRef.current
     return worldRef.current === context.clientGuard.worldId
       && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && context.projectKey === projectKey
       && storageRef.current === "server"
       && !persistenceErrorRef.current
       && current.activeWindowId === "diff"
@@ -2046,7 +2052,7 @@ export function WorkspaceShell({
       && live?.worldId === context.clientGuard.worldId
       && live.path === context.path
       && live.fingerprint === context.fingerprint
-  }, [])
+  }, [projectKey])
 
   const previewExplainLineContextIsCurrent = useCallback((context: PreviewExplainLineContext): boolean => {
     const current = stateRef.current
@@ -2054,6 +2060,7 @@ export function WorkspaceShell({
     const capturedEvidence = previewExplainEvidenceRef.current
     return worldRef.current === context.clientGuard.worldId
       && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && context.projectKey === projectKey
       && previewEvidenceRequestRef.current === context.clientGuard.requestId
       && storageRef.current === "server"
       && !persistenceErrorRef.current
@@ -2070,13 +2077,14 @@ export function WorkspaceShell({
       && capturedEvidence.payload.evidence.status === context.clientGuard.status
       && capturedEvidence.payload.evidence.identity === context.clientGuard.identity
       && capturedEvidence.payload.evidence.origin === context.clientGuard.origin
-  }, [])
+  }, [projectKey])
 
   const fileAskLineContextIsCurrent = useCallback((context: FileAskLineContext): boolean => {
     const current = stateRef.current
     const pane = current.editor.panes.find((candidate) => candidate.id === current.editor.activePaneId) ?? null
     return worldRef.current === context.clientGuard.worldId
       && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && context.projectKey === projectKey
       && storageRef.current === "server"
       && !persistenceErrorRef.current
       && projectRef.current?.identity === context.projectIdentity
@@ -2088,7 +2096,7 @@ export function WorkspaceShell({
       && pane?.activePath === context.path
       && pane?.selection?.anchor === context.selection.anchor
       && pane?.selection?.head === context.selection.head
-  }, [])
+  }, [projectKey])
 
   const toolRunSnapshotsLineContextIsCurrent = useCallback((context: ToolRunSnapshotsLineContext): boolean => {
     if (worldRef.current !== context.clientGuard.worldId
@@ -2831,7 +2839,7 @@ export function WorkspaceShell({
     setSpaceDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2860,7 +2868,7 @@ export function WorkspaceShell({
     })
     return () => controller.abort()
   }, [
-    dirtyPaths, persistenceError, persistencePending, project, selectedKind, space.revision,
+    dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
     space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
@@ -2886,7 +2894,7 @@ export function WorkspaceShell({
     setFileDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2915,7 +2923,7 @@ export function WorkspaceShell({
     })
     return () => controller.abort()
   }, [
-    dirtyPaths, persistenceError, persistencePending, project, selectedKind, space.revision,
+    dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
     space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
@@ -3679,6 +3687,7 @@ export function WorkspaceShell({
           savePreviewEvidenceSnapshot(requestWorldId, requestProjectIdentity, payload)
           const context: PreviewExplainLineContext = {
             kind: "preview-explain",
+            projectKey,
             previewFingerprint: payload.evidence.fingerprint,
             selectedPath: requestPath,
             clientGuard: {
@@ -3765,6 +3774,7 @@ export function WorkspaceShell({
       }
       const context: DiffChallengeLineContext = {
         kind: "diff-challenge",
+        projectKey,
         ...identity,
         clientGuard: { worldId, transitionEpoch: transitionEpochRef.current },
       }
@@ -3784,6 +3794,7 @@ export function WorkspaceShell({
       }
       const context: FileAskLineContext = {
         kind: "file-ask",
+        projectKey,
         path: selectedPath,
         projectIdentity: project.identity,
         revision: space.revision,

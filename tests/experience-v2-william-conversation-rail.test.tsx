@@ -295,14 +295,14 @@ describe("durable William conversation rail", () => {
 
     render(<WorkspaceShell />)
     await openWilliamConversation()
-    await userEvent.type(screen.getByRole("textbox", { name: "Message William" }), "What is the latest test state?")
+    await userEvent.type(screen.getByRole("textbox", { name: "Message William" }), "What is the latest test outcome?")
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
     await screen.findByText("The latest retained test run exited 1.")
 
     expect(lineBodies).toHaveLength(1)
     expect(lineBodies[0]).toMatchObject({
       worldId: "world-a",
-      text: "What is the latest test state?",
+      text: "What is the latest test outcome?",
       lineContext: {
         kind: "tool-run-snapshots",
         runs: [

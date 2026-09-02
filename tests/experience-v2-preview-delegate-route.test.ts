@@ -73,7 +73,8 @@ const evidence = {
 
 function request(body: Record<string, unknown>) {
   return new Request("http://williamos.test/api/loom/agent", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: "terrafusion", ...body }),
   })
 }
 
