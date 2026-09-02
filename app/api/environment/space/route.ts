@@ -141,6 +141,7 @@ function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
   persistedExpiry: string | null
   signedDeliveryExpiry: unknown
   signedAnchorExpiry: unknown
+  liveAnchorExpiry: string | null
   activeAuthorityFresh: boolean
 }>): boolean {
   if (input.persistedExpiry === null) return false
@@ -152,8 +153,18 @@ function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
   // host offset before persisting it in deliveryGrant.expiresAt. Accept only that one recognizable
   // representation defect, and only while the complete live Space/Work Order/grant chain is fresh.
   // A widened/expired grant, a changed anchor, or any other timestamp remains fail-closed.
-  return typeof input.signedAnchorExpiry === "string"
-    && input.persistedExpiry === input.signedAnchorExpiry
+  if (typeof input.signedAnchorExpiry !== "string"
+    || typeof input.signedDeliveryExpiry !== "string"
+    || input.liveAnchorExpiry === null
+    || input.persistedExpiry !== input.signedAnchorExpiry) return false
+  const liveAnchor = Date.parse(input.liveAnchorExpiry)
+  const signedAnchor = Date.parse(input.signedAnchorExpiry)
+  const persisted = Date.parse(input.persistedExpiry)
+  const signedDelivery = Date.parse(input.signedDeliveryExpiry)
+  const projection = signedAnchor - liveAnchor
+  return [liveAnchor, signedAnchor, persisted, signedDelivery].every(Number.isFinite)
+    && projection !== 0 && Math.abs(projection) <= 14 * 60 * 60 * 1_000
+    && signedDelivery === persisted + projection
 }
 
 function mergedExternalWorkOrderIsExact(input: Readonly<{
@@ -562,6 +573,8 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
     const queueGrant = grantsById.get(expected.queueGrantId)
     const deliveryGrant = grantsById.get(expected.deliveryGrantId)
     const deliveryScope = deliveryGrant ? jsonRecord(deliveryGrant.scope) : null
+    const implementationExpiry = implementationGrant?.expiresAt instanceof Date
+      ? implementationGrant.expiresAt.toISOString() : null
     const deliveryExpiry = deliveryGrant?.expiresAt instanceof Date ? deliveryGrant.expiresAt.toISOString() : null
     const transactionTimeResult = await transaction.execute(sql`SELECT clock_timestamp() AS "now"`)
     const at = new Date(transactionTimeResult.rows[0]?.now as Date | string)
@@ -619,6 +632,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
         persistedExpiry: deliveryExpiry,
         signedDeliveryExpiry: deliveryGrantBinding?.expiresAt,
         signedAnchorExpiry: anchorGrant?.expiresAt,
+        liveAnchorExpiry: implementationExpiry,
         activeAuthorityFresh,
       })
       && canonicalRepository(deliveryScope?.repository) === expected.repository

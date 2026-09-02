@@ -223,6 +223,7 @@ describe("merged external Space delivery finalization", () => {
         persistedExpiry: string | null
         signedDeliveryExpiry: unknown
         signedAnchorExpiry: unknown
+        liveAnchorExpiry: string | null
         activeAuthorityFresh: boolean
       }) => boolean
 
@@ -231,24 +232,35 @@ describe("merged external Space delivery finalization", () => {
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
       activeAuthorityFresh: true,
     })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: persistedExpiry,
       signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
       activeAuthorityFresh: false,
     })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
       activeAuthorityFresh: false,
     })).toBe(false)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      activeAuthorityFresh: true,
+    })).toBe(false)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-04T20:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
       activeAuthorityFresh: true,
     })).toBe(false)
   })
