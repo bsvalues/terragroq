@@ -124,16 +124,25 @@ function mergedExternalActiveAuthorityIsFresh(input: Readonly<{
   leaseToken: unknown
   leaseExpiresAt: unknown
   admittedExpiry: string
+  signedAnchorExpiry: unknown
   expectedLeaseHolder: string
   expectedLeaseToken: string
   now: Date
   grants: readonly Readonly<{ status: string; revokedAt: unknown; expiresAt: unknown }>[]
 }>): boolean {
+  const leaseExpiry = input.leaseExpiresAt instanceof Date ? input.leaseExpiresAt : null
+  const persistedLeaseExpiry = leaseExpiry?.toISOString() ?? null
   return input.leaseHolder === input.expectedLeaseHolder
     && input.leaseToken === input.expectedLeaseToken
-    && input.leaseExpiresAt instanceof Date
-    && input.leaseExpiresAt.getTime() > input.now.getTime()
-    && input.admittedExpiry === input.leaseExpiresAt.toISOString()
+    && leaseExpiry !== null
+    && leaseExpiry.getTime() > input.now.getTime()
+    // The same historical raw node-pg boundary that skewed delivery-grant timestamps also skewed
+    // the persisted Space lease. Accept only its exact HERMES projection when the immutable signed
+    // anchor independently names that projected instant; every other lease field and grant remains exact.
+    && (input.admittedExpiry === persistedLeaseExpiry
+      || (typeof input.signedAnchorExpiry === "string"
+        && input.signedAnchorExpiry === persistedLeaseExpiry
+        && hermesLegacyRawPgExpiryProjection(input.admittedExpiry) === persistedLeaseExpiry))
     && input.grants.every((grant) => grant.status === "active" && grant.revokedAt === null
       && grant.expiresAt instanceof Date && grant.expiresAt.getTime() > input.now.getTime())
 }
@@ -623,6 +632,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       leaseToken: outcome?.leaseToken,
       leaseExpiresAt: outcome?.leaseExpiresAt,
       admittedExpiry,
+      signedAnchorExpiry: anchorGrant?.expiresAt,
       expectedLeaseHolder: `space:${expected.worldId}`,
       expectedLeaseToken,
       now: at,

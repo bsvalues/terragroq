@@ -297,11 +297,32 @@ describe("merged external Space delivery finalization", () => {
     const expiry = new Date("2026-09-01T13:00:00.000Z")
     const base = {
       leaseHolder: "space:space-1", leaseToken: "lease-token", leaseExpiresAt: expiry,
-      admittedExpiry: expiry.toISOString(), expectedLeaseHolder: "space:space-1",
+      admittedExpiry: expiry.toISOString(), signedAnchorExpiry: expiry.toISOString(), expectedLeaseHolder: "space:space-1",
       expectedLeaseToken: "lease-token", now,
       grants: [{ status: "active", revokedAt: null, expiresAt: expiry }],
     }
     expect(authorityIsFresh(base)).toBe(true)
+    expect(authorityIsFresh({
+      ...base,
+      admittedExpiry: "2026-09-01T13:00:00.000Z",
+      signedAnchorExpiry: "2026-09-01T20:00:00.000Z",
+      leaseExpiresAt: new Date("2026-09-01T20:00:00.000Z"),
+      grants: [{ status: "active", revokedAt: null, expiresAt: new Date("2026-09-01T20:00:00.000Z") }],
+    })).toBe(true)
+    expect(authorityIsFresh({
+      ...base,
+      admittedExpiry: "2026-09-01T13:00:00.000Z",
+      signedAnchorExpiry: "2026-09-01T20:00:00.000Z",
+      leaseExpiresAt: new Date("2026-09-01T19:59:59.000Z"),
+      grants: [{ status: "active", revokedAt: null, expiresAt: new Date("2026-09-01T20:00:00.000Z") }],
+    })).toBe(false)
+    expect(authorityIsFresh({
+      ...base,
+      admittedExpiry: "2026-09-01T13:00:00.000Z",
+      signedAnchorExpiry: "2026-09-01T20:00:01.000Z",
+      leaseExpiresAt: new Date("2026-09-01T20:00:00.000Z"),
+      grants: [{ status: "active", revokedAt: null, expiresAt: new Date("2026-09-01T20:00:00.000Z") }],
+    })).toBe(false)
     expect(authorityIsFresh({ ...base, leaseExpiresAt: now, admittedExpiry: now.toISOString() })).toBe(false)
     expect(authorityIsFresh({ ...base, grants: [{ status: "active", revokedAt: null, expiresAt: now }] })).toBe(false)
     expect(authorityIsFresh({ ...base, leaseToken: "stale" })).toBe(false)
