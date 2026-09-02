@@ -37,9 +37,31 @@ if ($Action -eq "stage") { exit 0 }
 if ($Action -eq "test") {
   & cargo test --manifest-path $manifest --locked @NativeArguments
 } else {
-  if ($Action -eq "build" -and (-not $NativeArguments -or $NativeArguments.Count -eq 0)) {
-    $NativeArguments = @("--bundles", "msi,nsis")
+  $deploymentProfile = if ($env:WILLIAMOS_COCKPIT_PROFILE) {
+    $env:WILLIAMOS_COCKPIT_PROFILE.Trim()
+  } else {
+    "hermes-anchor"
   }
+  if ($deploymentProfile -notin @("hermes-anchor", "county-development")) {
+    throw "Unsupported WILLIAMOS_COCKPIT_PROFILE: $deploymentProfile"
+  }
+
+  if ($Action -eq "build" -and (-not $NativeArguments -or $NativeArguments.Count -eq 0)) {
+    $NativeArguments = if ($deploymentProfile -eq "county-development") {
+      @("--bundles", "nsis")
+    } else {
+      @("--bundles", "msi,nsis")
+    }
+  }
+
+  if ($deploymentProfile -eq "county-development") {
+    $countyConfig = Join-Path $cockpitRoot "src-tauri\tauri.county-development.conf.json"
+    if (-not (Test-Path -LiteralPath $countyConfig -PathType Leaf)) {
+      throw "County Development Tauri config is missing: $countyConfig"
+    }
+    $NativeArguments = @("--config", $countyConfig) + @($NativeArguments)
+  }
+
   & pnpm exec tauri $Action @NativeArguments
 }
 exit $LASTEXITCODE
