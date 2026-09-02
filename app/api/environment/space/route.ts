@@ -214,7 +214,12 @@ function mergedExternalWorkOrderIsExact(input: Readonly<{
 }>): boolean {
   if (input.persistedRef !== input.signedRef || !(input.persistedUpdatedAt instanceof Date)) return false
   if (input.workOrderStatus === "active" && input.outcomeLifecycleState === "active") {
-    return input.persistedUpdatedAt.toISOString() === input.signedVersion
+    const persistedVersion = input.persistedUpdatedAt.toISOString()
+    // The historical HERMES adoption issuer read this UTC-wall Work Order timestamp through raw
+    // node-pg before signing it. Accept only that exact one-hop projection from the still-persisted
+    // version; the signed ref, immutable authorization event, seal, and every other binding stay exact.
+    return persistedVersion === input.signedVersion
+      || hermesLegacyRawPgExpiryProjection(persistedVersion) === input.signedVersion
   }
   if (input.workOrderStatus === "closed" && input.outcomeLifecycleState === "completed") {
     return input.persistedClosedAt instanceof Date

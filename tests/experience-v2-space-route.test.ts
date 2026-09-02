@@ -317,8 +317,10 @@ describe("merged external Space delivery finalization", () => {
       workOrderStatus: "active", outcomeLifecycleState: "active", outcomeTerminalAt: null,
     }
     expect(workOrderIsExact(base)).toBe(true)
+    expect(workOrderIsExact({ ...base, signedVersion: "2026-09-01T19:00:00.000Z" })).toBe(true)
     expect(workOrderIsExact({ ...base, persistedRef: "WO-75" })).toBe(false)
     expect(workOrderIsExact({ ...base, signedVersion: "2026-09-01T11:00:00.000Z" })).toBe(false)
+    expect(workOrderIsExact({ ...base, signedVersion: "2026-09-02T02:00:00.000Z" })).toBe(false)
     const terminalAt = new Date("2026-09-01T13:00:00.000Z")
     const replay = {
       ...base, persistedUpdatedAt: terminalAt, persistedClosedAt: terminalAt,
