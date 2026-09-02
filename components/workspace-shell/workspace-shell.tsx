@@ -2223,7 +2223,7 @@ export function WorkspaceShell({
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId: requestWorldId, text: normalized, ...(serverContext ? { lineContext: serverContext } : {}) }),
+        body: JSON.stringify({ worldId: requestWorldId, projectKey, text: normalized, ...(serverContext ? { lineContext: serverContext } : {}) }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
@@ -2255,7 +2255,7 @@ export function WorkspaceShell({
       setLineBusy(false)
       setWilliamBusy(false)
     }
-  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, fileAskLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, toolRunSnapshotsLineContextIsCurrent, williamBusy])
+  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, fileAskLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, projectKey, toolRunSnapshotsLineContextIsCurrent, williamBusy])
 
   const reviewerAgentContext = delegateContext?.kind === "reviewer" ? delegateContext : null
 

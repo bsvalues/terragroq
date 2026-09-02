@@ -103,7 +103,7 @@ describe("durable William conversation rail", () => {
     expect(override.disabled).toBe(true)
     await userEvent.click(override)
     expect(composer.value).toBe("Finish the earlier turn")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Finish the earlier turn" }])
 
     resolveLine(Response.json({ worldId: "world-a", say: "Earlier turn complete.", spine: EMPTY_SPINE }))
     await screen.findByText("Earlier turn complete.")
@@ -141,7 +141,7 @@ describe("durable William conversation rail", () => {
 
     await screen.findByText("Earlier turn complete.")
     expect(composer.value).toBe("Newer unsent draft")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Finish the earlier turn" }])
   })
 
   it("opens a focused editable override draft for the exact validated judgment and sends it through William", async () => {
@@ -179,6 +179,7 @@ describe("durable William conversation rail", () => {
     await screen.findByText("I have reconsidered it against your reason.")
     expect(lineBodies).toEqual([{
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: `${draft}A narrower reservation already prevents concurrent writes.`,
     }])
   })
@@ -248,7 +249,7 @@ describe("durable William conversation rail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
 
     await screen.findByText("I would keep the narrow revision check.")
-    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Should we keep it narrow?" }])
+    expect(lineBodies).toEqual([{ worldId: "world-a", projectKey: "terrafusion", text: "Should we keep it narrow?" }])
     expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
@@ -393,7 +394,7 @@ describe("durable William conversation rail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
     await screen.findByText("Inspect the selected source next.")
 
-    expect(lineBody).toEqual({ worldId: "world-a", text: "What should I inspect next?" })
+    expect(lineBody).toEqual({ worldId: "world-a", projectKey: "terrafusion", text: "What should I inspect next?" })
   })
 
   it("rejects a tool-grounded reply when browser history changes during inference", async () => {

@@ -35,7 +35,7 @@ import { isContinueIntent } from "@/lib/environment/start-work"
 import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff, type WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
-import { resolveCanonicalWorkspaceProjectBinding, resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -1222,7 +1222,7 @@ export async function POST(request: Request) {
   // huge ignored field would still buffer fully) -- this bounds the actual bytes.
   const parsed = await readBoundedJson(request)
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
-  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown; lineContext?: unknown }
+  const body = parsed.value as { worldId?: unknown; projectKey?: unknown; text?: unknown; summon?: unknown; lineContext?: unknown }
   // A surface asked for by ADDRESS rather than by sentence. The superseded routes redirect here
   // carrying `?summon=`, and the Desk forwards it as this field instead of inventing an owner turn
   // that the owner never typed -- a transcript that puts words in their mouth is a lie, however
@@ -1566,9 +1566,12 @@ export async function POST(request: Request) {
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
         const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
-        const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
+        const projectBinding = await resolveCanonicalWorkspaceProjectBinding(userId, body.projectKey)
         if (!projectBinding.ok) {
           return Response.json({ error: projectBinding.error }, { status: 503 })
+        }
+        if (!worldMatchesWorkspaceProject(world, projectBinding.binding)) {
+          return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
         }
         const selectedObject = await deriveSelectedObjectGrounding(
           world,
@@ -1587,8 +1590,9 @@ export async function POST(request: Request) {
           // Re-resolve at the persistence CAS boundary. A retargeted junction or changed Git origin
           // must stale the inference result instead of letting William commit an answer grounded in
           // a checkout that the rest of the product now refuses.
-          const latestBinding = await resolveTerraFusionWorkspaceBinding(userId)
+          const latestBinding = await resolveCanonicalWorkspaceProjectBinding(userId, body.projectKey)
           if (!latestBinding.ok) return `WORKSPACE_BINDING_STALE:${latestBinding.error}`
+          if (!worldMatchesWorkspaceProject(latest, latestBinding.binding)) return "WORKSPACE_BINDING_STALE:WORLD_PROJECT_MISMATCH"
           const latestSelectedObject = await deriveSelectedObjectGrounding(
             latest,
             latestBinding.binding.workspaceRoot,
