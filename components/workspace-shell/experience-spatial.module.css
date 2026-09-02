@@ -486,7 +486,18 @@
   .objectLabel { max-width: 34vw; }
   .objectActions { max-width: 62vw; overflow-x: auto; }
   .objectActions .action { flex: 0 0 auto; }
-  .objectBar > [role="status"] { display: none; }
+  .objectBar > [role="status"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
   .windowLayer { inset: 85px 0 0; }
   .williamConversationRail { top: 85px; }
   .williamDrawerTrigger { right: 8px; bottom: 52px; }

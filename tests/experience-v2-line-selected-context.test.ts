@@ -176,12 +176,6 @@ describe("server-derived Line selected-object grounding", () => {
       system = body.messages?.find((message) => message.role === "system")?.content ?? ""
       return Response.json({ choices: [{ message: { content: "The latest retained test run completed with exit code 1; detailed counts are unavailable." } }] })
     }))
-    harness.save.mockImplementationOnce(async (input: {
-      expectedSelectedContext?: string
-      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
-    }) => {
-      expect(await input.deriveSelectedContext?.(world)).toBe(input.expectedSelectedContext)
-    })
     const { POST } = await import("@/app/api/environment/line/route")
 
     const response = await POST(new Request("http://localhost/api/environment/line", {
@@ -199,7 +193,7 @@ describe("server-derived Line selected-object grounding", () => {
     const encoded = system.match(/UNTRUSTED_BROWSER_TOOL_SNAPSHOTS_BASE64:([A-Za-z0-9+/=]+)/)?.[1]
     expect(encoded).toBeTruthy()
     expect(JSON.parse(Buffer.from(encoded!, "base64").toString("utf8"))).toEqual(toolRunSnapshotsContext.runs)
-    expect(harness.save).toHaveBeenCalledTimes(1)
+    expect(harness.save).not.toHaveBeenCalled()
   })
 
   it("answers latest test-state questions from the exact retained outcome without asking inference to invent details", async () => {
@@ -218,7 +212,6 @@ describe("server-derived Line selected-object grounding", () => {
       },
     }
     harness.snapshot = JSON.stringify(world)
-    harness.save.mockResolvedValueOnce(undefined)
     const inference = vi.fn()
     vi.stubGlobal("fetch", inference)
     const { POST } = await import("@/app/api/environment/line/route")
@@ -234,7 +227,7 @@ describe("server-derived Line selected-object grounding", () => {
       say: "Selected file: README.md. Latest browser-retained Tests result: completed with exit code 1 at 2026-09-02T04:02:00.000Z. Detailed output and test counts are unavailable in this bounded snapshot; current runtime liveness is unverified.",
     })
     expect(inference).not.toHaveBeenCalled()
-    expect(harness.save).toHaveBeenCalledTimes(1)
+    expect(harness.save).not.toHaveBeenCalled()
   })
 
   it.each([

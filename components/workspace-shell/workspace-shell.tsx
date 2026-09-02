@@ -552,6 +552,11 @@ function captureToolRunSnapshots(
   }
 }
 
+function shouldAttachToolRunSnapshots(text: string): boolean {
+  return /\b(tests?|build|terminal|tool)\b/i.test(text)
+    && /\b(latest|current|state|status|result|ran|run|output)\b/i.test(text)
+}
+
 export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
   const [space, setSpace] = useState<WorkspaceSpace>(() => defaultSpace())
   const [worldId, setWorldId] = useState<string | null>(null)
@@ -2144,7 +2149,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && selectedContextFingerprint() === requestContext
     try {
       await persistBarrierRef.current()
-      const effectiveContext = context ?? (includeBrowserToolRuns && requestWorldId && storageRef.current === "server"
+      const effectiveContext = context ?? (includeBrowserToolRuns && shouldAttachToolRunSnapshots(normalized) && requestWorldId && storageRef.current === "server"
         ? captureToolRunSnapshots(window.localStorage, `server:${requestWorldId}`, requestWorldId, requestEpoch)
         : null)
       if (context && typeof context === "object" && context.kind === "agent-snapshot"
@@ -4048,11 +4053,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             }}
           /> : null}
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Delegate unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? selectedKind === "file" ? fileReviewUnavailableReason ?? undefined : diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Delegate unavailable" ? selectedKind === "file" ? fileDelegateUnavailableReason ?? undefined : spaceDelegateUnavailableReason ?? undefined : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Delegate unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} aria-describedby={action === "Continue unavailable" ? "space-continue-unavailable" : action === "Delegate unavailable" && selectedKind === "space" ? "space-delegate-unavailable" : undefined} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? selectedKind === "file" ? fileReviewUnavailableReason ?? undefined : diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Delegate unavailable" ? selectedKind === "file" ? fileDelegateUnavailableReason ?? undefined : spaceDelegateUnavailableReason ?? undefined : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
-        {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
-        {selectedKind === "space" && spaceDelegateUnavailableReason ? <span role="status">{spaceDelegateUnavailableReason}</span> : null}
+        {selectedKind === "space" && !spaceContinueCandidate ? <span id="space-continue-unavailable" role="status">{continueUnavailableMessage}</span> : null}
+        {selectedKind === "space" && spaceDelegateUnavailableReason ? <span id="space-delegate-unavailable" role="status">{spaceDelegateUnavailableReason}</span> : null}
       </div>
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">

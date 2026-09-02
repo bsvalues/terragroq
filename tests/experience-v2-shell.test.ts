@@ -71,6 +71,9 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).toContain('No durable session exists in this Space; use Delegate.')
     expect(source).toContain('action === "Pause unavailable"')
     expect(source).toContain('action === "Pause unavailable" ? "Only the selected running session can be paused."')
+    expect(source).toContain('aria-describedby={action === "Continue unavailable" ? "space-continue-unavailable"')
+    expect(source).toContain('id="space-continue-unavailable" role="status"')
+    expect(source).toContain('id="space-delegate-unavailable" role="status"')
     expect(source).toContain('action === "Fork unavailable"')
     expect(source).toContain('lineMode === "fork" ? "Fork session"')
     expect(source).toContain("agentSessions.forkClaudeSession")
@@ -189,11 +192,19 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(css).not.toContain("#cc8d61")
   })
 
+  it("keeps narrow-screen Space action explanations available to assistive technology", () => {
+    const css = spatialCss()
+    const narrowStatus = css.match(/\.objectBar > \[role="status"\]\s*\{([^}]+)\}/)?.[1] ?? ""
+    expect(narrowStatus).toContain("position: absolute")
+    expect(narrowStatus).toContain("clip-path: inset(50%)")
+    expect(narrowStatus).not.toContain("display: none")
+  })
+
   it("keeps the responsive object bar from covering spatial window controls", () => {
     const css = spatialCss()
     const objectBar = css.match(/\.objectBar\s*\{([^}]+)\}/)?.[1] ?? ""
     expect(objectBar).toMatch(/overflow:\s*hidden/)
-    expect(css).toMatch(/@media \(max-width: 720px\)[\s\S]*\.objectBar > \[role="status"\]\s*\{\s*display:\s*none;/)
+    expect(css).toMatch(/@media \(max-width: 720px\)[\s\S]*\.objectBar > \[role="status"\]\s*\{\s*position:\s*absolute;/)
   })
 
   it("keeps TerraFusion inside a neutral developer preview, never WilliamOS business UI", () => {

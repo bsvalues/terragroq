@@ -1415,20 +1415,12 @@ export async function POST(request: Request) {
     }
     if (lineContext && typeof lineContext === "object" && lineContext.kind === "tool-run-snapshots") {
       const grounding = deriveToolRunSnapshotsLineGrounding(world, lineContext)
-      let updated = withTurn(world, "owner", text)
-      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) =>
-        deriveToolRunSnapshotsLineGrounding(latest, lineContext).version
-      const say = exactToolRunStatusAnswer(world, text, lineContext) ?? await converse(updated, text, grounding.facts)
-      updated = withTurn(updated, "williamos", say)
-      try {
-        await saveWorld(userId, requestedWorldId, updated, false, grounding.version, deriveSelectedContext)
-      } catch (error) {
-        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
-          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
-        }
-        throw error
-      }
-      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+      const scratch = withTurn(world, "owner", text)
+      const say = exactToolRunStatusAnswer(world, text, lineContext) ?? await converse(scratch, text, grounding.facts)
+      // Browser-only tool history has no server-observable CAS source. Persisting either turn here
+      // would let a result changed during inference reappear after reload even when the client
+      // correctly rejects it. Keep this bounded advisory exchange transient instead.
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: world.spine } satisfies LineReply)
     }
 
     let updated = withTurn(world, "owner", text)
