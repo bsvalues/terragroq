@@ -200,6 +200,19 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(narrowStatus).not.toContain("display: none")
   })
 
+  it("routes the canonical WilliamOS project through the existing Space persistence boundary", () => {
+    const page = read("app/page.tsx")
+    const desk = read("components/desk/desk.tsx")
+    const source = shell()
+    expect(page).toContain('params.project === "williamos" ? "williamos" : "terrafusion"')
+    expect(page).toContain("projectKey={projectKey}")
+    expect(desk).toContain("<WorkspaceShell initialSummon={initialSummon} projectKey={projectKey} />")
+    expect(source).toContain('projectKey?: "terrafusion" | "williamos"')
+    expect(source).toContain("fetch(spaceEndpoint(projectKey)")
+    expect(source).toContain("spaceMutationBody(projectKey, { worldId: id")
+    expect(source).toContain('projectKey === "williamos" ? "?projectKey=williamos" : ""')
+  })
+
   it("keeps the responsive object bar from covering spatial window controls", () => {
     const css = spatialCss()
     const objectBar = css.match(/\.objectBar\s*\{([^}]+)\}/)?.[1] ?? ""

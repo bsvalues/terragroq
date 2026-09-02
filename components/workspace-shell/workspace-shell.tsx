@@ -557,7 +557,28 @@ function shouldAttachToolRunSnapshots(text: string): boolean {
     && /\b(latest|current|state|status|result|ran|run|output)\b/i.test(text)
 }
 
-export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
+function spaceEndpoint(projectKey: "terrafusion" | "williamos", worldId?: string): string {
+  const query = [
+    ...(worldId ? [`worldId=${encodeURIComponent(worldId)}`] : []),
+    ...(projectKey === "williamos" ? ["projectKey=williamos"] : []),
+  ]
+  return `/api/environment/space${query.length > 0 ? `?${query.join("&")}` : ""}`
+}
+
+function spaceMutationBody(
+  projectKey: "terrafusion" | "williamos",
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  return projectKey === "williamos" ? { ...value, projectKey } : value
+}
+
+export function WorkspaceShell({
+  initialSummon = null,
+  projectKey = "terrafusion",
+}: {
+  initialSummon?: SummonedSurface | null
+  projectKey?: "terrafusion" | "williamos"
+}) {
   const [space, setSpace] = useState<WorkspaceSpace>(() => defaultSpace())
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
@@ -968,7 +989,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     let cancelled = false
     const fallback = defaultSpace(window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
-      const response = await fetch("/api/environment/space", { cache: "no-store" })
+      const response = await fetch(spaceEndpoint(projectKey), { cache: "no-store" })
       const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
       if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
         throw new Error(payload.error ?? `SPACE_${response.status}`)
@@ -996,7 +1017,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const hintedIsListed = envelope.spaces?.some((item) => item.worldId === hinted) === true
         if (hinted && hinted !== envelope.worldId && (hintedIsListed || envelope.collectionAvailable === false)) {
           try {
-            const exactResponse = await fetch(`/api/environment/space?worldId=${encodeURIComponent(hinted)}`, { cache: "no-store" })
+            const exactResponse = await fetch(spaceEndpoint(projectKey, hinted), { cache: "no-store" })
             const exact = await exactResponse.json() as SpaceEnvelope & { error?: string }
             if (exactResponse.ok && exact.worldId === hinted && exact.space) envelope = exact
             else if (!exactResponse.ok) safeLocalStorageRemove(preferenceKey)
@@ -1091,13 +1112,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!cancelled) setHydrated(true)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [projectKey])
 
   const refreshPersistedSpaceSelection = useCallback(async (expectedSelectedPath?: string) => {
     const requestWorldId = worldRef.current
     const requestEpoch = transitionEpochRef.current
     if (!requestWorldId || storageRef.current !== "server") throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
-    const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(requestWorldId)}`, { cache: "no-store" })
+    const response = await fetch(spaceEndpoint(projectKey, requestWorldId), { cache: "no-store" })
     const payload = await response.json() as SpaceEnvelope & { error?: string }
     if (!response.ok) throw new Error(payload.error ?? `CONTINUATION_SPACE_${response.status}`)
     if (worldRef.current !== requestWorldId || transitionEpochRef.current !== requestEpoch
@@ -1123,7 +1144,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (payload.spine) setSpine(payload.spine)
     setPersistenceError(null)
     setPersistencePending(false)
-  }, [])
+  }, [projectKey])
 
   const refreshWilliamJudgment = useCallback(async () => {
     const id = worldRef.current
@@ -1359,7 +1380,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const job: PersistJob = {
       worldId: id,
       revision,
-      body: JSON.stringify({ worldId: id, space: spaceToServer(stateRef.current, revision) }),
+      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision) })),
       storage: storageRef.current,
       browserKey: browserStorageKeyRef.current,
       epoch: transitionEpochRef.current,
@@ -1390,7 +1411,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if (drainPromiseRef.current === drain) drainPromiseRef.current = null
     })
     return drain.then(() => revision)
-  }, [sendPersist])
+  }, [projectKey, sendPersist])
   persistBarrierRef.current = async () => {
     if (persistTimer.current) clearTimeout(persistTimer.current)
     const requiredRevision = await persist()
@@ -3345,7 +3366,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     try {
       await flushCurrentSpace()
       setTransitionMessage("Restoring the selected Space…")
-      const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(targetWorldId)}`, { cache: "no-store" })
+      const response = await fetch(spaceEndpoint(projectKey, targetWorldId), { cache: "no-store" })
       const payload = await response.json() as SpaceEnvelope & { error?: string }
       if (!response.ok || payload.worldId !== targetWorldId || !payload.space) throw new Error(payload.error ?? `SPACE_${response.status}`)
       applySpaceEnvelope(payload)
@@ -3366,7 +3387,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     try {
       await flushCurrentSpace()
       const response = await fetch("/api/environment/space", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spaceMutationBody(projectKey, { name })),
       })
       const payload = await response.json() as SpaceEnvelope & { error?: string }
       if (!response.ok || !payload.worldId || !payload.space) throw new Error(payload.error ?? `SPACE_CREATE_${response.status}`)
@@ -3390,7 +3411,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setSwitchingSpace(true)
     setTransitionMessage("Removing the saved Space…")
     try {
-      const response = await fetch(`/api/environment/spaces/${encodeURIComponent(targetWorldId)}`, { method: "DELETE" })
+      const response = await fetch(`/api/environment/spaces/${encodeURIComponent(targetWorldId)}${projectKey === "williamos" ? "?projectKey=williamos" : ""}`, { method: "DELETE" })
       const payload = await response.json().catch(() => ({})) as { error?: string; removedWorldId?: string; spaces?: SpaceSummary[] }
       if (!response.ok || payload.removedWorldId !== targetWorldId) throw new Error(payload.error ?? `SPACE_REMOVE_${response.status}`)
       setSpaceSummaries((current) => payload.spaces ?? current.filter((summary) => summary.worldId !== targetWorldId))
@@ -4043,7 +4064,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             className={`${spatial.action} ${spatial.primaryAction}`}
             onAdmitted={async (admission) => {
               if (worldRef.current !== admission.worldId) return
-              const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(admission.worldId)}`, { cache: "no-store" })
+              const response = await fetch(spaceEndpoint(projectKey, admission.worldId), { cache: "no-store" })
               const payload = await response.json() as SpaceEnvelope & { error?: string }
               if (!response.ok || payload.worldId !== admission.worldId || !payload.space) {
                 throw new Error(payload.error ?? `SPACE_${response.status}`)
