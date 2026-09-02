@@ -1,0 +1,200 @@
+name: county-development-bundle
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: county-development-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: Windows x64 offline bundle
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      OLLAMA_VERSION: v0.9.2
+      PGVECTOR_VERSION: v0.8.1
+      WILLIAMOS_COCKPIT_PROFILE: county-development
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install application dependencies
+        shell: pwsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir cockpit install --frozen-lockfile
+
+      - name: Build WilliamOS standalone application
+        shell: pwsh
+        run: pnpm run build
+        env:
+          CI: "true"
+
+      - name: Build and test County Development Cockpit
+        shell: pwsh
+        run: |
+          pnpm --dir cockpit native:test
+          pnpm --dir cockpit tauri:build -- --bundles nsis
+
+      - name: Install portable PostgreSQL build source
+        shell: pwsh
+        run: |
+          choco install postgresql16 --no-progress -y --params "'/Password:CountyBundleBuildOnly_73aM9q /Port:55432'"
+          Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+          $pgRoot = Get-ChildItem 'C:\Program Files\PostgreSQL' -Directory |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $pgRoot) { throw 'PostgreSQL installation root was not found.' }
+          "PGROOT=$pgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build pgvector into the portable PostgreSQL tree
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:PGVECTOR_VERSION https://github.com/pgvector/pgvector.git $env:RUNNER_TEMP\pgvector
+          Push-Location $env:RUNNER_TEMP\pgvector
+          try {
+            nmake /F Makefile.win
+            if ($LASTEXITCODE -ne 0) { throw "pgvector build failed: $LASTEXITCODE" }
+            nmake /F Makefile.win install
+            if ($LASTEXITCODE -ne 0) { throw "pgvector install failed: $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          if (-not (Test-Path "$env:PGROOT\share\extension\vector.control")) {
+            throw 'pgvector control file was not installed.'
+          }
+
+      - name: Download pinned official Ollama Windows runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ollamaRoot = "$env:RUNNER_TEMP\ollama"
+          New-Item -ItemType Directory -Path $ollamaRoot -Force | Out-Null
+          gh release download $env:OLLAMA_VERSION --repo ollama/ollama --pattern 'ollama-windows-amd64.zip' --dir $ollamaRoot
+          Expand-Archive -LiteralPath "$ollamaRoot\ollama-windows-amd64.zip" -DestinationPath "$ollamaRoot\runtime" -Force
+          if (-not (Test-Path "$ollamaRoot\runtime\ollama.exe")) { throw 'ollama.exe was not found.' }
+          "OLLAMA_ROOT=$ollamaRoot\runtime" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Pull the County local coding and embedding models
+        shell: pwsh
+        run: |
+          $modelRoot = "$env:RUNNER_TEMP\ollama-models"
+          New-Item -ItemType Directory -Path $modelRoot -Force | Out-Null
+          $env:OLLAMA_HOST = '127.0.0.1:11435'
+          $env:OLLAMA_MODELS = $modelRoot
+          $ollama = "$env:OLLAMA_ROOT\ollama.exe"
+          $process = Start-Process -FilePath $ollama -ArgumentList 'serve' -PassThru -WindowStyle Hidden
+          try {
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(60)
+            do {
+              try { Invoke-RestMethod 'http://127.0.0.1:11435/api/tags' -TimeoutSec 5 | Out-Null; break }
+              catch { Start-Sleep -Milliseconds 750 }
+            } while ([DateTimeOffset]::UtcNow -lt $deadline)
+            & $ollama pull qwen2.5-coder:1.5b
+            if ($LASTEXITCODE -ne 0) { throw "Coding model pull failed: $LASTEXITCODE" }
+            & $ollama pull snowflake-arctic-embed2
+            if ($LASTEXITCODE -ne 0) { throw "Embedding model pull failed: $LASTEXITCODE" }
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+          "MODEL_ROOT=$modelRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Assemble source-pinned offline package
+        shell: pwsh
+        run: |
+          $node = (Get-Command node.exe).Source
+          $cockpit = Resolve-Path 'cockpit\src-tauri\target\release\williamos-cockpit.exe'
+          $loader = Resolve-Path 'cockpit\src-tauri\target\release\WebView2Loader.dll'
+          .\scripts\build-county-development-bundle.ps1 `
+            -NodeExe $node `
+            -PostgresRoot $env:PGROOT `
+            -OllamaRoot $env:OLLAMA_ROOT `
+            -CockpitExe $cockpit `
+            -WebView2Loader $loader `
+            -SourceSha '${{ github.sha }}' `
+            -ModelRoot $env:MODEL_ROOT `
+            -OutputRoot "$env:RUNNER_TEMP\county-output" |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\county-build-result.json"
+
+      - name: Exercise the installed loopback runtime
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem "$env:RUNNER_TEMP\county-output\WilliamOS-County-Development-*.zip" | Select-Object -First 1
+          $package = "$env:RUNNER_TEMP\county-smoke-package"
+          Expand-Archive -LiteralPath $bundle.FullName -DestinationPath $package -Force
+          $packageRoot = Get-ChildItem $package -Directory | Select-Object -First 1 -ExpandProperty FullName
+          $fakeTf = "$env:RUNNER_TEMP\terrafusion_os_1.0"
+          New-Item -ItemType Directory -Path $fakeTf -Force | Out-Null
+          git -C $fakeTf init
+          git -C $fakeTf config user.email 'county-bundle-ci@example.invalid'
+          git -C $fakeTf config user.name 'County Bundle CI'
+          Set-Content -LiteralPath "$fakeTf\README.md" -Value '# TerraFusion CI checkout'
+          git -C $fakeTf add README.md
+          git -C $fakeTf commit -m 'test: seed county bundle checkout'
+          git -C $fakeTf remote add origin https://github.com/bsvalues/terrafusion_os_1.0.git
+
+          $manager = Join-Path $packageRoot 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          $smokeInstall = "$env:RUNNER_TEMP\county-installed"
+          $smokeData = "$env:RUNNER_TEMP\county-data"
+          & $manager -Action Install -InstallRoot $smokeInstall -DataRoot $smokeData `
+            -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $fakeTf `
+            -DeploymentId 'ci-county-development' -ModelSource $env:MODEL_ROOT `
+            -NonInteractive -SkipCockpit
+          if ($LASTEXITCODE -ne 0) { throw "County install smoke failed: $LASTEXITCODE" }
+
+          $status = & (Join-Path $smokeInstall 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1') `
+            -Action Status -InstallRoot $smokeInstall -DataRoot $smokeData | ConvertFrom-Json
+          if (-not $status.health) { throw 'Installed WilliamOS health evidence is missing.' }
+          if ($status.health.deployment.profile -ne 'county-development') { throw 'Wrong deployment profile.' }
+          if (-not $status.health.deployment.valid) { throw 'County boundary is not valid.' }
+          if (-not $status.health.deployment.localOnlyInference) { throw 'Local-only inference is not proven.' }
+          if ($status.health.deployment.serviceOrigin -ne 'http://127.0.0.1:3200') { throw 'Service origin is not loopback.' }
+
+          & (Join-Path $smokeInstall 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1') `
+            -Action Uninstall -InstallRoot $smokeInstall -DataRoot $smokeData -PurgeData
+
+      - name: Upload County Development application bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: WilliamOS-County-Development-${{ github.sha }}
+          path: ${{ runner.temp }}\county-output\WilliamOS-County-Development-*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload County Development model pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: WilliamOS-County-Models-${{ github.sha }}
+          path: ${{ runner.temp }}\county-output\WilliamOS-County-Models-*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload package build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WilliamOS-County-Development-build-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}\county-build-result.json
+          if-no-files-found: warn
