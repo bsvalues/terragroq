@@ -357,6 +357,15 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({ ...base, reservationPaths: anchorPaths })).toBe(false)
     expect(exact({ ...base, deliveryPaths: anchorPaths })).toBe(false)
     expect(exact({ ...base, anchorPaths: [artifactPaths[0]] })).toBe(false)
+    const directoryArtifactPaths = ["app/api/environment/space/route.ts", "tests/experience-v2-space-route.test.ts"]
+    expect(exact({
+      anchorPaths: ["app/**", "tests/**"], artifactPaths: directoryArtifactPaths,
+      reservationPaths: directoryArtifactPaths, deliveryPaths: directoryArtifactPaths,
+    })).toBe(true)
+    expect(exact({
+      anchorPaths: ["app/**", "tests/**"], artifactPaths: ["testosterone/escape.ts"],
+      reservationPaths: ["testosterone/escape.ts"], deliveryPaths: ["testosterone/escape.ts"],
+    })).toBe(false)
   })
 
   it("loads historical Ed25519 verification keys from the configured public-key ring", () => {

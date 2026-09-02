@@ -31,6 +31,7 @@ import {
 } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { hashRecord } from "@/lib/governance/hash"
+import { reservationCoversRequestedPath } from "@/lib/governance/work-context-gate"
 import {
   deliverySigningKeyFromBase64,
   verifyWilliamOSDeliverySeal,
@@ -237,7 +238,7 @@ function mergedExternalDeliveryPathsAreExact(input: Readonly<{
   return exactCanonicalPaths(input.anchorPaths, input.anchorPaths)
     && exactCanonicalPaths(input.artifactPaths, input.reservationPaths)
     && exactCanonicalPaths(input.artifactPaths, input.deliveryPaths)
-    && input.artifactPaths.every((artifactPath) => input.anchorPaths.includes(artifactPath))
+    && input.artifactPaths.every((artifactPath) => reservationCoversRequestedPath(artifactPath, input.anchorPaths).ok)
 }
 
 function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
