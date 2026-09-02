@@ -129,7 +129,7 @@ export function WindowFrame({
         zIndex: geometry.z,
       }}
       onPointerDown={(event) => {
-        if ((event.target as HTMLElement).closest("button")) return
+        if ((event.target as HTMLElement).closest("[data-window-control]")) return
         onActivate()
         trackNativeResize(event)
       }}
@@ -139,12 +139,12 @@ export function WindowFrame({
       <header className={styles.windowBar} onPointerDown={startDrag} onDoubleClick={toggleMaximize}>
         <span className={styles.windowTitle}>{title}</span>
         {onMinimize ? (
-          <button type="button" className={styles.windowControl} onClick={onMinimize} disabled={minimizeDisabled} aria-label={`Minimize ${title}`} title={minimizeDisabledReason ?? `Minimize ${title}`}>
+          <button data-window-control type="button" className={styles.windowControl} onClick={onMinimize} disabled={minimizeDisabled} aria-label={`Minimize ${title}`} title={minimizeDisabledReason ?? `Minimize ${title}`}>
             <Minus size={14} strokeWidth={1.7} />
           </button>
         ) : null}
         {onClose ? (
-          <button type="button" className={styles.windowControl} onClick={onClose} aria-label={`Close ${title}`}>
+          <button data-window-control type="button" className={styles.windowControl} onClick={onClose} aria-label={`Close ${title}`}>
             <X size={13} strokeWidth={1.7} />
           </button>
         ) : null}
