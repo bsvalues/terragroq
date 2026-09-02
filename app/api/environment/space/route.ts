@@ -52,6 +52,7 @@ const MAX_SPACE_BYTES = 256_000
 const FINALIZE_MERGED_EXTERNAL_DELIVERY = "space.external_work_order.finalize_merged_delivery"
 const SHA = /^[0-9a-f]{40}$/
 const EXTERNAL_QUEUE_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:access", "spend:increase"] as const
+const HERMES_LEGACY_TIME_ZONE = "America/Los_Angeles"
 
 type MergedExternalContext = Readonly<{
   worldId: string
@@ -137,6 +138,69 @@ function mergedExternalActiveAuthorityIsFresh(input: Readonly<{
       && grant.expiresAt instanceof Date && grant.expiresAt.getTime() > input.now.getTime())
 }
 
+function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
+  persistedExpiry: string | null
+  signedDeliveryExpiry: unknown
+  signedAnchorExpiry: unknown
+  liveAnchorExpiry: string | null
+}>): boolean {
+  if (input.persistedExpiry === null) return false
+  if (input.persistedExpiry === input.signedDeliveryExpiry) return true
+  // Historical prospective-adoption evidence was written through raw node-pg on HERMES before
+  // UTC-wall timestamps were normalized at that boundary. The inserted delivery grant retained the
+  // authorization's exact anchor expiry, while RETURNING serialized the same wall clock through the
+  // host offset before persisting it in deliveryGrant.expiresAt. Accept only that one recognizable
+  // representation defect, and only while the complete live Space/Work Order/grant chain is fresh.
+  // A widened/expired grant, a changed anchor, or any other timestamp remains fail-closed.
+  if (typeof input.signedAnchorExpiry !== "string"
+    || typeof input.signedDeliveryExpiry !== "string"
+    || input.liveAnchorExpiry === null
+    || input.persistedExpiry !== input.signedAnchorExpiry) return false
+  return hermesLegacyRawPgExpiryProjection(input.liveAnchorExpiry) === input.signedAnchorExpiry
+    && hermesLegacyRawPgExpiryProjection(input.persistedExpiry) === input.signedDeliveryExpiry
+}
+
+function hermesLegacyRawPgExpiryProjection(value: string): string | null {
+  const wall = Date.parse(value)
+  if (!Number.isFinite(wall)) return null
+  const partsAt = (instant: number) => Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: HERMES_LEGACY_TIME_ZONE,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(instant)).filter((part) => part.type !== "literal")
+    .map((part) => [part.type, Number(part.value)]))
+  const offsetAt = (instant: number) => {
+    const parts = partsAt(instant)
+    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+      - Math.trunc(instant / 1_000) * 1_000
+  }
+  const wallDate = new Date(wall)
+  const wallParts = {
+    year: wallDate.getUTCFullYear(), month: wallDate.getUTCMonth() + 1, day: wallDate.getUTCDate(),
+    hour: wallDate.getUTCHours(), minute: wallDate.getUTCMinutes(), second: wallDate.getUTCSeconds(),
+  }
+  const sameWall = (parts: Record<string, number>) => Object.entries(wallParts)
+    .every(([key, value]) => parts[key] === value)
+  const first = wall - offsetAt(wall)
+  if (sameWall(partsAt(first))) return new Date(first).toISOString()
+  const second = wall - offsetAt(first)
+  if (sameWall(partsAt(second))) return new Date(second).toISOString()
+  // JavaScript normalizes a nonexistent spring-forward wall clock to the first valid instant after
+  // the gap. Reproduce that only when the two offset candidates bracket the requested wall time by
+  // the same bounded DST gap; arbitrary non-round-tripping timestamps remain invalid.
+  const localWall = (instant: number) => {
+    const parts = partsAt(instant)
+    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+      + wallDate.getUTCMilliseconds()
+  }
+  const candidates = [first, second].map((instant) => ({ instant, local: localWall(instant) }))
+    .sort((left, right) => left.local - right.local)
+  const before = wall - candidates[0].local
+  const after = candidates[1].local - wall
+  return before > 0 && before === after && before <= 2 * 60 * 60 * 1_000
+    ? new Date(candidates[1].instant).toISOString() : null
+}
+
 function mergedExternalWorkOrderIsExact(input: Readonly<{
   persistedRef: unknown
   persistedUpdatedAt: unknown
@@ -204,6 +268,8 @@ function configuredDeliveryVerificationKeys(): Readonly<Record<string, KeyObject
 if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact = mergedExternalOutcomeVersionIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalActiveAuthorityIsFresh = mergedExternalActiveAuthorityIsFresh
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryGrantExpiryIsExact = mergedExternalDeliveryGrantExpiryIsExact
+  ;(globalThis as Record<string, unknown>).__williamosHermesLegacyRawPgExpiryProjection = hermesLegacyRawPgExpiryProjection
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalWorkOrderIsExact = mergedExternalWorkOrderIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalExactLiteralStrings = exactLiteralStrings
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact = mergedExternalSpaceRevisionIsExact
@@ -542,6 +608,8 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
     const queueGrant = grantsById.get(expected.queueGrantId)
     const deliveryGrant = grantsById.get(expected.deliveryGrantId)
     const deliveryScope = deliveryGrant ? jsonRecord(deliveryGrant.scope) : null
+    const implementationExpiry = implementationGrant?.expiresAt instanceof Date
+      ? implementationGrant.expiresAt.toISOString() : null
     const deliveryExpiry = deliveryGrant?.expiresAt instanceof Date ? deliveryGrant.expiresAt.toISOString() : null
     const transactionTimeResult = await transaction.execute(sql`SELECT clock_timestamp() AS "now"`)
     const at = new Date(transactionTimeResult.rows[0]?.now as Date | string)
@@ -595,7 +663,12 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && deliveryGrant.workOrderId === expected.workOrderId
       && deliveryGrant.grantedBy === userId && deliveryGrant.grantedTo === "williamos-delivery"
       && deliveryGrant.authorityLevel === "A8_PUSH"
-      && deliveryExpiry === (deliveryGrantBinding?.expiresAt ?? null)
+      && mergedExternalDeliveryGrantExpiryIsExact({
+        persistedExpiry: deliveryExpiry,
+        signedDeliveryExpiry: deliveryGrantBinding?.expiresAt,
+        signedAnchorExpiry: anchorGrant?.expiresAt,
+        liveAnchorExpiry: implementationExpiry,
+      })
       && canonicalRepository(deliveryScope?.repository) === expected.repository
       && Number(deliveryScope?.pullRequest) === expected.pullRequest
       && deliveryScope?.headSha === expected.headSha

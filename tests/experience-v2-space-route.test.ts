@@ -216,6 +216,60 @@ describe("Experience V2 Space route", () => {
 })
 
 describe("merged external Space delivery finalization", () => {
+  it("accepts only the known raw-pg delivery expiry representation while live authority is fresh", async () => {
+    await import("@/app/api/environment/space/route")
+    const expiryIsExact = (globalThis as Record<string, unknown>)
+      .__williamosMergedExternalDeliveryGrantExpiryIsExact as (input: {
+        persistedExpiry: string | null
+        signedDeliveryExpiry: unknown
+        signedAnchorExpiry: unknown
+        liveAnchorExpiry: string | null
+      }) => boolean
+
+    const persistedExpiry = "2026-09-04T19:07:15.475Z"
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+    })).toBe(true)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: persistedExpiry,
+      signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+    })).toBe(true)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+    })).toBe(true)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
+      signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+    })).toBe(false)
+    expect(expiryIsExact({
+      persistedExpiry,
+      signedDeliveryExpiry: "2026-09-04T20:07:15.475Z",
+      signedAnchorExpiry: persistedExpiry,
+      liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
+    })).toBe(false)
+    const project = (globalThis as Record<string, unknown>)
+      .__williamosHermesLegacyRawPgExpiryProjection as (value: string) => string | null
+    expect(project("2026-03-08T00:30:00.000Z")).toBe("2026-03-08T08:30:00.000Z")
+    expect(project("2026-03-08T08:30:00.000Z")).toBe("2026-03-08T15:30:00.000Z")
+    expect(expiryIsExact({
+      persistedExpiry: "2026-03-08T08:30:00.000Z",
+      signedDeliveryExpiry: "2026-03-08T15:30:00.000Z",
+      signedAnchorExpiry: "2026-03-08T08:30:00.000Z",
+      liveAnchorExpiry: "2026-03-08T00:30:00.000Z",
+    })).toBe(true)
+    expect(project("2026-03-08T02:30:00.000Z")).toBe("2026-03-08T10:30:00.000Z")
+  })
+
   it("accepts only the signed active version or its exact completed replay successor", () => {
     const versionIsExact = (globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact as (input: {
       signedVersion: number
