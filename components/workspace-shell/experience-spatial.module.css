@@ -108,6 +108,7 @@
   height: 37px;
   display: flex;
   align-items: center;
+  overflow: hidden;
   gap: 11px;
   padding: 0 16px;
   border-bottom: 1px solid #20271f;
@@ -116,7 +117,7 @@
 
 .objectLabel { max-width: 46vw; overflow: hidden; color: #aab5a6; font-family: var(--font-geist-mono), monospace; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .objectLabel strong { color: #e6ebe3; font-family: var(--font-geist-sans), sans-serif; font-size: 11px; }
-.objectActions { gap: 4px; margin-left: auto; }
+.objectActions { min-width: 0; gap: 4px; margin-left: auto; }
 .action,
 .overlayButton,
 .lineClose {
@@ -485,6 +486,7 @@
   .objectLabel { max-width: 34vw; }
   .objectActions { max-width: 62vw; overflow-x: auto; }
   .objectActions .action { flex: 0 0 auto; }
+  .objectBar > [role="status"] { display: none; }
   .windowLayer { inset: 85px 0 0; }
   .williamConversationRail { top: 85px; }
   .williamDrawerTrigger { right: 8px; bottom: 52px; }

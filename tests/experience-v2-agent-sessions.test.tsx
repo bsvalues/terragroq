@@ -372,7 +372,7 @@ describe("Experience V2 real agent sessions", () => {
       label: "Local Thinker",
       descriptor: { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
+      body: { worldId: "world-1", prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
       events: [
         { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Local", mode: "delegate", resumed: true, continuity: "browser-replayed" },
         { type: "result", text: "Local continued." }, { type: "done", code: 0, reason: null },
@@ -2812,7 +2812,7 @@ describe("Experience V2 real agent sessions", () => {
       sessions: [{ provider: "Local", sessionId, role: "Thinker", assignment: "Conversation", completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
     })
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
-      prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
+      worldId: "world-1", prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
     })
 
     first.unmount()

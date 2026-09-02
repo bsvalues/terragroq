@@ -1133,6 +1133,7 @@ export function useExperienceAgentSessions({
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
         } : input.provider === "Local" ? {
+          worldId,
           prompt,
           provider: "local",
           sessionId: prior?.sessionId ?? null,

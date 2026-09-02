@@ -189,6 +189,13 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(css).not.toContain("#cc8d61")
   })
 
+  it("keeps the responsive object bar from covering spatial window controls", () => {
+    const css = spatialCss()
+    const objectBar = css.match(/\.objectBar\s*\{([^}]+)\}/)?.[1] ?? ""
+    expect(objectBar).toMatch(/overflow:\s*hidden/)
+    expect(css).toMatch(/@media \(max-width: 720px\)[\s\S]*\.objectBar > \[role="status"\]\s*\{\s*display:\s*none;/)
+  })
+
   it("keeps TerraFusion inside a neutral developer preview, never WilliamOS business UI", () => {
     const source = shell().toLowerCase()
     expect(source).toContain("developer preview")

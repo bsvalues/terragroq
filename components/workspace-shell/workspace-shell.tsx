@@ -11,7 +11,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
-import { removeToolRunHistory } from "./tool-run-history"
+import { loadToolRunHistory, removeToolRunHistory, type ToolRunTranscript } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
@@ -83,7 +83,18 @@ type FileAskLineContext = Readonly<{
   selection: Readonly<{ anchor: number; head: number }>
   clientGuard: Readonly<{ worldId: string; transitionEpoch: number }>
 }>
-type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | PreviewExplainLineContext | FileAskLineContext | null
+type ToolRunSnapshot = Readonly<Pick<ToolRunTranscript, "id" | "operationId" | "operationLabel" | "alias" | "startedAt" | "endedAt" | "outcome">>
+type ToolRunSnapshotsLineContext = Readonly<{
+  kind: "tool-run-snapshots"
+  runs: readonly ToolRunSnapshot[]
+  clientGuard: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    scope: string
+    fingerprint: string
+  }>
+}>
+type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | PreviewExplainLineContext | FileAskLineContext | ToolRunSnapshotsLineContext | null
 type LineMode = "default" | "change" | "review" | "fork"
 type ExecutionObservation = Readonly<{
   worldId: string
@@ -509,6 +520,35 @@ function williamJudgmentInspectorSurface(value: unknown): InspectorSurface | nul
     subject: "William judgment",
     identity,
     payload: snapshot,
+  }
+}
+
+function captureToolRunSnapshots(
+  storage: Storage,
+  scope: string,
+  worldId: string,
+  transitionEpoch: number,
+): ToolRunSnapshotsLineContext | null {
+  const history = loadToolRunHistory(storage, scope)
+  if (history.error || history.runs.length === 0) return null
+  const latestByOperation = new Map<string, ToolRunTranscript>()
+  for (const run of history.runs) {
+    const prior = latestByOperation.get(run.operationId)
+    if (!prior || prior.endedAt < run.endedAt || (prior.endedAt === run.endedAt && prior.id < run.id)) {
+      latestByOperation.set(run.operationId, run)
+    }
+  }
+  const runs = [...latestByOperation.values()]
+    .sort((left, right) => left.endedAt.localeCompare(right.endedAt) || left.id.localeCompare(right.id))
+    .slice(-6)
+    .map(({ id, operationId, operationLabel, alias, startedAt, endedAt, outcome }) => ({
+      id, operationId, operationLabel, alias, startedAt, endedAt, outcome,
+    }))
+  if (runs.length === 0) return null
+  return {
+    kind: "tool-run-snapshots",
+    runs,
+    clientGuard: { worldId, transitionEpoch, scope, fingerprint: JSON.stringify(runs) },
   }
 }
 
@@ -2024,7 +2064,30 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && pane?.selection?.head === context.selection.head
   }, [])
 
-  const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
+  const toolRunSnapshotsLineContextIsCurrent = useCallback((context: ToolRunSnapshotsLineContext): boolean => {
+    if (worldRef.current !== context.clientGuard.worldId
+      || transitionEpochRef.current !== context.clientGuard.transitionEpoch
+      || storageRef.current !== "server"
+      || persistenceErrorRef.current) return false
+    const currentScope = `server:${context.clientGuard.worldId}`
+    if (currentScope !== context.clientGuard.scope) return false
+    try {
+      return captureToolRunSnapshots(
+        window.localStorage,
+        currentScope,
+        context.clientGuard.worldId,
+        context.clientGuard.transitionEpoch,
+      )?.clientGuard.fingerprint === context.clientGuard.fingerprint
+    } catch {
+      return false
+    }
+  }, [])
+
+  const sendWilliamTurn = useCallback(async (
+    text: string,
+    context: LineContext = null,
+    includeBrowserToolRuns = false,
+  ): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
     if (context && typeof context === "object" && context.kind === "agent-snapshot"
@@ -2081,6 +2144,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && selectedContextFingerprint() === requestContext
     try {
       await persistBarrierRef.current()
+      const effectiveContext = context ?? (includeBrowserToolRuns && requestWorldId && storageRef.current === "server"
+        ? captureToolRunSnapshots(window.localStorage, `server:${requestWorldId}`, requestWorldId, requestEpoch)
+        : null)
       if (context && typeof context === "object" && context.kind === "agent-snapshot"
         && !agentSnapshotLineContextIsCurrent(context)) {
         const stale = "The selected browser-saved session changed before William dispatch, so no advice was requested."
@@ -2109,10 +2175,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setWilliamError(stale)
         return false
       }
+      if (effectiveContext && typeof effectiveContext === "object" && effectiveContext.kind === "tool-run-snapshots"
+        && !toolRunSnapshotsLineContextIsCurrent(effectiveContext)) {
+        const stale = "The saved tool results changed before William dispatch, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
-      const serverContext = context && typeof context === "object" && (context.kind === "agent-snapshot" || context.kind === "diff-challenge" || context.kind === "preview-explain" || context.kind === "file-ask")
-        ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== "clientGuard"))
-        : context
+      const serverContext = effectiveContext && typeof effectiveContext === "object" && (effectiveContext.kind === "agent-snapshot" || effectiveContext.kind === "diff-challenge" || effectiveContext.kind === "preview-explain" || effectiveContext.kind === "file-ask" || effectiveContext.kind === "tool-run-snapshots")
+        ? Object.fromEntries(Object.entries(effectiveContext).filter(([key]) => key !== "clientGuard"))
+        : effectiveContext
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2126,6 +2199,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       }
       if (context && typeof context === "object" && context.kind === "file-ask"
         && !fileAskLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
+      if (effectiveContext && typeof effectiveContext === "object" && effectiveContext.kind === "tool-run-snapshots"
+        && !toolRunSnapshotsLineContextIsCurrent(effectiveContext)) {
         throw new Error("LINE_CONTEXT_STALE")
       }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
@@ -2144,7 +2221,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setLineBusy(false)
       setWilliamBusy(false)
     }
-  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, fileAskLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, williamBusy])
+  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, fileAskLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, toolRunSnapshotsLineContextIsCurrent, williamBusy])
 
   const reviewerAgentContext = delegateContext?.kind === "reviewer" ? delegateContext : null
 
@@ -4032,7 +4109,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           const submittedDraft = williamInput
           const text = submittedDraft.trim()
           if (!text) return
-          void sendWilliamTurn(text).then((sent) => {
+          void sendWilliamTurn(text, null, true).then((sent) => {
             if (sent) setWilliamInput((current) => current === submittedDraft ? "" : current)
           })
         }}

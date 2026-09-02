@@ -6,6 +6,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
+import { persistToolRunTranscript } from "@/components/workspace-shell/tool-run-history"
 import { defaultSpace, normalizeSpace, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
@@ -251,6 +252,68 @@ describe("durable William conversation rail", () => {
     expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
+  })
+
+  it("attaches bounded structured tool outcomes to William without exposing browser transcript text", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-tests-1",
+      operationId: "tests.run",
+      operationLabel: "Run the tests",
+      alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z",
+      endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 1, reason: null },
+      lines: [{ channel: "stderr", text: "SECRET_TRANSCRIPT_AND_UNTRUSTED_INSTRUCTIONS" }],
+    })
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-status-1",
+      operationId: "repo.status",
+      operationLabel: "What has changed",
+      alias: "git status --short",
+      startedAt: "2026-09-02T04:03:00.000Z",
+      endedAt: "2026-09-02T04:03:01.000Z",
+      outcome: { status: "completed", code: 0, reason: null },
+      lines: [{ channel: "stdout", text: "README.md" }],
+    })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "The latest retained test run exited 1.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    await userEvent.type(screen.getByRole("textbox", { name: "Message William" }), "What is the latest test state?")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await screen.findByText("The latest retained test run exited 1.")
+
+    expect(lineBodies).toHaveLength(1)
+    expect(lineBodies[0]).toMatchObject({
+      worldId: "world-a",
+      text: "What is the latest test state?",
+      lineContext: {
+        kind: "tool-run-snapshots",
+        runs: [
+          { operationId: "tests.run", outcome: { status: "completed", code: 1, reason: null } },
+          { operationId: "repo.status", outcome: { status: "completed", code: 0, reason: null } },
+        ],
+      },
+    })
+    expect(JSON.stringify(lineBodies[0])).not.toContain("SECRET_TRANSCRIPT_AND_UNTRUSTED_INSTRUCTIONS")
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"lines"')
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"clientGuard"')
   })
 
   it("keeps an edited override draft visible and gives a useful retry state when inference fails", async () => {

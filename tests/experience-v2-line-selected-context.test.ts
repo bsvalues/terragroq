@@ -123,6 +123,142 @@ describe("server-derived Line selected-object grounding", () => {
     },
     snapshotAt: "2026-09-01T18:05:00.000Z",
   }
+  const toolRunSnapshotsContext = {
+    kind: "tool-run-snapshots" as const,
+    runs: [
+      {
+        id: "run-tests-1",
+        operationId: "tests.run",
+        operationLabel: "Run the tests",
+        alias: "test",
+        startedAt: "2026-09-02T04:00:00.000Z",
+        endedAt: "2026-09-02T04:02:00.000Z",
+        outcome: { status: "completed" as const, code: 1, reason: null },
+      },
+      {
+        id: "run-status-1",
+        operationId: "repo.status",
+        operationLabel: "What has changed",
+        alias: "git status --short",
+        startedAt: "2026-09-02T04:03:00.000Z",
+        endedAt: "2026-09-02T04:03:01.000Z",
+        outcome: { status: "completed" as const, code: 0, reason: null },
+      },
+    ],
+  }
+
+  it("grounds William in bounded browser-saved tool outcomes without treating repository prose as runtime evidence", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        schemaVersion: 1,
+        revision: 4,
+        windows: [{
+          id: "editor",
+          kind: "editor",
+          title: "Source",
+          frame: { x: 0, y: 0, width: 800, height: 600 },
+          z: 1,
+          minimized: false,
+        }],
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", filePath: "README.md", selection: { anchor: 0, head: 0 } }],
+        selection: { filePath: "README.md", anchor: 0, head: 0 },
+        activeWindowId: "editor",
+        activePaneId: "primary",
+        runningAppUrl: null,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    let system = ""
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages?: { role?: string; content?: string }[] }
+      system = body.messages?.find((message) => message.role === "system")?.content ?? ""
+      return Response.json({ choices: [{ message: { content: "The latest retained test run completed with exit code 1; detailed counts are unavailable." } }] })
+    }))
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
+    }) => {
+      expect(await input.deriveSelectedContext?.(world)).toBe(input.expectedSelectedContext)
+    })
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "What should I inspect next?", lineContext: toolRunSnapshotsContext }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(system).toContain("Browser-saved tool result snapshots")
+    expect(system).toContain("runtime liveness is unverified")
+    expect(system).toContain("use the tests.run entry if present")
+    expect(system).toContain("test counts are unavailable and must not be inferred from repository prose")
+    expect(system).toContain('"selectedPath": "README.md"')
+    const encoded = system.match(/UNTRUSTED_BROWSER_TOOL_SNAPSHOTS_BASE64:([A-Za-z0-9+/=]+)/)?.[1]
+    expect(encoded).toBeTruthy()
+    expect(JSON.parse(Buffer.from(encoded!, "base64").toString("utf8"))).toEqual(toolRunSnapshotsContext.runs)
+    expect(harness.save).toHaveBeenCalledTimes(1)
+  })
+
+  it("answers latest test-state questions from the exact retained outcome without asking inference to invent details", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        schemaVersion: 1,
+        revision: 4,
+        windows: [{ id: "editor", kind: "editor", title: "Source", frame: { x: 0, y: 0, width: 800, height: 600 }, z: 1, minimized: false }],
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", filePath: "README.md", selection: { anchor: 0, head: 0 } }],
+        selection: { filePath: "README.md", anchor: 0, head: 0 },
+        activeWindowId: "editor",
+        activePaneId: "primary",
+        runningAppUrl: null,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    harness.save.mockResolvedValueOnce(undefined)
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Summarize the current selected file and the latest test state.", lineContext: toolRunSnapshotsContext }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      say: "Selected file: README.md. Latest browser-retained Tests result: completed with exit code 1 at 2026-09-02T04:02:00.000Z. Detailed output and test counts are unavailable in this bounded snapshot; current runtime liveness is unverified.",
+    })
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.save).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { ...toolRunSnapshotsContext, extra: true },
+    { ...toolRunSnapshotsContext, runs: [{ ...toolRunSnapshotsContext.runs[0], lines: [{ channel: "stdout", text: "raw" }] }] },
+    { ...toolRunSnapshotsContext, runs: [{ ...toolRunSnapshotsContext.runs[0], alias: "git status" }] },
+    { ...toolRunSnapshotsContext, runs: [toolRunSnapshotsContext.runs[0], { ...toolRunSnapshotsContext.runs[0], id: "run-tests-2" }] },
+  ])("rejects malformed or fabricated tool-run snapshots before inference or persistence", async (lineContext) => {
+    harness.snapshot = JSON.stringify(createWorkingWorld({ intent: "Finish Experience V2" }))
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "What is the latest test state?", lineContext }),
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "INVALID_LINE_CONTEXT" })
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
+  })
 
   it("grounds Ask William to a strict browser-saved session snapshot as quoted untrusted advisory evidence", async () => {
     const world = createWorkingWorld({ intent: "Finish Experience V2" })
