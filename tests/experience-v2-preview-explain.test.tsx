@@ -98,6 +98,7 @@ describe("Experience V2 Developer Preview Explain", () => {
     expect(linePosts).toBe(1)
     expect(lineBody).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: "Explain the exact current developer Preview.",
       lineContext: { kind: "preview-explain", projectKey: "terrafusion", previewFingerprint: "a".repeat(64), selectedPath },
     })
@@ -172,6 +173,7 @@ describe("Experience V2 Developer Preview Explain", () => {
     await waitFor(() => expect(linePosts).toBe(1))
     expect(lineBody).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: "Explain the exact current developer Preview.",
       lineContext: { kind: "preview-explain", projectKey: "terrafusion", previewFingerprint: "b".repeat(64), selectedPath },
     })

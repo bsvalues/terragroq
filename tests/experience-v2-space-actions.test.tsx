@@ -461,6 +461,7 @@ describe("Experience V2 selected Space actions", () => {
     expect((within(line).getByRole("button", { name: "Working" }) as HTMLButtonElement).disabled).toBe(true)
     expect(requests[0]).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: "Summarize this exact current Space.",
       lineContext: "space-summary",
     })
@@ -476,7 +477,11 @@ describe("Experience V2 selected Space actions", () => {
     fireEvent.change(genericInput, { target: { value: "A separate ordinary question." } })
     fireEvent.click(within(genericLine).getByRole("button", { name: "Send" }))
     await waitFor(() => expect(requests).toHaveLength(2))
-    expect(requests[1]).toEqual({ worldId: "world-a", text: "A separate ordinary question." })
+    expect(requests[1]).toEqual({
+      worldId: "world-a",
+      projectKey: "terrafusion",
+      text: "A separate ordinary question.",
+    })
   })
 
   it("keeps a pending summary bound to its exact Space by refusing cross-Space re-entry", async () => {

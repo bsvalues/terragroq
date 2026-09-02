@@ -82,6 +82,7 @@ describe("Experience V2 exact selected-file Ask", () => {
     await waitFor(() => expect(lineRequests).toHaveLength(1))
     expect(lineRequests[0]).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: "What invariant does this file enforce?",
       lineContext: {
         kind: "file-ask",
