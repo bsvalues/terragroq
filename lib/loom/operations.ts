@@ -79,7 +79,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
   {
     id: "tests.run",
     label: "Run the tests",
-    intent: "Run the full vitest suite and stream its output.",
+    intent: "Run the repository's configured Vitest validation and stream its output.",
     // node is spawned directly rather than through pnpm: Windows refuses to run .cmd shims without
     // a shell, and introducing a shell would create the interpolation point this design avoids.
     command: "node",

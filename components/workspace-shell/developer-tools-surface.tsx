@@ -428,7 +428,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
             Read-only project shell · git status, diff, and log accept common inspection flags. Build and test remain bounded actions.
           </p> : null}
           <div className={styles.utilityControls}>
-            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>{projectKey === "williamos" ? "Run deterministic suite" : "Run full test suite"}</button>
+            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>Run repository tests</button>
               : operations.map((operation) => <button key={operation.id} type="button" aria-label={operation.label} className={styles.utilityButton}
                 disabled={surfaceRunning !== null} title={operation.intent} onClick={() => { const alias = terminalAlias(operation.id); if (alias) { setCommand(alias); void run(operation.id, alias) } }}>{operation.label}</button>)}
             {surfaceRunning ? <button type="button" className={styles.utilityStop} onClick={stop}>Stop</button> : null}

@@ -594,7 +594,7 @@ describe("Experience V2 multi-Space re-entry", () => {
     }))
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: /^(Restore|Focus) Tests$/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
     expect(screen.getByText("Stop the active Test or Terminal run before switching Spaces.")).toBeTruthy()
