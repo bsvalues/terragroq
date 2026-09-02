@@ -42,8 +42,9 @@ export async function GET() {
   }
 
   // Preserve the established HERMES aggregate-health behavior. County Development additionally
-  // requires a valid local-only compartment and the configured local model to be available.
-  const countyRuntimeReady = deployment.profile !== "county-development" || liveRuntime.available
+  // requires the exact configured chat model, not merely any locally installed fallback model.
+  const exactCountyModelReady = liveRuntime.available && liveRuntime.model === runtime.chatModel
+  const countyRuntimeReady = deployment.profile !== "county-development" || exactCountyModelReady
   const healthy = readiness.ready && deployment.valid && countyRuntimeReady
 
   return NextResponse.json(
@@ -62,9 +63,12 @@ export async function GET() {
         database,
         auth,
         runtime: {
-          ok: liveRuntime.available,
+          ok: deployment.profile === "county-development" ? exactCountyModelReady : liveRuntime.available,
           chatModel: liveRuntime.model,
           ...(liveRuntime.detail ? { detail: liveRuntime.detail } : {}),
+          ...(deployment.profile === "county-development" && liveRuntime.available && !exactCountyModelReady
+            ? { detail: `Configured County model ${runtime.chatModel} is not installed.` }
+            : {}),
           embeddingModel: runtime.embeddingModel,
           gateway: runtime.gateway,
           provider: runtime.provider,
