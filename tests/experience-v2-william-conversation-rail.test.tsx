@@ -316,6 +316,55 @@ describe("durable William conversation rail", () => {
     expect(JSON.stringify(lineBodies[0])).not.toContain('"clientGuard"')
   })
 
+  it("attaches bounded tool outcomes through The Line for natural pass or fail wording", async () => {
+    persistToolRunTranscript(window.localStorage, "server:world-a", {
+      schemaVersion: 1,
+      id: "run-tests-line-1",
+      operationId: "tests.run",
+      operationLabel: "Run the tests",
+      alias: "test",
+      startedAt: "2026-09-02T04:00:00.000Z",
+      endedAt: "2026-09-02T04:02:00.000Z",
+      outcome: { status: "completed", code: 0, reason: null },
+      lines: [{ channel: "stdout", text: "SECRET_LINE_TRANSCRIPT" }],
+    })
+    const lineBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ worldId: "world-a", say: "The retained test run passed.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Open William conversation" })
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    await userEvent.type(screen.getByRole("textbox", { name: "The Line" }), "Did the tests pass?")
+    await userEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => expect(screen.getAllByText(/The retained test run passed\./).length).toBeGreaterThan(0))
+
+    expect(lineBodies).toHaveLength(1)
+    expect(lineBodies[0]).toMatchObject({
+      worldId: "world-a",
+      text: "Did the tests pass?",
+      lineContext: {
+        kind: "tool-run-snapshots",
+        runs: [{ operationId: "tests.run", outcome: { status: "completed", code: 0, reason: null } }],
+      },
+    })
+    expect(JSON.stringify(lineBodies[0])).not.toContain("SECRET_LINE_TRANSCRIPT")
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"lines"')
+    expect(JSON.stringify(lineBodies[0])).not.toContain('"clientGuard"')
+  })
+
   it("does not attach browser tool history to an unrelated William question", async () => {
     persistToolRunTranscript(window.localStorage, "server:world-a", {
       schemaVersion: 1, id: "run-tests-1", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",

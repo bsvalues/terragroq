@@ -33,10 +33,14 @@ const SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
   const exactBody = body.provider === "local" && body.worldId === undefined ? { ...body, worldId: "world-a" } : body
+  return rawRequest(exactBody, signal)
+}
+
+function rawRequest(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/agent", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(exactBody),
+    body: JSON.stringify(body),
     signal,
   })
 }
@@ -96,6 +100,30 @@ describe("durable Local model conversation route", () => {
     })
     expect(seams.spawn).not.toHaveBeenCalled()
     expect(seams.requireWorkContext).not.toHaveBeenCalled()
+  })
+
+  it("keeps a worldless Workroom Local turn explicitly unbound and non-mutating", async () => {
+    const upstream = vi.fn().mockResolvedValue(ollama(
+      { message: { content: "Unbound " }, done: false },
+      { message: { content: "answer" }, done: true },
+    ))
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await POST(rawRequest({ provider: "local", prompt: "Discuss this idea." }))
+    const output = await events(response)
+
+    expect(response.status).toBe(200)
+    expect(output).toContainEqual({ type: "result", text: "Unbound answer" })
+    expect(seams.loadOwnedWorkingWorld).not.toHaveBeenCalled()
+    expect(JSON.parse(String(upstream.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [
+        { role: "system", content: expect.stringContaining("No active Space or selected file is attached to this Workroom turn. Do not invent either.") },
+        { role: "user", content: "Discuss this idea." },
+      ],
+      stream: true,
+    })
+    expect(JSON.parse(String(upstream.mock.calls[0]?.[1]?.body)).messages[0].content)
+      .toContain("cannot edit files, run commands, or dispatch work")
   })
 
   it("uses an installed chat model when the server default is absent without overriding an explicit choice", async () => {

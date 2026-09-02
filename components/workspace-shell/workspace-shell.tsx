@@ -554,7 +554,7 @@ function captureToolRunSnapshots(
 
 function shouldAttachToolRunSnapshots(text: string): boolean {
   return /\b(tests?|build|terminal|tool)\b/i.test(text)
-    && /\b(latest|current|state|status|result|ran|run|output)\b/i.test(text)
+    && /\b(latest|current|state|status|result|ran|run|output|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
 }
 
 function spaceEndpoint(projectKey: "terrafusion" | "williamos", worldId?: string): string {
@@ -2742,7 +2742,7 @@ export function WorkspaceShell({
         }
         return
       }
-      await sendWilliamTurn(text, lineContext)
+      await sendWilliamTurn(text, lineContext, true)
     } catch (error) {
       if (lineTarget !== "agent") {
         setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
