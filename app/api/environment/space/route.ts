@@ -143,11 +143,9 @@ function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
   signedDeliveryExpiry: unknown
   signedAnchorExpiry: unknown
   liveAnchorExpiry: string | null
-  activeAuthorityFresh: boolean
 }>): boolean {
   if (input.persistedExpiry === null) return false
   if (input.persistedExpiry === input.signedDeliveryExpiry) return true
-  if (!input.activeAuthorityFresh) return false
   // Historical prospective-adoption evidence was written through raw node-pg on HERMES before
   // UTC-wall timestamps were normalized at that boundary. The inserted delivery grant retained the
   // authorization's exact anchor expiry, while RETURNING serialized the same wall clock through the
@@ -176,17 +174,31 @@ function hermesLegacyRawPgExpiryProjection(value: string): string | null {
     return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
       - Math.trunc(instant / 1_000) * 1_000
   }
-  let projected = wall - offsetAt(wall)
-  projected = wall - offsetAt(projected)
-  const projectedParts = partsAt(projected)
   const wallDate = new Date(wall)
-  if (projectedParts.year !== wallDate.getUTCFullYear()
-    || projectedParts.month !== wallDate.getUTCMonth() + 1
-    || projectedParts.day !== wallDate.getUTCDate()
-    || projectedParts.hour !== wallDate.getUTCHours()
-    || projectedParts.minute !== wallDate.getUTCMinutes()
-    || projectedParts.second !== wallDate.getUTCSeconds()) return null
-  return new Date(projected).toISOString()
+  const wallParts = {
+    year: wallDate.getUTCFullYear(), month: wallDate.getUTCMonth() + 1, day: wallDate.getUTCDate(),
+    hour: wallDate.getUTCHours(), minute: wallDate.getUTCMinutes(), second: wallDate.getUTCSeconds(),
+  }
+  const sameWall = (parts: Record<string, number>) => Object.entries(wallParts)
+    .every(([key, value]) => parts[key] === value)
+  const first = wall - offsetAt(wall)
+  if (sameWall(partsAt(first))) return new Date(first).toISOString()
+  const second = wall - offsetAt(first)
+  if (sameWall(partsAt(second))) return new Date(second).toISOString()
+  // JavaScript normalizes a nonexistent spring-forward wall clock to the first valid instant after
+  // the gap. Reproduce that only when the two offset candidates bracket the requested wall time by
+  // the same bounded DST gap; arbitrary non-round-tripping timestamps remain invalid.
+  const localWall = (instant: number) => {
+    const parts = partsAt(instant)
+    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+      + wallDate.getUTCMilliseconds()
+  }
+  const candidates = [first, second].map((instant) => ({ instant, local: localWall(instant) }))
+    .sort((left, right) => left.local - right.local)
+  const before = wall - candidates[0].local
+  const after = candidates[1].local - wall
+  return before > 0 && before === after && before <= 2 * 60 * 60 * 1_000
+    ? new Date(candidates[1].instant).toISOString() : null
 }
 
 function mergedExternalWorkOrderIsExact(input: Readonly<{
@@ -656,7 +668,6 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
         signedDeliveryExpiry: deliveryGrantBinding?.expiresAt,
         signedAnchorExpiry: anchorGrant?.expiresAt,
         liveAnchorExpiry: implementationExpiry,
-        activeAuthorityFresh,
       })
       && canonicalRepository(deliveryScope?.repository) === expected.repository
       && Number(deliveryScope?.pullRequest) === expected.pullRequest

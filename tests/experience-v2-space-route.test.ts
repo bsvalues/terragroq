@@ -224,7 +224,6 @@ describe("merged external Space delivery finalization", () => {
         signedDeliveryExpiry: unknown
         signedAnchorExpiry: unknown
         liveAnchorExpiry: string | null
-        activeAuthorityFresh: boolean
       }) => boolean
 
     const persistedExpiry = "2026-09-04T19:07:15.475Z"
@@ -233,35 +232,30 @@ describe("merged external Space delivery finalization", () => {
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: persistedExpiry,
       liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: true,
     })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: persistedExpiry,
       signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
       liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: false,
     })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: persistedExpiry,
       liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: false,
-    })).toBe(false)
+    })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-05T02:07:15.475Z",
       signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
       liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: true,
     })).toBe(false)
     expect(expiryIsExact({
       persistedExpiry,
       signedDeliveryExpiry: "2026-09-04T20:07:15.475Z",
       signedAnchorExpiry: persistedExpiry,
       liveAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: true,
     })).toBe(false)
     const project = (globalThis as Record<string, unknown>)
       .__williamosHermesLegacyRawPgExpiryProjection as (value: string) => string | null
@@ -272,8 +266,8 @@ describe("merged external Space delivery finalization", () => {
       signedDeliveryExpiry: "2026-03-08T15:30:00.000Z",
       signedAnchorExpiry: "2026-03-08T08:30:00.000Z",
       liveAnchorExpiry: "2026-03-08T00:30:00.000Z",
-      activeAuthorityFresh: true,
     })).toBe(true)
+    expect(project("2026-03-08T02:30:00.000Z")).toBe("2026-03-08T10:30:00.000Z")
   })
 
   it("accepts only the signed active version or its exact completed replay successor", () => {
