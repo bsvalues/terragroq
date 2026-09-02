@@ -1,0 +1,23 @@
+{
+  "productName": "WilliamOS County Development",
+  "version": "0.1.7",
+  "identifier": "com.williamos.cockpit.county-development",
+  "app": {
+    "security": {
+      "capabilities": ["remote-cockpit"],
+      "csp": "default-src 'none'; style-src 'self'; navigate-to http://127.0.0.1:3200"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "target/release/WebView2Loader.dll": ""
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    }
+  }
+}
