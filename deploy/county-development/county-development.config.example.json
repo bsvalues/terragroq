@@ -9,5 +9,5 @@
   "aiPort": 11434,
   "chatModel": "qwen2.5-coder:1.5b",
   "embeddingModel": "snowflake-arctic-embed2",
-  "previewUrl": null
+  "previewUrl": "http://127.0.0.1:3102/"
 }
