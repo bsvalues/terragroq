@@ -566,7 +566,8 @@ export async function POST(request: Request) {
         "No active Space or selected file is attached to this Workroom turn. Do not invent either.",
       ].join("\n")
     } else {
-      const localWorld = await loadOwnedWorkingWorld(session.user.id, body.worldId)
+      const worldId = body.worldId as string
+      const localWorld = await loadOwnedWorkingWorld(session.user.id, worldId)
       if (!localWorld) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
       const selectedPath = selectedWorldPath(localWorld)
       grounding = [
