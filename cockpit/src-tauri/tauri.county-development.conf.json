@@ -4,7 +4,7 @@
   "identifier": "com.williamos.cockpit.county-development",
   "app": {
     "security": {
-      "capabilities": ["remote-cockpit"],
+      "capabilities": ["county-development-cockpit"],
       "csp": "default-src 'none'; style-src 'self'; navigate-to http://127.0.0.1:3200"
     }
   },
