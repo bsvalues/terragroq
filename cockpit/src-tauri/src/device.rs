@@ -4,6 +4,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::SysRng;
 use rand::TryRng;
 use serde::Serialize;
+use url::Host;
 use zeroize::Zeroizing;
 
 const PRIVATE_KEY_ENTRY: &str = "device-ed25519-pkcs8";
@@ -141,10 +142,25 @@ fn canonical_proof_shape(proof: &str, hermes_origin: &str) -> bool {
     let Ok(expiry) = time::OffsetDateTime::parse(expiry_value, &time::format_description::well_known::Rfc3339) else { return false; };
     request_id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
         && challenge.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-        && origin.scheme() == "https"
+        && proof_origin_is_authorized(&origin)
         && origin.origin().ascii_serialization() == hermes_origin
         && origin_value == hermes_origin
         && expiry > time::OffsetDateTime::now_utc()
+}
+
+fn proof_origin_is_authorized(origin: &url::Url) -> bool {
+    if origin.scheme() == "https" {
+        return true;
+    }
+    if origin.scheme() != "http" {
+        return false;
+    }
+    match origin.host() {
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
 }
 
 fn decode_private_key(pkcs8: Vec<u8>) -> Result<SigningKey, String> {
