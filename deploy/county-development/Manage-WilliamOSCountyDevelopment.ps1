@@ -74,7 +74,12 @@ function Copy-Tree {
 function New-Secret {
   param([int]$Bytes = 32)
   $buffer = New-Object byte[] $Bytes
-  [Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($buffer)
+  } finally {
+    $rng.Dispose()
+  }
   return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
@@ -301,6 +306,9 @@ function Import-Models {
     if (Test-Path -LiteralPath $candidate -PathType Container) { $script:ModelSource = $candidate }
   }
   if (-not $ModelSource) { return }
+  if (-not (Test-Path -LiteralPath $ModelSource -PathType Container)) {
+    Deny "MODEL_SOURCE_MISSING" "The local model source does not exist: $ModelSource"
+  }
   $resolved = (Resolve-Path -LiteralPath $ModelSource).ProviderPath
   $source = if (Test-Path -LiteralPath (Join-Path $resolved "models") -PathType Container) {
     Join-Path $resolved "models"
@@ -320,6 +328,55 @@ function Wait-JsonEndpoint {
   return $null
 }
 
+function Normalize-OllamaModelName {
+  param([string]$Name)
+  $trimmed = ("$Name").Trim()
+  if (-not $trimmed) { return $trimmed }
+  $lastSlash = $trimmed.LastIndexOf('/')
+  $lastColon = $trimmed.LastIndexOf(':')
+  if ($lastColon -gt $lastSlash) { return $trimmed }
+  return "$trimmed`:latest"
+}
+
+function Remove-StalePidFile {
+  param([string]$PidPath, [string]$Detail)
+  Write-Event "STALE_PID_DISCARDED" $Detail
+  Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+}
+
+function Get-TrackedProcess {
+  param(
+    [string]$PidPath,
+    [string]$ExpectedExecutable,
+    [string]$ExpectedCommandToken,
+    [string]$Label
+  )
+  if (-not (Test-Path -LiteralPath $PidPath -PathType Leaf)) { return $null }
+  [int]$pidValue = 0
+  $raw = (Get-Content -LiteralPath $PidPath -Raw).Trim()
+  if (-not [int]::TryParse($raw, [ref]$pidValue) -or $pidValue -le 0) {
+    Remove-StalePidFile $PidPath "$Label invalid-pid=$raw"
+    return $null
+  }
+
+  $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
+  if (-not $record) {
+    Remove-StalePidFile $PidPath "$Label absent-pid=$pidValue"
+    return $null
+  }
+
+  $expectedPath = [IO.Path]::GetFullPath($ExpectedExecutable)
+  $actualPath = if ($record.ExecutablePath) { [IO.Path]::GetFullPath([string]$record.ExecutablePath) } else { "" }
+  $commandLine = [string]$record.CommandLine
+  $pathMatches = $actualPath -and $actualPath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)
+  $commandMatches = -not $ExpectedCommandToken -or $commandLine.IndexOf($ExpectedCommandToken, [StringComparison]::OrdinalIgnoreCase) -ge 0
+  if (-not $pathMatches -or -not $commandMatches) {
+    Remove-StalePidFile $PidPath "$Label reused-pid=$pidValue"
+    return $null
+  }
+  return $record
+}
+
 function Start-Ollama {
   param([object]$Config)
   Import-Models
@@ -327,8 +384,8 @@ function Start-Ollama {
   Ensure-Directory $StateRoot
   Ensure-Directory $LogRoot
   $ollama = Join-Path $InstallRoot "runtime\ollama\ollama.exe"
-  $existing = if (Test-Path $OllamaPidPath) { [int](Get-Content $OllamaPidPath -Raw) } else { 0 }
-  if (-not ($existing -and (Get-Process -Id $existing -ErrorAction SilentlyContinue))) {
+  $tracked = Get-TrackedProcess $OllamaPidPath $ollama "serve" "Ollama"
+  if (-not $tracked) {
     $env:OLLAMA_HOST = "127.0.0.1:$([int]$Config.aiPort)"
     $env:OLLAMA_MODELS = $OllamaModels
     $process = Start-Process -FilePath $ollama -ArgumentList "serve" -WindowStyle Hidden -PassThru `
@@ -338,28 +395,56 @@ function Start-Ollama {
   }
   $tags = Wait-JsonEndpoint "http://127.0.0.1:$([int]$Config.aiPort)/api/tags" 60
   if (-not $tags) { Deny "OLLAMA_START_FAILED" "The loopback Ollama endpoint did not become ready." }
-  $names = @($tags.models | ForEach-Object { [string]$_.name })
-  $missing = @([string]$Config.chatModel, [string]$Config.embeddingModel) | Where-Object { $_ -notin $names }
+  $names = @($tags.models | ForEach-Object { Normalize-OllamaModelName ([string]$_.name) })
+  $required = @([string]$Config.chatModel, [string]$Config.embeddingModel)
+  $missing = @($required | Where-Object { (Normalize-OllamaModelName $_) -notin $names })
   if ($missing.Count -gt 0 -and -not $AllowMissingModels) {
     Deny "LOCAL_MODEL_NOT_INSTALLED" ("Extract the model artifact beside the package or pass -ModelSource. Missing: " + ($missing -join ', '))
   }
+}
+
+function Clear-RemoteProviderSecrets {
+  foreach ($key in @("ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY")) {
+    if ([Environment]::GetEnvironmentVariable($key, "Process")) {
+      Write-Event "COUNTY_DEVELOPMENT_REMOTE_PROVIDER_SECRET_FORBIDDEN" "$key removed from the County child runtime"
+    }
+    [Environment]::SetEnvironmentVariable($key, $null, "Process")
+  }
+}
+
+function Test-HealthyCountyRuntime {
+  param([object]$Health, [object]$Config)
+  if (-not $Health) { return $false }
+  return $Health.deployment.profile -eq "county-development" -and
+    [bool]$Health.deployment.valid -and
+    [bool]$Health.deployment.localOnlyInference -and
+    $Health.deployment.serviceOrigin -eq "http://127.0.0.1:$([int]$Config.appPort)" -and
+    [bool]$Health.checks.runtime.ok -and
+    $Health.checks.runtime.chatModel -eq [string]$Config.chatModel
 }
 
 function Start-WilliamOS {
   param([object]$Config, [object]$Secrets)
   Ensure-Directory $StateRoot
   Ensure-Directory $LogRoot
-  $existing = if (Test-Path $AppPidPath) { [int](Get-Content $AppPidPath -Raw) } else { 0 }
-  if ($existing -and (Get-Process -Id $existing -ErrorAction SilentlyContinue)) { return }
 
   $port = [int]$Config.appPort
   $origin = "http://127.0.0.1:$port"
   if (-not (Test-LoopbackUrl $origin @('http'))) { Deny "SERVICE_ORIGIN_INVALID" $origin }
   $databaseUrl = "postgresql://williamos:$([string]$Secrets.postgresPassword)@127.0.0.1:$([int]$Config.postgresPort)/williamos?sslmode=disable"
+  $node = Join-Path $InstallRoot "runtime\node\node.exe"
+  $app = Join-Path $InstallRoot "app"
 
-  foreach ($key in @("ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY")) {
-    [Environment]::SetEnvironmentVariable($key, $null, "Process")
+  $tracked = Get-TrackedProcess $AppPidPath $node "server.js" "WilliamOS"
+  if ($tracked) {
+    $existingHealth = Wait-JsonEndpoint "$origin/api/health" 10
+    if (Test-HealthyCountyRuntime $existingHealth $Config) { return }
+    Stop-Process -Id ([int]$tracked.ProcessId) -Force
+    Remove-Item -LiteralPath $AppPidPath -Force -ErrorAction SilentlyContinue
+    Write-Event "UNHEALTHY_PROCESS_RESTARTED" "WilliamOS pid=$([int]$tracked.ProcessId)"
   }
+
+  Clear-RemoteProviderSecrets
   $env:NODE_ENV = "production"
   $env:HOSTNAME = "127.0.0.1"
   $env:PORT = "$port"
@@ -380,8 +465,6 @@ function Start-WilliamOS {
   if ($Config.previewUrl) { $env:WILLIAMOS_WORKSPACE_APP_URL = [string]$Config.previewUrl }
   else { Remove-Item Env:WILLIAMOS_WORKSPACE_APP_URL -ErrorAction SilentlyContinue }
 
-  $node = Join-Path $InstallRoot "runtime\node\node.exe"
-  $app = Join-Path $InstallRoot "app"
   $process = Start-Process -FilePath $node -ArgumentList "server.js" -WorkingDirectory $app `
     -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $LogRoot "williamos.stdout.log") `
@@ -390,8 +473,9 @@ function Start-WilliamOS {
 
   $health = Wait-JsonEndpoint "$origin/api/health" 90
   if (-not $health) { Deny "WILLIAMOS_START_FAILED" "The local WilliamOS health endpoint did not answer." }
-  if ($health.deployment.profile -ne "county-development" -or -not $health.deployment.valid) {
-    Deny "COUNTY_BOUNDARY_UNPROVEN" (($health.deployment.violations -join ', '))
+  if (-not (Test-HealthyCountyRuntime $health $Config)) {
+    $detail = if ($health.deployment.violations) { $health.deployment.violations -join ', ' } else { "Exact County runtime/model health was not proven." }
+    Deny "COUNTY_BOUNDARY_UNPROVEN" $detail
   }
 }
 
@@ -411,29 +495,32 @@ function Open-OwnerSurface {
   $origin = "http://127.0.0.1:$([int]$Config.appPort)"
   if ((Get-OwnerCount $Config $Secrets) -eq 0) {
     Write-Event "OWNER_BOOTSTRAP_REQUIRED" "$origin/sign-up"
-    Start-Process "$origin/sign-up"
+    if (-not $NonInteractive) { Start-Process "$origin/sign-up" }
     return
   }
-  if ($SkipCockpit) { return }
+  if ($SkipCockpit -or $NonInteractive) { return }
   $cockpit = Join-Path $InstallRoot "cockpit\williamos-cockpit.exe"
   Start-Process -FilePath $cockpit -WorkingDirectory (Split-Path -Parent $cockpit) | Out-Null
 }
 
 function Stop-TrackedProcess {
-  param([string]$PidPath, [string]$Label)
-  if (-not (Test-Path -LiteralPath $PidPath -PathType Leaf)) { return }
-  $pidValue = [int](Get-Content -LiteralPath $PidPath -Raw)
-  $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+  param(
+    [string]$PidPath,
+    [string]$Label,
+    [string]$ExpectedExecutable,
+    [string]$ExpectedCommandToken
+  )
+  $process = Get-TrackedProcess $PidPath $ExpectedExecutable $ExpectedCommandToken $Label
   if ($process) {
-    Stop-Process -Id $pidValue -Force
-    Write-Event "STOPPED" "$Label pid=$pidValue"
+    Stop-Process -Id ([int]$process.ProcessId) -Force
+    Write-Event "STOPPED" "$Label pid=$([int]$process.ProcessId)"
   }
   Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
 }
 
 function Stop-All {
-  Stop-TrackedProcess $AppPidPath "WilliamOS"
-  Stop-TrackedProcess $OllamaPidPath "Ollama"
+  Stop-TrackedProcess $AppPidPath "WilliamOS" (Join-Path $InstallRoot "runtime\node\node.exe") "server.js"
+  Stop-TrackedProcess $OllamaPidPath "Ollama" (Join-Path $InstallRoot "runtime\ollama\ollama.exe") "serve"
   $pgCtl = Join-Path $InstallRoot "runtime\postgres\bin\pg_ctl.exe"
   if ((Test-Path $pgCtl) -and (Test-Path (Join-Path $PostgresData "PG_VERSION"))) {
     & $pgCtl status -D $PostgresData *> $null
@@ -452,6 +539,8 @@ function Get-StatusObject {
     try { $health = Invoke-RestMethod -Uri "$origin/api/health" -TimeoutSec 5 -UseBasicParsing }
     catch { $health = $null }
   }
+  $app = Get-TrackedProcess $AppPidPath (Join-Path $InstallRoot "runtime\node\node.exe") "server.js" "WilliamOS"
+  $ollama = Get-TrackedProcess $OllamaPidPath (Join-Path $InstallRoot "runtime\ollama\ollama.exe") "serve" "Ollama"
   return [ordered]@{
     schema = "williamos.county-development.status.v1"
     installed = Test-Path -LiteralPath (Join-Path $InstallRoot "app\server.js")
@@ -460,8 +549,8 @@ function Get-StatusObject {
     dataRoot = $DataRoot
     serviceOrigin = $origin
     health = $health
-    appProcess = if (Test-Path $AppPidPath) { (Get-Content $AppPidPath -Raw).Trim() } else { $null }
-    ollamaProcess = if (Test-Path $OllamaPidPath) { (Get-Content $OllamaPidPath -Raw).Trim() } else { $null }
+    appProcess = if ($app) { [int]$app.ProcessId } else { $null }
+    ollamaProcess = if ($ollama) { [int]$ollama.ProcessId } else { $null }
     observedAt = [DateTimeOffset]::UtcNow.ToString('o')
   }
 }
