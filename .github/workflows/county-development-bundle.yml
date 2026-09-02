@@ -2,6 +2,35 @@ name: county-development-bundle
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/county-development-bundle.yml"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "cockpit/**"
+      - "deploy/county-development/**"
+      - "drizzle/**"
+      - "scripts/accept-county-development-runtime.cjs"
+      - "scripts/build-county-development-bundle.ps1"
+      - "scripts/build_azure_standalone_artifact.ps1"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/county-development-bundle.yml"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "cockpit/**"
+      - "deploy/county-development/**"
+      - "drizzle/**"
+      - "scripts/accept-county-development-runtime.cjs"
+      - "scripts/build-county-development-bundle.ps1"
+      - "scripts/build_azure_standalone_artifact.ps1"
+      - "package.json"
+      - "pnpm-lock.yaml"
 
 concurrency:
   group: county-development-bundle-${{ github.ref }}
@@ -12,12 +41,13 @@ permissions:
 
 jobs:
   bundle:
-    name: Windows x64 offline bundle
+    name: Windows x64 offline bundle and owner-surface acceptance
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 150
     env:
       OLLAMA_VERSION: v0.9.2
       PGVECTOR_VERSION: v0.8.1
+      PLAYWRIGHT_VERSION: 1.55.0
       WILLIAMOS_COCKPIT_PROFILE: county-development
     steps:
       - uses: actions/checkout@v4
@@ -136,10 +166,11 @@ jobs:
             -OutputRoot "$env:RUNNER_TEMP\county-output" |
             Tee-Object -FilePath "$env:RUNNER_TEMP\county-build-result.json"
 
-      - name: Exercise the installed loopback runtime
+      - name: Install the packaged loopback runtime
         shell: pwsh
         run: |
           $bundle = Get-ChildItem "$env:RUNNER_TEMP\county-output\WilliamOS-County-Development-*.zip" | Select-Object -First 1
+          if (-not $bundle) { throw 'County application bundle was not created.' }
           $package = "$env:RUNNER_TEMP\county-smoke-package"
           Expand-Archive -LiteralPath $bundle.FullName -DestinationPath $package -Force
           $packageRoot = Get-ChildItem $package -Directory | Select-Object -First 1 -ExpandProperty FullName
@@ -156,6 +187,8 @@ jobs:
           $manager = Join-Path $packageRoot 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
           $smokeInstall = "$env:RUNNER_TEMP\county-installed"
           $smokeData = "$env:RUNNER_TEMP\county-data"
+          $evidenceRoot = "$env:RUNNER_TEMP\county-acceptance"
+          New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
           & $manager -Action Install -InstallRoot $smokeInstall -DataRoot $smokeData `
             -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $fakeTf `
             -DeploymentId 'ci-county-development' -ModelSource $env:MODEL_ROOT `
@@ -170,8 +203,71 @@ jobs:
           if (-not $status.health.deployment.localOnlyInference) { throw 'Local-only inference is not proven.' }
           if ($status.health.deployment.serviceOrigin -ne 'http://127.0.0.1:3200') { throw 'Service origin is not loopback.' }
 
-          & (Join-Path $smokeInstall 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1') `
-            -Action Uninstall -InstallRoot $smokeInstall -DataRoot $smokeData -PurgeData
+          "COUNTY_SMOKE_INSTALL=$smokeInstall" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_SMOKE_DATA=$smokeData" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_SMOKE_TF=$fakeTf" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_ACCEPTANCE_EVIDENCE=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install the browser acceptance driver
+        shell: pwsh
+        run: |
+          $driverRoot = "$env:RUNNER_TEMP\county-playwright"
+          npm install --prefix $driverRoot --no-save --package-lock=false "playwright@$env:PLAYWRIGHT_VERSION"
+          & "$driverRoot\node_modules\.bin\playwright.cmd" install chromium
+          "NODE_PATH=$driverRoot\node_modules" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run installed County owner-surface acceptance
+        shell: pwsh
+        env:
+          COUNTY_ACCEPTANCE_ORIGIN: http://127.0.0.1:3200
+          COUNTY_ACCEPTANCE_EXPECTED_DEPLOYMENT_ID: ci-county-development
+          COUNTY_ACCEPTANCE_OWNER_EMAIL: county.bundle@example.gov
+          COUNTY_ACCEPTANCE_OWNER_PASSWORD: County-Bundle-Acceptance-2026!
+        run: |
+          $env:COUNTY_ACCEPTANCE_TERRAFUSION_ROOT = $env:COUNTY_SMOKE_TF
+          $env:COUNTY_ACCEPTANCE_EVIDENCE_ROOT = $env:COUNTY_ACCEPTANCE_EVIDENCE
+          node scripts/accept-county-development-runtime.cjs
+
+      - name: Exercise the County Cockpit native surface
+        shell: pwsh
+        run: |
+          $cockpit = Join-Path $env:COUNTY_SMOKE_INSTALL 'cockpit\williamos-cockpit.exe'
+          if (-not (Test-Path -LiteralPath $cockpit -PathType Leaf)) { throw 'Installed County Cockpit is missing.' }
+          $process = Start-Process -FilePath $cockpit -WorkingDirectory (Split-Path -Parent $cockpit) -PassThru
+          try {
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 750
+              $process.Refresh()
+              if ($process.HasExited) { throw "County Cockpit exited during startup with code $($process.ExitCode)." }
+            } while ($process.MainWindowHandle -eq 0 -and [DateTimeOffset]::UtcNow -lt $deadline)
+
+            $observation = [ordered]@{
+              schema = 'williamos.county-development.cockpit-acceptance.v1'
+              result = 'PASS'
+              observedAt = [DateTimeOffset]::UtcNow.ToString('o')
+              processId = $process.Id
+              mainWindowObserved = $process.MainWindowHandle -ne 0
+              mainWindowTitle = $process.MainWindowTitle
+              processAlive = -not $process.HasExited
+              configuredOrigin = 'http://127.0.0.1:3200'
+            }
+            $observation | ConvertTo-Json -Depth 5 | Set-Content `
+              -LiteralPath (Join-Path $env:COUNTY_ACCEPTANCE_EVIDENCE 'cockpit-acceptance.json') -Encoding utf8
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Remove the smoke installation
+        if: always()
+        shell: pwsh
+        run: |
+          $manager = if ($env:COUNTY_SMOKE_INSTALL) {
+            Join-Path $env:COUNTY_SMOKE_INSTALL 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          } else { $null }
+          if ($manager -and (Test-Path -LiteralPath $manager -PathType Leaf)) {
+            & $manager -Action Uninstall -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA -PurgeData
+          }
 
       - name: Upload County Development application bundle
         uses: actions/upload-artifact@v4
@@ -189,6 +285,15 @@ jobs:
           path: ${{ runner.temp }}\county-output\WilliamOS-County-Models-*.zip
           if-no-files-found: error
           compression-level: 0
+          retention-days: 30
+
+      - name: Upload County Development acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WilliamOS-County-Development-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}\county-acceptance\**
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload package build evidence
