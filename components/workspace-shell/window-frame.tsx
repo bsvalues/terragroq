@@ -128,7 +128,11 @@ export function WindowFrame({
         height: geometry.height,
         zIndex: geometry.z,
       }}
-      onPointerDown={(event) => { onActivate(); trackNativeResize(event) }}
+      onPointerDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return
+        onActivate()
+        trackNativeResize(event)
+      }}
       aria-label={`${title} window`}
       data-window-id={id}
     >
