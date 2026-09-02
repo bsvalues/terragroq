@@ -6,6 +6,7 @@ import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, Terminal
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
@@ -13,10 +14,12 @@ import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { removeToolRunHistory } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
+import { encodeExecutionAssignmentInspectorPayload, EXECUTION_ASSIGNMENT_INSPECTOR_KIND, executionAssignmentInspectorIdentity, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
+import { agentSessionInspectorId, agentSessionInspectorIdFromIdentity, agentSessionInspectorIdentity, AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX, AGENT_SESSION_INSPECTOR_SURFACE_KIND, encodeAgentSessionInspectorPayload, isRestorableAgentSessionInspector, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
@@ -38,8 +41,56 @@ type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
-type LineContext = "space-summary" | null
+type DurableLineSnapshot = Awaited<ReturnType<typeof durableLineSnapshot>>
+type AgentSnapshotLineContext = DurableLineSnapshot & Readonly<{
+  clientGuard: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    descriptorFingerprint: string
+    collectionFingerprint: string
+  }>
+}>
+type DiffChallengeLineContext = Readonly<{
+  kind: "diff-challenge"
+  path: string
+  baseHash: string
+  indexHash: string
+  patchHash: string
+  fingerprint: string
+  clientGuard: Readonly<{ worldId: string; transitionEpoch: number }>
+}>
+type PreviewExplainLineContext = Readonly<{
+  kind: "preview-explain"
+  previewFingerprint: string
+  selectedPath: string
+  clientGuard: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    requestId: number
+    projectIdentity: string
+    runningAppUrl: string | null
+    status: PreviewInspectorPayload["evidence"]["status"]
+    identity: PreviewInspectorPayload["evidence"]["identity"]
+    origin: string | null
+  }>
+}>
+type FileAskLineContext = Readonly<{
+  kind: "file-ask"
+  path: string
+  projectIdentity: string
+  revision: number
+  activePaneId: string
+  selection: Readonly<{ anchor: number; head: number }>
+  clientGuard: Readonly<{ worldId: string; transitionEpoch: number }>
+}>
+type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | PreviewExplainLineContext | FileAskLineContext | null
 type LineMode = "default" | "change" | "review" | "fork"
+type ExecutionObservation = Readonly<{
+  worldId: string
+  workOrderId: number
+  state: "fresh" | "stale" | "mismatch"
+  observedAt: string | null
+}>
 type StandardDelegateContext = Readonly<{
   kind: "file" | "preview" | "diff" | "space" | "agent" | "conversation"
   label: string
@@ -47,13 +98,54 @@ type StandardDelegateContext = Readonly<{
   role: string
   assignment: string
   requiredSessionKey?: string
+  fileAssignmentBinding?: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    projectIdentity: string
+    outcomeKey: string
+    workOrderId: number
+    grantId: number
+    worldRevision: number
+    path: string
+    actor: "codex" | "claude"
+    proofSource: "space" | "file"
+  }>
+  fileAssignmentProofs?: Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>
+  fileAssignmentProofSource?: "space" | "file"
   previewDebugBinding?: Readonly<{
     worldId: string
     transitionEpoch: number
     revision: number
     runningAppUrl: string | null
+    projectIdentity: string
   }>
 }>
+
+type SpaceDelegateEligibility = Readonly<{
+  eligible: true
+  worldId: string
+  worldRevision: number
+  outcomeKey: string
+  workOrderId: number
+  grantId: number
+  actor: "codex" | "claude"
+  selectedPath: string
+}>
+
+function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  return candidate.eligible === true
+    && typeof candidate.worldId === "string"
+    && Number.isSafeInteger(candidate.worldRevision)
+    && typeof candidate.outcomeKey === "string"
+    && Number.isSafeInteger(candidate.workOrderId)
+    && Number.isSafeInteger(candidate.grantId)
+    && (candidate.actor === "codex" || candidate.actor === "claude")
+    && typeof candidate.selectedPath === "string"
+    ? candidate as SpaceDelegateEligibility
+    : null
+}
 type ReviewerDelegateContext = Readonly<{
   kind: "reviewer"
   label: "Reviewer · Claude"
@@ -73,6 +165,12 @@ type ContinueDelegateContext = Readonly<{
   role: string
   assignment: string
   sessionKey: string
+  sessionId: string
+  worldId: string
+  transitionEpoch: number
+  collectionFingerprint: string
+  descriptorFingerprint: string
+  objectBinding: LineObjectBinding
 }>
 type LineSessionDelegateContext = Readonly<{
   kind: "line-session"
@@ -126,10 +224,18 @@ const windowName: Record<WindowId, string> = {
 
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
 const PREVIEW_EVIDENCE_SUBJECT = "TerraFusion developer preview"
+const PREVIEW_DEBUG_PROMPT = "Diagnose the exact current Developer Preview using only its server-derived admitted evidence. State reachability, framing, and evidence limits; do not infer DOM, console, network, or business UI state."
+const SPACE_CONTINUE_PROMPT = "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority."
 const CLAUDE_REVIEW_SESSION_KEY = /^Claude:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function lineSessionKey(provider: string, sessionId: string): string {
   return `${provider}:${sessionId}`
+}
+
+function isReviewableWorkspacePath(path: string | null): path is string {
+  if (!path || path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path)) return false
+  const segments = path.split("/")
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
 }
 
 function lineSessionDescriptorFingerprint(session: unknown): string {
@@ -140,6 +246,76 @@ function lineSessionCollectionFingerprint(sessions: readonly unknown[]): string 
   return JSON.stringify([...sessions]
     .map((session) => lineSessionDescriptorFingerprint(session))
     .sort())
+}
+
+function liveModifiedDiffIdentity(context: LiveDiffContext | null): Omit<DiffChallengeLineContext, "kind" | "clientGuard"> | null {
+  if (!context) return null
+  try {
+    const value = JSON.parse(context.fingerprint) as Record<string, unknown>
+    if (Object.keys(value).sort().join("|") !== "baseHash|indexHash|patchHash|path|state|status"
+      || value.path !== context.path || value.state !== "modified"
+      || typeof value.baseHash !== "string" || !value.baseHash
+      || typeof value.indexHash !== "string" || !value.indexHash
+      || typeof value.patchHash !== "string" || !value.patchHash) return null
+    return { path: context.path, baseHash: value.baseHash, indexHash: value.indexHash, patchHash: value.patchHash, fingerprint: context.fingerprint }
+  } catch {
+    return null
+  }
+}
+
+// 250 code points remains below Council's 2,000-character history limit even when every
+// code point needs JSON's longest six-character escape.
+const COUNCIL_SNAPSHOT_RESULT_EXCERPT_CODE_POINTS = 250
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function durableCouncilSnapshot(sessionKey: string, descriptor: DurableAgentSession, snapshotAt: string) {
+  const mode = descriptor.preview ? "preview" as const
+    : descriptor.diffReview ? "diff-review" as const
+    : descriptor.reviewPath ? "review" as const
+    : descriptor.forkedFrom ? "fork" as const
+    : descriptor.provider === "Local" ? "conversation" as const
+    : "delegate" as const
+  const target = descriptor.diffReview
+    ? `diff · ${descriptor.diffReview.path} · patch ${descriptor.diffReview.patchHash}`
+    : descriptor.reviewPath ? `file review · ${descriptor.reviewPath}`
+    : descriptor.target ? `file · ${descriptor.target.path}`
+    : descriptor.preview ? `preview · ${descriptor.preview.worldId} · ${descriptor.preview.evidenceFingerprint}`
+    : descriptor.forkedFrom ? `forked from · Claude:${descriptor.forkedFrom}`
+    : "no saved target"
+  const lastTurn = descriptor.completedTurns?.at(-1) ?? null
+  const resultCodePoints = lastTurn ? Array.from(lastTurn.finalResult) : []
+  const result = lastTurn ? {
+    excerpt: resultCodePoints.slice(0, COUNCIL_SNAPSHOT_RESULT_EXCERPT_CODE_POINTS).join(""),
+    digest: await sha256Hex(lastTurn.finalResult),
+    originalCodePoints: resultCodePoints.length,
+  } : null
+  return {
+    kind: "agent-snapshot" as const,
+    sessionKey,
+    role: descriptor.role,
+    provider: descriptor.provider,
+    assignment: descriptor.assignment,
+    mode,
+    target,
+    lastTurn: lastTurn ? {
+      identity: `turn-${descriptor.completedTurns!.length}:${lastTurn.completedAt}`,
+      completedAt: lastTurn.completedAt,
+      result: result!,
+    } : null,
+    snapshotAt,
+  }
+}
+
+async function durableLineSnapshot(sessionKey: string, descriptor: DurableAgentSession, snapshotAt: string) {
+  return {
+    ...await durableCouncilSnapshot(sessionKey, descriptor, snapshotAt),
+    forkedFrom: descriptor.forkedFrom ? `Claude:${descriptor.forkedFrom}` : null,
+    updatedAt: descriptor.updatedAt,
+  }
 }
 
 export function lineObjectBindingFingerprint(binding: LineObjectBinding | null): string {
@@ -166,6 +342,10 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
 
 function durableSessionDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | StandardDelegateContext | null {
   if (!agent || agent.kind !== "durable-session") return null
+  // A saved Claude file-mutation transcript does not retain the server-derived authority proof
+  // required for another write. Keep it inspectable/reviewable, but do not advertise a
+  // continuation context that the server must refuse.
+  if (agent.providerLabel === "Claude" && agent.target) return null
   if (agent.mode === "review" || agent.mode === "diff-review") return reviewerDelegateContext(agent)
   const provider = agent.providerLabel
   if (provider !== "Codex" && provider !== "Claude" && provider !== "Local") return null
@@ -292,6 +472,25 @@ function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject" | "ident
   return `inspector-${(hash >>> 0).toString(36)}`
 }
 
+function restoredInspectorSurface(id: string, seed: WorkspaceSpace["inspectorSeeds"][string]): InspectorSurface[] {
+  if ((seed.kind === "review" || seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) && typeof seed.payload === "string") {
+    const agentSession = seed.kind === "review" && isRestorableAgentSessionInspector(id, seed.subject, seed.payload)
+    const agentSnapshot = agentSession ? parseAgentSessionInspectorPayload(seed.payload) : null
+    return [{
+      id,
+      kind: agentSession ? AGENT_SESSION_INSPECTOR_SURFACE_KIND : seed.kind,
+      subject: agentSession ? seed.subject.slice(AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX.length) : seed.subject,
+      payload: seed.payload,
+      ...(seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
+        ? { identity: parseExecutionAssignmentInspectorPayload(seed.payload)
+            ? executionAssignmentInspectorIdentity(parseExecutionAssignmentInspectorPayload(seed.payload)!)
+            : undefined }
+        : agentSnapshot ? { identity: agentSessionInspectorIdentity(agentSnapshot) } : {}),
+    }]
+  }
+  return seed.kind === "hermes" ? [{ id, kind: "hermes", subject: seed.subject }] : []
+}
+
 function inspectableWilliamJudgment(value: unknown): WilliamJudgment | null {
   try {
     return validateWilliamJudgment(value)
@@ -323,6 +522,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lineTerminalPresentation, setLineTerminalPresentation] = useState<{ sessionKey: string; text: string } | null>(null)
+  const [lineTerminalWarning, setLineTerminalWarning] = useState<{
+    presentationEpoch: number
+    transitionEpoch: number
+    worldId: string | null
+    projectIdentity: string | null
+    path: string | null
+    text: string
+  } | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
   const [lineContext, setLineContext] = useState<LineContext>(null)
@@ -331,11 +538,35 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [resumeSessionInFlightKeys, setResumeSessionInFlightKeys] = useState<readonly string[]>([])
   const [lineSessionObservedRunningKey, setLineSessionObservedRunningKey] = useState<string | null>(null)
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
+  const [spaceDelegateEligibility, setSpaceDelegateEligibility] = useState<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
+  const [spaceDelegateEligibilityPending, setSpaceDelegateEligibilityPending] = useState(false)
+  const [fileDelegateEligibility, setFileDelegateEligibility] = useState<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
+  const [fileDelegateEligibilityPending, setFileDelegateEligibilityPending] = useState(false)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
   const [changeIntent, setChangeIntent] = useState<"change" | "improve-diff">("change")
   const [capturedDiffImprove, setCapturedDiffImprove] = useState<CapturedDiffImprove | null>(null)
   const [capturedDiffReview, setCapturedDiffReview] = useState<CapturedDiffReview | null>(null)
+  const [agentWorkReview, setAgentWorkReview] = useState(false)
+  const [automaticPreviewDebugPending, setAutomaticPreviewDebugPending] = useState(false)
+  const [automaticPreviewDebugRunning, setAutomaticPreviewDebugRunning] = useState(false)
+  const [automaticSpaceContinuePending, setAutomaticSpaceContinuePending] = useState(false)
+  const [automaticSpaceContinueRunning, setAutomaticSpaceContinueRunning] = useState(false)
+  const automaticSpaceContinueSessionKeyRef = useRef<string | null>(null)
+  const automaticSpaceContinueOperationIdRef = useRef<string | null>(null)
+  const automaticSpaceContinueBaselineTurnIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const spaceDelegateEligibilityRequestRef = useRef(0)
+  const spaceDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
+  const fileDelegateEligibilityRequestRef = useRef(0)
+  const fileDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
+  const fileAssignmentOperationRef = useRef<{
+    binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]>
+    baselineTurnIds: ReadonlySet<string>
+    operationId: string | null
+    acceptedKey: string | null
+  } | null>(null)
+  const previewDebugSessionKeyRef = useRef<string | null>(null)
+  const previewDebugStopRequestedRef = useRef(false)
   const [liveDiffContext, setLiveDiffContext] = useState<(LiveDiffContext & { worldId: string }) | null>(null)
   const liveDiffContextRef = useRef<(LiveDiffContext & { worldId: string }) | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
@@ -360,6 +591,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [councilBusy, setCouncilBusy] = useState(false)
   const [councilError, setCouncilError] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
+  const [executionSession, setExecutionSession] = useState<ProjectedWorldWorkerSession | null>(null)
+  const [executionObservation, setExecutionObservation] = useState<ExecutionObservation | null>(null)
+  const boundExecutionSession = executionSession?.worldId === worldId
+    && executionSession.workOrderId === spine.workOrderId
+    ? executionSession
+    : null
+  const boundExecutionObservation = executionObservation?.worldId === worldId
+    && executionObservation.workOrderId === spine.workOrderId
+    ? executionObservation
+    : null
   const [judgment, setJudgment] = useState<WilliamJudgment | null>(null)
   const [judgmentBusy, setJudgmentBusy] = useState(false)
   const [judgmentError, setJudgmentError] = useState<string | null>(null)
@@ -381,10 +622,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
     worldId: storage === "server" ? worldId : null,
-    worker: spine.worker ?? null,
+    executionSession: boundExecutionSession,
     autoContinue: storage === "server" && hydrated && spine.outcomeKey !== null,
     onAutoContinuation: relayAutoContinuation,
   })
+  const previewDebugStopRef = useRef(agentSessions.stop)
   const stateRef = useRef(space)
   const spineRef = useRef(spine)
   const worldRef = useRef(worldId)
@@ -394,10 +636,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const persistencePendingRef = useRef(persistencePending)
   const browserStorageKeyRef = useRef<string | null>(null)
   const previewEvidenceRequestRef = useRef(0)
+  const previewExplainEvidenceRef = useRef<Readonly<{
+    worldId: string
+    transitionEpoch: number
+    requestId: number
+    projectIdentity: string
+    payload: PreviewInspectorPayload
+  }> | null>(null)
   const preferenceStorageKeyRef = useRef<string | null>(null)
   const transitionEpochRef = useRef(0)
   const agentPresentationEpochRef = useRef(0)
   const agentSavedSessionsRef = useRef(agentSessions.savedSessions)
+  const agentSelectedSessionKeyRef = useRef(agentSessions.selectedSessionKey)
+  const agentCollectionStateRef = useRef(agentSessions.collectionState)
+  const agentActiveTurnsRef = useRef(agentSessions.activeTurns)
+  const focusedAgentIdRef = useRef(focusedAgentId)
   const councilViewEpochRef = useRef(0)
   const councilSessionRef = useRef(councilSession)
   const initialSummonConsumedRef = useRef(false)
@@ -425,9 +678,69 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   persistenceErrorRef.current = persistenceError
   persistencePendingRef.current = persistencePending
   agentSavedSessionsRef.current = agentSessions.savedSessions
+  agentSelectedSessionKeyRef.current = agentSessions.selectedSessionKey
+  agentCollectionStateRef.current = agentSessions.collectionState
+  agentActiveTurnsRef.current = agentSessions.activeTurns
+  spaceDelegateEligibilityRef.current = spaceDelegateEligibility
+  fileDelegateEligibilityRef.current = fileDelegateEligibility
+  focusedAgentIdRef.current = focusedAgentId
+
+  function exactFileAssignmentBindingIsCurrent(binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]>): boolean {
+    const proof = binding.proofSource === "space"
+      ? spaceDelegateEligibilityRef.current[binding.actor] ?? null
+      : fileDelegateEligibilityRef.current[binding.actor] ?? null
+    return worldRef.current === binding.worldId
+      && transitionEpochRef.current === binding.transitionEpoch
+      && projectRef.current?.identity === binding.projectIdentity
+      && spineRef.current.outcomeKey === binding.outcomeKey
+      && spineRef.current.workOrderId === binding.workOrderId
+      && stateRef.current.selectedPath === binding.path
+      && stateRef.current.revision === binding.worldRevision
+      && acknowledgedRevisionRef.current === binding.worldRevision
+      && revisionRef.current === binding.worldRevision
+      && !dirtyPathsRef.current[binding.path]
+      && storageRef.current === "server"
+      && !persistencePendingRef.current
+      && !persistenceErrorRef.current
+      && proof?.worldId === binding.worldId
+      && proof.worldRevision === binding.worldRevision
+      && proof.outcomeKey === binding.outcomeKey
+      && proof.workOrderId === binding.workOrderId
+      && proof.grantId === binding.grantId
+      && proof.actor === binding.actor
+      && proof.selectedPath === binding.path
+  }
+
+  function exactFileAssignmentOperationIsCurrent(operation: NonNullable<typeof fileAssignmentOperationRef.current>): boolean {
+    return exactFileAssignmentBindingIsCurrent(operation.binding)
+  }
 
   useEffect(() => {
-    if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
+    const operation = fileAssignmentOperationRef.current
+    if (!operation) return
+    const provider = operation.binding.actor === "codex" ? "Codex" : "Claude"
+    const created = agentSessions.activeTurns.filter((turn) => !operation.baselineTurnIds.has(turn.id)
+      && turn.provider === provider && turn.role === "Builder")
+    if (created.length === 1) {
+      operation.operationId = created[0].id
+      operation.acceptedKey = created[0].sessionId ? created[0].id : null
+    }
+    if (exactFileAssignmentOperationIsCurrent(operation)) return
+    const exactOperationId = operation.acceptedKey ?? operation.operationId
+    if (exactOperationId) agentSessions.stop(exactOperationId)
+  }, [
+    agentSessions.activeTurns, agentSessions.stop, dirtyPaths, persistenceError, persistencePending,
+    project?.identity, space.revision, space.selectedPath, spaceDelegateEligibility, fileDelegateEligibility,
+    spine.execution, spine.outcomeKey, spine.workOrderId, worldId,
+  ])
+
+  useEffect(() => {
+    if (delegateContext?.kind !== "file") return
+    const capturedPath = delegateContext.fileAssignmentBinding?.path
+      ?? delegateContext.fileAssignmentProofs?.codex?.selectedPath
+      ?? delegateContext.fileAssignmentProofs?.claude?.selectedPath
+      ?? delegateContext.label
+    if (capturedPath === space.selectedPath) return
     // Delegate is an object action. If the selected object changes before dispatch, discard the
     // stale client intent; the server will derive authority only from the newly persisted Space.
     setDelegateContext(null)
@@ -469,16 +782,28 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const incoming: InspectorSurface[] = []
     for (const surface of reply.surfaces ?? []) {
       const binding = surface.kind === "review" ? diffReviewInspectorBinding(surface.payload) : null
-      const exactIdentity = binding ? diffReviewInspectorIdentity(binding) : surface.identity ?? null
+      const agentSnapshot = surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+        ? parseAgentSessionInspectorPayload(surface.payload) : null
+      const exactIdentity = binding ? diffReviewInspectorIdentity(binding)
+        : agentSnapshot ? agentSessionInspectorIdentity(agentSnapshot) : surface.identity ?? null
       const exactExisting = exactIdentity ? [...inspectors, ...incoming].find((candidate) => {
         const candidateBinding = candidate.kind === "review" ? diffReviewInspectorBinding(candidate.payload) : null
-        const candidateIdentity = candidateBinding ? diffReviewInspectorIdentity(candidateBinding) : candidate.identity ?? null
-        return candidate.kind === surface.kind && candidate.subject === surface.subject && candidateIdentity === exactIdentity
+        const candidateAgentSnapshot = candidate.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+          ? parseAgentSessionInspectorPayload(candidate.payload) : null
+        const candidateIdentity = candidateBinding ? diffReviewInspectorIdentity(candidateBinding)
+          : candidateAgentSnapshot ? agentSessionInspectorIdentity(candidateAgentSnapshot) : candidate.identity ?? null
+        return candidate.kind === surface.kind && candidateIdentity === exactIdentity
+          && (surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
+            || surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND || candidate.subject === surface.subject)
       }) : null
       if (exactExisting) {
         incoming.push({ ...surface, identity: exactIdentity ?? undefined, id: exactExisting.id })
       } else {
-        const baseId = binding ? diffReviewInspectorId(binding) : inspectorId(surface)
+        const baseId = binding ? diffReviewInspectorId(binding)
+          : agentSnapshot ? agentSessionInspectorId(agentSnapshot)
+          : surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+            ? agentSessionInspectorIdFromIdentity(exactIdentity) ?? inspectorId(surface)
+            : inspectorId(surface)
         let id = baseId
         let collision = 1
         while (usedIds.has(id)) {
@@ -518,9 +843,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           minimized: false,
         }
         inspectorSeeds[surface.id] = {
-          kind: surface.kind,
-          subject: surface.subject,
-          ...(surface.kind === "review" && typeof surface.payload === "string"
+          kind: surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND ? "review" : surface.kind,
+          subject: surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+            ? `${AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX}${surface.subject}` : surface.subject,
+          ...((surface.kind === "review" || surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
+            || surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) && typeof surface.payload === "string"
             ? { payload: surface.payload }
             : {}),
         }
@@ -529,6 +856,41 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
     })
   }, [inspectors])
+
+  const materializeExecutionAssignment = useCallback((sessionId: string) => {
+    const session = boundExecutionSession
+    if (!session || session.id !== sessionId || session.worldId !== worldId || session.workOrderId !== spine.workOrderId) {
+      setTransitionMessage("That persisted assignment is no longer bound to this Space.")
+      return
+    }
+    try {
+      const payload = encodeExecutionAssignmentInspectorPayload(session, spine)
+      materializeSurfaces({ surfaces: [{
+        kind: EXECUTION_ASSIGNMENT_INSPECTOR_KIND,
+        subject: `Work Order #${session.workOrderId}`,
+        identity: executionAssignmentInspectorIdentity(session),
+        payload,
+      }] })
+    } catch {
+      setTransitionMessage("The exact persisted assignment snapshot is unavailable.")
+    }
+  }, [boundExecutionSession, materializeSurfaces, spine, worldId])
+
+  const materializeDurableAgentSession = useCallback((sessionKey: string) => {
+    const descriptor = agentSessions.savedSessions.find((candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey)
+    const projection = agentSessions.sessions.find((candidate) => candidate.id === sessionKey && candidate.kind === "durable-session")
+    if (!descriptor || !projection || agentSessions.collectionState !== "available") {
+      setTransitionMessage("Durable agent session snapshot unavailable.")
+      return
+    }
+    const payload = encodeAgentSessionInspectorPayload(sessionKey, descriptor, projection.truth, new Date().toISOString())
+    materializeSurfaces({ surfaces: [{
+      kind: AGENT_SESSION_INSPECTOR_SURFACE_KIND,
+      subject: `${descriptor.role} · ${descriptor.provider}`,
+      identity: agentSessionInspectorIdentity(sessionKey),
+      payload,
+    }] })
+  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.sessions, materializeSurfaces])
 
   const materializeReviewReport = useCallback((path: string, report: string, binding?: AgentSessionDiffReview) => {
     materializeSurfaces({ surfaces: [{
@@ -546,7 +908,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     // intent). Clear the active opinion until it is regenerated from the newly persisted world.
     judgmentRequestedRef.current = null
     setJudgment(null)
-    if (typeof reply.worldId === "string") setWorldId(reply.worldId)
+    if (typeof reply.worldId === "string") {
+      if (reply.worldId !== worldRef.current) setExecutionSession(null)
+      setWorldId(reply.worldId)
+    }
     if (reply.spine) setSpine(reply.spine)
     const say = typeof reply.say === "string" ? reply.say : ""
     if (say) appendConversation("williamos", say)
@@ -655,13 +1020,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setWorldId(payload.worldId)
         setSpace(restored)
         setInspectors([
-          ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-            seed.kind === "review" && typeof seed.payload === "string"
-              ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
-              : seed.kind === "hermes"
-                ? [{ id, kind: "hermes", subject: seed.subject }]
-              : [],
-          ),
+          ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) => restoredInspectorSurface(id, seed)),
           ...(previewSurface ? [previewSurface] : []),
         ])
         setStorage(storageMode)
@@ -809,25 +1168,77 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   useEffect(() => {
     const outcomeKey = spine.outcomeKey
-    if (!outcomeKey || !isExecutionLive(spine.execution)) return
+    if (!hydrated || storage !== "server" || !worldId || !outcomeKey || spine.workOrderId === null) {
+      setExecutionSession(null)
+      setExecutionObservation(null)
+      return
+    }
     let cancelled = false
+    let latestRead = 0
     const executionWorldId = worldId
+    const executionWorkOrderId = spine.workOrderId
     const executionEpoch = transitionEpochRef.current
-    const timer = setInterval(async () => {
+    const readExecution = async () => {
+      const readId = ++latestRead
       try {
-        const response = await fetch(`/api/environment/execution?outcomeKey=${encodeURIComponent(outcomeKey)}`, { cache: "no-store" })
-        if (!response.ok) return
-        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence">
-        if (cancelled || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch) return
-        setSpine((current) => current.outcomeKey === outcomeKey
+        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
+        if (!response.ok) {
+          if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
+            if (response.status === 409) {
+              setExecutionSession(null)
+              setExecutionObservation({ worldId: executionWorldId, workOrderId: executionWorkOrderId, state: "mismatch", observedAt: null })
+            } else {
+              setExecutionObservation((current) => ({
+                worldId: executionWorldId,
+                workOrderId: executionWorkOrderId,
+                state: "stale",
+                observedAt: current?.worldId === executionWorldId && current.workOrderId === executionWorkOrderId
+                  ? current.observedAt
+                  : null,
+              }))
+            }
+          }
+          return
+        }
+        const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence" | "outcomeKey" | "workOrderId"> & { worldId?: unknown; session: ProjectedWorldWorkerSession | null }
+        if (cancelled || readId !== latestRead || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch
+          || spineRef.current.outcomeKey !== outcomeKey || spineRef.current.workOrderId !== executionWorkOrderId) return
+        if (live.worldId !== executionWorldId || live.outcomeKey !== outcomeKey || live.workOrderId !== executionWorkOrderId
+          || live.session && (live.session.worldId !== executionWorldId || live.session.workOrderId !== executionWorkOrderId)) {
+          setExecutionSession(null)
+          setExecutionObservation({ worldId: executionWorldId, workOrderId: executionWorkOrderId, state: "mismatch", observedAt: null })
+          return
+        }
+        setSpine((current) => current.outcomeKey === outcomeKey && current.workOrderId === executionWorkOrderId
           ? { ...current, execution: live.execution, worker: live.worker, evidence: live.evidence }
           : current)
+        setExecutionSession(live.session?.worldId === executionWorldId ? live.session : null)
+        setExecutionObservation({
+          worldId: executionWorldId,
+          workOrderId: executionWorkOrderId,
+          state: "fresh",
+          observedAt: live.session?.worldId === executionWorldId ? live.session.observedAt : new Date().toISOString(),
+        })
       } catch {
-        // Preserve the last canonical observation until the next successful read.
+        if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
+          setExecutionObservation((current) => ({
+            worldId: executionWorldId,
+            workOrderId: executionWorkOrderId,
+            state: "stale",
+            observedAt: current?.worldId === executionWorldId && current.workOrderId === executionWorkOrderId
+              ? current.observedAt
+              : null,
+          }))
+        }
       }
-    }, 4000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [spine.execution, spine.outcomeKey, worldId])
+    }
+    void readExecution()
+    const timer = setInterval(() => void readExecution(), 4000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [hydrated, spine.outcomeKey, spine.workOrderId, storage, worldId])
 
   const sendPersist = useCallback(async (job: PersistJob) => {
     try {
@@ -1006,6 +1417,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const requestEpoch = transitionEpochRef.current
     const requestId = previewEvidenceRequestRef.current + 1
     previewEvidenceRequestRef.current = requestId
+    previewExplainEvidenceRef.current = null
     if (!requestWorldId || !requestProjectIdentity) return
     try {
       const response = await fetch("/api/environment/preview", { cache: "no-store" })
@@ -1066,6 +1478,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const previewId = inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT })
     if (id === previewId) {
       previewEvidenceRequestRef.current += 1
+      previewExplainEvidenceRef.current = null
       const currentWorld = worldRef.current
       const currentProject = projectRef.current?.identity
       if (currentWorld && currentProject) removePreviewEvidenceSnapshot(currentWorld, currentProject)
@@ -1142,6 +1555,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     agentPresentationEpochRef.current += 1
     setLineTarget(target)
     setLineContext(context)
+    setAgentWorkReview(false)
     setForkContext(null)
     if (target === "william") setDelegateContext(null)
     setLineMode("default")
@@ -1254,7 +1668,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       worldId,
       transitionEpoch: transitionEpochRef.current,
     }
+    const reviewIdentityIsCurrent = () => {
+      const current = stateRef.current
+      const live = liveDiffContextRef.current
+      return Boolean(worldRef.current === captured.worldId
+        && transitionEpochRef.current === captured.transitionEpoch
+        && storageRef.current === "server"
+        && current.activeWindowId === "diff" && current.selectedPath === captured.path
+        && !dirtyPathsRef.current[captured.path]
+        && live?.worldId === captured.worldId && live.path === captured.path
+        && live.fingerprint === captured.fingerprint
+        && !persistenceErrorRef.current)
+    }
     setCapturedDiffReview(captured)
+    setAgentWorkReview(true)
     setCapturedDiffImprove(null)
     setReviewTarget(captured.path)
     review.reset(captured.path)
@@ -1266,13 +1693,34 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineTargetPickerOpen(false)
     setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
+    void review.startCapturedDiff({
+      worldId: captured.worldId,
+      path: captured.path,
+      fingerprint: captured.fingerprint,
+      isCurrent: reviewIdentityIsCurrent,
+      beforeStart: async () => {
+        await persistBarrierRef.current()
+        if (!reviewIdentityIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
+      },
+    })
+  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
-    if (change.running || review.running) return
     const target = space.selectedPath
+    if (change.running || review.running) {
+      setTransitionMessage("Finish the active Change or Review before reviewing another file.")
+      return
+    }
+    if (!worldId || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
+      setTransitionMessage(dirtyPaths[target ?? ""]
+        ? "Save the selected file before Review so Claude does not inspect stale disk content."
+        : "Review needs an exact durably saved workspace-relative file in the active Space.")
+      return
+    }
+    const capturedWorldId = worldId
+    const capturedEpoch = transitionEpochRef.current
     setCapturedDiffReview(null)
+    setAgentWorkReview(true)
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
@@ -1283,13 +1731,47 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineTargetPickerOpen(false)
     setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.running, review.reset, review.running, space.selectedPath])
+    void review.startCapturedPath({
+      path: target,
+      isStartCurrent: () => worldRef.current === capturedWorldId
+        && transitionEpochRef.current === capturedEpoch
+        && stateRef.current.selectedPath === target
+        && !dirtyPathsRef.current[target]
+        && !persistenceErrorRef.current,
+      isPresentationCurrent: () => worldRef.current === capturedWorldId
+        && transitionEpochRef.current === capturedEpoch,
+    })
+  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedPath, worldId])
 
-  const openReviewPath = useCallback((target: string) => {
-    if (change.running || review.running) return
-    setFocusedAgentId(null)
+  const openAgentWorkReview = useCallback((sessionKey: string, target: string) => {
+    if (change.running || review.running) {
+      setTransitionMessage("Finish the active Change or Review before reviewing another agent's work.")
+      return
+    }
+    const capturedWorldId = worldId
+    const capturedEpoch = transitionEpochRef.current
+    const descriptor = agentSessions.savedSessions.find((candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey)
+    if (!capturedWorldId || !descriptor || (descriptor.provider !== "Codex" && descriptor.provider !== "Claude")
+      || descriptor.target?.path !== target || agentSessions.collectionState !== "available"
+      || agentSessions.selectedSessionKey !== sessionKey || focusedAgentId !== sessionKey) {
+      setTransitionMessage("That durable agent no longer has an exact reviewable file target in this Space.")
+      return
+    }
+    const descriptorFingerprint = lineSessionDescriptorFingerprint(descriptor)
+    const collectionFingerprint = lineSessionCollectionFingerprint(agentSessions.savedSessions)
+    const isStartCurrent = () => {
+      const exact = agentSavedSessionsRef.current.find((candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey)
+      return worldRef.current === capturedWorldId
+        && transitionEpochRef.current === capturedEpoch
+        && agentCollectionStateRef.current === "available"
+        && agentSelectedSessionKeyRef.current === sessionKey
+        && focusedAgentIdRef.current === sessionKey
+        && exact?.target?.path === target
+        && lineSessionDescriptorFingerprint(exact) === descriptorFingerprint
+        && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === collectionFingerprint
+    }
     setCapturedDiffReview(null)
+    setAgentWorkReview(true)
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
@@ -1300,8 +1782,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineTargetPickerOpen(false)
     setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.running, review.reset, review.running])
+    void review.startCapturedPath({
+      path: target,
+      isStartCurrent,
+      isPresentationCurrent: () => worldRef.current === capturedWorldId && transitionEpochRef.current === capturedEpoch,
+    })
+  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.selectedSessionKey, change.running, focusedAgentId, review.reset, review.running, review.startCapturedPath, worldId])
 
   useEffect(() => {
     const summonLine = (event: KeyboardEvent) => {
@@ -1353,6 +1839,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   async function summonCouncil(question: string) {
     invalidateCouncilView()
+    const requestCouncilViewEpoch = councilViewEpochRef.current
+    const requestWorldId = worldId
+    const requestWorkOrderId = spine.workOrderId
+    const requestTransitionEpoch = transitionEpochRef.current
+    const requestIsCurrent = () => (
+      councilViewEpochRef.current === requestCouncilViewEpoch
+      && worldRef.current === requestWorldId
+      && spineRef.current.workOrderId === requestWorkOrderId
+      && transitionEpochRef.current === requestTransitionEpoch
+    )
     setCouncilView("convening")
     setCouncilQuestion(question)
     setCouncilSession(null)
@@ -1360,36 +1856,69 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setCouncilError(null)
     setCouncilBusy(true)
     setOverlay("council")
-    if (!worldId) {
+    if (!requestWorldId) {
       setCouncilError("Council needs an open persistent Space.")
       setCouncilBusy(false)
       return
     }
-    if (selectedAgent?.kind === "durable-session") {
-      setCouncilError("Council cannot ground this browser-saved agent session yet. Select a persisted Space object or live world worker.")
+    const selectedDurableDescriptor = selectedAgent?.kind === "durable-session"
+      ? agentSessions.savedSessions.find((descriptor) => lineSessionKey(descriptor.provider, descriptor.sessionId) === selectedAgent.id) ?? null
+      : null
+    const snapshotDescriptorFingerprint = selectedDurableDescriptor
+      ? lineSessionDescriptorFingerprint(selectedDurableDescriptor)
+      : null
+    const snapshotCollectionFingerprint = selectedDurableDescriptor
+      ? lineSessionCollectionFingerprint(agentSessions.savedSessions)
+      : null
+    const councilSelectedContext = selectedAgent?.kind === "durable-session"
+      ? selectedDurableDescriptor && agentSessions.collectionState === "available"
+        && agentSessions.selectedSessionKey === selectedAgent.id
+        ? await durableCouncilSnapshot(selectedAgent.id, selectedDurableDescriptor, new Date().toISOString())
+        : null
+      : selectedAgent?.kind === "world-worker"
+      ? boundExecutionSession?.id === selectedAgent.id
+        ? { kind: "agent" as const, workOrderId: boundExecutionSession.workOrderId }
+        : null
+      : { kind: selectedKind, label: selectedLabel }
+    if (!councilSelectedContext) {
+      setCouncilError("That persisted assignment is no longer bound to this Space.")
       setCouncilBusy(false)
       return
     }
     try {
       await persistBarrierRef.current()
+      if (!requestIsCurrent()) return
+      if (councilSelectedContext.kind === "agent-snapshot") {
+        const exactDescriptor = agentSavedSessionsRef.current.find(
+          (descriptor) => lineSessionKey(descriptor.provider, descriptor.sessionId) === councilSelectedContext.sessionKey,
+        )
+        if (agentSelectedSessionKeyRef.current !== councilSelectedContext.sessionKey
+          || !exactDescriptor
+          || lineSessionDescriptorFingerprint(exactDescriptor) !== snapshotDescriptorFingerprint
+          || lineSessionCollectionFingerprint(agentSavedSessionsRef.current) !== snapshotCollectionFingerprint) {
+          setCouncilError("The selected browser-saved session changed before Council dispatch, so no advice was requested.")
+          return
+        }
+      }
       const response = await fetch("/api/environment/council", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          worldId,
+          worldId: requestWorldId,
           question,
-          selectedContext: { kind: selectedKind, label: selectedLabel },
+          selectedContext: councilSelectedContext,
         }),
         cache: "no-store",
       })
       const payload = await response.json() as { error?: string; detail?: string; session?: BrainCouncilSession }
+      if (!requestIsCurrent()) return
       if (!response.ok || !payload.session) throw new Error(payload.detail ?? payload.error ?? `COUNCIL_${response.status}`)
       setCouncilSession(payload.session)
       setCouncilHistory((current) => [...current.filter((entry) => entry.id !== payload.session!.id), payload.session!].slice(-6))
     } catch (error) {
-      setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
+      if (requestIsCurrent()) setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
     } finally {
-      setCouncilBusy(false)
+      if (requestIsCurrent()) setCouncilBusy(false)
     }
   }
 
@@ -1424,9 +1953,108 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  const agentSnapshotLineContextIsCurrent = useCallback((context: AgentSnapshotLineContext): boolean => {
+    const exactDescriptor = agentSavedSessionsRef.current.find(
+      (descriptor) => lineSessionKey(descriptor.provider, descriptor.sessionId) === context.sessionKey,
+    )
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && agentCollectionStateRef.current === "available"
+      && agentSelectedSessionKeyRef.current === context.sessionKey
+      && focusedAgentIdRef.current === context.sessionKey
+      && exactDescriptor !== undefined
+      && lineSessionDescriptorFingerprint(exactDescriptor) === context.clientGuard.descriptorFingerprint
+      && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === context.clientGuard.collectionFingerprint
+  }, [])
+
+  const diffChallengeLineContextIsCurrent = useCallback((context: DiffChallengeLineContext): boolean => {
+    const current = stateRef.current
+    const live = liveDiffContextRef.current
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && storageRef.current === "server"
+      && !persistenceErrorRef.current
+      && current.activeWindowId === "diff"
+      && current.selectedPath === context.path
+      && !dirtyPathsRef.current[context.path]
+      && live?.worldId === context.clientGuard.worldId
+      && live.path === context.path
+      && live.fingerprint === context.fingerprint
+  }, [])
+
+  const previewExplainLineContextIsCurrent = useCallback((context: PreviewExplainLineContext): boolean => {
+    const current = stateRef.current
+    const currentProject = projectRef.current
+    const capturedEvidence = previewExplainEvidenceRef.current
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && previewEvidenceRequestRef.current === context.clientGuard.requestId
+      && storageRef.current === "server"
+      && !persistenceErrorRef.current
+      && currentProject?.identity === context.clientGuard.projectIdentity
+      && current.activeWindowId === "running-app"
+      && current.runningAppUrl === context.clientGuard.runningAppUrl
+      && current.selectedPath === context.selectedPath
+      && !dirtyPathsRef.current[context.selectedPath]
+      && capturedEvidence?.worldId === context.clientGuard.worldId
+      && capturedEvidence.transitionEpoch === context.clientGuard.transitionEpoch
+      && capturedEvidence.requestId === context.clientGuard.requestId
+      && capturedEvidence.projectIdentity === context.clientGuard.projectIdentity
+      && capturedEvidence.payload.evidence.fingerprint === context.previewFingerprint
+      && capturedEvidence.payload.evidence.status === context.clientGuard.status
+      && capturedEvidence.payload.evidence.identity === context.clientGuard.identity
+      && capturedEvidence.payload.evidence.origin === context.clientGuard.origin
+  }, [])
+
+  const fileAskLineContextIsCurrent = useCallback((context: FileAskLineContext): boolean => {
+    const current = stateRef.current
+    const pane = current.editor.panes.find((candidate) => candidate.id === current.editor.activePaneId) ?? null
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && storageRef.current === "server"
+      && !persistenceErrorRef.current
+      && projectRef.current?.identity === context.projectIdentity
+      && current.revision === context.revision
+      && current.activeWindowId === "editor"
+      && current.selectedPath === context.path
+      && !dirtyPathsRef.current[context.path]
+      && current.editor.activePaneId === context.activePaneId
+      && pane?.activePath === context.path
+      && pane?.selection?.anchor === context.selection.anchor
+      && pane?.selection?.head === context.selection.head
+  }, [])
+
   const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
+    if (context && typeof context === "object" && context.kind === "agent-snapshot"
+      && !agentSnapshotLineContextIsCurrent(context)) {
+      const stale = "The selected browser-saved session changed before William dispatch, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
+    if (context && typeof context === "object" && context.kind === "diff-challenge"
+      && (!diffChallengeLineContextIsCurrent(context) || persistencePendingRef.current)) {
+      const stale = "The exact current patch changed before William could challenge it, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
+    if (context && typeof context === "object" && context.kind === "preview-explain"
+      && (!previewExplainLineContextIsCurrent(context) || persistencePendingRef.current)) {
+      const stale = "The exact developer Preview context changed before William could explain it, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
+    if (context && typeof context === "object" && context.kind === "file-ask"
+      && (!fileAskLineContextIsCurrent(context) || persistencePendingRef.current)) {
+      const stale = "The exact saved file selection changed before William dispatch, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
     appendConversation("owner", normalized)
     setLineBusy(true)
     setLineReply(null)
@@ -1453,15 +2081,58 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && selectedContextFingerprint() === requestContext
     try {
       await persistBarrierRef.current()
+      if (context && typeof context === "object" && context.kind === "agent-snapshot"
+        && !agentSnapshotLineContextIsCurrent(context)) {
+        const stale = "The selected browser-saved session changed before William dispatch, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
+      if (context && typeof context === "object" && context.kind === "diff-challenge"
+        && !diffChallengeLineContextIsCurrent(context)) {
+        const stale = "The exact current patch changed before William could challenge it, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
+      if (context && typeof context === "object" && context.kind === "preview-explain"
+        && !previewExplainLineContextIsCurrent(context)) {
+        const stale = "The exact developer Preview context changed before William could explain it, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
+      if (context && typeof context === "object" && context.kind === "file-ask"
+        && !fileAskLineContextIsCurrent(context)) {
+        const stale = "The exact saved file selection changed before William dispatch, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
+      const serverContext = context && typeof context === "object" && (context.kind === "agent-snapshot" || context.kind === "diff-challenge" || context.kind === "preview-explain" || context.kind === "file-ask")
+        ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== "clientGuard"))
+        : context
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId: requestWorldId, text: normalized, ...(context ? { lineContext: context } : {}) }),
+        body: JSON.stringify({ worldId: requestWorldId, text: normalized, ...(serverContext ? { lineContext: serverContext } : {}) }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
+      if (context && typeof context === "object" && context.kind === "preview-explain"
+        && !previewExplainLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
+      if (context && typeof context === "object" && context.kind === "file-ask"
+        && !fileAskLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
+      if (context && typeof context === "object" && context.kind === "diff-challenge"
+        && !diffChallengeLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
       acceptLineReply(payload as LineReply)
       return true
     } catch (error) {
@@ -1473,13 +2144,52 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setLineBusy(false)
       setWilliamBusy(false)
     }
-  }, [acceptLineReply, agentSessions.sessions, appendConversation, focusedAgentId, lineBusy, williamBusy])
+  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, fileAskLineContextIsCurrent, focusedAgentId, lineBusy, previewExplainLineContextIsCurrent, williamBusy])
 
   const reviewerAgentContext = delegateContext?.kind === "reviewer" ? delegateContext : null
 
-  async function submitLine(event: React.FormEvent) {
-    event.preventDefault()
-    const text = lineInput.trim()
+  useEffect(() => {
+    previewDebugStopRef.current = agentSessions.stop
+  }, [agentSessions.stop])
+
+  useEffect(() => () => {
+    previewDebugStopRequestedRef.current = true
+    const key = previewDebugSessionKeyRef.current
+    if (key) previewDebugStopRef.current(key)
+    else previewDebugStopRef.current()
+  }, [])
+
+  function stopAutomaticPreviewDebug() {
+    previewDebugStopRequestedRef.current = true
+    setAutomaticPreviewDebugPending(false)
+    setLineBusy(false)
+    const acceptedKey = previewDebugSessionKeyRef.current
+    if (acceptedKey) {
+      agentSessions.stop(acceptedKey)
+    } else {
+      const pendingPreviewTurns = agentSessions.activeTurns.filter((turn) => (
+        turn.provider === "Claude" && turn.role === "Preview debugger" && turn.sessionId === null
+      ))
+      if (pendingPreviewTurns.length === 1) agentSessions.stop(pendingPreviewTurns[0].id)
+    }
+    setLineReply("Stop requested. Preview Debug outcome is unknown.")
+  }
+
+  function stopAutomaticSpaceContinue() {
+    setAutomaticSpaceContinuePending(false)
+    const sessionKey = automaticSpaceContinueSessionKeyRef.current
+    if (sessionKey && agentSessions.activeSessionIds.includes(sessionKey)) {
+      agentSessions.stop(sessionKey)
+    } else if (automaticSpaceContinueOperationIdRef.current) {
+      agentSessions.stop(automaticSpaceContinueOperationIdRef.current)
+    }
+    setLineReply("Stop requested. Session continuation outcome is unknown.")
+  }
+
+  async function submitLine(event: React.FormEvent | null, suppliedText?: string) {
+    event?.preventDefault()
+    if (lineContext === "space-summary" || lineMode === "review" && agentWorkReview) return
+    const text = (suppliedText ?? lineInput).trim()
     if (lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !text
       || lineTarget === "agent" && lineMode === "default" && !delegateContext?.provider) return
     if (lineMode === "change") {
@@ -1567,25 +2277,60 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineBusy(true)
     setLineReply(null)
     setLineTerminalPresentation(null)
+    setLineTerminalWarning(null)
     let agentPresentationIsCurrent: (() => boolean) | null = null
+    let agentTerminalTruthIsCurrent: (() => boolean) | null = null
     let resumeDispatchKey: string | null = null
     try {
       const contextualText = lineTarget === "agent" && delegateContext
         ? `Owner request: ${text}`
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
-        if (delegateContext?.kind === "preview" && delegateContext.previewDebugBinding) {
+        const previewDebugContextIsCurrent = () => {
+          if (delegateContext?.kind !== "preview" || !delegateContext.previewDebugBinding) return true
           const binding = delegateContext.previewDebugBinding
           const current = stateRef.current
-          if (worldRef.current !== binding.worldId
-            || transitionEpochRef.current !== binding.transitionEpoch
-            || current.revision !== binding.revision
-            || current.runningAppUrl !== binding.runningAppUrl
-            || current.activeWindowId !== "running-app"
-            || current.windows["running-app"].minimized) {
+          return worldRef.current === binding.worldId
+            && transitionEpochRef.current === binding.transitionEpoch
+            && current.revision === binding.revision
+            && acknowledgedRevisionRef.current === binding.revision
+            && current.runningAppUrl === binding.runningAppUrl
+            && projectRef.current?.identity === binding.projectIdentity
+            && current.activeWindowId === "running-app"
+            && !current.windows["running-app"].minimized
+        }
+        const fileAssignmentContextIsCurrent = () => {
+          if (delegateContext?.kind !== "file" || !delegateContext.fileAssignmentBinding) return true
+          return exactFileAssignmentBindingIsCurrent(delegateContext.fileAssignmentBinding)
+        }
+        const spaceContinueContextIsCurrent = () => {
+          if (delegateContext?.kind !== "continue") return true
+          const exactDescriptor = agentSavedSessionsRef.current.find((candidate) => (
+            lineSessionKey(candidate.provider, candidate.sessionId) === delegateContext.sessionKey
+          ))
+          return worldRef.current === delegateContext.worldId
+            && transitionEpochRef.current === delegateContext.transitionEpoch
+            && agentCollectionStateRef.current === "available"
+            && agentSelectedSessionKeyRef.current === delegateContext.sessionKey
+            && Boolean(exactDescriptor)
+            && lineSessionDescriptorFingerprint(exactDescriptor) === delegateContext.descriptorFingerprint
+            && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === delegateContext.collectionFingerprint
+            && delegateContext.objectBinding.kind === "space"
+            && delegateContext.objectBinding.worldId === worldRef.current
+            && delegateContext.objectBinding.revision === stateRef.current.revision
+        }
+        if (delegateContext?.kind === "preview" && delegateContext.previewDebugBinding && !automaticPreviewDebugRunning) {
+          if (!previewDebugContextIsCurrent() || persistencePendingRef.current
+            || persistenceErrorRef.current || agentActiveTurnsRef.current.length !== 0) {
             throw new Error("PREVIEW_DEBUG_CONTEXT_STALE")
           }
         }
+        if (delegateContext?.kind === "file" && delegateContext.fileAssignmentBinding) {
+          if (!fileAssignmentContextIsCurrent() || persistencePendingRef.current) {
+            throw new Error("FILE_ASSIGNMENT_CONTEXT_STALE")
+          }
+        }
+        if (!spaceContinueContextIsCurrent()) throw new Error("AGENT_CONTINUE_SESSION_STALE")
         appendConversation("owner", text)
         if (lineMode === "fork") {
           if (!forkContext) throw new Error("AGENT_FORK_UNAVAILABLE")
@@ -1609,6 +2354,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         agentPresentationEpochRef.current = presentationEpoch
         const presentationTransitionEpoch = transitionEpochRef.current
         const presentationWorldId = worldRef.current
+        const presentationProjectIdentity = projectRef.current?.identity ?? null
         const presentationProvider = delegateContext.provider
         const exactResumeSessionKey = resumeSessionKey(delegateContext)
         const exactResumeDescriptor = exactResumeSessionKey
@@ -1626,6 +2372,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         agentPresentationIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
           && transitionEpochRef.current === presentationTransitionEpoch
           && worldRef.current === presentationWorldId
+          && previewDebugContextIsCurrent()
+          && fileAssignmentContextIsCurrent()
+          && spaceContinueContextIsCurrent()
+        agentTerminalTruthIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
+          && transitionEpochRef.current === presentationTransitionEpoch
+          && worldRef.current === presentationWorldId
+          && (projectRef.current?.identity ?? null) === presentationProjectIdentity
         if (delegateContext.kind === "line-session") {
           const exactDescriptor = agentSessions.savedSessions.find((candidate) => (
             lineSessionKey(candidate.provider, candidate.sessionId) === delegateContext.sessionKey
@@ -1703,31 +2456,71 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             : [...current, exactResumeSessionKey])
         }
         setLineReply(reviewerAgentContext ? "Reviewer is working." : "Agent is working.")
-        const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
-        if (promotedPath) await persistBarrierRef.current()
+        const promotedPath = (delegateContext.provider === "Codex" || delegateContext.provider === "Claude") && delegateContext.kind === "file"
+          ? delegateContext.fileAssignmentBinding?.path ?? delegateContext.label
+          : null
+        if (promotedPath && !(delegateContext.kind === "file" && delegateContext.fileAssignmentBinding)) await persistBarrierRef.current()
+        const fileAssignmentOperation: NonNullable<typeof fileAssignmentOperationRef.current> | null = delegateContext.kind === "file" && delegateContext.fileAssignmentBinding
+          ? {
+            binding: delegateContext.fileAssignmentBinding,
+            baselineTurnIds: new Set(agentSessions.activeTurns.map((turn) => turn.id)),
+            operationId: null,
+            acceptedKey: null,
+          }
+          : null
+        if (fileAssignmentOperation) fileAssignmentOperationRef.current = fileAssignmentOperation
         let committedPersistenceError: AgentTurnCommittedPersistenceError | null = null
         let persistedFinalPresentation: string | null = null
         try {
           const turn = {
             prompt: delegateContext.kind === "preview" ? text : contextualText,
+            onEvent: delegateContext.kind === "preview" && delegateContext.previewDebugBinding ? () => {
+              if (previewDebugContextIsCurrent()) return
+              const exactKey = previewDebugSessionKeyRef.current
+              if (exactKey) agentSessions.stop(exactKey)
+            } : delegateContext.kind === "file" && delegateContext.fileAssignmentBinding ? () => {
+              if (fileAssignmentContextIsCurrent()) return
+              if (presentationSessionKey) agentSessions.stop(presentationSessionKey)
+            } : undefined,
             onPresentation: (presentation: AgentTurnPresentation) => {
               if (presentation.provider !== presentationProvider) return
               const presentedSessionKey = `${presentation.provider}:${presentation.sessionId}`
               if (presentationSessionKey === null) presentationSessionKey = presentedSessionKey
-              if (presentationSessionKey !== presentedSessionKey || !agentPresentationIsCurrent?.()) return
+              if (presentationSessionKey !== presentedSessionKey) return
+              if (fileAssignmentOperation
+                && presentation.provider === (fileAssignmentOperation.binding.actor === "codex" ? "Codex" : "Claude")) {
+                fileAssignmentOperation.operationId = presentedSessionKey
+                fileAssignmentOperation.acceptedKey = presentedSessionKey
+              }
+              if (delegateContext.kind === "preview" && delegateContext.previewDebugBinding) {
+                previewDebugSessionKeyRef.current = presentedSessionKey
+                if (previewDebugStopRequestedRef.current || !previewDebugContextIsCurrent()) {
+                  agentSessions.stop(presentedSessionKey)
+                  return
+                }
+              }
+              if (delegateContext.kind === "file" && delegateContext.fileAssignmentBinding
+                && !fileAssignmentContextIsCurrent()) {
+                agentSessions.stop(presentedSessionKey)
+                return
+              }
+              if (!agentPresentationIsCurrent?.()) return
               if (presentation.phase === "complete" && exactResumeSessionKey) {
                 setLineReply(null)
                 setLineTerminalPresentation({ sessionKey: presentedSessionKey, text: presentation.text })
                 return
               }
               setLineReply(presentation.text)
-              if (presentation.phase === "working") setLineBusy(false)
+              if (presentation.phase === "working" && delegateContext.kind !== "preview") setLineBusy(false)
             },
           }
           const completed = delegateContext.kind === "continue" || delegateContext.kind === "line-session"
             ? await agentSessions.continueSession({
               sessionKey: delegateContext.sessionKey,
               prompt: text,
+              onEvent: delegateContext.kind === "continue" ? () => {
+                if (!spaceContinueContextIsCurrent()) agentSessions.stop(delegateContext.sessionKey)
+              } : undefined,
               onPresentation: turn.onPresentation,
             })
             : reviewerAgentContext
@@ -1755,8 +2548,22 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                   await refreshPersistedSpaceSelection(continuation.selectedPath)
                 }
               },
-              ...(delegateContext.provider === "Codex" && delegateContext.kind === "file"
-                ? { target: { kind: "file" as const, path: delegateContext.label } }
+              ...((delegateContext.provider === "Codex" || delegateContext.provider === "Claude")
+                && delegateContext.kind === "file" && delegateContext.fileAssignmentBinding
+                ? {
+                  target: { kind: "file" as const, path: delegateContext.fileAssignmentBinding.path },
+                  ...(delegateContext.provider === "Claude" ? {
+                    expectedFileAuthority: {
+                      worldId: delegateContext.fileAssignmentBinding.worldId,
+                      worldRevision: delegateContext.fileAssignmentBinding.worldRevision,
+                      outcomeKey: delegateContext.fileAssignmentBinding.outcomeKey,
+                      workOrderId: delegateContext.fileAssignmentBinding.workOrderId,
+                      grantId: delegateContext.fileAssignmentBinding.grantId,
+                      actor: "claude" as const,
+                      selectedPath: delegateContext.fileAssignmentBinding.path,
+                    },
+                  } : {}),
+                }
                 : {}),
             })
           const completedSessionKey = `${completed.provider}:${completed.sessionId}`
@@ -1796,22 +2603,39 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         } catch (error) {
           if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
           committedPersistenceError = error
+        } finally {
+          if (fileAssignmentOperationRef.current === fileAssignmentOperation) fileAssignmentOperationRef.current = null
         }
         let refreshWarning: string | null = null
         if (promotedPath) {
           const refreshed = await refreshVerifiedChange(promotedPath)
           if (refreshed === "dirty-conflict") {
-            refreshWarning = `Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`
+            refreshWarning = `${presentationProvider} saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`
           } else if (refreshed === "failed") {
-            refreshWarning = `Codex saved ${promotedPath}, but Source or Changes could not refresh.`
+            refreshWarning = `${presentationProvider} saved ${promotedPath}, but Source or Changes could not refresh.`
           }
         }
-        if (committedPersistenceError && agentPresentationIsCurrent()) {
-          setLineReply(refreshWarning
-            ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
-            : committedPersistenceError.message)
-        } else if (refreshWarning && persistedFinalPresentation && agentPresentationIsCurrent()) {
-          setLineReply(`${persistedFinalPresentation}\n\nWarning: ${refreshWarning}`)
+        if (committedPersistenceError && agentTerminalTruthIsCurrent()) {
+          setLineReply(null)
+          setLineTerminalWarning({
+            presentationEpoch,
+            transitionEpoch: presentationTransitionEpoch,
+            worldId: presentationWorldId,
+            projectIdentity: presentationProjectIdentity,
+            path: promotedPath,
+            text: refreshWarning
+              ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
+              : committedPersistenceError.message,
+          })
+        } else if (refreshWarning && persistedFinalPresentation && agentTerminalTruthIsCurrent()) {
+          setLineTerminalWarning({
+            presentationEpoch,
+            transitionEpoch: presentationTransitionEpoch,
+            worldId: presentationWorldId,
+            projectIdentity: presentationProjectIdentity,
+            path: promotedPath,
+            text: refreshWarning,
+          })
         }
         return
       }
@@ -1819,18 +2643,46 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     } catch (error) {
       if (lineTarget !== "agent") {
         setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
-      } else if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) {
+      } else if (!agentPresentationIsCurrent || agentPresentationIsCurrent() || agentTerminalTruthIsCurrent?.()) {
+        const message = error instanceof Error ? error.message : ""
         setLineReply(error instanceof AgentTurnCommittedPersistenceError
           ? error.message
-          : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
+          : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped."
+            : delegateContext?.provider === "Local" && (message === "LOCAL_INFERENCE_UNAVAILABLE" || message === "LOCAL_MODEL_UNAVAILABLE")
+              ? "Local inference unavailable."
+              : "Agent turn unavailable.")
       }
     } finally {
       if (resumeDispatchKey) {
         setResumeSessionInFlightKeys((current) => current.filter((key) => key !== resumeDispatchKey))
       }
-      if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) setLineBusy(false)
+      if (!agentPresentationIsCurrent || agentPresentationIsCurrent() || agentTerminalTruthIsCurrent?.()) setLineBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!automaticPreviewDebugPending || delegateContext?.kind !== "preview" || !delegateContext.previewDebugBinding) return
+    setAutomaticPreviewDebugPending(false)
+    void submitLine(null, PREVIEW_DEBUG_PROMPT).finally(() => setAutomaticPreviewDebugRunning(false))
+  }, [automaticPreviewDebugPending, delegateContext])
+
+  useEffect(() => {
+    if (!automaticSpaceContinuePending || delegateContext?.kind !== "continue") return
+    setAutomaticSpaceContinuePending(false)
+    void submitLine(null, SPACE_CONTINUE_PROMPT).finally(() => setAutomaticSpaceContinueRunning(false))
+  }, [automaticSpaceContinuePending, delegateContext])
+
+  useEffect(() => {
+    if (!automaticSpaceContinueRunning || delegateContext?.kind !== "continue"
+      || automaticSpaceContinueOperationIdRef.current) return
+    const created = agentSessions.activeTurns.filter((turn) => (
+      !automaticSpaceContinueBaselineTurnIdsRef.current.has(turn.id)
+      && turn.provider === delegateContext.provider
+      && turn.role === delegateContext.role
+      && (turn.sessionId === null || lineSessionKey(turn.provider, turn.sessionId) === delegateContext.sessionKey)
+    ))
+    if (created.length === 1) automaticSpaceContinueOperationIdRef.current = created[0].id
+  }, [agentSessions.activeTurns, automaticSpaceContinueRunning, delegateContext])
 
   const savedLabel = persistenceError
     ? persistenceError
@@ -1853,6 +2705,116 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? "changes"
     : selectedKind === "agent" ? "agent session"
     : "Space"
+
+  useEffect(() => {
+    const requestId = spaceDelegateEligibilityRequestRef.current + 1
+    spaceDelegateEligibilityRequestRef.current = requestId
+    setSpaceDelegateEligibility({})
+    const path = space.selectedPath
+    const baselineReady = selectedKind === "space" && storage === "server" && Boolean(worldId && project)
+      && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
+      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
+    if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
+      setSpaceDelegateEligibilityPending(false)
+      return
+    }
+    const guard = {
+      worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
+      revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+    }
+    const controller = new AbortController()
+    setSpaceDelegateEligibilityPending(true)
+    void Promise.all((["codex", "claude"] as const).map(async (actor) => {
+      try {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path }).toString()}`, {
+          cache: "no-store", signal: controller.signal,
+        })
+        const payload = await response.json().catch(() => null)
+        const proof = response.ok ? parseSpaceDelegateEligibility(payload) : null
+        return proof?.actor === actor ? proof : null
+      } catch {
+        return null
+      }
+    })).then((proofs) => {
+      if (controller.signal.aborted || spaceDelegateEligibilityRequestRef.current !== requestId
+        || worldRef.current !== guard.worldId || transitionEpochRef.current !== guard.transitionEpoch
+        || projectRef.current?.identity !== guard.projectIdentity
+        || stateRef.current.revision !== guard.revision || stateRef.current.selectedPath !== guard.path
+        || spineRef.current.outcomeKey !== guard.outcomeKey || spineRef.current.workOrderId !== guard.workOrderId
+        || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
+        || acknowledgedRevisionRef.current !== guard.revision || revisionRef.current !== guard.revision) return
+      const exact = Object.fromEntries(proofs.flatMap((proof) => proof
+        && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
+        && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
+        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+      setSpaceDelegateEligibility(exact)
+    }).catch(() => undefined).finally(() => {
+      if (!controller.signal.aborted && spaceDelegateEligibilityRequestRef.current === requestId) {
+        setSpaceDelegateEligibilityPending(false)
+      }
+    })
+    return () => controller.abort()
+  }, [
+    dirtyPaths, persistenceError, persistencePending, project, selectedKind, space.revision,
+    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+  ])
+
+  useEffect(() => {
+    const requestId = fileDelegateEligibilityRequestRef.current + 1
+    fileDelegateEligibilityRequestRef.current = requestId
+    setFileDelegateEligibility({})
+    const path = space.selectedPath
+    const baselineReady = selectedKind === "file" && storage === "server" && Boolean(worldId && project)
+      && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
+      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
+    if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
+      setFileDelegateEligibilityPending(false)
+      return
+    }
+    const guard = {
+      worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
+      revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+    }
+    const controller = new AbortController()
+    setFileDelegateEligibilityPending(true)
+    void Promise.all((["codex", "claude"] as const).map(async (actor) => {
+      try {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path }).toString()}`, {
+          cache: "no-store", signal: controller.signal,
+        })
+        const payload = await response.json().catch(() => null)
+        const proof = response.ok ? parseSpaceDelegateEligibility(payload) : null
+        return proof?.actor === actor ? proof : null
+      } catch {
+        return null
+      }
+    })).then((proofs) => {
+      if (controller.signal.aborted || fileDelegateEligibilityRequestRef.current !== requestId
+        || worldRef.current !== guard.worldId || transitionEpochRef.current !== guard.transitionEpoch
+        || projectRef.current?.identity !== guard.projectIdentity
+        || stateRef.current.revision !== guard.revision || stateRef.current.selectedPath !== guard.path
+        || spineRef.current.outcomeKey !== guard.outcomeKey || spineRef.current.workOrderId !== guard.workOrderId
+        || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
+        || acknowledgedRevisionRef.current !== guard.revision || revisionRef.current !== guard.revision) return
+      const exact = Object.fromEntries(proofs.flatMap((proof) => proof
+        && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
+        && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
+        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+      setFileDelegateEligibility(exact)
+    }).catch(() => undefined).finally(() => {
+      if (!controller.signal.aborted && fileDelegateEligibilityRequestRef.current === requestId) {
+        setFileDelegateEligibilityPending(false)
+      }
+    })
+    return () => controller.abort()
+  }, [
+    dirtyPaths, persistenceError, persistencePending, project, selectedKind, space.revision,
+    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+  ])
 
   function currentLineObjectBinding(): LineObjectBinding | null {
     if (selectedKind === "agent") return selectedAgent ? { kind: "agent-session", sessionKey: selectedAgent.id } : null
@@ -1917,7 +2879,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         role: descriptor.role,
         provider: descriptor.provider,
         assignment: descriptor.assignment,
-        truth: projection.truth,
+        truth: projection.truth === "persisted" ? "resume-unverified" : projection.truth,
         turns: descriptor.completedTurns ?? [],
       }
     })()
@@ -1926,6 +2888,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const lineTerminalReply = lineTerminalPresentation?.sessionKey === currentResumeSessionKey
     && lineTerminalPresentation.text !== canonicalTranscriptFinal
     ? lineTerminalPresentation.text
+    : null
+  const visibleLineTerminalWarning = lineTerminalWarning
+    && lineTerminalWarning.presentationEpoch === agentPresentationEpochRef.current
+    && lineTerminalWarning.transitionEpoch === transitionEpochRef.current
+    && lineTerminalWarning.worldId === worldId
+    && lineTerminalWarning.projectIdentity === (project?.identity ?? null)
+    ? lineTerminalWarning
     : null
 
   useEffect(() => {
@@ -2015,13 +2984,81 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const pauseAction = selectedAgent && agentSessions.pausableSessionIds.includes(selectedAgent.id) ? "Pause" : "Pause unavailable"
   const forkEligible = selectedAgent?.kind === "durable-session" && selectedAgent?.truth === "live" && selectedAgent.providerLabel === "Claude" && selectedAgent.role === "Builder" && selectedAgent.mode === "delegate"
   const forkAction = forkEligible && agentSessions.activeSessionIds.length === 0 ? "Fork" : "Fork unavailable"
-  const spaceContinueCandidate = selectSpaceContinueCandidate(
+  const rawSpaceContinueCandidate = selectSpaceContinueCandidate(
     agentSessions.collectionState,
     agentSessions.savedSessions,
     agentSessions.selectedSessionKey,
   )
+  const readOnlySpaceContinue = rawSpaceContinueCandidate
+    && (rawSpaceContinueCandidate.provider === "Local"
+      && rawSpaceContinueCandidate.role === "Thinker"
+      && !rawSpaceContinueCandidate.target
+      && !rawSpaceContinueCandidate.reviewPath
+      && !rawSpaceContinueCandidate.diffReview
+      && !rawSpaceContinueCandidate.preview
+      && !rawSpaceContinueCandidate.forkedFrom
+      || rawSpaceContinueCandidate.provider === "Claude"
+        && rawSpaceContinueCandidate.role === "Reviewer"
+        && Boolean(rawSpaceContinueCandidate.reviewPath || rawSpaceContinueCandidate.diffReview)
+        && !rawSpaceContinueCandidate.target
+        && !rawSpaceContinueCandidate.preview
+        && !rawSpaceContinueCandidate.forkedFrom
+      || rawSpaceContinueCandidate.provider === "Claude"
+        && rawSpaceContinueCandidate.role === "Preview debugger"
+        && Boolean(rawSpaceContinueCandidate.preview)
+        && !rawSpaceContinueCandidate.target
+        && !rawSpaceContinueCandidate.reviewPath
+        && !rawSpaceContinueCandidate.diffReview
+        && !rawSpaceContinueCandidate.forkedFrom)
+  const nonReadOnlySpaceContinue = Boolean(rawSpaceContinueCandidate && !readOnlySpaceContinue)
+  const spaceContinueCandidate = readOnlySpaceContinue ? rawSpaceContinueCandidate : null
   const continueAction = spaceContinueCandidate ? "Continue" : "Continue unavailable"
-  const continueUnavailableMessage = spaceContinueUnavailableMessage(agentSessions.collectionState)
+  const continueUnavailableMessage = nonReadOnlySpaceContinue
+    ? "This saved session is mutation-capable or not verifiably read-only, so Space Continue did not resume it."
+    : spaceContinueUnavailableMessage(agentSessions.collectionState)
+  const spaceDelegateBaselineUnavailableReason = selectedKind !== "space" ? null
+    : storage !== "server" || !worldId || !project
+      || persistencePending || persistenceError
+      || acknowledgedRevisionRef.current !== space.revision
+      || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
+      || dirtyPaths[space.selectedPath]
+      || !spine.outcomeKey || spine.workOrderId === null
+      || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
+      ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
+      : null
+  const spaceDelegateProofMatches = (["codex", "claude"] as const).some((actor) => {
+    const proof = spaceDelegateEligibility[actor]
+    return Boolean(proof
+      && proof.worldId === worldId
+      && proof.worldRevision === space.revision
+      && proof.outcomeKey === spine.outcomeKey
+      && proof.workOrderId === spine.workOrderId
+      && proof.actor === actor
+      && proof.selectedPath === space.selectedPath)
+  })
+  const spaceDelegateUnavailableReason = spaceDelegateBaselineUnavailableReason
+    ?? (spaceDelegateEligibilityPending
+      ? "Delegate is checking exact-path authority for Codex and Claude."
+      : !spaceDelegateProofMatches
+        ? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude."
+        : null)
+  const fileDelegateBaselineUnavailableReason = selectedKind !== "file" ? null
+    : storage !== "server" || !worldId || !project
+      || persistencePending || persistenceError
+      || acknowledgedRevisionRef.current !== space.revision
+      || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
+      || dirtyPaths[space.selectedPath]
+      || !spine.outcomeKey || spine.workOrderId === null
+      || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
+      ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
+      : null
+  const fileDelegateProofAvailable = Boolean(fileDelegateEligibility.codex || fileDelegateEligibility.claude)
+  const fileDelegateUnavailableReason = fileDelegateBaselineUnavailableReason
+    ?? (fileDelegateEligibilityPending
+      ? "Delegate is checking exact-path authority for Codex and Claude."
+      : !fileDelegateProofAvailable
+        ? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude."
+        : null)
   const diffReviewUnavailableReason = selectedKind !== "diff" ? null
     : storage !== "server" ? "Review requires a server-bound Space with durable persistence."
       : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
@@ -2030,12 +3067,37 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             ? "Review needs the exact live modified patch for the saved selected file."
             : persistencePending ? "Review waits until the current Space is durably saved."
               : null
-  const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
-    : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
-    : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
-    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
-    : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
-    : ["Summarize", continueAction, "Delegate", "Council"] as const
+  const diffChallengeUnavailableReason = selectedKind !== "diff" ? null
+    : storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."
+      : persistenceError ? `Challenge is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : persistencePending ? "Challenge waits until the current Space is durably saved."
+          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+            || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
+            || !liveModifiedDiffIdentity(liveDiffContext)
+            ? "Challenge needs the exact live modified patch for the saved selected file."
+            : null
+  const previewExplainUnavailableReason = selectedKind !== "preview" ? null
+    : storage !== "server" ? "Explain requires a server-bound Space with durable persistence."
+      : persistenceError ? `Explain is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : persistencePending ? "Explain waits until the current Space is durably saved."
+          : !worldId || !project || !space.selectedPath || dirtyPaths[space.selectedPath]
+            ? "Explain needs an exact durably saved selected source file."
+            : null
+  const fileReviewUnavailableReason = selectedKind !== "file" ? null
+    : change.running || review.running ? "Finish the active Change or Review before reviewing another file."
+      : !worldId || !isReviewableWorkspacePath(space.selectedPath) ? "Review needs an exact workspace-relative selected file."
+        : dirtyPaths[space.selectedPath] ? "Save the selected file before Review so Claude does not inspect stale disk content."
+          : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
+            : null
+  const selectedActions = selectedKind === "file" ? ["Ask", "Change", fileDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const
+    : selectedKind === "preview" ? ["Inspect", "Debug", previewExplainUnavailableReason ? "Explain unavailable" : "Explain", "Delegate"] as const
+    : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
+    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Inspect", "Ask William", "Talk", "Council", pauseAction, forkAction] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "durable-session" && !durableSessionDelegateContext(selectedAgent)
+      ? ["Inspect", "Ask William", "Council", pauseAction, forkAction, selectedAgent.target ? "Review work" : "Review work unavailable"] as const
+    : selectedKind === "agent" ? ["Inspect", "Ask William", "Talk", "Redirect", "Council", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
+    : ["Summarize", continueAction, spaceDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", "Council"] as const
   const improveUnavailableReason = selectedKind !== "diff" ? null
     : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
       : persistenceError ? `Improve is unavailable because Space persistence is refusing writes (${persistenceError}).`
@@ -2117,6 +3179,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     judgmentRequestedRef.current = null
     judgmentContextRef.current = null
     setWorldId(payload.worldId)
+    setExecutionSession(null)
     setSpace(restored)
     setPersistenceError(null)
     setPersistencePending(false)
@@ -2136,13 +3199,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     changeRefreshWaiters.current.clear()
     setChangeRefresh({ path: null, key: changeRefreshKey.current })
     setInspectors([
-      ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-        seed.kind === "review" && typeof seed.payload === "string"
-          ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
-          : seed.kind === "hermes"
-            ? [{ id, kind: "hermes", subject: seed.subject }]
-          : [],
-      ),
+      ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) => restoredInspectorSurface(id, seed)),
       ...(previewSurface ? [previewSurface] : []),
     ])
     setConversation(restoredConversation(payload.conversation))
@@ -2162,6 +3219,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLiveDiffContext(null)
     liveDiffContextRef.current = null
     setReviewTarget(null)
+    setAgentWorkReview(false)
     change.reset(null)
     review.reset(null)
     setCouncilQuestion(null)
@@ -2273,10 +3331,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
   }
-  const currentAgentCollectionKnown = agentSessions.collectionState === "available" || agentSessions.collectionState === "missing"
+  const executionAssignmentExpected = storage === "server" && Boolean(worldId) && Boolean(spine.outcomeKey) && spine.workOrderId !== null
+  const currentAgentCollectionKnown = (agentSessions.collectionState === "available" || agentSessions.collectionState === "missing")
+    && (!executionAssignmentExpected || boundExecutionObservation?.state === "fresh")
   const currentMissionAgents = currentAgentCollectionKnown
     ? agentSessions.sessions
-    : agentSessions.sessions.filter((agent) => agent.truth === "live")
+    : agentSessions.sessions.filter((agent) => agent.truth !== "resume-unverified")
   const currentMissionSpace: MissionControlSpaceProjection = {
     id: worldId ?? space.id,
     name: space.name,
@@ -2333,16 +3393,76 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       error: persistenceError,
     },
   })
+  const assignmentRefreshMessage = boundExecutionObservation?.state === "stale"
+    ? `Assignment refresh unavailable · last persisted observation ${boundExecutionObservation.observedAt ?? "not recorded"} · runtime liveness unverified`
+    : boundExecutionObservation?.state === "mismatch"
+      ? `Work Order #${boundExecutionObservation.workOrderId} assignment could not be verified for this Space`
+      : null
 
   function openObjectAction(action: string) {
+    if (action === "Delegate unavailable") return
     if (action === "Merge unavailable") return
+    if (selectedAgent?.kind === "world-worker" && action === "Inspect") {
+      materializeExecutionAssignment(selectedAgent.id)
+      return
+    }
+    if (selectedAgent?.kind === "durable-session" && action === "Inspect") {
+      materializeDurableAgentSession(selectedAgent.id)
+      return
+    }
+    if (selectedAgent?.kind === "durable-session" && action === "Ask William") {
+      const descriptor = agentSessions.savedSessions.find(
+        (candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === selectedAgent.id,
+      )
+      if (!worldId || !descriptor || agentSessions.collectionState !== "available"
+        || agentSessions.selectedSessionKey !== selectedAgent.id) {
+        setTransitionMessage("That browser-saved session is no longer selected and available.")
+        return
+      }
+      const sessionKey = selectedAgent.id
+      const capturedWorldId = worldId
+      const capturedTransitionEpoch = transitionEpochRef.current
+      const descriptorFingerprint = lineSessionDescriptorFingerprint(descriptor)
+      const collectionFingerprint = lineSessionCollectionFingerprint(agentSessions.savedSessions)
+      void durableLineSnapshot(sessionKey, descriptor, new Date().toISOString()).then((snapshot) => {
+        const exactDescriptor = agentSavedSessionsRef.current.find(
+          (candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey,
+        )
+        if (worldRef.current !== capturedWorldId
+          || transitionEpochRef.current !== capturedTransitionEpoch
+          || agentCollectionStateRef.current !== "available"
+          || agentSelectedSessionKeyRef.current !== sessionKey
+          || focusedAgentIdRef.current !== sessionKey
+          || !exactDescriptor
+          || lineSessionDescriptorFingerprint(exactDescriptor) !== descriptorFingerprint
+          || lineSessionCollectionFingerprint(agentSavedSessionsRef.current) !== collectionFingerprint) {
+          setTransitionMessage("The selected browser-saved session changed before William opened, so no advice was requested.")
+          return
+        }
+        openLine("", "william", {
+          ...snapshot,
+          clientGuard: { worldId: capturedWorldId, transitionEpoch: capturedTransitionEpoch, descriptorFingerprint, collectionFingerprint },
+        })
+      })
+      return
+    }
+    if (selectedAgent?.kind === "world-worker" && action === "Ask William") {
+      const exact = boundExecutionSession
+      if (!exact || exact.id !== selectedAgent.id) {
+        setTransitionMessage("That persisted assignment is no longer bound to this Space.")
+        return
+      }
+      openLine("", "william", { kind: "execution-assignment", workOrderId: exact.workOrderId })
+      return
+    }
     if (selectedKind === "space" && action === "Summarize") {
-      openLine("Summarize this exact current Space: ", "william", "space-summary")
+      openLine("", "william", "space-summary")
+      void sendWilliamTurn("Summarize this exact current Space.", "space-summary")
       return
     }
     if (selectedKind === "space" && action === "Continue") {
       const candidate = spaceContinueCandidate
-      if (!candidate) return
+      if (!candidate || !worldId) return
       const key = `${candidate.provider}:${candidate.sessionId}`
       const projected = agentSessions.sessions.find((session) => session.id === key)
       if (!projected || !agentSessions.selectSession(key)) return
@@ -2372,9 +3492,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         role: candidate.role,
         assignment: candidate.assignment,
         sessionKey: key,
+        sessionId: candidate.sessionId,
+        worldId,
+        transitionEpoch: transitionEpochRef.current,
+        collectionFingerprint: lineSessionCollectionFingerprint(agentSessions.savedSessions),
+        descriptorFingerprint: lineSessionDescriptorFingerprint(candidate),
+        objectBinding: { kind: "space", worldId, revision: space.revision },
       })
+      automaticSpaceContinueSessionKeyRef.current = key
+      automaticSpaceContinueOperationIdRef.current = null
+      automaticSpaceContinueBaselineTurnIdsRef.current = new Set(agentSessions.activeTurns.map((turn) => turn.id))
+      setAutomaticSpaceContinueRunning(true)
+      setAutomaticSpaceContinuePending(true)
       openLine("", "agent")
-      setLineReply("Saved session · verification pending")
+      setLineReply("Agent is working.")
       return
     }
     if (action === "Continue unavailable") return
@@ -2383,7 +3514,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedKind === "preview" && action === "Debug") {
-      if (!worldId || !agentSessions.selectSession(null)) return
+      // A pre-acceptance transport has no provider session id yet. Starting only while the
+      // operation collection is empty makes its synthetic active-turn id an exact, non-foreign
+      // cancellation target until Claude accepts a durable session key.
+      if (!worldId || !project || agentActiveTurnsRef.current.length !== 0 || !agentSessions.selectSession(null)) return
+      previewDebugSessionKeyRef.current = null
+      previewDebugStopRequestedRef.current = false
+      setAutomaticPreviewDebugRunning(true)
+      setAutomaticPreviewDebugPending(true)
       setFocusedAgentId(null)
       setDelegateContext({
         kind: "preview",
@@ -2396,13 +3534,71 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           transitionEpoch: transitionEpochRef.current,
           revision: space.revision,
           runningAppUrl: space.runningAppUrl,
+          projectIdentity: project.identity,
         },
       })
       openLine("", "agent")
       return
     }
+    if (selectedKind === "preview" && action === "Explain unavailable") return
     if (selectedKind === "preview" && action === "Explain") {
-      openLine("Explain the exact current developer Preview evidence: ")
+      const requestWorldId = worldId
+      const requestProjectIdentity = project?.identity ?? null
+      const requestEpoch = transitionEpochRef.current
+      const requestPath = space.selectedPath
+      const requestRunningAppUrl = space.runningAppUrl
+      const requestId = previewEvidenceRequestRef.current + 1
+      previewEvidenceRequestRef.current = requestId
+      previewExplainEvidenceRef.current = null
+      if (!requestWorldId || !requestProjectIdentity || !requestPath || previewExplainUnavailableReason) return
+      void (async () => {
+        try {
+          const response = await fetch("/api/environment/preview", { cache: "no-store" })
+          const body = await response.json() as unknown
+          const evidence = body && typeof body === "object" ? (body as Record<string, unknown>).evidence : null
+          const payload = response.ok ? parsePreviewInspectorPayload({ evidence, snapshot: "live" }) : null
+          if (!payload) throw new Error("PREVIEW_EVIDENCE_UNAVAILABLE")
+          if (previewEvidenceRequestRef.current !== requestId
+            || worldRef.current !== requestWorldId
+            || projectRef.current?.identity !== requestProjectIdentity
+            || transitionEpochRef.current !== requestEpoch
+            || stateRef.current.activeWindowId !== "running-app"
+            || stateRef.current.runningAppUrl !== requestRunningAppUrl
+            || stateRef.current.selectedPath !== requestPath
+            || dirtyPathsRef.current[requestPath]) throw new Error("LINE_CONTEXT_STALE")
+          previewExplainEvidenceRef.current = {
+            worldId: requestWorldId,
+            transitionEpoch: requestEpoch,
+            requestId,
+            projectIdentity: requestProjectIdentity,
+            payload,
+          }
+          savePreviewEvidenceSnapshot(requestWorldId, requestProjectIdentity, payload)
+          const context: PreviewExplainLineContext = {
+            kind: "preview-explain",
+            previewFingerprint: payload.evidence.fingerprint,
+            selectedPath: requestPath,
+            clientGuard: {
+              worldId: requestWorldId,
+              transitionEpoch: requestEpoch,
+              requestId,
+              projectIdentity: requestProjectIdentity,
+              runningAppUrl: requestRunningAppUrl,
+              status: payload.evidence.status,
+              identity: payload.evidence.identity,
+              origin: payload.evidence.origin,
+            },
+          }
+          openLine("", "william", context)
+          void sendWilliamTurn("Explain the exact current developer Preview.", context)
+        } catch (error) {
+          if (worldRef.current === requestWorldId && transitionEpochRef.current === requestEpoch) {
+            const message = error instanceof Error ? error.message : "PREVIEW_EVIDENCE_UNAVAILABLE"
+            setTransitionMessage(message)
+            setWilliamError(message)
+          }
+        }
+      })()
       return
     }
     if (action === "Pause") {
@@ -2454,8 +3650,45 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedKind === "diff" && action === "Review unavailable") return
+    if (selectedKind === "diff" && action === "Challenge unavailable") return
     if (selectedKind === "diff" && action === "Challenge") {
-      openLine(`${action} the exact current patch for the selected file.`)
+      const live = liveDiffContextRef.current
+      const identity = liveModifiedDiffIdentity(live)
+      if (!worldId || !identity || live?.worldId !== worldId || identity.path !== space.selectedPath
+        || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
+        || dirtyPathsRef.current[identity.path]) {
+        setTransitionMessage("Challenge needs the exact live modified patch for the durably saved selected file.")
+        return
+      }
+      const context: DiffChallengeLineContext = {
+        kind: "diff-challenge",
+        ...identity,
+        clientGuard: { worldId, transitionEpoch: transitionEpochRef.current },
+      }
+      openLine("", "william", context)
+      void sendWilliamTurn("Challenge the exact current patch for the selected file.", context)
+      return
+    }
+    if (selectedKind === "file" && action === "Ask") {
+      const selectedPath = space.selectedPath
+      const activePane = space.editor.panes.find((pane) => pane.id === space.editor.activePaneId) ?? null
+      if (!worldId || !project || storageRef.current !== "server" || persistencePendingRef.current
+        || persistenceErrorRef.current || !selectedPath || dirtyPathsRef.current[selectedPath]
+        || space.activeWindowId !== "editor" || !activePane || activePane.activePath !== selectedPath
+        || !activePane.selection) {
+        setTransitionMessage("Ask needs the exact durably saved selected file in a server-bound Space.")
+        return
+      }
+      const context: FileAskLineContext = {
+        kind: "file-ask",
+        path: selectedPath,
+        projectIdentity: project.identity,
+        revision: space.revision,
+        activePaneId: activePane.id,
+        selection: { anchor: activePane.selection.anchor, head: activePane.selection.head },
+        clientGuard: { worldId, transitionEpoch: transitionEpochRef.current },
+      }
+      openLine("", "william", context)
       return
     }
     if (action === "Council") {
@@ -2468,16 +3701,85 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (action === "Delegate") {
-      if (!agentSessions.selectSession(null)) return
-      setFocusedAgentId(null)
-      setDelegateContext(selectedKind === "preview"
-        ? { kind: "preview", label: selectedLabel, provider: null, role: "Preview debugger", assignment: "Developer Preview diagnosis" }
-        : { kind: selectedKind, label: selectedLabel, provider: null, role: "Builder", assignment: selectedLabel })
+      if (selectedKind === "preview") {
+        if (!worldId || !project || storageRef.current !== "server"
+          || persistencePendingRef.current || persistenceErrorRef.current
+          || acknowledgedRevisionRef.current !== space.revision
+          || agentActiveTurnsRef.current.length !== 0
+          || !space.runningAppUrl || space.activeWindowId !== "running-app"
+          || space.windows["running-app"].minimized) {
+          setTransitionMessage("Delegate needs the exact active durably saved Developer Preview.")
+          return
+        }
+        if (!agentSessions.selectSession(null)) return
+        setFocusedAgentId(null)
+        previewDebugSessionKeyRef.current = null
+        previewDebugStopRequestedRef.current = false
+        setDelegateContext({
+          kind: "preview",
+          label: selectedLabel,
+          provider: null,
+          role: "Preview debugger",
+          assignment: "Developer Preview diagnosis",
+          previewDebugBinding: {
+            worldId,
+            transitionEpoch: transitionEpochRef.current,
+            revision: space.revision,
+            runningAppUrl: space.runningAppUrl,
+            projectIdentity: project.identity,
+          },
+        })
+      } else if (selectedKind === "space") {
+        const path = space.selectedPath
+        const outcomeKey = spine.outcomeKey
+        const workOrderId = spine.workOrderId
+        const proofs = spaceDelegateEligibility
+        if (spaceDelegateUnavailableReason || (!proofs.codex && !proofs.claude)
+          || !worldId || !project || !path || !outcomeKey || workOrderId === null) {
+          setTransitionMessage(spaceDelegateUnavailableReason
+            ?? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")
+          return
+        }
+        if (!agentSessions.selectSession(null)) return
+        setFocusedAgentId(null)
+        const label = `Space assignment · exact selected file ${path}`
+        setDelegateContext({
+          kind: "file",
+          label,
+          provider: null,
+          role: "Builder",
+          assignment: label,
+          fileAssignmentProofs: proofs,
+          fileAssignmentProofSource: "space",
+        })
+      } else if (selectedKind === "file") {
+        const path = space.selectedPath
+        const outcomeKey = spine.outcomeKey
+        const workOrderId = spine.workOrderId
+        const proofs = fileDelegateEligibility
+        if (fileDelegateUnavailableReason || !worldId || !project || !path || !outcomeKey
+          || workOrderId === null || (!proofs.codex && !proofs.claude)) {
+          setTransitionMessage(fileDelegateUnavailableReason
+            ?? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")
+          return
+        }
+        if (!agentSessions.selectSession(null)) return
+        setFocusedAgentId(null)
+        const label = `File assignment · exact selected file ${path}`
+        setDelegateContext({
+          kind: "file", label, provider: null, role: "Builder", assignment: label,
+          fileAssignmentProofs: proofs,
+        })
+      } else {
+        if (!agentSessions.selectSession(null)) return
+        setFocusedAgentId(null)
+        setDelegateContext({ kind: selectedKind, label: selectedLabel, provider: null, role: "Builder", assignment: selectedLabel })
+      }
       openLine("", "agent")
       return
     }
     if (action === "Review work" && selectedAgent?.kind === "durable-session" && selectedAgent.target) {
-      openReviewPath(selectedAgent.target.path)
+      openAgentWorkReview(selectedAgent.id, selectedAgent.target.path)
       return
     }
     if (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect")) {
@@ -2492,6 +3794,35 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
+  }
+
+  function chooseDelegateProvider(provider: "Codex" | "Claude") {
+    setDelegateContext((current) => {
+      if (!current || current.kind === "reviewer") return current
+      if (current.kind !== "file") return { ...current, provider }
+      const actor = provider.toLowerCase() as "codex" | "claude"
+      if (current.fileAssignmentBinding) {
+        return current.fileAssignmentBinding.actor === actor ? { ...current, provider } : current
+      }
+      const proof = current.fileAssignmentProofs?.[actor]
+      const currentProject = projectRef.current
+      if (!proof || !currentProject) return current
+      const binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]> = {
+        worldId: proof.worldId,
+        transitionEpoch: transitionEpochRef.current,
+        projectIdentity: currentProject.identity,
+        outcomeKey: proof.outcomeKey,
+        workOrderId: proof.workOrderId,
+        grantId: proof.grantId,
+        worldRevision: proof.worldRevision,
+        path: proof.selectedPath,
+        actor,
+        proofSource: current.fileAssignmentProofSource ?? "file",
+      }
+      return exactFileAssignmentBindingIsCurrent(binding)
+        ? { ...current, provider, fileAssignmentBinding: binding }
+        : current
+    })
   }
 
   function openLocalConversation() {
@@ -2571,8 +3902,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
+        <div className={spatial.agentPresence}>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
+          if (agent.kind === "world-worker") {
+            setFocusedAgentId(agent.id)
+            setDelegateContext(null)
+            setLineOpen(false)
+            materializeExecutionAssignment(agent.id)
+            return
+          }
           const running = agentSessions.activeSessionIds.includes(agent.id)
           if (running && agent.kind === "durable-session") {
             setFocusedAgentId(agent.id)
@@ -2607,6 +3946,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             setLineReply(null)
           }
         }} />
+        {assignmentRefreshMessage ? <span className={spatial.assignmentRefresh} role="status">{assignmentRefreshMessage}</span> : null}
+        </div>
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
       </header>
 
@@ -2630,10 +3971,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             }}
           /> : null}
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Delegate unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? selectedKind === "file" ? fileReviewUnavailableReason ?? undefined : diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Delegate unavailable" ? selectedKind === "file" ? fileDelegateUnavailableReason ?? undefined : spaceDelegateUnavailableReason ?? undefined : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
+        {selectedKind === "space" && spaceDelegateUnavailableReason ? <span role="status">{spaceDelegateUnavailableReason}</span> : null}
       </div>
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
@@ -2720,12 +4062,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
               {lineTranscriptSession ? <AgentTranscriptHistory key={lineTranscriptSession.sessionKey} {...lineTranscriptSession} /> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : lineContext === "space-summary" ? "Exact current Space · server-grounded · read-only" : lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment" ? `Persisted assignment · Work Order #${lineContext.workOrderId} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "agent-snapshot" ? `Browser-saved session snapshot · ${lineContext.sessionKey} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "diff-challenge" ? `Challenge exact patch · ${lineContext.path} · ${lineContext.patchHash}` : lineContext && typeof lineContext === "object" && lineContext.kind === "preview-explain" ? `Preview ${lineContext.clientGuard.status} · ${lineContext.clientGuard.identity} · ${lineContext.clientGuard.origin ?? "origin unavailable"} · source ${lineContext.selectedPath} · DOM unavailable · console unavailable · network unavailable` : lineContext && typeof lineContext === "object" && lineContext.kind === "file-ask" ? `Exact saved file · ${lineContext.path} · ${lineContext.projectIdentity} · read-only` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.kind === "file" && (delegateContext.fileAssignmentBinding || delegateContext.fileAssignmentProofs) ? delegateContext.label : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span>{lineMode === "review" && agentWorkReview || automaticPreviewDebugRunning || automaticSpaceContinueRunning || lineBusy && delegateContext?.kind === "preview" && Boolean(delegateContext.previewDebugBinding) ? null : <input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={lineContext === "space-summary" || (lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />}{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              {visibleLineTerminalWarning ? <output className={spatial.lineReply} aria-label={`Delivery warning · ${visibleLineTerminalWarning.path ?? "assignment"}`}>{visibleLineTerminalWarning.text}</output> : null}
             </div>
             <div className={spatial.lineControls}>
-              {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
+              {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" || delegateContext.kind === "file" && !(delegateContext.fileAssignmentBinding?.actor === "codex" || delegateContext.fileAssignmentProofs?.codex) ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title={delegateContext.kind === "preview" ? "Preview diagnostic transport is not available for Codex yet." : "No current server-derived exact-path Codex authority proof is available."}>Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => chooseDelegateProvider("Codex")}>Codex</button>}{delegateContext.kind === "file" && !(delegateContext.fileAssignmentBinding?.actor === "claude" || delegateContext.fileAssignmentProofs?.claude) ? <button type="button" className={spatial.lineClose} disabled aria-label="Claude unavailable" title="No current server-derived exact-path Claude authority proof is available.">Claude unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => chooseDelegateProvider("Claude")}>Claude</button>}</div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Read-only Preview debugger session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || currentResumeSessionIsActive || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : currentResumeSessionIsActive ? "Session working" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? lineBusy ? "Preview debugger working" : "Send" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              {lineMode === "review" && agentWorkReview || automaticPreviewDebugRunning || automaticSpaceContinueRunning || lineBusy && delegateContext?.kind === "preview" && Boolean(delegateContext.previewDebugBinding) ? null : <button type="submit" className={spatial.lineSend} disabled={lineContext === "space-summary" || lineBusy || currentResumeSessionIsActive || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : currentResumeSessionIsActive ? "Session working" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? lineBusy ? "Preview debugger working" : "Send" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>}{automaticPreviewDebugRunning || lineBusy && delegateContext?.kind === "preview" && Boolean(delegateContext.previewDebugBinding) ? <button type="button" className={spatial.lineClose} aria-label="Stop Preview debug" onClick={stopAutomaticPreviewDebug}>Stop Preview debug</button> : null}{automaticSpaceContinueRunning ? <button type="button" className={spatial.lineClose} aria-label="Stop Space continuation" onClick={stopAutomaticSpaceContinue}>Stop Space continuation</button> : null}
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>{changeIntent === "improve-diff" ? "Stop improvement" : "Stop change"}</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } if (lineTarget === "agent") { agentPresentationEpochRef.current += 1; setLineBusy(false) } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>

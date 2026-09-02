@@ -1,5 +1,6 @@
 import type { WilliamJudgment, WorldSpine } from "@/lib/environment/working-world"
 import { isSummonedSurface } from "@/lib/environment/summon"
+import { parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 
 export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
 
@@ -308,7 +309,7 @@ export function normalizeSpace(
     return item.kind === "editor" || item.kind === "running-app" || item.kind === "tests"
       || item.kind === "diff" || item.kind === "terminal" ? [[item.kind, item] as const] : []
   }))
-  const inspectorWindows = Object.fromEntries(rawWindows.flatMap((window) => {
+  const rawInspectorWindows = Object.fromEntries(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string") return []
@@ -322,13 +323,21 @@ export function normalizeSpace(
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string"
       || typeof item.surfaceKind !== "string" || typeof item.surfaceSubject !== "string") return []
-    if (item.surfaceKind === "review" && typeof item.surfacePayload !== "string") return []
+    const persistedPayload = item.surfaceKind === "review" || item.surfaceKind === "execution-assignment"
+    if (persistedPayload && typeof item.surfacePayload !== "string") return []
+    if (item.surfaceKind === "execution-assignment") {
+      const snapshot = parseExecutionAssignmentInspectorPayload(item.surfacePayload)
+      if (!snapshot || snapshot.worldId !== fallback.id) return []
+    }
     return [[item.id, {
       kind: item.surfaceKind,
       subject: item.surfaceSubject,
-      ...(item.surfaceKind === "review" ? { payload: item.surfacePayload as string } : {}),
+      ...(persistedPayload ? { payload: item.surfacePayload as string } : {}),
     } satisfies InspectorSeed]]
   }))
+  const inspectorWindows = Object.fromEntries(
+    Object.entries(rawInspectorWindows).filter(([id]) => Boolean(inspectorSeeds[id])),
+  ) as Record<string, WindowGeometry>
   const normalizeWindow = (id: WindowId): WindowGeometry => {
     const input = windowsByKind.get(id) as Record<string, unknown> | undefined
     const frame = input?.frame && typeof input.frame === "object" ? input.frame as Record<string, unknown> : undefined
@@ -441,7 +450,9 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     .filter(([id]) => {
       const seed = space.inspectorSeeds[id]
       return Boolean(seed) && (isSummonedSurface(seed.kind)
-        || seed.kind === "review" && typeof seed.payload === "string" && seed.payload.length > 0)
+        || seed.kind === "review" && typeof seed.payload === "string" && seed.payload.length > 0
+        || seed.kind === "execution-assignment" && typeof seed.payload === "string"
+          && parseExecutionAssignmentInspectorPayload(seed.payload)?.worldId === space.id)
     })
     .slice(0, 22)
   const persistedInspectorIds = new Set(persistedInspectors.map(([id]) => id))
@@ -470,10 +481,11 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
       return {
         id,
         kind: "inspector" as const,
-        title: seed.kind === "review" ? "Review report" : "Inspector",
+        title: seed.kind === "review" ? "Review report"
+          : seed.kind === "execution-assignment" ? "Execution assignment" : "Inspector",
         surfaceKind: seed.kind,
         surfaceSubject: seed.subject,
-        ...(seed.kind === "review" ? { surfacePayload: seed.payload } : {}),
+        ...(seed.kind === "review" || seed.kind === "execution-assignment" ? { surfacePayload: seed.payload } : {}),
         frame: { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
         z: Math.max(0, Math.min(10_000, Math.round(geometry.z))),
         minimized: geometry.minimized,

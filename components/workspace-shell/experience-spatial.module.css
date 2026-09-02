@@ -63,6 +63,8 @@
 .spacePath { overflow: hidden; color: #8e998b; font-family: var(--font-geist-mono), monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .sessionStrip { justify-content: center; gap: 7px; }
+.agentPresence { min-width: 0; display: grid; justify-items: center; gap: 2px; }
+.assignmentRefresh { max-width: 560px; overflow: hidden; color: #c2a06f; font-family: var(--font-geist-mono), monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .sessionButton {
   gap: 8px;
@@ -466,7 +468,9 @@
 
 @media (max-width: 1040px) {
   .topBar { grid-template-columns: minmax(220px, 1fr) auto; }
-  .sessionStrip { display: none; }
+  .agentPresence { display: contents; }
+  .sessionStrip { display: none !important; }
+  .assignmentRefresh { position: absolute; right: 250px; bottom: 2px; left: 250px; max-width: none; text-align: center; }
   .spacePath { display: none; }
   .windowLayer { right: 0; }
   .dock { right: 18px; }
@@ -476,6 +480,7 @@
 @media (max-width: 720px) {
   .topBar { height: 48px; padding: 0 10px; }
   .status { display: none; }
+  .assignmentRefresh { right: 10px; left: 10px; }
   .objectBar { top: 48px; padding: 0 9px; }
   .objectLabel { max-width: 34vw; }
   .objectActions { max-width: 62vw; overflow-x: auto; }

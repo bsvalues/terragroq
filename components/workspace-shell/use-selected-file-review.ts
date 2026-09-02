@@ -19,15 +19,29 @@ export type SelectedDiffReviewCapture = Readonly<{
   beforeStart: () => Promise<void>
 }>
 
+export type CapturedFileReviewStart = Readonly<{
+  path: string
+  isStartCurrent: () => boolean
+  isPresentationCurrent: () => boolean
+}>
+
 type ActiveReview = {
   id: number
   path: string
   stopRequested: boolean
+  stopIssued: boolean
   sessionKey: string | null
   diff: SelectedDiffReviewCapture | null
+  capture: CapturedFileReviewStart | null
 }
 
 const idle: ReviewState = { running: false, path: null, progress: null, outcome: null }
+
+function stopExactReview(operation: ActiveReview, controller: ExperienceAgentSessionController) {
+  if (!operation.sessionKey || operation.stopIssued) return
+  operation.stopIssued = true
+  controller.stop(operation.sessionKey)
+}
 
 export function useSelectedFileReview({
   path,
@@ -49,9 +63,8 @@ export function useSelectedFileReview({
   useEffect(() => () => {
     const operation = active.current
     if (!operation) return
-    const controller = sessionController.current
-    const turnId = operation.sessionKey ?? controller.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
-    controller.stop(turnId)
+    operation.stopRequested = true
+    stopExactReview(operation, sessionController.current)
   }, [])
 
   const reset = useCallback((nextPath: string | null) => {
@@ -63,22 +76,30 @@ export function useSelectedFileReview({
     const operation = active.current
     if (!operation) return
     operation.stopRequested = true
-    const turnId = operation.sessionKey ?? sessions.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
-    sessions.stop(turnId)
+    stopExactReview(operation, sessions)
     setState({ running: true, path: operation.path, progress: null, outcome: "Stop requested. Review outcome is unknown." })
   }, [sessions])
 
-  const start = useCallback(async (focus: string, diff: SelectedDiffReviewCapture | null = null) => {
+  const run = useCallback(async (
+    operationPath: string | null,
+    focus: string,
+    diff: SelectedDiffReviewCapture | null,
+    capture: CapturedFileReviewStart | null,
+  ) => {
     if (active.current) return
-    if (!path) {
+    if (!operationPath) {
       setState({ running: false, path: null, progress: null, outcome: "Select a file before starting Review." })
       return
     }
-    if (diff && (diff.path !== path || !diff.isCurrent())) {
-      setState({ running: false, path, progress: null, outcome: "The live change changed. Reopen Review from the current Changes surface." })
+    if (capture && (capture.path !== operationPath || !capture.isStartCurrent())) {
+      setState({ running: false, path: operationPath, progress: null, outcome: "The selected agent work changed before Review could start." })
       return
     }
-    const operation: ActiveReview = { id: ++sequence.current, path, stopRequested: false, sessionKey: null, diff }
+    if (diff && (diff.path !== operationPath || !diff.isCurrent())) {
+      setState({ running: false, path: operationPath, progress: null, outcome: "The live change changed. Reopen Review from the current Changes surface." })
+      return
+    }
+    const operation: ActiveReview = { id: ++sequence.current, path: operationPath, stopRequested: false, stopIssued: false, sessionKey: null, diff, capture }
     active.current = operation
     setState({ running: true, path: operation.path, progress: "Starting read-only Review…", outcome: null })
     try {
@@ -99,22 +120,31 @@ export function useSelectedFileReview({
         } : {}),
         ...(focus.trim() ? { focus: focus.trim() } : {}),
         onEvent: (event) => {
-          if (active.current !== operation || operation.stopRequested) return
+          if (active.current !== operation) return
           if (event.type === "session" && typeof event.sessionId === "string") {
             operation.sessionKey = `Claude:${event.sessionId}`
-            setState((current) => ({ ...current, progress: `Reviewing ${operation.path}…` }))
+            if (operation.stopRequested) {
+              stopExactReview(operation, sessionController.current)
+              return
+            }
+            if (!operation.capture || operation.capture.isPresentationCurrent()) {
+              setState((current) => ({ ...current, progress: `Reviewing ${operation.path}…` }))
+            }
           }
         },
         onReviewComplete: (text, binding) => {
-          if (active.current !== operation || operation.stopRequested || operation.diff && !operation.diff.isCurrent()) return
+          if (active.current !== operation || operation.stopRequested || operation.diff && !operation.diff.isCurrent()
+            || operation.capture && !operation.capture.isPresentationCurrent()) return
           report.current(operation.path, text, binding)
         },
       })
-      if (active.current === operation && !operation.stopRequested) {
+      if (active.current === operation && !operation.stopRequested
+        && (!operation.capture || operation.capture.isPresentationCurrent())) {
         setState({ running: false, path: operation.path, progress: null, outcome: "Review completed and opened in Inspector." })
       }
     } catch (error) {
       if (active.current !== operation) return
+      if (operation.capture && !operation.capture.isPresentationCurrent()) return
       const unknown = operation.stopRequested || (error instanceof DOMException && error.name === "AbortError")
       const stale = operation.diff && (error instanceof Error && /DIFF(?:_REVIEW)?_CONTEXT_STALE/.test(error.message) || !operation.diff.isCurrent())
       setState({ running: false, path: operation.path, progress: null, outcome: unknown
@@ -124,7 +154,19 @@ export function useSelectedFileReview({
     } finally {
       if (active.current === operation) active.current = null
     }
-  }, [path, sessions])
+  }, [sessions])
 
-  return { ...state, canStop: state.running, reset, start, stop }
+  const start = useCallback((focus: string, diff: SelectedDiffReviewCapture | null = null) => (
+    run(path, focus, diff, null)
+  ), [path, run])
+
+  const startCapturedPath = useCallback((capture: CapturedFileReviewStart) => (
+    run(capture.path, "", null, capture)
+  ), [run])
+
+  const startCapturedDiff = useCallback((diff: SelectedDiffReviewCapture) => (
+    run(diff.path, "", diff, null)
+  ), [run])
+
+  return { ...state, canStop: state.running, reset, start, startCapturedPath, startCapturedDiff, stop }
 }

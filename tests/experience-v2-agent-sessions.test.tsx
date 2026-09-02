@@ -14,11 +14,18 @@ import {
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
-import type { WorldWorker } from "@/lib/environment/working-world"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
 const ASSIGNMENT_HASH = "a".repeat(64)
+const DELEGATE_SPINE = {
+  ...EMPTY_SPINE,
+  outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+  outcomeTitle: "Finish Experience V2",
+  workOrderId: 1122,
+  execution: "authorized" as const,
+}
 
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
@@ -39,12 +46,22 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function workspaceResponse(storage: "browser" | "server" = "browser") {
+function workspaceResponse(storage: "browser" | "server" = "browser", delegate = false) {
   const space = {
-    ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
+    ...defaultSpace(), ...(delegate ? { revision: 7 } : {}), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
     editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
-  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
+  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: delegate ? DELEGATE_SPINE : EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
+}
+
+function exactDelegateEligibility(url: string, eligibleActor: "codex" | "claude" = "codex"): Response | null {
+  if (!url.startsWith("/api/loom/agent?")) return null
+  const actor = new URL(url, "http://localhost").searchParams.get("actor")
+  return Response.json(actor === eligibleActor ? {
+    eligible: true, worldId: "server-world", worldRevision: 8,
+    outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1122, grantId: 45,
+    actor: eligibleActor, selectedPath: "src/app.ts",
+  } : { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
 }
 
 async function openWilliamConversation() {
@@ -52,8 +69,8 @@ async function openWilliamConversation() {
   return screen.findByRole("complementary", { name: "William conversation" })
 }
 
-function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker, autoContinue, onAutoContinuation })
+function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, executionSession, autoContinue, onAutoContinuation })
   expose = controller
   return (
     <AgentSessionStrip
@@ -489,8 +506,9 @@ describe("Experience V2 real agent sessions", () => {
   it("contains a throwing corrupt-record cleanup and keeps the current session truth unknown", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     window.localStorage.setItem(key, "{bad-json")
-    const removeItem = Storage.prototype.removeItem
-    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (candidate) {
+    const storagePrototype = Object.getPrototypeOf(window.localStorage) as Storage
+    const removeItem = storagePrototype.removeItem
+    vi.spyOn(storagePrototype, "removeItem").mockImplementation(function (candidate) {
       if (candidate === key) throw new DOMException("blocked", "SecurityError")
       return removeItem.call(this, candidate)
     })
@@ -524,12 +542,16 @@ describe("Experience V2 real agent sessions", () => {
       { id: "Codex:build-1", role: "Builder", providerLabel: "Codex", assignment: "Build workspace", status: "working", evidence: "live agent stream", truth: "live", kind: "durable-session", mode: "delegate", presentation: "Builder validating the patch." },
       { id: "Local:123e4567-e89b-42d3-a456-426614174000", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "thinking", evidence: "live model response", truth: "live", kind: "durable-session", mode: "delegate", presentation: "<thinking>hidden secret</thinking>" },
       { id: "Claude:223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", providerLabel: "Claude", assignment: "Review current work", status: "resume unverified", evidence: "saved transcript", truth: "resume-unverified", kind: "durable-session", mode: "review" },
+      { id: "world-worker:world-1:41:hermes-codex-bridge", role: "HERMES", providerLabel: "Local execution", assignment: "Finish the bounded slice", status: "implementing", evidence: "persisted assignment", truth: "persisted", kind: "world-worker", mode: "delegate" },
+      { id: "world-worker:world-1:42:hermes-codex-bridge", role: "HERMES", providerLabel: "Local execution", assignment: "Recover the bounded slice", status: "blocked", evidence: "persisted assignment", truth: "persisted", kind: "world-worker", mode: "delegate" },
     ]
 
     expect(projectMissionAgentSessions(sessions, true)).toEqual([
       { id: "Codex:build-1", name: "Codex", role: "Builder", activity: "Builder validating the patch.", state: "working", truth: "live" },
       { id: "Local:123e4567-e89b-42d3-a456-426614174000", name: "Local", role: "Thinker", activity: "Conversation", state: "working", truth: "live" },
       { id: "Claude:223e4567-e89b-42d3-a456-426614174000", name: "Claude", role: "Reviewer", activity: "Review current work", state: "waiting", truth: "resume-unverified" },
+      { id: "world-worker:world-1:41:hermes-codex-bridge", name: "Local execution", role: "HERMES", activity: "Finish the bounded slice", state: "working", truth: "persisted" },
+      { id: "world-worker:world-1:42:hermes-codex-bridge", name: "Local execution", role: "HERMES", activity: "Recover the bounded slice", state: "blocked", truth: "persisted" },
     ])
   })
 
@@ -1010,11 +1032,13 @@ describe("Experience V2 real agent sessions", () => {
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
@@ -1030,7 +1054,7 @@ describe("Experience V2 real agent sessions", () => {
     await screen.findByLabelText("Source content")
     const conversation = await openWilliamConversation()
 
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Build safely." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
@@ -1040,7 +1064,6 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "423e4567-e89b-42d3-a456-426614174000"
     act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
@@ -1062,7 +1085,7 @@ describe("Experience V2 real agent sessions", () => {
     act(() => streams.get("Local")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" })}\n`)))
 
     expect(await screen.findByRole("button", { name: "Stop Local Thinker turn" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Builder · Codex · File assignment · exact selected file src\/app.ts/i })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/i }))
     expect(screen.getByText("Reviewer · Claude")).toBeTruthy()
     const pause = screen.getByRole("button", { name: "Pause" })
@@ -1276,7 +1299,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem("williamos:agent-session:owner-b:project-b", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${bId}`, sessions: [descriptor(bId, "B only")] }))
     const observed: string[][] = []
     function Probe({ ownerScope, worldScope }: { ownerScope: string; worldScope: string }) {
-      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, worker: null })
+      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, executionSession: null })
       observed.push(controller.sessions.map((session) => session.assignment))
       return <span>{controller.sessions.map((session) => session.assignment).join(",") || "No sessions"}</span>
     }
@@ -1705,11 +1728,13 @@ describe("Experience V2 real agent sessions", () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
@@ -1735,10 +1760,10 @@ describe("Experience V2 real agent sessions", () => {
     expect(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     expect(screen.getByRole("group", { name: "Choose agent provider" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Claude unavailable" }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole("button", { name: "Local" })).toBeNull()
     const line = screen.getByRole("form", { name: "The Line" })
     expect((within(line).getByRole("button", { name: "Delegate" }) as HTMLButtonElement).disabled).toBe(true)
@@ -1843,11 +1868,13 @@ describe("Experience V2 real agent sessions", () => {
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
@@ -1875,7 +1902,7 @@ describe("Experience V2 real agent sessions", () => {
     render(<WorkspaceShell />)
     expect((await screen.findByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 1\n")
 
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
@@ -1889,8 +1916,36 @@ describe("Experience V2 real agent sessions", () => {
       path: "src/app.ts",
     })
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
-    fireEvent.click(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i }))
+    fireEvent.click(screen.getByRole("button", { name: /Builder · Codex · File assignment · exact selected file src\/app.ts/i }))
     expect(screen.getByText("Updated src/app.ts.")).toBeTruthy()
+  })
+
+  it("shows a truthful Local inference refusal in the open Line", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/agent" && init?.method === "POST") {
+        return Promise.resolve(Response.json({ error: "LOCAL_MODEL_UNAVAILABLE" }, { status: 503 }))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
+    const line = screen.getByRole("form", { name: "The Line" })
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "What is the current Space?" } })
+    fireEvent.click(within(line).getByRole("button", { name: "Ask Local" }))
+
+    expect(await within(line).findByText("Local inference unavailable.")).toBeTruthy()
   })
 
   it("keeps agent work running when The Line closes and fences its late presentation from another Line", async () => {
@@ -1962,11 +2017,13 @@ describe("Experience V2 real agent sessions", () => {
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
@@ -1987,21 +2044,16 @@ describe("Experience V2 real agent sessions", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
     expect((await screen.findByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 1\n")
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
-    const durableStorage = window.localStorage
-    vi.stubGlobal("localStorage", {
-      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
-      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
-      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
-    })
+    window.localStorage.setItem("quota-fixture", "x".repeat(4_999_950))
 
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
 
     await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
     expect(diffReads).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText("AGENT_SESSION_PERSISTENCE_FAILED")).toBeTruthy()
+    expect(await screen.findByText("AGENT_SESSION_PERSISTENCE_FAILED")).toBeTruthy()
     expect(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")).toBeNull()
   })
 
@@ -2012,43 +2064,115 @@ describe("Experience V2 real agent sessions", () => {
     const sessionId = `codex-persisted-${failRefresh ? "failed" : "dirty"}`
     let sourceReads = 0
     let diffReads = 0
+    let delegationStarted = false
+    let source: HTMLTextAreaElement | null = null
+    let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && sourceReads > 1) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
-      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "result", text: "The repository mutation committed." },
-        { type: "done", code: 0, reason: null },
-      ))
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        delegationStarted = true
+        return Promise.resolve(ndjson(
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "result", text: "The repository mutation committed." },
+          { type: "done", code: 0, reason: null },
+        ))
+      }
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
-    const source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
-    if (makeDirty) fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    if (makeDirty) {
+      await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
+      fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
+      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+    }
 
-    expect(await screen.findByText((content) => content.includes("The repository mutation committed.") && content.includes(warning))).toBeTruthy()
+    expect(await screen.findByText("The repository mutation committed.")).toBeTruthy()
+    expect(await screen.findByText(warning)).toBeTruthy()
     expect(diffReads).toBeGreaterThanOrEqual(2)
     const stored = JSON.parse(String(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")))
     expect(stored.sessions[0].completedTurns.at(-1).finalResult).toBe("The repository mutation committed.")
+  })
+
+  it.each([
+    ["dirty-conflict", true, false, "Claude saved src/app.ts, but Source has newer unsaved edits. Your buffer was preserved."],
+    ["failed refresh", false, true, "Claude saved src/app.ts, but Source or Changes could not refresh."],
+  ])("attributes a Claude exact-file completion and %s warning to Claude", async (_case, makeDirty, failRefresh, warning) => {
+    const sessionId = failRefresh
+      ? "323e4567-e89b-42d3-a456-426614174121"
+      : "323e4567-e89b-42d3-a456-426614174120"
+    const authority = {
+      worldId: "server-world", worldRevision: 8, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      workOrderId: 1122, grantId: 45, actor: "claude", selectedPath: "src/app.ts",
+    }
+    let delegationStarted = false
+    let source: HTMLTextAreaElement | null = null
+    let resolveSourceRefresh: ((response: Response) => void) | null = null
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
+      }
+      const eligibility = exactDelegateEligibility(url, "claude")
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: delegationStarted ? "+export const version = 2" : "" }))
+      if (url === "/api/loom/agent" && init?.method === "POST") {
+        delegationStarted = true
+        return Promise.resolve(ndjson(
+          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+          { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Claude committed the exact file." } },
+          { type: "done", code: 0, reason: null },
+        ))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the exact selected file." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    if (makeDirty) {
+      await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
+      fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
+      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+    }
+
+    expect(await screen.findByText("Claude committed the exact file.")).toBeTruthy()
+    expect(await screen.findByText(warning)).toBeTruthy()
+    expect(screen.queryByText(/Codex saved src\/app\.ts/)).toBeNull()
   })
 
   it.each([
@@ -2058,47 +2182,56 @@ describe("Experience V2 real agent sessions", () => {
     const sessionId = `codex-combined-${failRefresh ? "failed" : "dirty"}`
     let sourceReads = 0
     let diffReads = 0
+    let delegationStarted = false
+    let source: HTMLTextAreaElement | null = null
+    let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
-        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && sourceReads > 1) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
-      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "result", text: "The repository mutation committed." },
-        { type: "done", code: 0, reason: null },
-      ))
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        delegationStarted = true
+        return Promise.resolve(ndjson(
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "result", text: "The repository mutation committed." },
+          { type: "done", code: 0, reason: null },
+        ))
+      }
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
-    const source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
-    if (makeDirty) fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
-    const durableStorage = window.localStorage
-    vi.stubGlobal("localStorage", {
-      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
-      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
-      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
-    })
+    window.localStorage.setItem("quota-fixture", "x".repeat(4_999_950))
 
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    if (makeDirty) {
+      await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
+      fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
+      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+    }
 
     expect(await screen.findByText(expected)).toBeTruthy()
+    expect(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")).toBeNull()
     expect(diffReads).toBeGreaterThanOrEqual(2)
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe(makeDirty ? "owner unsaved buffer\n" : "export const version = 1\n")
   })
@@ -2241,7 +2374,7 @@ describe("Experience V2 real agent sessions", () => {
 
   it("does not open a fresh Delegate flow when clearing the saved selection cannot be persisted", async () => {
     const sessionId = "codex-restored"
-    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    const key = "williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion"
     window.localStorage.setItem(key, JSON.stringify({
       schemaVersion: 3,
       selectedSessionKey: `Codex:${sessionId}`,
@@ -2249,7 +2382,13 @@ describe("Experience V2 real agent sessions", () => {
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
+      }
+      const eligibility = exactDelegateEligibility(url)
+      if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
@@ -2258,6 +2397,7 @@ describe("Experience V2 real agent sessions", () => {
     }))
     render(<WorkspaceShell />)
     await screen.findByRole("button", { name: /Builder · Codex · src\/old.ts/i })
+    const delegate = await screen.findByRole("button", { name: "Delegate" })
     const durableStorage = window.localStorage
     vi.stubGlobal("localStorage", {
       getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
@@ -2265,7 +2405,7 @@ describe("Experience V2 real agent sessions", () => {
       get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(delegate)
 
     expect(screen.queryByRole("form", { name: "The Line" })).toBeNull()
     expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Codex:${sessionId}`)
@@ -2872,7 +3012,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Claude turn" })).toBeNull())
   })
 
-  it("keeps live World Spine worker facts separate from durable provider sessions", () => {
+  it("projects exact server-derived HERMES execution with stable Space identity beside provider sessions", () => {
     const durableId = "123e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
       schemaVersion: 3,
@@ -2888,18 +3028,276 @@ describe("Experience V2 real agent sessions", () => {
         completedTurns: [],
       }],
     }))
-    render(<Harness worker={{ lane: "review", state: "reviewing", since: "2026-08-27T16:00:00Z" }} />)
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:world-1:41:hermes-codex-bridge",
+      worldId: "world-1",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      status: "reviewing",
+      evidence: "tests: 84 passed · PASS",
+      observedAt: "2026-08-27T16:00:00Z",
+    }
+    const mounted = render(<Harness executionSession={executionSession} />)
 
-    const worker = screen.getByRole("button", { name: /Worker · review lane/i })
+    const worker = screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })
     expect(worker).toBeTruthy()
-    expect(worker.getAttribute("aria-label")).not.toContain("Current Space execution")
-    expect(within(worker).getByText("reviewing · live world state")).toBeTruthy()
-    expect(worker.querySelector('[data-agent-session-level="assignment"]')).toBeNull()
-    expect(screen.queryByTitle("Current Space execution")).toBeNull()
+    expect(within(worker).getByTitle("Finish the durable HERMES session").textContent).toBe("Finish the durable HERMES session")
+    expect(within(worker).getByText("reviewing · tests: 84 passed · PASS")).toBeTruthy()
+    expect(expose!.sessions).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: "world-worker:world-1:41:hermes-codex-bridge",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      kind: "world-worker",
+      truth: "persisted",
+    })]))
 
     const durable = screen.getByRole("button", { name: `Reviewer · Claude · Review src/world-worker.ts` })
     expect(within(durable).getByTitle("Review src/world-worker.ts").textContent).toBe("Review src/world-worker.ts")
     expect(within(durable).getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
+
+    mounted.rerender(<Harness executionSession={{
+      ...executionSession,
+      status: "complete",
+      evidence: "merge: protected main · PASS",
+      observedAt: "2026-08-27T16:10:00Z",
+    }} />)
+    expect(expose!.sessions.filter((session) => session.kind === "world-worker")).toEqual([
+      expect.objectContaining({ id: executionSession.id, status: "complete", evidence: "merge: protected main · PASS" }),
+    ])
+    expect(JSON.parse(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")!)).toMatchObject({
+      sessions: [expect.objectContaining({ provider: "Claude" })],
+    })
+  })
+
+  it("keeps a newer successful HERMES poll when an older failed read settles afterward", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "TerraFusion",
+      outcomeKey: "EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const space = {
+      ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
+      editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+    }
+    let settleOlderRead!: (response: Response) => void
+    const olderRead = new Promise<Response>((resolve) => { settleOlderRead = resolve })
+    const successfulSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish the durable HERMES session",
+      status: "implementing",
+      evidence: "tests: 202 passed · PASS",
+      observedAt: "2026-08-31T22:00:00Z",
+    }
+    let executionReads = 0
+    let poll: (() => void) | null = null
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      poll = callback as () => void
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionReads += 1
+        if (executionReads === 1) return olderRead
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: successfulSession }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-31T22:00:00Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(poll).not.toBeNull())
+    act(() => poll!())
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+
+    await act(async () => settleOlderRead(new Response(null, { status: 503 })))
+    expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
+  it("marks assignment refresh truthfully, removes mismatches, recovers automatically, and keeps Mission Control unknown", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const session: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish assignment freshness",
+      status: "implementing",
+      evidence: "tests: focused suite · PASS",
+      observedAt: "2026-09-01T19:00:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    let executionRead = 0
+    let poll: (() => void) | null = null
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      poll = callback as () => void
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as unknown as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        spaces: [{ worldId: "server-world", name: "Experience V2", updatedAt: "2026-09-01T19:00:00.000Z", space: spaceToServer(space) }],
+        multiSpaceAvailable: true,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionRead += 1
+        if (executionRead === 2) return Promise.resolve(new Response(null, { status: 503 }))
+        if (executionRead === 3) return Promise.resolve(new Response(null, { status: 409 }))
+        if (executionRead === 5) return Promise.reject(new Error("network unavailable"))
+        if (executionRead === 7) return Promise.resolve(Response.json({
+          worldId: "foreign-world",
+          ...spine,
+          session: { ...session, worldId: "foreign-world", id: "world-worker:foreign-world:41:hermes-codex-bridge" },
+        }))
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+    const executionPoll = poll!
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Assignment refresh unavailable · last persisted observation 2026-09-01T19:00:00.000Z · runtime liveness unverified")).toBeTruthy()
+    expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect((await screen.findAllByText("Agent activity unknown")).length).toBeGreaterThan(0)
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Work Order #41 assignment could not be verified for this Space")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeNull()
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeTruthy()
+    expect(screen.queryByText(/assignment could not be verified/)).toBeNull()
+
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Assignment refresh unavailable · last persisted observation 2026-09-01T19:00:00.000Z · runtime liveness unverified")).toBeTruthy()
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    await waitFor(() => expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull())
+    await act(async () => { executionPoll(); await Promise.resolve() })
+    expect(await screen.findByText("Work Order #41 assignment could not be verified for this Space")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeNull()
+  })
+
+  it.each([
+    { role: "HERMES" as const, assignee: "hermes-codex-bridge", providerLabel: "Local execution", accessibleName: /HERMES · Local execution · Finish Experience V2/i },
+    { role: "Executor" as const, assignee: "builder-a", providerLabel: "codex", accessibleName: /Executor · codex · Finish Experience V2/i },
+  ])("opens and deduplicates the exact persisted $role assignment Inspector without appliance or dispatch probes", async ({ role, assignee, providerLabel, accessibleName }) => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "validating" as const,
+      evidence: [
+        { kind: "test", detail: "Focused product suite", result: "PASS", at: "2026-09-01T18:00:00.000Z" },
+        { kind: "checkpoint", detail: "", result: null, at: "2026-09-01T18:01:00.000Z" },
+      ],
+    }
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: `world-worker:server-world:41:${assignee}`,
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee,
+      agent: "codex",
+      role,
+      providerLabel,
+      assignment: "Finish Experience V2 · Work Order #41: Inspect persisted execution",
+      status: "validating",
+      evidence: "test: Focused product suite · PASS",
+      observedAt: "2026-09-01T18:01:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine, judgment: null }))
+      }
+      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      if (url === "/api/environment/line" && init?.method === "POST") return Promise.resolve(Response.json({
+        worldId: "server-world", say: "Inspect the focused product suite next.", surfaces: [], spine,
+      }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    const worker = await screen.findByRole("button", { name: accessibleName })
+    fireEvent.click(worker)
+
+    expect(await screen.findByText("Assignment · Work Order #41")).toBeTruthy()
+    expect(screen.getByText("WILLIAMOS_EXPERIENCE_V2 · Finish Experience V2")).toBeTruthy()
+    expect(screen.getByText("Focused product suite")).toBeTruthy()
+    expect(screen.getByText("No detail recorded")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Inspect" }))
+    expect(screen.getAllByText("Assignment · Work Order #41")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "Ask William" }))
+    expect(screen.getByText("Persisted assignment · Work Order #41 · runtime liveness unverified")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "What should I inspect next?" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(await screen.findByText("Inspect the focused product suite next.")).toBeTruthy()
+    const lineCall = fetcher.mock.calls.find(([input]) => String(input) === "/api/environment/line")
+    expect(JSON.parse(String(lineCall?.[1]?.body))).toMatchObject({
+      worldId: "server-world",
+      lineContext: { kind: "execution-assignment", workOrderId: 41 },
+    })
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/hermes")).toBe(false)
+    expect(fetcher.mock.calls.some(([input]) => String(input).startsWith("/api/loom/agent"))).toBe(false)
   })
 
   it("creates a real Claude session from the streamed route response and persists its descriptor", async () => {
@@ -2962,6 +3360,90 @@ describe("Experience V2 real agent sessions", () => {
       truth: "resume-unverified",
       target: { kind: "file", path: "src/app.ts" },
     }))
+  })
+
+  it("persists and restores a Claude Builder target only from the exact server-authored authority binding", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174111"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const authority = {
+      worldId: "world-1", worldRevision: 9, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      workOrderId: 1122, grantId: 45, actor: "claude" as const, selectedPath: "src/app.ts",
+    }
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Changed the exact file." } },
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Change the exact file.",
+        target: { kind: "file", path: "src/app.ts" }, expectedFileAuthority: authority,
+      })
+    })
+
+    expect(expose!.sessions[0]).toMatchObject({ target: { kind: "file", path: "src/app.ts" } })
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions[0].target).toEqual({ kind: "file", path: "src/app.ts" })
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({
+      providerLabel: "Claude", truth: "resume-unverified", target: { kind: "file", path: "src/app.ts" },
+    }))
+  })
+
+  it("does not expose a completed Claude file mutation session as resumable without current authority", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174113"
+    const authority = {
+      worldId: "world-1", worldRevision: 9, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      workOrderId: 1122, grantId: 45, actor: "claude" as const, selectedPath: "src/app.ts",
+    }
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Changed the exact file." } },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Change the exact file.",
+        target: { kind: "file", path: "src/app.ts" }, expectedFileAuthority: authority,
+      })
+    })
+
+    expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Claude:${sessionId}`,
+      truth: "resume-unverified",
+      evidence: "saved transcript · server verification required",
+      target: { kind: "file", path: "src/app.ts" },
+    })])
+    await expect(expose!.continueSession({
+      sessionKey: `Claude:${sessionId}`,
+      prompt: "Continue the mutation.",
+    })).rejects.toThrow("AGENT_CONTINUE_SESSION_UNAVAILABLE")
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects a Claude target session when the server authority binding differs from the captured proof", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174112"
+    const authority = {
+      worldId: "world-1", worldRevision: 9, outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      workOrderId: 1122, grantId: 45, actor: "claude" as const, selectedPath: "src/app.ts",
+    }
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority, grantId: 46 },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Unbound result." } },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Change the exact file.",
+      target: { kind: "file", path: "src/app.ts" }, expectedFileAuthority: authority,
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
   })
 
   it.each([
@@ -3080,7 +3562,6 @@ describe("Experience V2 real agent sessions", () => {
         { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/review.ts", target: { kind: "file", path: "src/review.ts" }, reviewPath: "src/review.ts", updatedAt: "2026-08-27T16:02:00.000Z" },
         { schemaVersion: 1, sessionId: "423e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", target: { kind: "file", path: "src/local.ts" }, updatedAt: "2026-08-27T16:03:00.000Z" },
         { schemaVersion: 1, sessionId: "523e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Bad path", target: { kind: "file", path: "./src/bad.ts" }, updatedAt: "2026-08-27T16:04:00.000Z" },
-        { schemaVersion: 1, sessionId: "623e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "No server binding", target: { kind: "file", path: "src/claude.ts" }, updatedAt: "2026-08-27T16:05:00.000Z" },
       ],
     })
     window.localStorage.setItem(key, stored)

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   isExecutionLive,
   projectWorldExecution,
+  projectWorldWorkerSession,
   type CanonicalExecution,
 } from "@/lib/environment/world-execution"
 
@@ -112,6 +113,85 @@ describe("attribution is never inferred", () => {
     const evidence = [{ kind: "tests", detail: "43 passed", result: "PASS", at: "2026-08-22T09:05:00Z" }]
     expect(projectWorldExecution(canonical({ evidence })).evidence).toEqual(evidence)
     expect(projectWorldExecution(canonical()).evidence).toEqual([])
+  })
+})
+
+describe("exact persisted executor projects as a Space-bound session", () => {
+  const input = {
+    worldId: "world-terrafusion",
+    outcome: { key: "WILLIAMOS_EXPERIENCE_V2", title: "Finish Experience V2" },
+    workOrder: {
+      id: 1121,
+      ref: "WO-1121",
+      title: "Project canonical checkout binding",
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      lane: "ui",
+    },
+    status: "implementing" as const,
+    evidence: [{
+      kind: "validation",
+      detail: "Focused session tests",
+      result: "84 passed",
+      at: "2026-08-31T20:00:00.000Z",
+    }],
+    observedAt: "2026-08-31T20:01:00.000Z",
+  }
+
+  it("keeps identity stable across observation time while projecting bounded assignment and evidence", () => {
+    const first = projectWorldWorkerSession(input)
+    const later = projectWorldWorkerSession({ ...input, observedAt: "2026-08-31T20:05:00.000Z" })
+
+    expect(first).toMatchObject({
+      id: "world-worker:world-terrafusion:1121:hermes-codex-bridge",
+      worldId: "world-terrafusion",
+      workOrderId: 1121,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish Experience V2 · WO-1121: Project canonical checkout binding",
+      evidence: "validation: Focused session tests · 84 passed",
+      status: "implementing",
+    })
+    expect(later?.id).toBe(first?.id)
+    expect(later?.observedAt).not.toBe(first?.observedAt)
+  })
+
+  it("never calls a lane HERMES when the exact persisted executor is not HERMES", () => {
+    expect(projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee: "builder-a", lane: "hermes" },
+    })).toMatchObject({
+      role: "Executor",
+      providerLabel: "builder-a · codex",
+      assignee: "builder-a",
+    })
+  })
+
+  it("does not project a session without a persisted assignee identity", () => {
+    expect(projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee: null, lane: "hermes" },
+    })).toBeNull()
+  })
+
+  it("keeps projected provider labels inside the inspector payload contract", () => {
+    const assignee = "a".repeat(200)
+    const session = projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee, agent: "codex" },
+    })
+
+    expect(session?.providerLabel).toHaveLength(200)
+    expect(session?.providerLabel.endsWith("…")).toBe(true)
+  })
+
+  it("rejects persisted executor identities containing control characters", () => {
+    expect(projectWorldWorkerSession({
+      ...input,
+      workOrder: { ...input.workOrder, assignee: "builder\talpha" },
+    })).toBeNull()
   })
 })
 

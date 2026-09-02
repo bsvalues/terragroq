@@ -75,6 +75,28 @@ describe("Experience V2 bounded Terminal route", () => {
     expect(await response.text()).toContain('"type":"exit","code":0')
   })
 
+  it("runs project tests in test mode even when WilliamOS itself is a production server", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    const originalNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = "production"
+
+    try {
+      const response = await POST(terminalRequest({ operation: "tests.run" }))
+
+      expect(response.status).toBe(200)
+      expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+        "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent",
+      ], expect.objectContaining({
+        env: expect.objectContaining({ NODE_ENV: "test" }),
+      }))
+      child.emit("close", 0)
+      await response.text()
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+  })
+
   it("injects the default commit bound when a typed log inspection omits one", async () => {
     const child = new FakeTerminalChild()
     terminalRouteSeams.spawn.mockReturnValue(child)

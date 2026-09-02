@@ -135,14 +135,11 @@ function workspaceFetch({
   })
 }
 
-async function openCurrentChangeReview(focus = "Check the exact authorization regression.") {
+async function openCurrentChangeReview(_focus = "") {
   const reviewButton = await screen.findByRole("button", { name: "Review" }) as HTMLButtonElement
   await waitFor(() => expect(reviewButton.disabled).toBe(false))
   fireEvent.click(reviewButton)
   expect(screen.getByText(`Review current change · ${PATH}`)).toBeTruthy()
-  const input = screen.getByRole("textbox", { name: "Review focus" })
-  fireEvent.change(input, { target: { value: focus } })
-  fireEvent.click(screen.getByRole("button", { name: "Start review" }))
 }
 
 beforeEach(() => {
@@ -224,6 +221,33 @@ describe("Experience V2 current Changes Review", () => {
       .not.toBe(diffReviewInspectorId(diffReviewBinding))
   })
 
+  it("starts the exact current patch Review in one click without a composer or second Start", async () => {
+    const fetcher = workspaceFetch({ review: () => new Response(new ReadableStream({ start() { /* remain pending */ } }), {
+      headers: { "content-type": "application/x-ndjson" },
+    }) })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    const review = await screen.findByRole("button", { name: "Review" }) as HTMLButtonElement
+    await waitFor(() => expect(review.disabled).toBe(false))
+    fireEvent.click(review)
+
+    expect(screen.getByText(`Review current change · ${PATH}`)).toBeTruthy()
+    expect(screen.getByText("Starting read-only Review…")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Stop review" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Review focus" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
+    let request: (typeof fetcher.mock.calls)[number] | undefined
+    await waitFor(() => {
+      request = fetcher.mock.calls.find(([input, options]) => String(input) === "/api/loom/agent" && options?.method === "POST")
+      expect(request).toBeTruthy()
+    })
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      mode: "diff-review", worldId: WORLD_ID, path: PATH, expectedDiffFingerprint: FINGERPRINT,
+      provider: "cloud", sessionId: null, resume: false,
+    })
+  })
+
   it("starts a durable exact-diff Reviewer and opens the grounded report in a movable Inspector", async () => {
     const baseFetcher = workspaceFetch()
     let persistedSpace: ReturnType<typeof spaceToServer> | null = null
@@ -258,7 +282,6 @@ describe("Experience V2 current Changes Review", () => {
       worldId: WORLD_ID,
       path: PATH,
       expectedDiffFingerprint: FINGERPRINT,
-      focus: "Check the exact authorization regression.",
       provider: "cloud",
       sessionId: null,
       resume: false,

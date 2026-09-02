@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { WorldWorker } from "@/lib/environment/working-world"
+import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
+const ACTIVE_WORLD_EXECUTION_STATES = new Set(["authorized", "acquired", "implementing", "validating", "reviewing", "remediating"])
 const ASSIGNMENT_HASH = /^[0-9a-f]{64}$/
 const GIT_OBJECT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const STORAGE_PREFIX = "williamos:agent-session:"
@@ -33,6 +34,16 @@ export type CompletedAgentTurn = Readonly<{
 export type AgentSessionFileTarget = Readonly<{
   kind: "file"
   path: string
+}>
+
+export type AgentSessionFileAuthorityProof = Readonly<{
+  worldId: string
+  worldRevision: number
+  outcomeKey: string
+  workOrderId: number
+  grantId: number
+  actor: "codex" | "claude"
+  selectedPath: string
 }>
 
 export type AgentSessionPreview = Readonly<{
@@ -81,7 +92,7 @@ export type ExperienceAgentSession = Readonly<{
   assignment: string
   status: string
   evidence: string
-  truth: "live" | "resume-unverified"
+  truth: "live" | "persisted" | "resume-unverified"
   kind: "durable-session" | "world-worker"
   mode: "delegate" | "review" | "diff-review" | "preview"
   target?: AgentSessionFileTarget
@@ -99,7 +110,7 @@ export type MissionAgentSessionProjection = Readonly<{
   role: string
   activity: string
   state: "working" | "waiting" | "blocked" | "idle"
-  truth?: "live" | "resume-unverified"
+  truth?: "live" | "persisted" | "resume-unverified"
 }>
 
 export type SavedAgentSessionProjection = Readonly<{
@@ -131,6 +142,7 @@ export type RunClaudeTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string, binding?: AgentSessionDiffReview) => void
   target?: AgentSessionFileTarget
+  expectedFileAuthority?: AgentSessionFileAuthorityProof
   requiredSessionKey?: string
 }>
 
@@ -140,6 +152,7 @@ export type RunAgentTurnInput = Readonly<{
   assignment: string
   prompt: string
   target?: AgentSessionFileTarget
+  expectedFileAuthority?: AgentSessionFileAuthorityProof
   automatic?: boolean
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
@@ -288,6 +301,27 @@ function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
   return path ? { kind: "file", path } : null
 }
 
+function parseFileAuthorityProof(value: unknown): AgentSessionFileAuthorityProof | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const keys = Object.keys(candidate).sort().join("\0")
+  const worldId = boundedText(candidate.worldId, 200)
+  const outcomeKey = boundedText(candidate.outcomeKey, 200)
+  const selectedPath = canonicalWorkspaceFilePath(candidate.selectedPath)
+  return keys === "actor\0grantId\0outcomeKey\0selectedPath\0workOrderId\0worldId\0worldRevision"
+    && worldId && outcomeKey && selectedPath
+    && Number.isSafeInteger(candidate.worldRevision) && Number(candidate.worldRevision) >= 0
+    && Number.isSafeInteger(candidate.workOrderId) && Number(candidate.workOrderId) > 0
+    && Number.isSafeInteger(candidate.grantId) && Number(candidate.grantId) > 0
+    && (candidate.actor === "codex" || candidate.actor === "claude")
+    ? {
+      worldId, worldRevision: candidate.worldRevision as number, outcomeKey,
+      workOrderId: candidate.workOrderId as number, grantId: candidate.grantId as number,
+      actor: candidate.actor, selectedPath,
+    }
+    : null
+}
+
 function parsePreview(value: unknown): AgentSessionPreview | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
@@ -349,7 +383,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
-    || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
+    || target !== undefined && (role !== "Builder"
+      || candidate.provider !== "Codex" && candidate.provider !== "Claude" || reviewPath !== undefined)
     || isClaudeReviewer !== (reviewPath !== undefined)
     || (candidate.diffReview !== undefined && !diffReview)
     || diffReview != null && (candidate.provider !== "Claude" || role !== "Reviewer" || reviewPath !== diffReview.path
@@ -540,21 +575,21 @@ function storageKey(ownerScope: string, worldScope: string): string {
 }
 
 function projectSessions(
-  worker: WorldWorker | null,
+  executionSession: ProjectedWorldWorkerSession | null,
   durable: readonly DurableAgentSession[],
   verified: readonly DurableAgentSession[],
   activeTurns: readonly ActiveAgentTurn[],
 ): readonly ExperienceAgentSession[] {
   const sessions: ExperienceAgentSession[] = []
-  if (worker) {
+  if (executionSession) {
     sessions.push({
-      id: `world-worker:${worker.lane}:${worker.since}`,
-      role: "Worker",
-      providerLabel: `${worker.lane} lane`,
-      assignment: "Current Space execution",
-      status: worker.state,
-      evidence: "live world state",
-      truth: "live",
+      id: executionSession.id,
+      role: executionSession.role,
+      providerLabel: executionSession.providerLabel,
+      assignment: executionSession.assignment,
+      status: executionSession.status,
+      evidence: executionSession.evidence,
+      truth: "persisted",
       kind: "world-worker",
       mode: "delegate",
     })
@@ -562,7 +597,8 @@ function projectSessions(
   durable.forEach((descriptor) => {
     const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
     const isLocal = descriptor.provider === "Local"
-    const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
+    const isVerified = !(descriptor.provider === "Claude" && descriptor.target)
+      && verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
     const active = activeTurns.find((turn) => turn.id === descriptorKey)
     const isWorking = Boolean(active)
     sessions.push({
@@ -672,7 +708,7 @@ export function projectMissionAgentSessions(
 ): readonly MissionAgentSessionProjection[] {
   const projected = new Map<string, MissionAgentSessionProjection>()
   for (const session of sessions) {
-    const truth = current && session.truth === "live" ? "live" : "resume-unverified"
+    const truth = current ? session.truth : "resume-unverified"
     const candidate: MissionAgentSessionProjection = {
       id: session.id,
       name: session.providerLabel,
@@ -680,29 +716,36 @@ export function projectMissionAgentSessions(
       activity: agentPresentationText(current ? session.presentation : null)
         ?? agentPresentationText(session.assignment)
         ?? "Bounded assignment",
-      state: truth === "resume-unverified"
-        ? "waiting"
-        : session.status === "working" || session.status === "thinking" ? "working" : "idle",
+      state: truth === "resume-unverified" ? "waiting" : missionAgentState(session.status),
       truth,
     }
     const existing = projected.get(session.id)
-    if (!existing || existing.truth !== "live" && candidate.truth === "live") projected.set(session.id, candidate)
+    const rank = (value: MissionAgentSessionProjection["truth"]) => value === "live" ? 2 : value === "persisted" ? 1 : 0
+    if (!existing || rank(candidate.truth) > rank(existing.truth)) projected.set(session.id, candidate)
   }
   return [...projected.values()]
+}
+
+function missionAgentState(status: string): MissionAgentSessionProjection["state"] {
+  if (status === "blocked") return "blocked"
+  if (status === "working" || status === "thinking" || ACTIVE_WORLD_EXECUTION_STATES.has(status)) {
+    return "working"
+  }
+  return "idle"
 }
 
 export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
   worldId,
-  worker,
+  executionSession,
   autoContinue = false,
   onAutoContinuation,
 }: {
   ownerScope: string
   worldScope: string
   worldId: string | null
-  worker: WorldWorker | null
+  executionSession: ProjectedWorldWorkerSession | null
   autoContinue?: boolean
   onAutoContinuation?: RunAgentTurnInput["onContinuation"]
 }): ProviderNeutralAgentSessionController {
@@ -910,13 +953,20 @@ export function useExperienceAgentSessions({
     const expectedDiffFingerprint = candidateDiffFingerprint && new TextEncoder().encode(candidateDiffFingerprint).byteLength <= 16_384
       ? candidateDiffFingerprint : null
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
+    const expectedFileAuthority = input.expectedFileAuthority === undefined
+      ? null : parseFileAuthorityProof(input.expectedFileAuthority)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     const requiredSessionKey = input.requiredSessionKey === undefined ? null : boundedText(input.requiredSessionKey, 200)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if ((mode === "delegate" || forkMode) && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
     if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
-      || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
+      || input.provider !== "Codex" && input.provider !== "Claude")) throw new Error("AGENT_TARGET_INVALID")
+    if (input.expectedFileAuthority !== undefined && (!expectedFileAuthority || !requestedTarget
+      || expectedFileAuthority.worldId !== worldId || expectedFileAuthority.selectedPath !== requestedTarget.path
+      || expectedFileAuthority.actor !== input.provider.toLowerCase())) throw new Error("AGENT_TARGET_INVALID")
+    if (input.provider === "Claude" && requestedTarget && !expectedFileAuthority) throw new Error("AGENT_TARGET_INVALID")
+    if (input.provider !== "Claude" && input.expectedFileAuthority !== undefined) throw new Error("AGENT_TARGET_INVALID")
     if ((mode === "review" || diffReviewMode) && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (diffReviewMode && (!reviewWorldId || reviewWorldId !== worldId || !expectedDiffFingerprint)) throw new Error("AGENT_DIFF_REVIEW_INPUT_INVALID")
     if ((mode === "review" || diffReviewMode) && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
@@ -1146,14 +1196,27 @@ export function useExperienceAgentSessions({
             && typeof event.forkedFrom === "string" && CLAUDE_SESSION_ID.test(event.forkedFrom)
             && event.forkedFrom !== event.sessionId ? event.forkedFrom : null
           const invalidResumeForkLineage = !forkMode && event.forkedFrom !== undefined && !resumeForkedFrom
-          const capturedTarget = input.provider === "Codex" ? requestedTarget ?? prior?.target ?? null : null
-          const serverSelectedPath = input.provider === "Codex" && capturedTarget
+          const capturedTarget = requestedTarget ?? prior?.target ?? null
+          const serverSelectedPath = capturedTarget
             ? canonicalWorkspaceFilePath(event.selectedPath)
             : null
           const serverAssignmentHash = input.provider === "Codex" && capturedTarget && typeof event.assignmentHash === "string"
             && ASSIGNMENT_HASH.test(event.assignmentHash) ? event.assignmentHash : null
-          const invalidTargetBinding = Boolean(capturedTarget
-            && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
+          const claudeAuthorityBindingMatches = input.provider !== "Claude" || !capturedTarget
+            || Boolean(expectedFileAuthority
+              && event.provider === "Claude" && event.mode === "delegate"
+              && event.worldId === expectedFileAuthority.worldId
+              && event.worldRevision === expectedFileAuthority.worldRevision
+              && event.outcomeKey === expectedFileAuthority.outcomeKey
+              && event.workOrderId === expectedFileAuthority.workOrderId
+              && event.grantId === expectedFileAuthority.grantId
+              && event.actor === expectedFileAuthority.actor
+              && serverSelectedPath === expectedFileAuthority.selectedPath)
+          const invalidTargetBinding = Boolean(capturedTarget && (
+            serverSelectedPath !== capturedTarget.path
+            || input.provider === "Codex" && !serverAssignmentHash
+            || input.provider === "Claude" && !claudeAuthorityBindingMatches
+          ))
           const previewWorldId = previewMode ? boundedText(event.worldId, 200) : null
           const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
             ? event.evidenceFingerprint : null
@@ -1508,7 +1571,9 @@ export function useExperienceAgentSessions({
     const prior = exactKey && loadedStorageKey === operationStorageKey && selectedSessionKeyRef.current === exactKey
       ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === exactKey) ?? null
       : null
-    if (!prior || !exactKey) return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
+    if (!prior || !exactKey || prior.provider === "Claude" && prior.target) {
+      return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
+    }
     const mode = prior.preview ? "preview" as const : prior.diffReview ? "diff-review" as const : prior.reviewPath ? "review" as const : "delegate" as const
     return executeTurn({
       provider: prior.provider,
@@ -1539,8 +1604,8 @@ export function useExperienceAgentSessions({
   const presentedActiveSessionIds = presentedActiveTurns.map((turn) => turn.id)
   const presentedPausableSessionIds = presentedActiveTurns.filter((turn) => turn.sessionId !== null).map((turn) => turn.id)
   const sessions = useMemo(
-    () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns) : [],
-    [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns],
+    () => scopeLoaded ? projectSessions(executionSession, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns) : [],
+    [scopeLoaded, executionSession, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns],
   )
   const presentedSelectedSessionKey = scopeLoaded ? selectedSessionKey : null
   const presentedDurableSession = scopeLoaded ? durableSession : null
@@ -1626,7 +1691,7 @@ export function AgentSessionStrip({
           aria-pressed={activeSessionId === session.id}
           aria-label={session.kind === "durable-session"
             ? `${session.role} · ${session.providerLabel} · ${session.assignment}`
-            : `${session.role} · ${session.providerLabel} · ${session.status} · ${session.evidence}`}
+            : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
@@ -1638,7 +1703,7 @@ export function AgentSessionStrip({
             <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
               {session.role} · {session.providerLabel}
             </strong>
-            {session.kind === "durable-session" ? (
+            {session.assignment ? (
               <span
                 data-agent-session-level="assignment"
                 title={session.assignment}
