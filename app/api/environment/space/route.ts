@@ -143,8 +143,9 @@ function mergedExternalDeliveryGrantExpiryIsExact(input: Readonly<{
   signedAnchorExpiry: unknown
   activeAuthorityFresh: boolean
 }>): boolean {
-  if (!input.activeAuthorityFresh || input.persistedExpiry === null) return false
+  if (input.persistedExpiry === null) return false
   if (input.persistedExpiry === input.signedDeliveryExpiry) return true
+  if (!input.activeAuthorityFresh) return false
   // Historical prospective-adoption evidence was written through raw node-pg on HERMES before
   // UTC-wall timestamps were normalized at that boundary. The inserted delivery grant retained the
   // authorization's exact anchor expiry, while RETURNING serialized the same wall clock through the

@@ -237,7 +237,7 @@ describe("merged external Space delivery finalization", () => {
       persistedExpiry,
       signedDeliveryExpiry: persistedExpiry,
       signedAnchorExpiry: "2026-09-04T12:07:15.475Z",
-      activeAuthorityFresh: true,
+      activeAuthorityFresh: false,
     })).toBe(true)
     expect(expiryIsExact({
       persistedExpiry,
