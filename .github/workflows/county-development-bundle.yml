@@ -177,15 +177,19 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'manifest.json') -PathType Leaf)) {
             throw 'Extracted County package root does not contain manifest.json.'
           }
-          $fakeTf = "$env:RUNNER_TEMP\terrafusion_os_1.0"
-          New-Item -ItemType Directory -Path $fakeTf -Force | Out-Null
-          git -C $fakeTf init
-          git -C $fakeTf config user.email 'county-bundle-ci@example.invalid'
-          git -C $fakeTf config user.name 'County Bundle CI'
-          Set-Content -LiteralPath "$fakeTf\README.md" -Value '# TerraFusion CI checkout'
-          git -C $fakeTf add README.md
-          git -C $fakeTf commit -m 'test: seed county bundle checkout'
-          git -C $fakeTf remote add origin https://github.com/bsvalues/terrafusion_os_1.0.git
+
+          $tfRoot = "$env:RUNNER_TEMP\terrafusion_os_1.0"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/bsvalues/terrafusion_os_1.0.git $tfRoot
+          if ($LASTEXITCODE -ne 0) { throw "Source-pinned TerraFusion clone failed: $LASTEXITCODE" }
+          foreach ($required in @('README.md', 'package.json')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $tfRoot $required) -PathType Leaf)) {
+              throw "Sparse TerraFusion checkout is missing $required"
+            }
+          }
+          $tfSha = (git -C $tfRoot rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tfSha -notmatch '^[0-9a-f]{40}$') {
+            throw 'The exact TerraFusion source revision could not be established.'
+          }
 
           $manager = Join-Path $packageRoot 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
           $smokeInstall = "$env:RUNNER_TEMP\county-installed"
@@ -193,7 +197,7 @@ jobs:
           $evidenceRoot = "$env:RUNNER_TEMP\county-acceptance"
           New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
           & $manager -Action Install -InstallRoot $smokeInstall -DataRoot $smokeData `
-            -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $fakeTf `
+            -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $tfRoot `
             -DeploymentId 'ci-county-development' -ModelSource $env:MODEL_ROOT `
             -NonInteractive -SkipCockpit
           if ($LASTEXITCODE -ne 0) { throw "County install smoke failed: $LASTEXITCODE" }
@@ -205,11 +209,18 @@ jobs:
           if (-not $status.health.deployment.valid) { throw 'County boundary is not valid.' }
           if (-not $status.health.deployment.localOnlyInference) { throw 'Local-only inference is not proven.' }
           if ($status.health.deployment.serviceOrigin -ne 'http://127.0.0.1:3200') { throw 'Service origin is not loopback.' }
+          if ($status.health.checks.runtime.chatModel -ne 'qwen2.5-coder:1.5b') { throw 'Exact local chat model is not healthy.' }
+          if ($status.health.checks.runtime.embeddingResolvedModel -ne 'snowflake-arctic-embed2:latest' -and
+              $status.health.checks.runtime.embeddingResolvedModel -ne 'snowflake-arctic-embed2') {
+            throw 'Exact local embedding model is not healthy.'
+          }
 
           "COUNTY_SMOKE_INSTALL=$smokeInstall" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_SMOKE_DATA=$smokeData" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "COUNTY_SMOKE_TF=$fakeTf" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_SMOKE_TF=$tfRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_SMOKE_TF_SHA=$tfSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_ACCEPTANCE_EVIDENCE=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "COUNTY_ACCEPTANCE_BROWSER_PROFILE=$env:RUNNER_TEMP\county-browser-profile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install the browser acceptance driver
         shell: pwsh
@@ -228,7 +239,9 @@ jobs:
           COUNTY_ACCEPTANCE_OWNER_PASSWORD: County-Bundle-Acceptance-2026!
         run: |
           $env:COUNTY_ACCEPTANCE_TERRAFUSION_ROOT = $env:COUNTY_SMOKE_TF
+          $env:COUNTY_ACCEPTANCE_TERRAFUSION_SHA = $env:COUNTY_SMOKE_TF_SHA
           $env:COUNTY_ACCEPTANCE_EVIDENCE_ROOT = $env:COUNTY_ACCEPTANCE_EVIDENCE
+          $env:COUNTY_ACCEPTANCE_BROWSER_PROFILE = $env:COUNTY_ACCEPTANCE_BROWSER_PROFILE
           node scripts/accept-county-development-runtime.cjs
 
       - name: Exercise the County Cockpit native surface
