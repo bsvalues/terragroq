@@ -602,6 +602,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                   {buffer ? (
                     <>
                       <SourceEditor
+                        key={buffer.key}
                         path={buffer.path}
                         value={buffer.content}
                         selection={pane.selection}
@@ -613,7 +614,15 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                         }}
                         onSelection={(selection) => {
                           const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item)
-                          updatePanes(panes, space.editor.openFiles, space.editor.openFileRefs, buffer.path, pane.id, buffer.fileRef)
+                          const controlsSelectedObject = space.editor.activePaneId === pane.id
+                          updatePanes(
+                            panes,
+                            space.editor.openFiles,
+                            space.editor.openFileRefs,
+                            controlsSelectedObject ? buffer.path : space.selectedPath,
+                            controlsSelectedObject ? pane.id : space.editor.activePaneId,
+                            controlsSelectedObject ? buffer.fileRef : space.selectedFileRef,
+                          )
                         }}
                         onSave={() => void save(buffer.key)}
                       />

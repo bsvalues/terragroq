@@ -1,15 +1,27 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { useState } from "react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { EditorSurface } from "@/components/workspace-shell/editor-surface"
-import { defaultSpace, type WorkspaceProject } from "@/components/workspace-shell/types"
+import { defaultSpace, type WorkspaceProject, type WorkspaceSpace } from "@/components/workspace-shell/types"
 
 vi.mock("next/dynamic", () => ({
-  default: () => function Editor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-    return <textarea aria-label="Test source editor" value={value} onChange={(event) => onChange(event.target.value)} />
+  default: () => function Editor({ value, onChange, onSelection }: {
+    value: string
+    onChange: (value: string) => void
+    onSelection: (selection: { anchor: number; head: number }) => void
+  }) {
+    return (
+      <textarea
+        aria-label="Test source editor"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onSelect={(event) => onSelection({ anchor: event.currentTarget.selectionStart, head: event.currentTarget.selectionEnd })}
+      />
+    )
   },
 }))
 
@@ -398,6 +410,91 @@ describe("Experience V2 multi-repository Source workspace", () => {
       repositoryMountKey: "terrafusion:os-1:configured",
       path: "AGENTS.md",
     })
+  })
+
+  it("keeps an inactive repository-qualified editor selection pane-local until that pane is explicitly activated", async () => {
+    const user = userEvent.setup()
+    const onEditorChange = vi.fn()
+    const osRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "AGENTS.md",
+    }
+    const atlasReadmeRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const atlasAgentsRef = { ...atlasReadmeRef, path: "AGENTS.md" }
+    const startingSpace: WorkspaceSpace = {
+      ...defaultSpace(),
+      selectedPath: "AGENTS.md",
+      selectedFileRef: osRef,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["AGENTS.md", "README.md"],
+        openFileRefs: [osRef, atlasReadmeRef],
+        panes: [{ id: "primary", activePath: "AGENTS.md", activeFileRef: osRef, selection: null }],
+      },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") return Response.json({ kind: "directory", entries: [{ name: "AGENTS.md", path: "AGENTS.md", directory: false }] })
+      if (url === "/api/loom/files?path=AGENTS.md&repositoryKey=os-1") return Response.json({ kind: "file", path: "AGENTS.md", content: "OS instructions", modifiedAt: "2026-09-02T00:00:00.000Z", repository: { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: revision } })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas") return Response.json({ kind: "file", path: "README.md", content: "Atlas readme", modifiedAt: "2026-09-02T00:00:00.000Z", repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision } })
+      if (url.startsWith("/api/loom/search?")) return Response.json({
+        results: [{ repositoryKey: "atlas", repositoryIdentity: "bsvalues/terrafusion-atlas", repositoryMountKey: "terrafusion:atlas:configured", observedRevision: revision, path: "AGENTS.md", line: 1, excerpt: "Atlas instructions" }],
+        unavailable: [],
+        truncated: false,
+      })
+      if (url === "/api/loom/files?path=AGENTS.md&repositoryKey=atlas") return Response.json({ kind: "file", path: "AGENTS.md", content: "Atlas instructions", modifiedAt: "2026-09-02T00:00:00.000Z", repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision } })
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    function ControlledEditor() {
+      const [space, setSpace] = useState(startingSpace)
+      return (
+        <EditorSurface
+          project={project}
+          projectKey="terrafusion"
+          space={space}
+          onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            onEditorChange(editor, selectedPath, selectedFileRef)
+            setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+          }}
+        />
+      )
+    }
+
+    render(<ControlledEditor />)
+    expect(await screen.findByDisplayValue("OS instructions")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Split editor" }))
+    await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Test source editor" })).toHaveLength(2))
+    await user.type(screen.getByRole("searchbox", { name: "Search Working Set" }), "Atlas instructions")
+    await user.click(screen.getByRole("button", { name: "Search 2 Working Set repositories" }))
+    await user.click(await screen.findByRole("button", { name: /Open AGENTS\.md in atlas at line 1/i }))
+    await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Test source editor" }).map((editor) => (editor as HTMLTextAreaElement).value)).toContain("Atlas instructions"))
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[0].activePaneId).toBe("secondary"))
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual(atlasAgentsRef)
+
+    const osEditor = screen.getByDisplayValue("OS instructions")
+    osEditor.setSelectionRange(1, 3)
+    fireEvent.select(osEditor)
+
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[0].panes[0].selection).toEqual({ anchor: 1, head: 3 }))
+    expect(onEditorChange.mock.calls.at(-1)?.[0].activePaneId).toBe("secondary")
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual(atlasAgentsRef)
+
+    await user.click(osEditor)
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[0].activePaneId).toBe("primary"))
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual(osRef)
   })
 
   it("rebinds a newly opened file to the exact revision returned by its verified mount", async () => {
