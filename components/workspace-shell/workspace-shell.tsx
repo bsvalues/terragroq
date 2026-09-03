@@ -5,7 +5,6 @@ import { Activity, AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
-import { isExecutionLive } from "@/lib/environment/world-execution"
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
@@ -3667,7 +3666,6 @@ export function WorkspaceShell({
   const switchBlockedReason = () => {
     if (Object.values(dirtyPaths).some(Boolean)) return "Save or discard the dirty source before switching Spaces."
     if (runningTools.tests || runningTools.terminal) return "Stop the active Test or Terminal run before switching Spaces."
-    if (isExecutionLive(spine.execution)) return "Finish or stop the active Space execution before switching Spaces."
     if (change.running || review.running || lineBusy || councilBusy || judgmentBusy || agentSessions.activeSessionIds.length > 0) {
       return "Finish or stop active work before switching Spaces."
     }

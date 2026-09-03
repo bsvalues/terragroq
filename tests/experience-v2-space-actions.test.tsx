@@ -88,6 +88,7 @@ describe("Experience V2 selected Space actions", () => {
       payload: {
         version: "williamos-delivery-seal.v2",
         adoption: {
+          adoptionHash,
           worldId: "world-a",
           outcome: { id: 11, key: BOUND_SPINE.outcomeKey, version: 4 },
           workOrder: { id: BOUND_SPINE.workOrderId, ref: "WO-1121", version: "2026-09-03T00:00:00.000Z" },
@@ -114,7 +115,7 @@ describe("Experience V2 selected Space actions", () => {
       })
       if (url === "/api/environment/space" && init?.method === "PATCH") return Response.json({
         status: "FINALIZED", replayed: false, worldId: "world-a", outcomeKey: BOUND_SPINE.outcomeKey,
-        workOrderId: BOUND_SPINE.workOrderId, pullRequest: 1145, headSha, mergeSha: "d".repeat(40), paths,
+        adoptionHash, workOrderId: BOUND_SPINE.workOrderId, pullRequest: 1145, headSha, mergeSha: "d".repeat(40), paths,
       })
       if (url === "/api/environment/space?worldId=world-a&projectKey=williamos") return refreshResponse
       if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })

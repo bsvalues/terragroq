@@ -35,6 +35,7 @@ type FinalizedDelivery = Readonly<{
   status: "FINALIZED"
   replayed: boolean
   worldId: string
+  adoptionHash: string
   outcomeKey: string
   workOrderId: number
   pullRequest: number
@@ -119,23 +120,32 @@ function deliverySealBlock(seal: ArtifactSeal["seal"]): string {
 }
 
 function isRestoredSeal(value: unknown): value is RestoredArtifactSeal {
-  return isRecord(value)
-    && hasExactKeys(value, ["status", "worldId", "pullRequest", "headSha", "paths", "previewDigest", "adoptionHash", "seal", "sealBlock"])
-    && value.status === "SEALED"
-    && typeof value.worldId === "string"
-    && Number.isSafeInteger(value.pullRequest) && Number(value.pullRequest) > 0
-    && isHead(value.headSha) && isStrings(value.paths) && isDigest(value.previewDigest)
-    && isDigest(value.adoptionHash)
-    && hasSeal(value)
-    && value.sealBlock === deliverySealBlock(value.seal)
+  if (!isRecord(value)) return false
+  if (!hasExactKeys(value, ["status", "worldId", "pullRequest", "headSha", "paths", "previewDigest", "adoptionHash", "seal", "sealBlock"])
+    || value.status !== "SEALED"
+    || typeof value.worldId !== "string"
+    || !Number.isSafeInteger(value.pullRequest) || Number(value.pullRequest) <= 0
+    || !isHead(value.headSha) || !isStrings(value.paths) || !isDigest(value.previewDigest)
+    || !isDigest(value.adoptionHash)
+    || !hasSeal(value)
+    || value.sealBlock !== deliverySealBlock(value.seal)) return false
+  const adoption = isRecord(value.seal.payload.adoption) ? value.seal.payload.adoption : null
+  const artifact = adoption && isRecord(adoption.artifact) ? adoption.artifact : null
+  const artifactPaths = artifact && isStrings(artifact.paths) ? artifact.paths : null
+  return adoption?.worldId === value.worldId
+    && adoption.adoptionHash === value.adoptionHash
+    && artifact?.pullRequest === value.pullRequest
+    && artifact?.headSha === value.headSha
+    && artifactPaths !== null && sameStrings(artifactPaths, value.paths)
 }
 
 function isFinalizedDelivery(value: unknown): value is FinalizedDelivery {
   return isRecord(value)
-    && hasExactKeys(value, ["status", "replayed", "worldId", "outcomeKey", "workOrderId", "pullRequest", "headSha", "mergeSha", "paths"])
+    && hasExactKeys(value, ["status", "replayed", "worldId", "adoptionHash", "outcomeKey", "workOrderId", "pullRequest", "headSha", "mergeSha", "paths"])
     && value.status === "FINALIZED"
     && typeof value.replayed === "boolean"
     && typeof value.worldId === "string"
+    && isDigest(value.adoptionHash)
     && typeof value.outcomeKey === "string"
     && Number.isSafeInteger(value.workOrderId) && Number(value.workOrderId) > 0
     && Number.isSafeInteger(value.pullRequest) && Number(value.pullRequest) > 0
@@ -155,6 +165,8 @@ function finalizationMatchesDisplayedSeal(value: FinalizedDelivery, sealed: Arti
   const artifact = adoption && isRecord(adoption.artifact) ? adoption.artifact : null
   const artifactPaths = artifact && isStrings(artifact.paths) ? artifact.paths : null
   return adoption?.worldId === value.worldId
+    && adoption.adoptionHash === sealed.adoptionHash
+    && value.adoptionHash === sealed.adoptionHash
     && outcome?.key === value.outcomeKey
     && workOrder?.id === value.workOrderId
     && artifact?.pullRequest === value.pullRequest
@@ -225,6 +237,7 @@ export function DeliveryAdoption({
       const failureCode = isRecord(value) && typeof value.error === "string" ? value.error : null
       const targetMustBeReselected = failureCode === "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND"
         || failureCode === "DELIVERY_SEAL_DIFF_INVALID"
+        || failureCode === "DELIVERY_SEAL_TARGET_REQUIRED"
       if (!response.ok && restoreOnly && targetMustBeReselected) {
         setPreview(null)
         setStage("absent")
@@ -359,7 +372,12 @@ export function DeliveryAdoption({
       const response = await fetch("/api/environment/space", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId, projectKey: "williamos" }),
+        body: JSON.stringify({
+          mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY",
+          worldId,
+          projectKey: "williamos",
+          adoptionHash: seal.adoptionHash,
+        }),
         cache: "no-store",
       })
       const value = await payload(response)

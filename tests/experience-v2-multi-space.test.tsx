@@ -617,17 +617,22 @@ describe("Experience V2 multi-Space re-entry", () => {
     settleRun(new Response(`${JSON.stringify({ type: "started", operation: "tests.run", label: "Run the tests", mutating: false, ...PROJECT_TOOL_IDENTITY })}\n${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
   })
 
-  it("blocks re-entry while canonical Space execution is live", async () => {
+  it("allows re-entry while canonical server-side Space execution remains live", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), judgment: null, spine: { ...EMPTY_SPINE, execution: "implementing" } }) }
+      if (url === "/api/environment/space?worldId=b" && !init?.method) return { ok: true, status: 200, json: async () => envelope("b") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
-      return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init?.body ?? "{}"))?.space }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
     }))
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    expect(screen.getByText("Finish or stop the active Space execution before switching Spaces.")).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
+    expect(screen.queryByText("Finish or stop the active Space execution before switching Spaces.")).toBeNull()
   })
 
   it("blocks re-entry visibly while the current source has unsaved edits", async () => {

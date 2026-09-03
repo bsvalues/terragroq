@@ -17,13 +17,21 @@ import {
   type ArtifactAdoptionEvidence,
   type ArtifactAdoptionTarget,
 } from "@/lib/governance/artifact-adoption"
-import { DeliverySealError, deliverySigningKeyFromBase64, type DeliverySigningKey, type WilliamOSDeliverySeal } from "@/lib/governance/delivery-seal"
+import {
+  ARTIFACT_ADOPTION_SEAL_VERSION,
+  DeliverySealError,
+  deliverySigningKeyFromBase64,
+  verifyWilliamOSDeliverySeal,
+  type DeliverySigningKey,
+  type WilliamOSDeliverySeal,
+} from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
 import { hashRecord } from "@/lib/governance/hash"
 import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/repository-lifecycle.mjs"
 
 const runFile = promisify(execFile)
 const SHA = /^[0-9a-f]{40}$/
+const DIGEST = /^[0-9a-f]{64}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
 const SUPPORTED_REPOSITORY = "bsvalues/terragroq"
 const DELIVERY_SEAL_CHECK = "WilliamOS assignment delivery seal"
@@ -91,6 +99,23 @@ function exactPaths(value: unknown): string[] {
 
 function same(left: readonly string[], right: readonly string[]): boolean {
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function validPersistedEvidence(authorization: ArtifactAdoptionAuthorization, evidence: ArtifactAdoptionEvidence): boolean {
+  return evidence.adoptionHash === authorization.adoptionHash
+    && evidence.pullRequest === authorization.artifact.pullRequest
+    && evidence.state === "OPEN"
+    && evidence.headSha === authorization.artifact.headSha
+    && same(exactPaths(evidence.paths), authorization.artifact.paths)
+    && evidence.checksGreen === true
+    && evidence.checksComplete === true
+    && evidence.reviewed === true
+    && evidence.reviewCompleted === true
+    && evidence.isDraft === false
+    && evidence.reviewDecision !== "CHANGES_REQUESTED"
+    && evidence.unresolvedThreadCount === 0
+    && DIGEST.test(evidence.validationEvidenceDigest)
+    && DIGEST.test(evidence.reviewEvidenceDigest)
 }
 
 function checkRows(value: unknown): ReadonlyArray<Readonly<{ name: string; state: string }>> {
@@ -282,8 +307,9 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     const result = await options.database.query(
       `SELECT "id", "metadata" FROM "governance_event" WHERE "userId"=$1
         AND "eventType"='ARTIFACT_ADOPTION_AUTHORIZED' AND "entityType"='williamos_artifact_adoption_authorization'
-        AND "entityId"=$2 ORDER BY "id" DESC LIMIT 1`, [userId, adoptionHash],
+        AND "entityId"=$2 ORDER BY "id" DESC LIMIT 2`, [userId, adoptionHash],
     )
+    if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "prospective authorization state is ambiguous")
     const row = result.rows[0]
     return row ? { eventId: Number(row.id), authorization: object(row.metadata) as unknown as ArtifactAdoptionAuthorization } : null
   }
@@ -297,7 +323,15 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     if (!result.rows[0]) return null
     return object(result.rows[0].metadata).seal as WilliamOSDeliverySeal
   }
-  const restorePersistedSeal = async (userId: string, worldId: string) => {
+  const restorePersistedSeal = async (
+    userId: string,
+    worldId: string,
+    requestedTarget?: ArtifactAdoptionTarget,
+  ) => {
+    if (requestedTarget && (!Number.isSafeInteger(requestedTarget.pullRequest)
+      || requestedTarget.pullRequest <= 0 || !SHA.test(requestedTarget.expectedHeadSha))) {
+      fail("DELIVERY_SEAL_REQUEST_INVALID", "the exact artifact target is malformed")
+    }
     const admission = await options.database.query(
       `SELECT receipt."resultBinding", receipt."requestBinding",
           outcome."id" AS "outcomeId", outcome."outcomeKey", work."id" AS "workOrderId"
@@ -332,36 +366,59 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
       || String(external.repository ?? "").trim().toLowerCase() !== SUPPORTED_REPOSITORY
       || !same(admissionAnchorPaths, exactPaths(external.reservedPaths))) {
+      fail(requestedTarget ? "DELIVERY_SEAL_ASSIGNMENT_STALE" : "DELIVERY_SEAL_EVIDENCE_INVALID",
+        "current Space admission binding is malformed")
+    }
+    // A Work Order can be admitted before its delivery artifact exists. Once an immutable target
+    // has been sealed, restore that signed target from durable evidence instead of asking GitHub
+    // whether the (now possibly merged) pull request is still open. An explicitly admitted target
+    // remains mandatory and exact when present.
+    const admittedPullRequest = hasAdmittedTarget ? pullRequest?.number : null
+    const admittedHeadSha = hasAdmittedTarget ? pullRequest?.headSha : null
+    if (hasAdmittedTarget && (Object.keys(pullRequest!).sort().join("\0") !== "headSha\0number"
+      || typeof admittedPullRequest !== "number" || !Number.isSafeInteger(admittedPullRequest)
+      || admittedPullRequest <= 0 || typeof admittedHeadSha !== "string" || !SHA.test(admittedHeadSha))) {
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
     }
-    // A Work Order can be admitted before its delivery artifact exists. That is a valid active
-    // Space, not stale authority: let the caller fall through to the existing exact-target picker.
-    // Once a pullRequest field is present, however, its complete immutable identity remains
-    // mandatory so partial or malformed historical bindings still fail closed.
-    if (!hasAdmittedTarget) return null
-    const admittedPullRequest = Number(pullRequest?.number)
-    const admittedHeadSha = String(pullRequest?.headSha ?? "")
-    if (!Number.isSafeInteger(admittedPullRequest) || admittedPullRequest <= 0 || !SHA.test(admittedHeadSha)) {
-      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
-    }
+    const selectedTarget = requestedTarget ?? null
     const result = await options.database.query(
-      `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
+      `SELECT "entityId", "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
         AND "entityType"='williamos_delivery_seal'
         AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2
         AND "metadata"->'seal'->'payload'->'adoption'->'outcome'->>'key'=$3
         AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer=$4
-        ORDER BY "id" DESC LIMIT 1`,
-      [userId, worldId, outcomeKey, workOrderId],
+        ${selectedTarget ? `AND ("metadata"->'seal'->'payload'->'adoption'->'artifact'->>'pullRequest')::integer=$5
+        AND "metadata"->'seal'->'payload'->'adoption'->'artifact'->>'headSha'=$6` : ""}
+        ORDER BY "id" DESC LIMIT 2`,
+      selectedTarget
+        ? [userId, worldId, outcomeKey, workOrderId, selectedTarget.pullRequest, selectedTarget.expectedHeadSha]
+        : [userId, worldId, outcomeKey, workOrderId],
     )
+    if (result.rows.length > 1 && !selectedTarget) {
+      fail("DELIVERY_SEAL_TARGET_REQUIRED", "select one exact persisted artifact for this Space")
+    }
+    if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "exact persisted delivery seal state is ambiguous")
     if (result.rows.length === 0) return null
     const metadata = object(result.rows[0].metadata)
     const adoptionHash = String(metadata.adoptionHash ?? "")
     const authorizationEventId = Number(metadata.authorizationEventId)
+    const validationEventId = Number(metadata.validationEventId)
+    const reviewEventId = Number(metadata.reviewEventId)
     const seal = await loadPersistedSeal(userId, adoptionHash)
     const persisted = await loadAuthorization(userId, adoptionHash)
-    if (!seal || hashRecord(seal) !== hashRecord(metadata.seal)
-      || !persisted || persisted.eventId !== authorizationEventId || seal.payload.version !== "williamos-delivery-seal.v2") {
+    if (!DIGEST.test(adoptionHash)
+      || !Number.isSafeInteger(authorizationEventId) || authorizationEventId <= 0
+      || !Number.isSafeInteger(validationEventId) || validationEventId <= 0
+      || !Number.isSafeInteger(reviewEventId) || reviewEventId <= 0
+      || !seal || hashRecord(seal) !== hashRecord(metadata.seal)
+      || result.rows[0].entityId !== seal?.signature
+      || !persisted || persisted.eventId !== authorizationEventId
+      || seal.payload.version !== ARTIFACT_ADOPTION_SEAL_VERSION) {
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal is not bound to one exact authorization")
+    }
+    if (!options.signingKey) fail("DELIVERY_SEAL_SIGNING_UNAVAILABLE", "the WilliamOS delivery signing key is unavailable")
+    if (!verifyWilliamOSDeliverySeal(seal, { [options.signingKey.keyId]: options.signingKey.publicKey })) {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal signature is invalid")
     }
     const authorization = persisted.authorization
     const authorizationContext = authorization.context as typeof authorization.context & {
@@ -370,9 +427,58 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     const anchorAllowed = exactPaths(object(authorizationContext.anchorReservation).allowed)
     const adoption = seal.payload.adoption
     const delivery = seal.payload.delivery
-    if (seal.payload.authorityKind !== "prospective_artifact_adoption" || !seal.signature
+    const expectedPreviewDigest = hashRecord({
+      version: ARTIFACT_ADOPTION_SEAL_VERSION,
+      value: { context: authorization.context, artifact: authorization.artifact },
+    })
+    const expectedAdoptionHash = hashRecord({
+      version: ARTIFACT_ADOPTION_SEAL_VERSION,
+      authorityKind: "prospective_artifact_adoption",
+      previewDigest: authorization.previewDigest,
+      idempotencyKey: authorization.idempotencyKey,
+    })
+    const evidence = await options.database.query(
+      `SELECT validation."id" AS "validationEventId", validation."entityType" AS "validationEntityType",
+          validation."entityId" AS "validationEntityId", validation."metadata" AS "validationMetadata",
+          review."id" AS "reviewEventId", review."entityType" AS "reviewEntityType",
+          review."entityId" AS "reviewEntityId", review."metadata" AS "reviewMetadata"
+        FROM "governance_event" validation
+        JOIN "governance_event" review ON review."userId"=validation."userId"
+        WHERE validation."userId"=$1 AND validation."id"=$2
+          AND validation."eventType"='ARTIFACT_ADOPTION_VALIDATED'
+          AND validation."entityType"='williamos_artifact_adoption_validation'
+          AND review."id"=$3 AND review."eventType"='ARTIFACT_ADOPTION_REVIEWED'
+          AND review."entityType"='williamos_artifact_adoption_review'
+        LIMIT 2`,
+      [userId, validationEventId, reviewEventId],
+    )
+    if (evidence.rows.length !== 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery evidence is missing or ambiguous")
+    const evidenceRow = evidence.rows[0]
+    const validationMetadata = object(evidenceRow.validationMetadata)
+    const reviewMetadata = object(evidenceRow.reviewMetadata)
+    const validation = object(validationMetadata.evidence) as unknown as ArtifactAdoptionEvidence
+    const review = object(reviewMetadata.evidence) as unknown as ArtifactAdoptionEvidence
+    if (Number(evidenceRow.validationEventId) !== validationEventId
+      || Number(evidenceRow.reviewEventId) !== reviewEventId
+      || evidenceRow.validationEntityType !== "williamos_artifact_adoption_validation"
+      || evidenceRow.reviewEntityType !== "williamos_artifact_adoption_review"
+      || evidenceRow.validationEntityId !== validation.validationEvidenceDigest
+      || evidenceRow.reviewEntityId !== review.reviewEvidenceDigest
+      || Number(validationMetadata.authorizationEventId) !== authorizationEventId
+      || Number(reviewMetadata.authorizationEventId) !== authorizationEventId
+      || validationMetadata.adoptionHash !== adoptionHash
+      || reviewMetadata.adoptionHash !== adoptionHash
+      || hashRecord(validation) !== hashRecord(review)
+      || !validPersistedEvidence(authorization, validation)) {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery evidence no longer matches its exact authorization")
+    }
+    if (seal.payload.authorityKind !== "prospective_artifact_adoption"
+      || seal.payload.keyId !== options.signingKey.keyId
+      || authorization.previewDigest !== expectedPreviewDigest
+      || authorization.adoptionHash !== expectedAdoptionHash
       || adoption.adoptionHash !== authorization.adoptionHash
       || adoption.owner !== userId || adoption.worldId !== worldId
+      || adoption.spaceRevision !== authorization.context.spaceRevision
       || adoption.outcome.id !== outcomeId || adoption.outcome.key !== outcomeKey
       || adoption.workOrder.id !== workOrderId
       || hashRecord(adoption.outcome) !== hashRecord(authorization.context.outcome)
@@ -388,10 +494,16 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       || !same(adoption.artifact.paths, authorization.artifact.paths)
       || !same(anchorAllowed, admissionAnchorPaths)
       || !same(authorization.context.reservation.allowed, authorization.artifact.paths)
+      || adoption.evidence.validationDigest !== validation.validationEvidenceDigest
+      || adoption.evidence.reviewDigest !== review.reviewEvidenceDigest
+      || adoption.evidence.validationHeadSha !== validation.headSha
+      || adoption.evidence.reviewHeadSha !== review.headSha
       || delivery.repository !== authorization.context.repository
       || delivery.baseSha !== authorization.artifact.baseSha
       || delivery.commitSha !== authorization.artifact.headSha
-      || !same(delivery.paths, authorization.artifact.paths)) {
+      || !same(delivery.paths, authorization.artifact.paths)
+      || !DIGEST.test(delivery.patchDigest)
+      || !DIGEST.test(delivery.contentDigest)) {
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal no longer matches its exact authorization")
     }
     return {
@@ -605,9 +717,9 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
   return {
     preview: async (userId: string, worldId: string, requestedTarget?: ArtifactAdoptionTarget) => {
       let target = requestedTarget
+      const restoredSeal = await restorePersistedSeal(userId, worldId, requestedTarget)
+      if (restoredSeal) return restoredSeal
       if (!target) {
-        const restoredSeal = await restorePersistedSeal(userId, worldId)
-        if (restoredSeal) return restoredSeal
         const existing = await options.database.query(
           `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1
             AND "eventType"='ARTIFACT_ADOPTION_AUTHORIZED' AND "entityType"='williamos_artifact_adoption_authorization'
