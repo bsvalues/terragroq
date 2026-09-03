@@ -191,6 +191,7 @@ export function ExternalWorkOrderAdmission({
   className,
   onAdmitted,
   onFinalized,
+  onFinalizationRefreshError,
 }: {
   worldId: string | null
   persisted: boolean
@@ -198,6 +199,7 @@ export function ExternalWorkOrderAdmission({
   className?: string
   onAdmitted?: (result: AdmissionResult) => void | Promise<void>
   onFinalized?: () => void | Promise<void>
+  onFinalizationRefreshError?: (message: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<AdmissionStep>("capture")
@@ -285,7 +287,13 @@ export function ExternalWorkOrderAdmission({
 
   async function handleDeliveryFinalized() {
     handleOpen(false)
-    await onFinalized?.()
+    try {
+      await onFinalized?.()
+    } catch (cause) {
+      onFinalizationRefreshError?.(
+        cause instanceof Error ? cause.message : "SPACE_REFRESH_UNAVAILABLE",
+      )
+    }
   }
 
   const handleArtifactAvailability = useCallback((available: boolean) => {
