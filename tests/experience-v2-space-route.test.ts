@@ -216,6 +216,21 @@ describe("Experience V2 Space route", () => {
 })
 
 describe("merged external Space delivery finalization", () => {
+  it("accepts an admission without an artifact target and rejects an explicit partial target", async () => {
+    await import("@/app/api/environment/space/route")
+    const valid = (globalThis as Record<string, unknown>)
+      .__williamosMergedExternalAdmittedPullRequestIsValid as (value: unknown) => boolean
+
+    expect(valid(undefined)).toBe(true)
+    expect(valid({ number: 1148, headSha: "a".repeat(40) })).toBe(true)
+    expect(valid({ number: 1148 })).toBe(false)
+    expect(valid({ headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: "1148", headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: true, headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: 1148, headSha: "a".repeat(40), widened: true })).toBe(false)
+    expect(valid(null)).toBe(false)
+  })
+
   it("accepts only the known raw-pg delivery expiry representation while live authority is fresh", async () => {
     await import("@/app/api/environment/space/route")
     const expiryIsExact = (globalThis as Record<string, unknown>)
