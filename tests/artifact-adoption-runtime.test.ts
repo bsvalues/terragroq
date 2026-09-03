@@ -202,6 +202,36 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
   })
 
+  it("allows an active Space admitted before a pull request exists to choose its exact target later", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("still rejects a partially recorded pull request identity", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: 1117 },
+        },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
   it("accepts a canonical literal Next route path containing a dynamic segment", async () => {
     const dynamicRoutePaths = ["app/api/environment/spaces/[worldId]/route.ts"]
     const row = authorityRow({
