@@ -442,11 +442,11 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
         AND "entityType"='williamos_delivery_seal'
         AND "metadata"->'seal'->'payload'->>'version'='williamos-delivery-seal.v2'
         AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2
-        AND ("metadata"->'seal'->'payload'->'adoption'->'artifact'->>'pullRequest')::integer
-          =(receipt."requestBinding"->'externalWorkOrder'->'pullRequest'->>'number')::integer
-        AND "metadata"->'seal'->'payload'->'adoption'->'artifact'->>'headSha'
-          =receipt."requestBinding"->'externalWorkOrder'->'pullRequest'->>'headSha'
-      ORDER BY "id" DESC LIMIT 2
+        AND "metadata"->'seal'->'payload'->'adoption'->'outcome'->>'key'
+          =receipt."resultBinding"->>'outcomeKey'
+        AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer
+          =(receipt."resultBinding"->>'workOrderId')::integer
+      ORDER BY "id" DESC LIMIT 1
     ) seal_event ON TRUE
     WHERE receipt."userId"=$1 AND receipt."operation"='space.external_work_order.admit'
       AND receipt."resultBinding"->>'worldId'=$2
@@ -487,8 +487,8 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     && adoption.workOrder.id === Number(row.workOrderId)
     && spine.outcomeKey === row.outcomeKey
     && spine.workOrderId === Number(row.workOrderId)
-    && artifact.pullRequest === Number(externalPullRequest.number)
-    && artifact.headSha === String(externalPullRequest.headSha)
+    && Number.isSafeInteger(Number(externalPullRequest.number)) && Number(externalPullRequest.number) > 0
+    && SHA.test(String(externalPullRequest.headSha))
     && mergedExternalDeliveryPathsAreExact({ anchorPaths, artifactPaths, reservationPaths, deliveryPaths })
     && canonicalRepository(seal.payload.delivery.repository) === repository
     && seal.payload.delivery.commitSha === artifact.headSha
