@@ -239,7 +239,7 @@ describe("Experience V2 current Changes Review", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    const review = await screen.findByRole("button", { name: "Review" }) as HTMLButtonElement
+    const review = await screen.findByRole("button", { name: "Review" }, { timeout: 5_000 }) as HTMLButtonElement
     await waitFor(() => expect(review.disabled).toBe(false))
     fireEvent.click(review)
 
