@@ -379,10 +379,22 @@ export function projectActiveRepositoryAssignments(input: Readonly<{
   for (const event of sortedEvents(input.events)) {
     if (event.userId !== input.userId) continue
     const metadata = record(event.metadata)
-    const worldId = eventWorldId(metadata)
-    if (!worldId) continue
     const eventAssignmentId = exactString(event.entityId)
     if (!eventAssignmentId || !metadata) continue
+    const worldId = eventWorldId(metadata)
+
+    if (event.entityType === "loom_agent" && event.eventType === "LOOP_STOPPED") {
+      const assignmentId = exactString(metadata.assignmentId) ?? eventAssignmentId
+      const recorded = active.get(assignmentId) ?? limitations.get(assignmentId)
+      const terminalWorldId = worldId ?? recorded?.worldId ?? null
+      if (recorded?.worldId === terminalWorldId) {
+        active.delete(assignmentId)
+        limitations.delete(assignmentId)
+      }
+      continue
+    }
+
+    if (!worldId) continue
 
     if (event.entityType === "loom_codex_assignment" && event.eventType === "EVIDENCE_RECORDED") {
       if (event.projectId !== input.projectId) continue
@@ -415,13 +427,6 @@ export function projectActiveRepositoryAssignments(input: Readonly<{
     if (event.entityType === "loom_codex_ready" && metadata.committed === true) {
       if (active.get(eventAssignmentId)?.worldId === worldId) active.delete(eventAssignmentId)
       if (limitations.get(eventAssignmentId)?.worldId === worldId) limitations.delete(eventAssignmentId)
-      continue
-    }
-
-    if (event.entityType === "loom_agent" && event.eventType === "LOOP_STOPPED") {
-      const assignmentId = exactString(metadata.assignmentId) ?? eventAssignmentId
-      if (active.get(assignmentId)?.worldId === worldId) active.delete(assignmentId)
-      if (limitations.get(assignmentId)?.worldId === worldId) limitations.delete(assignmentId)
       continue
     }
 

@@ -26,6 +26,18 @@ function identity(value: unknown, field: string): string {
   return value
 }
 
+function projectIdentity(value: unknown): string {
+  if (typeof value === "string" && value.startsWith("/")) {
+    if (value.length > 240 || value.includes("\0") || value.includes("\\") || value.startsWith("//")
+      || value.endsWith("/") || value.split("/").includes("..")
+      || !/^\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)) {
+      throw new Error("WORKSPACE_FILE_REF_PROJECT_IDENTITY_INVALID")
+    }
+    return value
+  }
+  return identity(value, "PROJECT_IDENTITY")
+}
+
 function relativePath(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 2_000 || value.includes("\0")) {
     throw new Error("WORKSPACE_FILE_REF_PATH_INVALID")
@@ -58,7 +70,7 @@ export function parseWorkspaceFileRef(value: unknown): WorkspaceFileRef {
   if (!observedRevision) throw new Error("WORKSPACE_FILE_REF_REVISION_INVALID")
 
   return Object.freeze({
-    projectIdentity: identity(candidate.projectIdentity, "PROJECT_IDENTITY"),
+    projectIdentity: projectIdentity(candidate.projectIdentity),
     repositoryResourceKey: identity(candidate.repositoryResourceKey, "REPOSITORY_RESOURCE_KEY"),
     repositoryMountKey: identity(candidate.repositoryMountKey, "REPOSITORY_MOUNT_KEY"),
     worktreeKey,

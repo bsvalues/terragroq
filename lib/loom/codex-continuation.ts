@@ -2,6 +2,7 @@ import {
   validateWorkingWorld,
   type WorkingWorldSnapshot,
 } from "@/lib/environment/working-world"
+import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export type CodexContinuationInput = Readonly<{
   worldId: string
@@ -186,20 +187,57 @@ export function selectContinuationPath(
   if (!canonicalPath || !space || !space.activePaneId) throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
   const activePane = space.panes.find((pane) => pane.id === space.activePaneId)
   if (!activePane) throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
-  if (activePane.filePath === canonicalPath && space.selection?.filePath === canonicalPath) return world
-  const openFiles = space.openFiles.includes(canonicalPath)
-    ? [...space.openFiles]
-    : [...space.openFiles, canonicalPath]
+  const currentFileRef = space.selection?.fileRef
+    ?? activePane.fileRef
+    ?? (() => {
+      const matching = space.fileRefs?.filter((ref) => ref.path === activePane.filePath) ?? []
+      return matching.length === 1 ? matching[0] : undefined
+    })()
+  const selectedFileRef: WorkspaceFileRef | undefined = currentFileRef
+    ? { ...currentFileRef, path: canonicalPath }
+    : undefined
+  const exactSelectionMatches = !selectedFileRef || (
+    activePane.fileRef != null
+    && space.selection?.fileRef !== undefined
+    && canonicalWorkspaceObjectKey(activePane.fileRef) === canonicalWorkspaceObjectKey(selectedFileRef)
+    && canonicalWorkspaceObjectKey(space.selection.fileRef) === canonicalWorkspaceObjectKey(selectedFileRef)
+  )
+  if (activePane.filePath === canonicalPath && space.selection?.filePath === canonicalPath && exactSelectionMatches) return world
+
+  if (space.fileRefs !== undefined && !selectedFileRef) {
+    throw new Error("CONTINUATION_REPOSITORY_IDENTITY_UNAVAILABLE")
+  }
+  const selectedObjectKey = selectedFileRef ? canonicalWorkspaceObjectKey(selectedFileRef) : null
+  const alreadyOpen = selectedObjectKey
+    ? space.fileRefs?.some((ref) => canonicalWorkspaceObjectKey(ref) === selectedObjectKey) === true
+    : space.openFiles.includes(canonicalPath)
+  const openFiles = alreadyOpen ? [...space.openFiles] : [...space.openFiles, canonicalPath]
+  const fileRefs = space.fileRefs === undefined
+    ? undefined
+    : alreadyOpen
+      ? [...space.fileRefs]
+      : [...space.fileRefs, selectedFileRef!]
   if (openFiles.length > 64) throw new Error("CONTINUATION_SPACE_FILE_CAPACITY")
-  const selection = { filePath: canonicalPath, anchor: 0, head: 0 }
+  const selection = {
+    filePath: canonicalPath,
+    ...(selectedFileRef ? { fileRef: selectedFileRef } : {}),
+    anchor: 0,
+    head: 0,
+  }
   return validateWorkingWorld({
     ...world,
     space: {
       ...space,
       revision: space.revision + 1,
       openFiles,
+      ...(fileRefs !== undefined ? { fileRefs } : {}),
       panes: space.panes.map((pane) => pane.id === space.activePaneId
-        ? { ...pane, filePath: canonicalPath, selection: { anchor: 0, head: 0 } }
+        ? {
+            ...pane,
+            filePath: canonicalPath,
+            ...(selectedFileRef ? { fileRef: selectedFileRef } : {}),
+            selection: { anchor: 0, head: 0 },
+          }
         : pane),
       selection,
       activeWindowId: space.windows.some((window) => window.id === "workspace-editor")

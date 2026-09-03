@@ -16,6 +16,13 @@ const atlasReadme = {
 } as const
 
 describe("repository-qualified workspace object identity", () => {
+  it("accepts the POSIX absolute identity produced by a mounted WorkspaceProject", () => {
+    expect(parseWorkspaceFileRef({
+      ...atlasReadme,
+      projectIdentity: "/srv/williamos/projects/terrafusion",
+    }).projectIdentity).toBe("/srv/williamos/projects/terrafusion")
+  })
+
   it("keeps identical relative paths in different repositories distinct", () => {
     const osReadme = {
       ...atlasReadme,

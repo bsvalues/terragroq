@@ -219,7 +219,21 @@ describe("Experience V2 active repository assignment runtime", () => {
       events: [codexAssignment(1, "atlas-terminal"), terminal(2, "atlas-terminal", reason)],
     })
 
-    expect(projection).toMatchObject({ status: "READY", assignmentsById: {} })
+    expect(projection.status).toBe("READY")
+    expect(projection.assignmentsById).toEqual({})
+  })
+
+  it.each(["FAILED", "CANCELLED"])("releases a %s Codex assignment when its terminal event omits worldId", (reason) => {
+    const stopped = terminal(2, "atlas-terminal", reason)
+    const { worldId: _omitted, ...terminalMetadata } = stopped.metadata as Record<string, unknown>
+    const projection = projectActiveRepositoryAssignments({
+      userId: "owner-1",
+      projectId: 2,
+      events: [codexAssignment(1, "atlas-terminal"), { ...stopped, metadata: terminalMetadata }],
+    })
+
+    expect(projection.status).toBe("READY")
+    expect(projection.assignmentsById).toEqual({})
   })
 
   it("assesses a candidate against current active path, contract, and environment reservations", async () => {

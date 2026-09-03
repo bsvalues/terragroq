@@ -209,6 +209,48 @@ describe("Experience V2 Codex continuation", () => {
     expect(selected.space?.windows).toEqual(world.space.windows)
   })
 
+  it("keeps the continuation selection bound to the active repository mount and revision", () => {
+    const activeFileRef = {
+      projectIdentity: "/srv/williamos/projects/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "src/previous.ts",
+    }
+    const initialSpace = createDefaultSpace(null)
+    const world = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        ...initialSpace,
+        openFiles: [activeFileRef.path],
+        fileRefs: [activeFileRef],
+        panes: [{
+          id: "workspace-pane",
+          filePath: activeFileRef.path,
+          fileRef: activeFileRef,
+          selection: { anchor: 4, head: 4 },
+        }],
+        selection: { filePath: activeFileRef.path, fileRef: activeFileRef, anchor: 4, head: 4 },
+      },
+    }
+
+    const selected = selectContinuationPath(world, "src/next.ts")
+    const expectedFileRef = { ...activeFileRef, path: "src/next.ts" }
+
+    expect(selected.space).toMatchObject({
+      openFiles: ["src/previous.ts", "src/next.ts"],
+      fileRefs: [activeFileRef, expectedFileRef],
+      selection: { filePath: "src/next.ts", fileRef: expectedFileRef, anchor: 0, head: 0 },
+      panes: [{
+        id: "workspace-pane",
+        filePath: "src/next.ts",
+        fileRef: expectedFileRef,
+        selection: { anchor: 0, head: 0 },
+      }],
+    })
+  })
+
   it("restores the same pending assignment without generating another Space revision", () => {
     const world = {
       ...createWorkingWorld({ intent: "Finish Experience V2" }),
