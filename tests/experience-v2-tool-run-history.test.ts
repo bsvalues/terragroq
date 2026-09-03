@@ -4,14 +4,19 @@ import { resolveProjectTerminalAlias, resolveProjectTerminalCommand } from "@/li
 import {
   loadToolRunHistory,
   persistToolRunTranscript,
+  removeToolRunHistory,
+  repositoryQualifiedToolHistoryScope,
   toolRunHistoryStorageKey,
   type ToolRunTranscript,
 } from "@/components/workspace-shell/tool-run-history"
 
-class MemoryStorage implements Pick<Storage, "getItem" | "setItem"> {
+class MemoryStorage implements Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length"> {
   readonly values = new Map<string, string>()
+  get length() { return this.values.size }
   getItem(key: string) { return this.values.get(key) ?? null }
   setItem(key: string, value: string) { this.values.set(key, value) }
+  removeItem(key: string) { this.values.delete(key) }
+  key(index: number) { return [...this.values.keys()][index] ?? null }
 }
 
 function transcript(index: number, text = `output ${index}`): ToolRunTranscript {
@@ -73,6 +78,48 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(toolRunHistoryStorageKey("server:world-b")).not.toBe(toolRunHistoryStorageKey("server:world-a"))
     expect(toolRunHistoryStorageKey("browser:opaque-a")).not.toBe(toolRunHistoryStorageKey("browser:opaque-b"))
     expect(() => toolRunHistoryStorageKey("browser-local")).toThrow("TOOL_RUN_SCOPE_INVALID")
+  })
+
+  it("qualifies restored evidence by canonical repository, mount and exact revision", () => {
+    const base = {
+      projectKey: "terrafusion" as const,
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    }
+    const first = repositoryQualifiedToolHistoryScope("server:world-a", base)
+    const nextRevision = repositoryQualifiedToolHistoryScope("server:world-a", {
+      ...base,
+      observedRevision: "b".repeat(40),
+    })
+    const otherMount = repositoryQualifiedToolHistoryScope("server:world-a", {
+      ...base,
+      repositoryMountKey: "terrafusion:atlas:worktree-2",
+    })
+
+    expect(first).toContain(":identity:bsvalues%2Fterrafusion-atlas")
+    expect(first).toContain(":mount:terrafusion%3Aatlas%3Aconfigured")
+    expect(first).not.toBe(nextRevision)
+    expect(first).not.toBe(otherMount)
+  })
+
+  it("removes every exact-revision history when its disposable Space is deleted", () => {
+    const storage = new MemoryStorage()
+    const repository = {
+      projectKey: "terrafusion" as const,
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    }
+    const first = repositoryQualifiedToolHistoryScope("server:deleted-world", repository)
+    const second = repositoryQualifiedToolHistoryScope("server:deleted-world", { ...repository, observedRevision: "b".repeat(40) })
+    expect(persistToolRunTranscript(storage, first, transcript(1)).ok).toBe(true)
+    expect(persistToolRunTranscript(storage, second, transcript(2)).ok).toBe(true)
+
+    expect(removeToolRunHistory(storage, "server:deleted-world")).toBe(true)
+    expect(storage.length).toBe(0)
   })
 
   it("rejects corrupt persisted history without exposing invented transcripts", () => {

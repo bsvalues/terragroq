@@ -9,6 +9,34 @@ import { EMPTY_SPINE } from "@/lib/environment/working-world"
 const CLAUDE_REVIEW_ID = "123e4567-e89b-42d3-a456-426614174000"
 const LOCAL_ID = "223e4567-e89b-42d3-a456-426614174000"
 const SESSION_KEY = "williamos:agent-session:world-a:c%3A%2Frepos%2Fterrafusion"
+const OS1_REVISION = "a".repeat(40)
+const OS1_REPOSITORY = {
+  resourceKey: "os-1",
+  identity: "bsvalues/terrafusion_os_1.0",
+  mountKey: "terrafusion:os-1:configured",
+  observedRevision: OS1_REVISION,
+} as const
+
+function reviewerFileBinding(path: string) {
+  return {
+    repository: OS1_REPOSITORY,
+    fileRef: {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+      repositoryMountKey: OS1_REPOSITORY.mountKey,
+      worktreeKey: null,
+      observedRevision: OS1_REVISION,
+      path,
+    },
+  } as const
+}
+
+const OS1_SESSION_FRAME = {
+  repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+  repositoryIdentity: OS1_REPOSITORY.identity,
+  repositoryMountKey: OS1_REPOSITORY.mountKey,
+  observedRevision: OS1_REPOSITORY.observedRevision,
+} as const
 
 vi.mock("next/dynamic", () => ({
   default: () => function Editor() { return <textarea aria-label="Source content" readOnly /> },
@@ -683,6 +711,7 @@ describe("Experience V2 selected Space actions", () => {
     const selectedReviewer = {
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
       reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:10:00.000Z",
+      ...reviewerFileBinding("src/app.ts"),
       completedTurns: [{ ownerPrompt: "Review it.", finalResult: "Saved review", completedAt: "2026-08-30T05:10:00.000Z" }],
     }
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({
@@ -717,12 +746,14 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(requests).toHaveLength(1))
     expect(requests).toEqual([{ url: "/api/loom/agent", body: {
       mode: "review", projectKey: "terrafusion", path: "src/app.ts",
+      fileRef: reviewerFileBinding("src/app.ts").fileRef,
       focus: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "cloud", sessionId: CLAUDE_REVIEW_ID, resume: true,
+      repositoryKey: "os-1",
     } }])
 
     resolveContinuation(new Response(`${[
-      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true },
+      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: CLAUDE_REVIEW_ID, result: "Continued selected review." } },
       { type: "done", code: 0, reason: null },
     ].map((frame) => JSON.stringify(frame)).join("\n")}\n`))
@@ -744,7 +775,7 @@ describe("Experience V2 selected Space actions", () => {
   it("stops only the exact pre-acceptance Space continuation and ignores a late settlement", async () => {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [{
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }] }))
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
     let continuationSignal: AbortSignal | null = null
@@ -818,7 +849,7 @@ describe("Experience V2 selected Space actions", () => {
     }
     const reviewer = {
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({
       schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [local, reviewer],
@@ -843,7 +874,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(resolveContinuation).toBeTypeOf("function"))
     fireEvent.click(screen.getByRole("button", { name: "Thinker · Local · Conversation" }))
     resolveContinuation(new Response(`${[
-      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true },
+      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: CLAUDE_REVIEW_ID, result: "STALE REVIEW CONTINUATION" } },
       { type: "done", code: 0, reason: null },
     ].map((frame) => JSON.stringify(frame)).join("\n")}\n`))
@@ -859,8 +890,8 @@ describe("Experience V2 selected Space actions", () => {
     const first = "323e4567-e89b-42d3-a456-426614174000"
     const second = "423e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: null, sessions: [
-      { schemaVersion: 1, sessionId: second, role: "Reviewer", provider: "Claude", assignment: "Review second.ts", reviewPath: "second.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
-      { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review first.ts", reviewPath: "first.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
+      { schemaVersion: 1, sessionId: second, role: "Reviewer", provider: "Claude", assignment: "Review second.ts", reviewPath: "second.ts", ...reviewerFileBinding("second.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
+      { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review first.ts", reviewPath: "first.ts", ...reviewerFileBinding("first.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
     ] }))
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -932,7 +963,7 @@ describe("Experience V2 selected Space actions", () => {
   it("reattaches to a pending Reviewer without invalidating its presentation owner and shows natural settlement", async () => {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [{
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }] }))
     const encoder = new TextEncoder()
     let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -948,7 +979,7 @@ describe("Experience V2 selected Space actions", () => {
         agentRequests.push(JSON.parse(String(init.body)))
         return new Response(new ReadableStream<Uint8Array>({ start(value) {
           controller = value
-          value.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true })}\n`))
+          value.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME })}\n`))
         } }))
       }
       if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })

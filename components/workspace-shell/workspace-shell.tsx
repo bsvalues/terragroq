@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
+import { AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, Layers3, TerminalSquare, Users, X } from "lucide-react"
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
@@ -11,22 +11,35 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
-import { loadToolRunHistory, removeToolRunHistory, type ToolRunTranscript } from "./tool-run-history"
+import {
+  loadToolRunHistory,
+  removeToolRunHistory,
+  repositoryQualifiedToolHistoryScope,
+  type DeveloperToolRepositoryIdentity,
+  type ToolRunTranscript,
+} from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentSessionRepository, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
+import { changeSetSurfaceModel } from "./change-set-projection"
+import { ChangeSetSurface } from "./change-set-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
 import { encodeExecutionAssignmentInspectorPayload, EXECUTION_ASSIGNMENT_INSPECTOR_KIND, executionAssignmentInspectorIdentity, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { agentSessionInspectorId, agentSessionInspectorIdFromIdentity, agentSessionInspectorIdentity, AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX, AGENT_SESSION_INSPECTOR_SURFACE_KIND, encodeAgentSessionInspectorPayload, isRestorableAgentSessionInspector, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { PreviewComposition, type PendingSuiteChange } from "./preview-composition"
+import { RepositoryMapSurface, type RepositoryRelationship } from "./repository-map-surface"
+import type { RepositoryShelfRepository } from "./repository-shelf"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorPayload, spaceInViewport, spaceToServer, type PreviewInspectorPayload, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorPayload, qualifyLegacyWorkspaceFiles, spaceInViewport, spaceToServer, type PreviewInspectorPayload, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
+import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
+import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -38,7 +51,7 @@ type LineReply = Readonly<{
 
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number; keepalive: boolean }>
 type SpaceStorage = "server" | "browser"
-type EnvironmentOverlay = "council" | "mission-control" | null
+type EnvironmentOverlay = "council" | "mission-control" | "repository-map" | "change-set" | "preview-composition" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
 type DurableLineSnapshot = Awaited<ReturnType<typeof durableLineSnapshot>>
@@ -123,6 +136,7 @@ type StandardDelegateContext = Readonly<{
     path: string
     actor: "codex" | "claude"
     proofSource: "space" | "file"
+    repository?: AgentSessionRepository
   }>
   fileAssignmentProofs?: Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>
   fileAssignmentProofSource?: "space" | "file"
@@ -144,11 +158,57 @@ type SpaceDelegateEligibility = Readonly<{
   grantId: number
   actor: "codex" | "claude"
   selectedPath: string
+  repository?: AgentSessionRepository
 }>
+
+function deriveDeveloperToolRepositoryContext(
+  projectKey: "terrafusion" | "williamos",
+  project: WorkspaceProject | null,
+  space: WorkspaceSpace,
+): DeveloperToolRepositoryIdentity | null {
+  const selectedRepository = project?.repositories?.find((repository) => repository.key === space.selectedFileRef?.repositoryResourceKey)
+    ?? project?.repositories?.find((repository) => repository.defaultRepository)
+    ?? null
+  return selectedRepository?.mount.verified
+    && selectedRepository.mount.revision
+    && (!space.selectedFileRef || (
+      space.selectedFileRef.repositoryResourceKey === selectedRepository.key
+      && space.selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && space.selectedFileRef.observedRevision === selectedRepository.mount.revision
+    ))
+    ? {
+      projectKey,
+      repositoryKey: selectedRepository.key,
+      repositoryIdentity: selectedRepository.identity,
+      repositoryMountKey: selectedRepository.mount.key,
+      observedRevision: selectedRepository.mount.revision,
+    }
+    : null
+}
 
 function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
+  const repositoryValues = [
+    candidate.repositoryResourceKey,
+    candidate.repositoryIdentity,
+    candidate.repositoryMountKey,
+    candidate.observedRevision,
+  ]
+  const repositoryAbsent = repositoryValues.every((entry) => entry === undefined)
+  const repository = repositoryAbsent ? undefined
+    : typeof candidate.repositoryResourceKey === "string"
+      && typeof candidate.repositoryIdentity === "string"
+      && typeof candidate.repositoryMountKey === "string"
+      && typeof candidate.observedRevision === "string"
+      && /^[0-9a-f]{40,64}$/.test(candidate.observedRevision)
+      ? {
+        resourceKey: candidate.repositoryResourceKey,
+        identity: candidate.repositoryIdentity,
+        mountKey: candidate.repositoryMountKey,
+        observedRevision: candidate.observedRevision,
+      }
+      : null
   return candidate.eligible === true
     && typeof candidate.worldId === "string"
     && Number.isSafeInteger(candidate.worldRevision)
@@ -157,7 +217,18 @@ function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility
     && Number.isSafeInteger(candidate.grantId)
     && (candidate.actor === "codex" || candidate.actor === "claude")
     && typeof candidate.selectedPath === "string"
-    ? candidate as SpaceDelegateEligibility
+    && repository !== null
+    ? {
+      eligible: true,
+      worldId: candidate.worldId,
+      worldRevision: candidate.worldRevision as number,
+      outcomeKey: candidate.outcomeKey,
+      workOrderId: candidate.workOrderId as number,
+      grantId: candidate.grantId as number,
+      actor: candidate.actor,
+      selectedPath: candidate.selectedPath,
+      ...(repository ? { repository } : {}),
+    }
     : null
 }
 type ReviewerDelegateContext = Readonly<{
@@ -167,6 +238,8 @@ type ReviewerDelegateContext = Readonly<{
   role: "Reviewer"
   assignment: string
   reviewPath: string
+  fileRef: WorkspaceFileRef
+  repositoryKey: string
   sessionId: string
   requiredSessionKey: string
   mode: "review" | "diff-review"
@@ -211,8 +284,8 @@ export type LineObjectBinding =
   | Readonly<{ kind: "space"; worldId: string; revision: number }>
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
-type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
-type CapturedDiffReview = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
+type CapturedDiffImprove = Readonly<{ path: string; fileRef: WorkspaceFileRef; fingerprint: string; worldId: string; transitionEpoch: number }>
+type CapturedDiffReview = Readonly<{ path: string; fileRef: WorkspaceFileRef; fingerprint: string; worldId: string; transitionEpoch: number }>
 type ChangeRefreshWaiter = {
   path: string
   resolve: (result: ChangeRefreshResult) => void
@@ -339,6 +412,8 @@ export function lineObjectBindingFingerprint(binding: LineObjectBinding | null):
 function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | null {
   if (!agent || agent.kind !== "durable-session" || agent.mode !== "review" && agent.mode !== "diff-review"
     || agent.providerLabel !== "Claude" || agent.role !== "Reviewer" || !agent.reviewPath
+    || !agent.fileRef || !agent.repository || agent.fileRef.path !== agent.reviewPath
+    || agent.fileRef.repositoryResourceKey !== agent.repository.resourceKey
     || !CLAUDE_REVIEW_SESSION_KEY.test(agent.id)) return null
   return {
     kind: "reviewer",
@@ -347,6 +422,8 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
     role: "Reviewer",
     assignment: agent.assignment,
     reviewPath: agent.reviewPath,
+    fileRef: agent.fileRef,
+    repositoryKey: agent.repository.resourceKey,
     sessionId: agent.id.slice("Claude:".length),
     requiredSessionKey: agent.id,
     mode: agent.mode,
@@ -575,6 +652,32 @@ function spaceMutationBody(
   return projectKey === "williamos" ? { ...value, projectKey } : value
 }
 
+export function workspaceFileDirtyKey(path: string, fileRef?: WorkspaceFileRef | null): string {
+  return fileRef?.path === path ? canonicalWorkspaceObjectKey(fileRef) : path
+}
+
+function workspaceFileIsDirty(
+  dirtyFiles: Readonly<Record<string, boolean>>,
+  path: string | null,
+  fileRef?: WorkspaceFileRef | null,
+): boolean {
+  return Boolean(path && dirtyFiles[workspaceFileDirtyKey(path, fileRef)])
+}
+
+export function applyRestoredWorkspaceSelection(
+  current: WorkspaceSpace,
+  restored: WorkspaceSpace,
+): WorkspaceSpace {
+  return {
+    ...current,
+    revision: restored.revision,
+    activeWindowId: restored.activeWindowId,
+    selectedPath: restored.selectedPath,
+    selectedFileRef: restored.selectedFileRef,
+    editor: restored.editor,
+  }
+}
+
 export function WorkspaceShell({
   initialSummon = null,
   projectKey = "terrafusion",
@@ -613,6 +716,7 @@ export function WorkspaceShell({
   const [fileDelegateEligibilityPending, setFileDelegateEligibilityPending] = useState(false)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
+  const [changeFileRef, setChangeFileRef] = useState<WorkspaceFileRef | null>(null)
   const [changeIntent, setChangeIntent] = useState<"change" | "improve-diff">("change")
   const [capturedDiffImprove, setCapturedDiffImprove] = useState<CapturedDiffImprove | null>(null)
   const [capturedDiffReview, setCapturedDiffReview] = useState<CapturedDiffReview | null>(null)
@@ -639,6 +743,7 @@ export function WorkspaceShell({
   const [liveDiffContext, setLiveDiffContext] = useState<(LiveDiffContext & { worldId: string }) | null>(null)
   const liveDiffContextRef = useRef<(LiveDiffContext & { worldId: string }) | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
+  const [reviewFileRef, setReviewFileRef] = useState<WorkspaceFileRef | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
   const dirtyPathsRef = useRef<Readonly<Record<string, boolean>>>({})
   const [changeRefresh, setChangeRefresh] = useState<ChangeRefresh>({ path: null, key: 0 })
@@ -651,6 +756,10 @@ export function WorkspaceShell({
   const [williamBusy, setWilliamBusy] = useState(false)
   const [williamError, setWilliamError] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
+  const [changeSetProjection, setChangeSetProjection] = useState<CrossRepositoryChangeSetProjection | null>(null)
+  const [changeSetBusy, setChangeSetBusy] = useState(false)
+  const [changeSetError, setChangeSetError] = useState<string | null>(null)
+  const [repositoryFocusKey, setRepositoryFocusKey] = useState<string | null>(null)
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
   const [councilSession, setCouncilSession] = useState<BrainCouncilSession | null>(null)
@@ -706,6 +815,7 @@ export function WorkspaceShell({
   const persistencePendingRef = useRef(persistencePending)
   const browserStorageKeyRef = useRef<string | null>(null)
   const previewEvidenceRequestRef = useRef(0)
+  const changeSetRequestRef = useRef(0)
   const previewExplainEvidenceRef = useRef<Readonly<{
     worldId: string
     transitionEpoch: number
@@ -757,6 +867,26 @@ export function WorkspaceShell({
   fileDelegateEligibilityRef.current = fileDelegateEligibility
   focusedAgentIdRef.current = focusedAgentId
 
+  function selectedRepositoryBindingIsCurrent(repository: AgentSessionRepository | undefined): boolean {
+    const selectedFileRef = stateRef.current.selectedFileRef
+    if (!selectedFileRef) return true
+    const selectedRepository = projectRef.current?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    return Boolean(repository
+      && selectedRepository
+      && selectedRepository.mount.verified
+      && selectedRepository.mount.revision
+      && selectedFileRef.path === stateRef.current.selectedPath
+      && selectedFileRef.projectIdentity === projectRef.current?.identity
+      && selectedFileRef.repositoryResourceKey === repository.resourceKey
+      && selectedFileRef.repositoryMountKey === repository.mountKey
+      && selectedFileRef.observedRevision === repository.observedRevision
+      && selectedRepository.identity === repository.identity
+      && selectedRepository.mount.key === repository.mountKey
+      && selectedRepository.mount.revision === repository.observedRevision)
+  }
+
   function exactFileAssignmentBindingIsCurrent(binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]>): boolean {
     const proof = binding.proofSource === "space"
       ? spaceDelegateEligibilityRef.current[binding.actor] ?? null
@@ -770,7 +900,7 @@ export function WorkspaceShell({
       && stateRef.current.revision === binding.worldRevision
       && acknowledgedRevisionRef.current === binding.worldRevision
       && revisionRef.current === binding.worldRevision
-      && !dirtyPathsRef.current[binding.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, binding.path, stateRef.current.selectedFileRef)
       && storageRef.current === "server"
       && !persistencePendingRef.current
       && !persistenceErrorRef.current
@@ -781,6 +911,9 @@ export function WorkspaceShell({
       && proof.grantId === binding.grantId
       && proof.actor === binding.actor
       && proof.selectedPath === binding.path
+      && selectedRepositoryBindingIsCurrent(binding.repository)
+      && selectedRepositoryBindingIsCurrent(proof.repository)
+      && JSON.stringify(proof.repository) === JSON.stringify(binding.repository)
   }
 
   function exactFileAssignmentOperationIsCurrent(operation: NonNullable<typeof fileAssignmentOperationRef.current>): boolean {
@@ -812,14 +945,17 @@ export function WorkspaceShell({
       ?? delegateContext.fileAssignmentProofs?.codex?.selectedPath
       ?? delegateContext.fileAssignmentProofs?.claude?.selectedPath
       ?? delegateContext.label
-    if (capturedPath === space.selectedPath) return
+    const capturedRepository = delegateContext.fileAssignmentBinding?.repository
+      ?? delegateContext.fileAssignmentProofs?.codex?.repository
+      ?? delegateContext.fileAssignmentProofs?.claude?.repository
+    if (capturedPath === space.selectedPath && selectedRepositoryBindingIsCurrent(capturedRepository)) return
     // Delegate is an object action. If the selected object changes before dispatch, discard the
     // stale client intent; the server will derive authority only from the newly persisted Space.
     setDelegateContext(null)
     setLineTarget("william")
     setLineInput("")
     setLineOpen(false)
-  }, [delegateContext, space.selectedPath])
+  }, [delegateContext, project, space.selectedFileRef, space.selectedPath])
 
   const appendConversation = useCallback((role: WilliamConversationEntry["role"], text: string) => {
     const normalized = text.trim()
@@ -976,7 +1112,7 @@ export function WorkspaceShell({
     }] })
   }, [materializeSurfaces])
 
-  const review = useSelectedFileReview({ path: reviewTarget, sessions: agentSessions, onReport: materializeReviewReport })
+  const review = useSelectedFileReview({ path: reviewTarget, fileRef: reviewFileRef, sessions: agentSessions, onReport: materializeReviewReport })
 
   const acceptLineReply = useCallback((reply: LineReply) => {
     // A Line turn can change server-only judgment facts (validation marks, concerns, failures,
@@ -1060,10 +1196,13 @@ export function WorkspaceShell({
         }
         const identity = payload.worldId
         const name = payload.name ?? payload.project?.name ?? "Space"
-        const restoredBase = normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        })
+        const restoredBase = qualifyLegacyWorkspaceFiles(
+          normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          }),
+          payload.project,
+        )
         const savedPreview = payload.project
           ? loadPreviewEvidenceSnapshot(payload.worldId, payload.project.identity)
           : null
@@ -1132,10 +1271,13 @@ export function WorkspaceShell({
     if (!response.ok) throw new Error(payload.error ?? `CONTINUATION_SPACE_${response.status}`)
     if (worldRef.current !== requestWorldId || transitionEpochRef.current !== requestEpoch
       || payload.worldId !== requestWorldId) throw new Error("CONTINUATION_SPACE_CHANGED")
-    const restored = normalizeSpace(
-      payload.space,
-      defaultSpace(window.innerWidth, window.innerHeight, requestWorldId, payload.name ?? projectRef.current?.name ?? "Space"),
-      { width: window.innerWidth, height: window.innerHeight },
+    const restored = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        payload.space,
+        defaultSpace(window.innerWidth, window.innerHeight, requestWorldId, payload.name ?? projectRef.current?.name ?? "Space"),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      payload.project ?? projectRef.current,
     )
     if (expectedSelectedPath !== undefined && restored.selectedPath !== expectedSelectedPath) {
       throw new Error("CONTINUATION_SELECTION_MISMATCH")
@@ -1143,13 +1285,7 @@ export function WorkspaceShell({
     revisionRef.current = restored.revision
     acknowledgedRevisionRef.current = restored.revision
     pendingPersistRef.current = null
-    setSpace((current) => ({
-      ...current,
-      revision: restored.revision,
-      activeWindowId: restored.activeWindowId,
-      selectedPath: restored.selectedPath,
-      editor: restored.editor,
-    }))
+    setSpace((current) => applyRestoredWorkspaceSelection(current, restored))
     if (payload.spine) setSpine(payload.spine)
     setPersistenceError(null)
     setPersistencePending(false)
@@ -1521,6 +1657,48 @@ export function WorkspaceShell({
     }
   }, [materializeSurfaces])
 
+  const openRepositoryDeliverySurface = useCallback(async (target: "change-set" | "preview-composition") => {
+    setOverlay(target)
+    setChangeSetError(null)
+    if (projectKey !== "terrafusion") {
+      setChangeSetProjection(null)
+      setChangeSetError("Cross-repository delivery belongs to the TerraFusion Project.")
+      return
+    }
+    const requestWorldId = worldRef.current
+    const requestEpoch = transitionEpochRef.current
+    const requestId = changeSetRequestRef.current + 1
+    changeSetRequestRef.current = requestId
+    if (!requestWorldId || storageRef.current !== "server") {
+      setChangeSetProjection(null)
+      setChangeSetError("Change Set evidence needs an open persistent server Space.")
+      return
+    }
+    setChangeSetBusy(true)
+    try {
+      const response = await fetch(`/api/environment/change-set?worldId=${encodeURIComponent(requestWorldId)}`, { cache: "no-store" })
+      const payload = await response.json() as CrossRepositoryChangeSetProjection & Readonly<{ error?: string }>
+      if (changeSetRequestRef.current !== requestId
+        || worldRef.current !== requestWorldId
+        || transitionEpochRef.current !== requestEpoch) return
+      if (!response.ok || payload.version !== "williamos-cross-repository-change-set.v1" || payload.worldId !== requestWorldId) {
+        throw new Error(payload.error ?? `CHANGE_SET_${response.status}`)
+      }
+      setChangeSetProjection(payload)
+    } catch (error) {
+      if (changeSetRequestRef.current === requestId
+        && worldRef.current === requestWorldId
+        && transitionEpochRef.current === requestEpoch) {
+        setChangeSetProjection(null)
+        setChangeSetError(error instanceof Error ? error.message : "Change Set evidence is unavailable.")
+      }
+    } finally {
+      if (changeSetRequestRef.current === requestId
+        && worldRef.current === requestWorldId
+        && transitionEpochRef.current === requestEpoch) setChangeSetBusy(false)
+    }
+  }, [projectKey])
+
   const openWilliamJudgmentInspector = useCallback(() => {
     const surface = williamJudgmentInspectorSurface(judgment)
     if (!surface) return
@@ -1642,9 +1820,10 @@ export function WorkspaceShell({
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [])
 
-  const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean) => {
+  const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean, fileRef?: WorkspaceFileRef | null) => {
+    const key = workspaceFileDirtyKey(path, fileRef)
     setDirtyPaths((current) => {
-      const next = current[path] === dirty ? current : { ...current, [path]: dirty }
+      const next = current[key] === dirty ? current : { ...current, [key]: dirty }
       dirtyPathsRef.current = next
       return next
     })
@@ -1678,7 +1857,8 @@ export function WorkspaceShell({
     worldId,
     projectKey,
     path: changeTarget,
-    dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
+    fileRef: changeFileRef,
+    dirty: workspaceFileIsDirty(dirtyPaths, changeTarget, changeFileRef),
     onVerifiedSuccess: refreshVerifiedChange,
     isOperationScopeCurrent: isChangeScopeCurrent,
   })
@@ -1691,10 +1871,12 @@ export function WorkspaceShell({
   const openChange = useCallback(() => {
     if (change.running || review.running) return
     const target = space.selectedPath
+    const fileRef = space.selectedFileRef?.path === target ? space.selectedFileRef : null
     setChangeIntent("change")
     setCapturedDiffImprove(null)
     setCapturedDiffReview(null)
     setChangeTarget(target)
+    setChangeFileRef(fileRef)
     change.reset(target)
     setLineTarget("william")
     setDelegateContext(null)
@@ -1705,15 +1887,17 @@ export function WorkspaceShell({
     setLineTargetPickerOpen(false)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.reset, change.running, review.running, space.selectedPath])
+  }, [change.reset, change.running, review.running, space.selectedFileRef, space.selectedPath])
 
   const openDiffImprove = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
-      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
-      || liveDiffContext.path !== space.selectedPath) return
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
+      || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
       path: liveDiffContext.path,
+      fileRef: space.selectedFileRef,
       fingerprint: liveDiffContext.fingerprint,
       worldId,
       transitionEpoch: transitionEpochRef.current,
@@ -1721,6 +1905,7 @@ export function WorkspaceShell({
     setChangeIntent("improve-diff")
     setCapturedDiffImprove(captured)
     setChangeTarget(captured.path)
+    setChangeFileRef(captured.fileRef)
     change.reset(captured.path)
     setLineTarget("william")
     setDelegateContext(null)
@@ -1731,15 +1916,17 @@ export function WorkspaceShell({
     setLineTargetPickerOpen(false)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
+  }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedFileRef, space.selectedPath, storage, worldId])
 
   const openDiffReview = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
-      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
-      || liveDiffContext.path !== space.selectedPath) return
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
+      || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
       path: liveDiffContext.path,
+      fileRef: space.selectedFileRef,
       fingerprint: liveDiffContext.fingerprint,
       worldId,
       transitionEpoch: transitionEpochRef.current,
@@ -1751,7 +1938,8 @@ export function WorkspaceShell({
         && transitionEpochRef.current === captured.transitionEpoch
         && storageRef.current === "server"
         && current.activeWindowId === "diff" && current.selectedPath === captured.path
-        && !dirtyPathsRef.current[captured.path]
+        && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
+        && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
         && live?.worldId === captured.worldId && live.path === captured.path
         && live.fingerprint === captured.fingerprint
         && !persistenceErrorRef.current)
@@ -1760,6 +1948,7 @@ export function WorkspaceShell({
     setAgentWorkReview(true)
     setCapturedDiffImprove(null)
     setReviewTarget(captured.path)
+    setReviewFileRef(captured.fileRef)
     review.reset(captured.path)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1772,6 +1961,7 @@ export function WorkspaceShell({
     void review.startCapturedDiff({
       worldId: captured.worldId,
       path: captured.path,
+      fileRef: captured.fileRef,
       fingerprint: captured.fingerprint,
       isCurrent: reviewIdentityIsCurrent,
       beforeStart: async () => {
@@ -1779,16 +1969,17 @@ export function WorkspaceShell({
         if (!reviewIdentityIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
       },
     })
-  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedPath, storage, worldId])
+  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedFileRef, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
     const target = space.selectedPath
+    const fileRef = space.selectedFileRef?.path === target ? space.selectedFileRef : null
     if (change.running || review.running) {
       setTransitionMessage("Finish the active Change or Review before reviewing another file.")
       return
     }
-    if (!worldId || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
-      setTransitionMessage(dirtyPaths[target ?? ""]
+    if (!worldId || !fileRef || !isReviewableWorkspacePath(target) || workspaceFileIsDirty(dirtyPaths, target, fileRef) || persistenceError) {
+      setTransitionMessage(workspaceFileIsDirty(dirtyPaths, target, fileRef)
         ? "Save the selected file before Review so Claude does not inspect stale disk content."
         : "Review needs an exact durably saved workspace-relative file in the active Space.")
       return
@@ -1798,6 +1989,7 @@ export function WorkspaceShell({
     setCapturedDiffReview(null)
     setAgentWorkReview(true)
     setReviewTarget(target)
+    setReviewFileRef(fileRef)
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1809,15 +2001,17 @@ export function WorkspaceShell({
     setLineOpen(true)
     void review.startCapturedPath({
       path: target,
+      fileRef,
       isStartCurrent: () => worldRef.current === capturedWorldId
         && transitionEpochRef.current === capturedEpoch
         && stateRef.current.selectedPath === target
-        && !dirtyPathsRef.current[target]
+        && JSON.stringify(stateRef.current.selectedFileRef) === JSON.stringify(fileRef)
+        && !workspaceFileIsDirty(dirtyPathsRef.current, target, fileRef)
         && !persistenceErrorRef.current,
       isPresentationCurrent: () => worldRef.current === capturedWorldId
         && transitionEpochRef.current === capturedEpoch,
     })
-  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedPath, worldId])
+  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedFileRef, space.selectedPath, worldId])
 
   const openAgentWorkReview = useCallback((sessionKey: string, target: string) => {
     if (change.running || review.running) {
@@ -1828,10 +2022,18 @@ export function WorkspaceShell({
     const capturedEpoch = transitionEpochRef.current
     const descriptor = agentSessions.savedSessions.find((candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey)
     if (!capturedWorldId || !descriptor || (descriptor.provider !== "Codex" && descriptor.provider !== "Claude")
-      || descriptor.target?.path !== target || agentSessions.collectionState !== "available"
+      || !project || !descriptor.repository || descriptor.target?.path !== target || agentSessions.collectionState !== "available"
       || agentSessions.selectedSessionKey !== sessionKey || focusedAgentId !== sessionKey) {
       setTransitionMessage("That durable agent no longer has an exact reviewable file target in this Space.")
       return
+    }
+    const fileRef: WorkspaceFileRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: descriptor.repository.resourceKey,
+      repositoryMountKey: descriptor.repository.mountKey,
+      worktreeKey: null,
+      observedRevision: descriptor.repository.observedRevision,
+      path: target,
     }
     const descriptorFingerprint = lineSessionDescriptorFingerprint(descriptor)
     const collectionFingerprint = lineSessionCollectionFingerprint(agentSessions.savedSessions)
@@ -1843,12 +2045,16 @@ export function WorkspaceShell({
         && agentSelectedSessionKeyRef.current === sessionKey
         && focusedAgentIdRef.current === sessionKey
         && exact?.target?.path === target
+        && exact.repository?.resourceKey === fileRef.repositoryResourceKey
+        && exact.repository.mountKey === fileRef.repositoryMountKey
+        && exact.repository.observedRevision === fileRef.observedRevision
         && lineSessionDescriptorFingerprint(exact) === descriptorFingerprint
         && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === collectionFingerprint
     }
     setCapturedDiffReview(null)
     setAgentWorkReview(true)
     setReviewTarget(target)
+    setReviewFileRef(fileRef)
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1860,10 +2066,11 @@ export function WorkspaceShell({
     setLineOpen(true)
     void review.startCapturedPath({
       path: target,
+      fileRef,
       isStartCurrent,
       isPresentationCurrent: () => worldRef.current === capturedWorldId && transitionEpochRef.current === capturedEpoch,
     })
-  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.selectedSessionKey, change.running, focusedAgentId, review.reset, review.running, review.startCapturedPath, worldId])
+  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.selectedSessionKey, change.running, focusedAgentId, project, review.reset, review.running, review.startCapturedPath, worldId])
 
   useEffect(() => {
     const summonLine = (event: KeyboardEvent) => {
@@ -2053,7 +2260,7 @@ export function WorkspaceShell({
       && !persistenceErrorRef.current
       && current.activeWindowId === "diff"
       && current.selectedPath === context.path
-      && !dirtyPathsRef.current[context.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.path, current.selectedFileRef)
       && live?.worldId === context.clientGuard.worldId
       && live.path === context.path
       && live.fingerprint === context.fingerprint
@@ -2073,7 +2280,7 @@ export function WorkspaceShell({
       && current.activeWindowId === "running-app"
       && current.runningAppUrl === context.clientGuard.runningAppUrl
       && current.selectedPath === context.selectedPath
-      && !dirtyPathsRef.current[context.selectedPath]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.selectedPath, current.selectedFileRef)
       && capturedEvidence?.worldId === context.clientGuard.worldId
       && capturedEvidence.transitionEpoch === context.clientGuard.transitionEpoch
       && capturedEvidence.requestId === context.clientGuard.requestId
@@ -2096,7 +2303,7 @@ export function WorkspaceShell({
       && current.revision === context.revision
       && current.activeWindowId === "editor"
       && current.selectedPath === context.path
-      && !dirtyPathsRef.current[context.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.path, current.selectedFileRef)
       && current.editor.activePaneId === context.activePaneId
       && pane?.activePath === context.path
       && pane?.selection?.anchor === context.selection.anchor
@@ -2108,7 +2315,9 @@ export function WorkspaceShell({
       || transitionEpochRef.current !== context.clientGuard.transitionEpoch
       || storageRef.current !== "server"
       || persistenceErrorRef.current) return false
-    const currentScope = `server:${context.clientGuard.worldId}`
+    const repositoryContext = deriveDeveloperToolRepositoryContext(projectKey, projectRef.current, stateRef.current)
+    if (!repositoryContext) return false
+    const currentScope = repositoryQualifiedToolHistoryScope(`server:${context.clientGuard.worldId}`, repositoryContext)
     if (currentScope !== context.clientGuard.scope) return false
     try {
       return captureToolRunSnapshots(
@@ -2120,7 +2329,7 @@ export function WorkspaceShell({
     } catch {
       return false
     }
-  }, [])
+  }, [projectKey])
 
   const sendWilliamTurn = useCallback(async (
     text: string,
@@ -2189,8 +2398,15 @@ export function WorkspaceShell({
       && selectedContextFingerprint() === requestContext
     try {
       await persistBarrierRef.current()
-      const effectiveContext = context ?? (includeBrowserToolRuns && shouldAttachToolRunSnapshots(normalized) && requestWorldId && storageRef.current === "server"
-        ? captureToolRunSnapshots(window.localStorage, `server:${requestWorldId}`, requestWorldId, requestEpoch)
+      const toolRepositoryContext = deriveDeveloperToolRepositoryContext(projectKey, projectRef.current, stateRef.current)
+      const effectiveContext = context ?? (includeBrowserToolRuns && shouldAttachToolRunSnapshots(normalized) && requestWorldId
+        && storageRef.current === "server" && toolRepositoryContext
+        ? captureToolRunSnapshots(
+          window.localStorage,
+          repositoryQualifiedToolHistoryScope(`server:${requestWorldId}`, toolRepositoryContext),
+          requestWorldId,
+          requestEpoch,
+        )
         : null)
       if (context && typeof context === "object" && context.kind === "agent-snapshot"
         && !agentSnapshotLineContextIsCurrent(context)) {
@@ -2328,7 +2544,8 @@ export function WorkspaceShell({
             && transitionEpochRef.current === captured.transitionEpoch
             && storageRef.current === "server"
             && current.activeWindowId === "diff" && current.selectedPath === captured.path
-            && !dirtyPathsRef.current[captured.path]
+            && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
+            && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
             && live?.worldId === captured.worldId
             && live.path === captured.path
             && live.fingerprint === captured.fingerprint)
@@ -2366,7 +2583,7 @@ export function WorkspaceShell({
           && transitionEpochRef.current === captured.transitionEpoch
           && storageRef.current === "server"
           && current.activeWindowId === "diff" && current.selectedPath === captured.path
-          && !dirtyPathsRef.current[captured.path]
+          && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
           && (!live || live.worldId === captured.worldId && live.path === captured.path
             && live.fingerprint === captured.fingerprint)
           && !persistenceErrorRef.current)
@@ -2379,6 +2596,7 @@ export function WorkspaceShell({
       void review.start(text, {
         worldId: captured.worldId,
         path: captured.path,
+        fileRef: captured.fileRef,
         fingerprint: captured.fingerprint,
         isCurrent: reviewIdentityIsCurrent,
         beforeStart: async () => {
@@ -2651,6 +2869,8 @@ export function WorkspaceShell({
               assignment: reviewerAgentContext.assignment,
               mode: reviewerAgentContext.mode,
               path: reviewerAgentContext.reviewPath,
+              fileRef: reviewerAgentContext.fileRef,
+              repositoryKey: reviewerAgentContext.repositoryKey,
               ...(reviewerAgentContext.diffReview ? {
                 worldId: reviewerAgentContext.diffReview.worldId,
                 expectedDiffFingerprint: reviewerAgentContext.diffReview.fingerprint,
@@ -2674,6 +2894,9 @@ export function WorkspaceShell({
                 && delegateContext.kind === "file" && delegateContext.fileAssignmentBinding
                 ? {
                   target: { kind: "file" as const, path: delegateContext.fileAssignmentBinding.path },
+                  ...(delegateContext.fileAssignmentBinding.repository
+                    ? { repositoryKey: delegateContext.fileAssignmentBinding.repository.resourceKey }
+                    : {}),
                   ...(delegateContext.provider === "Claude" ? {
                     expectedFileAuthority: {
                       worldId: delegateContext.fileAssignmentBinding.worldId,
@@ -2818,10 +3041,17 @@ export function WorkspaceShell({
     : space.activeWindowId === "diff" ? "diff" as const
     : space.activeWindowId === "editor" && space.selectedPath ? "file" as const
     : "space" as const
+  const selectedFileRepositoryLabel = space.selectedFileRef
+    ? project?.repositories?.find(
+      (repository) => repository.key === space.selectedFileRef?.repositoryResourceKey,
+    )?.label ?? null
+    : null
   const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
     : selectedKind === "preview" ? "TerraFusion developer preview"
     : selectedKind === "diff" ? "Current changes"
-    : selectedKind === "file" ? space.selectedPath!
+    : selectedKind === "file" && selectedFileRepositoryLabel
+      ? `${selectedFileRepositoryLabel} · ${space.selectedPath!}`
+      : selectedKind === "file" ? space.selectedPath!
     : `${project?.name ?? space.name} Space`
   const selectedKindLabel = selectedKind === "file" ? "file"
     : selectedKind === "preview" ? "preview"
@@ -2834,10 +3064,20 @@ export function WorkspaceShell({
     spaceDelegateEligibilityRequestRef.current = requestId
     setSpaceDelegateEligibility({})
     const path = space.selectedPath
+    const selectedFileRef = space.selectedFileRef
+    const selectedRepository = selectedFileRef && project?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    const repositorySelectionReady = !selectedFileRef || Boolean(selectedRepository
+      && selectedRepository.mount.verified && selectedRepository.mount.revision
+      && selectedFileRef.path === path && selectedFileRef.projectIdentity === project?.identity
+      && selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "space" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
-      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(path && isReviewableWorkspacePath(path) && !workspaceFileIsDirty(dirtyPaths, path, selectedFileRef))
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
     if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
       setSpaceDelegateEligibilityPending(false)
@@ -2846,12 +3086,19 @@ export function WorkspaceShell({
     const guard = {
       worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
       revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+      repositoryKey: selectedFileRef?.repositoryResourceKey ?? null,
+      repositoryIdentity: selectedRepository?.identity ?? null,
+      repositoryMountKey: selectedFileRef?.repositoryMountKey ?? null,
+      repositoryRevision: selectedFileRef?.observedRevision ?? null,
     }
     const controller = new AbortController()
     setSpaceDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({
+          worldId, actor, path, projectKey,
+          ...(guard.repositoryKey ? { repositoryKey: guard.repositoryKey } : {}),
+        }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2871,7 +3118,12 @@ export function WorkspaceShell({
       const exact = Object.fromEntries(proofs.flatMap((proof) => proof
         && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
         && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
-        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+        && proof.selectedPath === guard.path
+        && (!guard.repositoryKey || proof.repository?.resourceKey === guard.repositoryKey
+          && proof.repository.identity === guard.repositoryIdentity
+          && proof.repository.mountKey === guard.repositoryMountKey
+          && proof.repository.observedRevision === guard.repositoryRevision)
+        ? [[proof.actor, proof]] : []))
       setSpaceDelegateEligibility(exact)
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted && spaceDelegateEligibilityRequestRef.current === requestId) {
@@ -2881,7 +3133,7 @@ export function WorkspaceShell({
     return () => controller.abort()
   }, [
     dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
-    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+    space.selectedFileRef, space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
   useEffect(() => {
@@ -2889,10 +3141,20 @@ export function WorkspaceShell({
     fileDelegateEligibilityRequestRef.current = requestId
     setFileDelegateEligibility({})
     const path = space.selectedPath
+    const selectedFileRef = space.selectedFileRef
+    const selectedRepository = selectedFileRef && project?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    const repositorySelectionReady = !selectedFileRef || Boolean(selectedRepository
+      && selectedRepository.mount.verified && selectedRepository.mount.revision
+      && selectedFileRef.path === path && selectedFileRef.projectIdentity === project?.identity
+      && selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "file" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
-      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(path && isReviewableWorkspacePath(path) && !workspaceFileIsDirty(dirtyPaths, path, selectedFileRef))
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
     if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
       setFileDelegateEligibilityPending(false)
@@ -2901,12 +3163,19 @@ export function WorkspaceShell({
     const guard = {
       worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
       revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+      repositoryKey: selectedFileRef?.repositoryResourceKey ?? null,
+      repositoryIdentity: selectedRepository?.identity ?? null,
+      repositoryMountKey: selectedFileRef?.repositoryMountKey ?? null,
+      repositoryRevision: selectedFileRef?.observedRevision ?? null,
     }
     const controller = new AbortController()
     setFileDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({
+          worldId, actor, path, projectKey,
+          ...(guard.repositoryKey ? { repositoryKey: guard.repositoryKey } : {}),
+        }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2926,7 +3195,12 @@ export function WorkspaceShell({
       const exact = Object.fromEntries(proofs.flatMap((proof) => proof
         && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
         && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
-        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+        && proof.selectedPath === guard.path
+        && (!guard.repositoryKey || proof.repository?.resourceKey === guard.repositoryKey
+          && proof.repository.identity === guard.repositoryIdentity
+          && proof.repository.mountKey === guard.repositoryMountKey
+          && proof.repository.observedRevision === guard.repositoryRevision)
+        ? [[proof.actor, proof]] : []))
       setFileDelegateEligibility(exact)
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted && fileDelegateEligibilityRequestRef.current === requestId) {
@@ -2936,7 +3210,7 @@ export function WorkspaceShell({
     return () => controller.abort()
   }, [
     dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
-    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+    space.selectedFileRef, space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
   function currentLineObjectBinding(): LineObjectBinding | null {
@@ -3144,7 +3418,7 @@ export function WorkspaceShell({
       || persistencePending || persistenceError
       || acknowledgedRevisionRef.current !== space.revision
       || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
-      || dirtyPaths[space.selectedPath]
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
       ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
@@ -3170,7 +3444,7 @@ export function WorkspaceShell({
       || persistencePending || persistenceError
       || acknowledgedRevisionRef.current !== space.revision
       || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
-      || dirtyPaths[space.selectedPath]
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
       ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
@@ -3185,7 +3459,7 @@ export function WorkspaceShell({
   const diffReviewUnavailableReason = selectedKind !== "diff" ? null
     : storage !== "server" ? "Review requires a server-bound Space with durable persistence."
       : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
-        : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+        : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Review needs the exact live modified patch for the saved selected file."
             : persistencePending ? "Review waits until the current Space is durably saved."
@@ -3194,7 +3468,7 @@ export function WorkspaceShell({
     : storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."
       : persistenceError ? `Challenge is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Challenge waits until the current Space is durably saved."
-          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             || !liveModifiedDiffIdentity(liveDiffContext)
             ? "Challenge needs the exact live modified patch for the saved selected file."
@@ -3203,13 +3477,13 @@ export function WorkspaceShell({
     : storage !== "server" ? "Explain requires a server-bound Space with durable persistence."
       : persistenceError ? `Explain is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Explain waits until the current Space is durably saved."
-          : !worldId || !project || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !project || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             ? "Explain needs an exact durably saved selected source file."
             : null
   const fileReviewUnavailableReason = selectedKind !== "file" ? null
     : change.running || review.running ? "Finish the active Change or Review before reviewing another file."
       : !worldId || !isReviewableWorkspacePath(space.selectedPath) ? "Review needs an exact workspace-relative selected file."
-        : dirtyPaths[space.selectedPath] ? "Save the selected file before Review so Claude does not inspect stale disk content."
+        : workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) ? "Save the selected file before Review so Claude does not inspect stale disk content."
           : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
             : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", fileDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const
@@ -3225,7 +3499,7 @@ export function WorkspaceShell({
     : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
       : persistenceError ? `Improve is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Improve waits until the current Space is durably saved."
-          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Improve needs the exact live modified patch for the saved selected file."
             : null
@@ -3257,12 +3531,15 @@ export function WorkspaceShell({
     change.invalidate()
     inspectorReturnWindowRef.current.clear()
     const name = payload.name ?? payload.project?.name ?? "Space"
-    const restoredBase = normalizeSpace(
-      payload.space,
-      defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
-      { width: window.innerWidth, height: window.innerHeight },
-    )
     const restoredProject = payload.project ?? projectRef.current
+    const restoredBase = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        payload.space,
+        defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      restoredProject,
+    )
     const savedPreview = restoredProject
       ? loadPreviewEvidenceSnapshot(payload.worldId, restoredProject.identity)
       : null
@@ -3289,6 +3566,7 @@ export function WorkspaceShell({
       activeWindowId: previewSurface.id,
     } satisfies WorkspaceSpace : restoredBase
     transitionEpochRef.current += 1
+    changeSetRequestRef.current += 1
     invalidateCouncilView()
     councilSessionRef.current = null
     worldRef.current = payload.worldId
@@ -3328,6 +3606,9 @@ export function WorkspaceShell({
     setConversation(restoredConversation(payload.conversation))
     setWilliamInput("")
     setWilliamError(null)
+    setChangeSetProjection(null)
+    setChangeSetBusy(false)
+    setChangeSetError(null)
     setFocusedAgentId(null)
     setLineOpen(false)
     setLineInput("")
@@ -3337,11 +3618,13 @@ export function WorkspaceShell({
     setLineMode("default")
     setDelegateContext(null)
     setChangeTarget(null)
+    setChangeFileRef(null)
     setChangeIntent("change")
     setCapturedDiffImprove(null)
     setLiveDiffContext(null)
     liveDiffContextRef.current = null
     setReviewTarget(null)
+    setReviewFileRef(null)
     setAgentWorkReview(false)
     change.reset(null)
     review.reset(null)
@@ -3479,10 +3762,13 @@ export function WorkspaceShell({
   }
   const missionSpaces: readonly MissionControlSpaceProjection[] = spaceSummaries.map((summary) => {
     if (summary.worldId === worldId) return currentMissionSpace
-    const restored = normalizeSpace(
-      summary.space,
-      defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
-      { width: window.innerWidth, height: window.innerHeight },
+    const restored = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        summary.space,
+        defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      project,
     )
     const savedAgents = project
       ? loadSavedAgentSessionProjection(summary.worldId, project.identity)
@@ -3688,7 +3974,7 @@ export function WorkspaceShell({
             || stateRef.current.activeWindowId !== "running-app"
             || stateRef.current.runningAppUrl !== requestRunningAppUrl
             || stateRef.current.selectedPath !== requestPath
-            || dirtyPathsRef.current[requestPath]) throw new Error("LINE_CONTEXT_STALE")
+            || workspaceFileIsDirty(dirtyPathsRef.current, requestPath, stateRef.current.selectedFileRef)) throw new Error("LINE_CONTEXT_STALE")
           previewExplainEvidenceRef.current = {
             worldId: requestWorldId,
             transitionEpoch: requestEpoch,
@@ -3780,7 +4066,7 @@ export function WorkspaceShell({
       const identity = liveModifiedDiffIdentity(live)
       if (!worldId || !identity || live?.worldId !== worldId || identity.path !== space.selectedPath
         || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
-        || dirtyPathsRef.current[identity.path]) {
+        || workspaceFileIsDirty(dirtyPathsRef.current, identity.path, stateRef.current.selectedFileRef)) {
         setTransitionMessage("Challenge needs the exact live modified patch for the durably saved selected file.")
         return
       }
@@ -3798,7 +4084,7 @@ export function WorkspaceShell({
       const selectedPath = space.selectedPath
       const activePane = space.editor.panes.find((pane) => pane.id === space.editor.activePaneId) ?? null
       if (!worldId || !project || storageRef.current !== "server" || persistencePendingRef.current
-        || persistenceErrorRef.current || !selectedPath || dirtyPathsRef.current[selectedPath]
+        || persistenceErrorRef.current || !selectedPath || workspaceFileIsDirty(dirtyPathsRef.current, selectedPath, stateRef.current.selectedFileRef)
         || space.activeWindowId !== "editor" || !activePane || activePane.activePath !== selectedPath
         || !activePane.selection) {
         setTransitionMessage("Ask needs the exact durably saved selected file in a server-bound Space.")
@@ -3944,6 +4230,7 @@ export function WorkspaceShell({
         path: proof.selectedPath,
         actor,
         proofSource: current.fileAssignmentProofSource ?? "file",
+        ...(proof.repository ? { repository: proof.repository } : {}),
       }
       return exactFileAssignmentBindingIsCurrent(binding)
         ? { ...current, provider, fileAssignmentBinding: binding }
@@ -4012,11 +4299,92 @@ export function WorkspaceShell({
     }
   }
 
-  const toolRunHistoryScope = storage === "server" && worldId
+  const selectedRepository = project?.repositories?.find((repository) => repository.key === space.selectedFileRef?.repositoryResourceKey)
+    ?? project?.repositories?.find((repository) => repository.defaultRepository)
+    ?? null
+  const repositoryViews: readonly RepositoryShelfRepository[] = (project?.repositories ?? []).map((repository) => ({
+    repositoryKey: repository.key,
+    ...(repository.repositoryResourceId ? { repositoryResourceId: repository.repositoryResourceId } : {}),
+    name: repository.label,
+    canonicalIdentity: repository.identity,
+    role: repository.role,
+    ...(repository.suite ? { suite: repository.suite } : {}),
+    workingSet: repository.defaultRepository || Boolean(space.editor.openFileRefs?.some((file) => file.repositoryResourceKey === repository.key)),
+    active: selectedRepository?.key === repository.key,
+    readOnly: !repository.mount.verified,
+    preview: repository.previewSource ? "source" : "none",
+    mounts: repository.mount.configured ? [{
+      id: repository.mount.key,
+      node: "Current host",
+      label: repository.mount.verified ? "verified checkout" : "configured mount",
+      branch: repository.mount.branch ?? "branch unavailable",
+      revision: repository.mount.revision ?? repository.mount.refusal ?? "revision unavailable",
+      status: repository.mount.verified ? "ready" : "unavailable",
+      cleanliness: "unknown",
+    }] : [],
+    entries: [],
+    agents: agentSessions.sessions.filter((session) => session.repository?.resourceKey === repository.key).map((session) => ({
+      id: session.id,
+      name: session.providerLabel,
+      role: session.role,
+      activity: session.presentation ?? session.assignment,
+      state: session.status === "working" || session.status === "thinking"
+        ? session.role === "Reviewer" ? "reviewing" as const : "working" as const
+        : session.status === "blocked" ? "blocked" as const : "waiting" as const,
+    })),
+  }))
+  const repositoryRelationships: readonly RepositoryRelationship[] = repositoryViews.flatMap((repository): RepositoryRelationship[] => {
+    if (repository.role === "suite-source") return [{
+      id: `${repository.repositoryKey}:os-1`,
+      fromRepositoryKey: repository.repositoryKey,
+      toRepositoryKey: "os-1",
+      label: `${repository.name} integration`,
+      kind: "consumed-by" as const,
+      status: "waiting" as const,
+      detail: "No assimilated artifact evidence is attached to the current Space.",
+    }]
+    if (repository.role === "sovereign-planning-and-promotion") return [{
+      id: `${repository.repositoryKey}:os-1`,
+      fromRepositoryKey: repository.repositoryKey,
+      toRepositoryKey: "os-1",
+      label: "Sovereign planning context",
+      kind: "informs" as const,
+      status: "reference" as const,
+      detail: "Planning and promotion context only; runtime dependency is none.",
+    }]
+    return []
+  })
+  const changeSetModel = changeSetProjection
+    ? changeSetSurfaceModel(changeSetProjection, (project?.repositories ?? []).map((repository) => ({
+        key: repository.key,
+        label: repository.label,
+        role: repository.role,
+      })))
+    : null
+  const pendingSuiteChanges: readonly PendingSuiteChange[] = (changeSetProjection?.units ?? []).flatMap((unit) => {
+    const repository = project?.repositories?.find((candidate) => candidate.key === unit.repository.key)
+    if (repository?.role !== "suite-source" || !repository.suite || !unit.git.revision) return []
+    return [{
+      suite: repository.label,
+      repositoryKey: repository.key,
+      revision: unit.git.revision,
+      state: unit.delivery.state === "sealed" ? "delivery-sealed" as const : "repository-changed" as const,
+      detail: "No runtime-composition attestation links this exact repository delivery to the running Preview.",
+    }]
+  })
+  const sovereignRepository = project?.repositories?.find((repository) => repository.role === "sovereign-planning-and-promotion") ?? null
+  const sovereignContext = sovereignRepository?.mount.verified && sovereignRepository.mount.revision
+    ? { repositoryName: sovereignRepository.label, revision: sovereignRepository.mount.revision }
+    : null
+  const developerToolRepositoryContext = deriveDeveloperToolRepositoryContext(projectKey, project, space)
+  const toolRunBaseHistoryScope = storage === "server" && worldId
     ? `server:${worldId}`
     : storage === "browser" && browserStorageKeyRef.current
       ? `browser:${browserStorageKeyRef.current}`
       : null
+  const toolRunHistoryScope = toolRunBaseHistoryScope && developerToolRepositoryContext
+    ? repositoryQualifiedToolHistoryScope(toolRunBaseHistoryScope, developerToolRepositoryContext)
+    : null
 
   return (
     <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? "Workspace"} Space`}>
@@ -4117,16 +4485,19 @@ export function WorkspaceShell({
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
         <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={Boolean(sourceMinimizeDisabledReason)} minimizeDisabledReason={sourceMinimizeDisabledReason}>
-          <EditorSurface key={worldId ?? "unhydrated"} projectName={project?.name ?? "Project"} projectKey={projectKey} space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
+          <EditorSurface key={worldId ?? "unhydrated"} project={project ?? undefined} projectName={project?.name ?? "Project"} projectKey={projectKey} requestedRepositoryKey={repositoryFocusKey} space={space} onEditorChange={(editor, selectedPath, selectedFileRef) => setSpace((current) => ({ ...current, editor, selectedPath, ...(selectedFileRef !== undefined ? { selectedFileRef } : {}) }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
-          {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
-            <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
-          )}
+          <div className={spatial.previewHost}>
+            <button type="button" className={spatial.previewCompositionButton} onClick={() => void openRepositoryDeliverySurface("preview-composition")} aria-label="Inspect Preview composition" title="Inspect exact runtime composition"><Layers3 size={13} />Composition</button>
+            {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
+              <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
+            )}
+          </div>
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} repositoryKey={selectedRepository?.key ?? null} repositoryLabel={selectedRepository?.label ?? null} repositoryContext={developerToolRepositoryContext} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
               const next = context && worldId ? { ...context, worldId } : current?.worldId === worldId ? null : current
               liveDiffContextRef.current = next
               return next
@@ -4147,6 +4518,8 @@ export function WorkspaceShell({
           </button>
         ))}
         <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
+        {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => setOverlay("repository-map")} aria-label="Open Repository Map" title="Repository Map"><GitFork size={15} /></button> : null}
+        {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => void openRepositoryDeliverySurface("change-set")} aria-label="Open Change Set" title="Cross-repository Change Set"><GitPullRequest size={15} /></button> : null}
         <button type="button" className={spatial.dockButton} onClick={() => void openCouncilHistory()} aria-label="Open Brain Council" title="Brain Council"><Users size={15} /></button>
       </nav>
 
@@ -4215,6 +4588,24 @@ export function WorkspaceShell({
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} busy={councilBusy} error={councilError} onDismiss={dismissCouncil} onAdvisoryAction={(action) => void handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={dismissCouncil}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={dismissCouncil} onSelect={selectCouncilHistory} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
       {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} onRemoveSpace={removeMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
+      {overlay === "repository-map" ? <div className={spatial.councilHost}><RepositoryMapSurface repositories={repositoryViews} relationships={repositoryRelationships} onDismiss={() => setOverlay(null)} onSelectRepository={(repositoryKey) => {
+        setRepositoryFocusKey(repositoryKey)
+        setOverlay(null)
+        activate("editor")
+      }} /></div> : null}
+      {overlay === "change-set" ? <div className={spatial.councilHost}>{changeSetModel ? <ChangeSetSurface {...changeSetModel} onDismiss={() => setOverlay(null)} onSelectRepository={(repositoryKey) => {
+        setRepositoryFocusKey(repositoryKey)
+        setOverlay(null)
+        activate("editor")
+      }} /> : <section className={spatial.utilitySurface} aria-label="Cross-repository Change Set"><header className={spatial.utilityMeta}><span>Change Set</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{changeSetBusy ? "Loading persisted delivery evidence…" : "Change Set unavailable"}</strong><p className={spatial.muted}>{changeSetError ?? "No repository-qualified delivery is recorded for this Space."}</p></div></section>}</div> : null}
+      {overlay === "preview-composition" ? <div className={spatial.councilHost}><PreviewComposition
+        state={space.runningAppUrl ? "unverified" : "unavailable"}
+        runtime={null}
+        consumedArtifacts={[]}
+        pendingSuiteChanges={pendingSuiteChanges}
+        sovereignContext={sovereignContext}
+        onDismiss={() => setOverlay(null)}
+      /></div> : null}
     </main>
   )
 }

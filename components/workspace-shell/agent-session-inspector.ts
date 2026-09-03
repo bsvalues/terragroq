@@ -1,4 +1,6 @@
 import type { DurableAgentSession } from "./agent-sessions"
+import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
+import { parseAssignmentContextManifestView } from "./assignment-context-view"
 
 export const AGENT_SESSION_INSPECTOR_PAYLOAD_KIND = "agent-session"
 // Reuse the already-persisted bounded Inspector payload channel. The payload kind remains exact.
@@ -16,9 +18,11 @@ export type AgentSessionInspectorSnapshot = Readonly<{
   kind: typeof AGENT_SESSION_INSPECTOR_PAYLOAD_KIND
   sessionKey: string
   sessionId: string
+  assignmentId: string
   role: string
   provider: "Codex" | "Claude" | "Local"
   assignment: string
+  contextManifest: AssignmentContextManifest | null
   verificationAtCapture: "verified" | "saved-resume-unverified"
   capturedAt: string
   mode: "delegate" | "review" | "diff-review" | "preview" | "conversation" | "fork"
@@ -98,7 +102,12 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
   try { decoded = JSON.parse(value) } catch { return null }
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return null
   const row = decoded as Record<string, unknown>
-  if (!exactKeys(row, ["schemaVersion", "kind", "sessionKey", "sessionId", "role", "provider", "assignment", "verificationAtCapture", "capturedAt", "mode", "target", "forkedFrom", "updatedAt", "turns"])
+  const expectedKeys = ["schemaVersion", "kind", "sessionKey", "sessionId", "role", "provider", "assignment", "verificationAtCapture", "capturedAt", "mode", "target", "forkedFrom", "updatedAt", "turns"]
+  const validKeys = exactKeys(row, expectedKeys)
+    || exactKeys(row, [...expectedKeys, "contextManifest"])
+    || exactKeys(row, [...expectedKeys, "assignmentId"])
+    || exactKeys(row, [...expectedKeys, "assignmentId", "contextManifest"])
+  if (!validKeys
     || row.schemaVersion !== 1 || row.kind !== AGENT_SESSION_INSPECTOR_PAYLOAD_KIND
     || !providers.has(row.provider as string) || !validSessionId(row.provider, row.sessionId)
     || row.sessionKey !== `${row.provider}:${row.sessionId}` || !text(row.sessionKey, 300)
@@ -108,6 +117,15 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
     || !Array.isArray(row.turns) || row.turns.length > 20) return null
   const target = parseTarget(row.target)
   if (target === undefined) return null
+  const assignmentId = row.assignmentId === undefined ? row.sessionId : row.assignmentId
+  if (!text(assignmentId, 300)) return null
+  const contextManifest = row.contextManifest === undefined || row.contextManifest === null
+    ? null
+    : parseAssignmentContextManifestView(row.contextManifest)
+  if (row.contextManifest !== undefined && row.contextManifest !== null && !contextManifest
+    || contextManifest && (contextManifest.assignment.assignmentId !== assignmentId
+      || target?.kind !== "file"
+      || !contextManifest.mutationPosture.target.writablePaths.includes(target.path))) return null
   const turns: { ownerPrompt: string; finalResult: string; completedAt: string }[] = []
   for (const value of row.turns) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null
@@ -121,9 +139,11 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
     kind: AGENT_SESSION_INSPECTOR_PAYLOAD_KIND,
     sessionKey: row.sessionKey as string,
     sessionId: row.sessionId as string,
+    assignmentId,
     role: row.role as string,
     provider: row.provider as AgentSessionInspectorSnapshot["provider"],
     assignment: row.assignment as string,
+    contextManifest,
     verificationAtCapture: row.verificationAtCapture as AgentSessionInspectorSnapshot["verificationAtCapture"],
     capturedAt: row.capturedAt as string,
     mode: row.mode as AgentSessionInspectorSnapshot["mode"],
@@ -155,9 +175,11 @@ export function encodeAgentSessionInspectorPayload(
     kind: AGENT_SESSION_INSPECTOR_PAYLOAD_KIND,
     sessionKey,
     sessionId: descriptor.sessionId,
+    assignmentId: descriptor.assignmentId ?? descriptor.sessionId,
     role: descriptor.role,
     provider: descriptor.provider,
     assignment: descriptor.assignment,
+    contextManifest: descriptor.contextManifest ?? null,
     verificationAtCapture: truth === "live" ? "verified" : "saved-resume-unverified",
     capturedAt,
     mode: sessionMode(descriptor),

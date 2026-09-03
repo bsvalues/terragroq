@@ -15,7 +15,11 @@ vi.mock("next/dynamic", () => ({
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.localStorage.clear(); vi.unstubAllGlobals() })
 
+const PROJECT_REVISION = "a".repeat(40)
+const PROJECT_REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: PROJECT_REVISION, refusal: null } }
+const PROJECT_TOOL_IDENTITY = { repositoryKey: PROJECT_REPOSITORY.key, repositoryIdentity: PROJECT_REPOSITORY.identity, repositoryMountKey: PROJECT_REPOSITORY.mount.key, observedRevision: PROJECT_REVISION } as const
 const project = { identity: "c:/project", name: "Project" }
+const exactProject = { ...project, repositories: [PROJECT_REPOSITORY] }
 const preferenceStorageKey = "opaque-preference"
 const alpha = spaceToServer({ ...defaultSpace(1440, 900, "a", "Alpha"), windows: { ...defaultSpace().windows, editor: { ...defaultSpace().windows.editor, x: 41 } } })
 const beta = spaceToServer({ ...defaultSpace(1440, 900, "b", "Beta"), windows: { ...defaultSpace().windows, editor: { ...defaultSpace().windows.editor, x: 177 } } })
@@ -587,7 +591,7 @@ describe("Experience V2 multi-Space re-entry", () => {
     const pendingRun = new Promise<Response>((done) => { settleRun = done })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), project: exactProject }) }
       if (url === "/api/loom/run" && init?.method === "POST") return pendingRun
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
       return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
@@ -598,7 +602,7 @@ describe("Experience V2 multi-Space re-entry", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
     expect(screen.getByText("Stop the active Test or Terminal run before switching Spaces.")).toBeTruthy()
-    settleRun(new Response(`${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
+    settleRun(new Response(`${JSON.stringify({ type: "started", operation: "tests.run", label: "Run the tests", mutating: false, ...PROJECT_TOOL_IDENTITY })}\n${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
   })
 
   it("blocks re-entry while canonical Space execution is live", async () => {

@@ -22,6 +22,10 @@ const BASE_HASH = "a".repeat(40)
 const INDEX_HASH = "b".repeat(64)
 const PATCH_HASH = "c".repeat(64)
 const COMPLETED_AT = "2026-08-30T09:00:00.000Z"
+const REVISION = "d".repeat(40)
+const REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: REVISION, refusal: null } }
+const FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVISION, path: PATH } as const
+const DIFF_REPOSITORY_IDENTITY = { repository: { key: REPOSITORY.key, identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } } as const
 
 const diffReviewBinding = {
   worldId: WORLD_ID,
@@ -45,9 +49,11 @@ function initialSpace() {
     ...space,
     activeWindowId: "diff" as const,
     selectedPath: PATH,
+    selectedFileRef: FILE_REF,
     editor: {
       openFiles: [PATH],
-      panes: [{ id: "primary" as const, activePath: PATH, selection: { anchor: 0, head: 0 } }],
+      openFileRefs: [FILE_REF],
+      panes: [{ id: "primary" as const, activePath: PATH, activeFileRef: FILE_REF, selection: { anchor: 0, head: 0 } }],
       activePaneId: "primary" as const,
     },
   }
@@ -61,7 +67,7 @@ function spaceEnvelope(storage: "server" | "browser" = "server") {
     space: spaceToServer(space),
     spaces: [{ worldId: WORLD_ID, name: "TerraFusion", space: spaceToServer(space), updatedAt: COMPLETED_AT }],
     spine: EMPTY_SPINE,
-    project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+    project: { identity: "c:/repos/terrafusion", name: "TerraFusion", repositories: [REPOSITORY] },
     storage,
     ...(storage === "browser" ? { browserStorageKey: "diff-review-browser" } : {}),
   }
@@ -88,6 +94,10 @@ function successfulReview(result = "P1 · The changed authorization check is too
       indexHash: INDEX_HASH,
       patchHash: PATCH_HASH,
       completedAt: COMPLETED_AT,
+      repositoryResourceKey: "os-1",
+      repositoryIdentity: REPOSITORY.identity,
+      repositoryMountKey: REPOSITORY.mount.key,
+      observedRevision: REVISION,
     },
     { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: SESSION_ID, result } },
     { type: "done", code: 0, reason: null },
@@ -104,7 +114,7 @@ function workspaceFetch({
   review?: (init: RequestInit) => Response | Promise<Response>
 } = {}) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = String(input).replace("&repositoryKey=os-1", "")
     if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json(spaceEnvelope(storage)))
     if (url === "/api/environment/space" && init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -112,13 +122,14 @@ function workspaceFetch({
     }
     if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
     if (url === `/api/loom/files?path=${encodeURIComponent(PATH)}` && !init?.method) {
-      return Promise.resolve(Response.json({ kind: "file", path: PATH, content: "export const app = true\n" }))
+      return Promise.resolve(Response.json({ kind: "file", path: PATH, content: "export const app = true\n", repository: { key: "os-1", identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } }))
     }
     if (url === `/api/loom/diff?path=${encodeURIComponent(PATH)}` && !init?.method) {
       if (diffState === "error") return Promise.resolve(Response.json({ error: "GIT_UNAVAILABLE" }, { status: 503 }))
-      if (diffState === "oversize") return Promise.resolve(Response.json({ path: PATH, state: "oversize", fingerprint: FINGERPRINT, diff: "", status: " M src/app.ts", reason: "PATCH_TOO_LARGE" }))
-      if (diffState === "clean") return Promise.resolve(Response.json({ path: PATH, state: "clean", fingerprint: FINGERPRINT, diff: "", status: "", untracked: false }))
+      if (diffState === "oversize") return Promise.resolve(Response.json({ ...DIFF_REPOSITORY_IDENTITY, path: PATH, state: "oversize", fingerprint: FINGERPRINT, diff: "", status: " M src/app.ts", reason: "PATCH_TOO_LARGE" }))
+      if (diffState === "clean") return Promise.resolve(Response.json({ ...DIFF_REPOSITORY_IDENTITY, path: PATH, state: "clean", fingerprint: FINGERPRINT, diff: "", status: "", untracked: false }))
       return Promise.resolve(Response.json({
+        ...DIFF_REPOSITORY_IDENTITY,
         path: PATH,
         state: "modified",
         fingerprint: FINGERPRINT,
@@ -228,7 +239,7 @@ describe("Experience V2 current Changes Review", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    const review = await screen.findByRole("button", { name: "Review" }) as HTMLButtonElement
+    const review = await screen.findByRole("button", { name: "Review" }, { timeout: 5_000 }) as HTMLButtonElement
     await waitFor(() => expect(review.disabled).toBe(false))
     fireEvent.click(review)
 
@@ -245,6 +256,8 @@ describe("Experience V2 current Changes Review", () => {
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
       mode: "diff-review", worldId: WORLD_ID, path: PATH, expectedDiffFingerprint: FINGERPRINT,
       projectKey: "terrafusion",
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       provider: "cloud", sessionId: null, resume: false,
     })
   })
@@ -283,6 +296,8 @@ describe("Experience V2 current Changes Review", () => {
       worldId: WORLD_ID,
       projectKey: "terrafusion",
       path: PATH,
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       expectedDiffFingerprint: FINGERPRINT,
       provider: "cloud",
       sessionId: null,
@@ -316,6 +331,8 @@ describe("Experience V2 current Changes Review", () => {
           type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "diff-review", resumed: true,
           worldId: WORLD_ID, path: PATH, fingerprint: FINGERPRINT, baseHash: BASE_HASH,
           indexHash: INDEX_HASH, patchHash: PATCH_HASH, completedAt: COMPLETED_AT,
+          repositoryResourceKey: "os-1", repositoryIdentity: REPOSITORY.identity,
+          repositoryMountKey: REPOSITORY.mount.key, observedRevision: REVISION,
         },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: SESSION_ID, result: "Follow-up stayed on the exact patch." } },
         { type: "done", code: 0, reason: null },
@@ -338,6 +355,8 @@ describe("Experience V2 current Changes Review", () => {
       worldId: WORLD_ID,
       projectKey: "terrafusion",
       path: PATH,
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       expectedDiffFingerprint: FINGERPRINT,
       focus: "Recheck the failure mode.",
       provider: "cloud",

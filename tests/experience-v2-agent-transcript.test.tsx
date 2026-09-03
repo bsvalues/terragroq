@@ -10,6 +10,27 @@ const CODEX = "codex-transcript-session"
 const CLAUDE = "123e4567-e89b-42d3-a456-426614174000"
 const LOCAL = "223e4567-e89b-42d3-a456-426614174000"
 const UNVERIFIED = "323e4567-e89b-42d3-a456-426614174000"
+const OS1_REVISION = "a".repeat(40)
+const OS1_REPOSITORY = {
+  resourceKey: "os-1",
+  identity: "bsvalues/terrafusion_os_1.0",
+  mountKey: "terrafusion:os-1:configured",
+  observedRevision: OS1_REVISION,
+} as const
+
+function reviewerFileBinding(path: string) {
+  return {
+    repository: OS1_REPOSITORY,
+    fileRef: {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+      repositoryMountKey: OS1_REPOSITORY.mountKey,
+      worktreeKey: null,
+      observedRevision: OS1_REVISION,
+      path,
+    },
+  } as const
+}
 
 const harness = vi.hoisted(() => ({ controller: null as any }))
 
@@ -44,6 +65,7 @@ const savedSessions = [
     provider: "Claude" as const,
     assignment: "Review src/workspace-shell.tsx",
     reviewPath: "src/workspace-shell.tsx",
+    ...reviewerFileBinding("src/workspace-shell.tsx"),
     updatedAt: "2026-08-30T13:06:00.000Z",
     completedTurns: [
       { ownerPrompt: "Review the current interaction.", finalResult: "The interaction preserves its exact session identity.", completedAt: "2026-08-30T13:06:00.000Z" },
@@ -90,6 +112,7 @@ function projection(provider: "Codex" | "Claude" | "Local", sessionId: string, r
     kind: "durable-session" as const,
     mode: options.mode ?? "delegate" as const,
     ...(options.reviewPath ? { reviewPath: options.reviewPath } : {}),
+    ...(options.reviewPath ? reviewerFileBinding(options.reviewPath) : {}),
     ...(options.presentation ? { presentation: options.presentation } : {}),
     ...(lastResult ? { lastResult } : {}),
   }

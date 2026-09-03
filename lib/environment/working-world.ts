@@ -14,6 +14,11 @@
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { validateCouncilHistory, type CouncilSession } from "@/lib/environment/council-session"
+import {
+  canonicalWorkspaceObjectKey,
+  parseWorkspaceFileRef,
+  type WorkspaceFileRef,
+} from "@/lib/projects/workspace-object-ref"
 
 export type SurfaceKind =
   | "browser" | "editor" | "diff" | "tests" | "terminal" | "trace" | "diagram" | "document" | "agent" | "data"
@@ -100,12 +105,15 @@ export type SpaceState = Readonly<{
   revision: number
   windows: readonly SpaceWindow[]
   openFiles: readonly string[]
+  /** Repository-qualified identity for each open file. Legacy snapshots omit this field. */
+  fileRefs?: readonly WorkspaceFileRef[]
   panes: readonly Readonly<{
     id: string
     filePath: string | null
+    fileRef?: WorkspaceFileRef | null
     selection?: Readonly<{ anchor: number; head: number }> | null
   }>[]
-  selection: Readonly<{ filePath: string; anchor: number; head: number }> | null
+  selection: Readonly<{ filePath: string; fileRef?: WorkspaceFileRef; anchor: number; head: number }> | null
   activeWindowId: string | null
   activePaneId: string | null
   /** Server-derived canonical running product URL; null means no truthful serving path is known. */
@@ -417,7 +425,7 @@ export function validateSpaceState(raw: unknown): SpaceState {
   const space = record(raw, "SPACE_MALFORMED")
   exactKeys(space, [
     "schemaVersion", "revision", "windows", "openFiles", "panes", "selection", "activeWindowId", "activePaneId",
-    "runningAppUrl",
+    "runningAppUrl", "fileRefs",
   ], "SPACE_UNKNOWN_KEY")
   if (space.schemaVersion !== 1) throw new Error("SPACE_SCHEMA_UNKNOWN")
   if (!Number.isSafeInteger(space.revision) || (space.revision as number) < 0) {
@@ -475,17 +483,32 @@ export function validateSpaceState(raw: unknown): SpaceState {
   })
 
   const openFiles = space.openFiles.map(workspaceRelativePath)
+  const fileRefs = space.fileRefs === undefined ? undefined : (() => {
+    if (!Array.isArray(space.fileRefs) || space.fileRefs.length > 64) throw new Error("SPACE_FILE_REFS_INVALID")
+    const refs = space.fileRefs.map(parseWorkspaceFileRef)
+    const keys = refs.map(canonicalWorkspaceObjectKey)
+    if (new Set(keys).size !== keys.length) throw new Error("SPACE_FILE_REFS_DUPLICATE")
+    if (refs.length !== openFiles.length || refs.some((ref, index) => ref.path !== openFiles[index])) {
+      throw new Error("SPACE_FILE_REFS_MISMATCH")
+    }
+    return refs
+  })()
   const openFileSet = new Set(openFiles)
-  if (openFileSet.size !== openFiles.length) throw new Error("SPACE_OPEN_FILES_DUPLICATE")
+  if (openFileSet.size !== openFiles.length && fileRefs === undefined) throw new Error("SPACE_OPEN_FILES_DUPLICATE")
+  const openFileRefKeys = new Set(fileRefs?.map(canonicalWorkspaceObjectKey) ?? [])
   const paneIds = new Set<string>()
   const panes = space.panes.map((rawPane) => {
     const pane = record(rawPane, "SPACE_PANE_MALFORMED")
-    exactKeys(pane, ["id", "filePath", "selection"], "SPACE_PANE_UNKNOWN_KEY")
+    exactKeys(pane, ["id", "filePath", "fileRef", "selection"], "SPACE_PANE_UNKNOWN_KEY")
     const id = boundedString(pane.id, "SPACE_PANE_ID_INVALID", 120)
     if (paneIds.has(id)) throw new Error("SPACE_PANE_ID_DUPLICATE")
     paneIds.add(id)
     const filePath = pane.filePath === null ? null : workspaceRelativePath(pane.filePath)
     if (filePath !== null && !openFileSet.has(filePath)) throw new Error("SPACE_PANE_FILE_NOT_OPEN")
+    const fileRef = pane.fileRef === undefined || pane.fileRef === null ? pane.fileRef : parseWorkspaceFileRef(pane.fileRef)
+    if (fileRef && (fileRef.path !== filePath || !openFileRefKeys.has(canonicalWorkspaceObjectKey(fileRef)))) {
+      throw new Error("SPACE_PANE_FILE_REF_NOT_OPEN")
+    }
     let paneSelection: { anchor: number; head: number } | null | undefined
     if (pane.selection === null) {
       paneSelection = null
@@ -499,20 +522,34 @@ export function validateSpaceState(raw: unknown): SpaceState {
       }
       paneSelection = { anchor: rawPaneSelection.anchor as number, head: rawPaneSelection.head as number }
     }
-    return paneSelection === undefined ? { id, filePath } : { id, filePath, selection: paneSelection }
+    return {
+      id,
+      filePath,
+      ...(fileRef !== undefined ? { fileRef } : {}),
+      ...(paneSelection !== undefined ? { selection: paneSelection } : {}),
+    }
   })
 
   let selection: SpaceState["selection"] = null
   if (space.selection !== null) {
     const rawSelection = record(space.selection, "SPACE_SELECTION_MALFORMED")
-    exactKeys(rawSelection, ["filePath", "anchor", "head"], "SPACE_SELECTION_UNKNOWN_KEY")
+    exactKeys(rawSelection, ["filePath", "fileRef", "anchor", "head"], "SPACE_SELECTION_UNKNOWN_KEY")
     const filePath = workspaceRelativePath(rawSelection.filePath)
     if (!openFileSet.has(filePath)) throw new Error("SPACE_SELECTION_FILE_NOT_OPEN")
     if (!Number.isSafeInteger(rawSelection.anchor) || (rawSelection.anchor as number) < 0
       || !Number.isSafeInteger(rawSelection.head) || (rawSelection.head as number) < 0) {
       throw new Error("SPACE_SELECTION_INVALID")
     }
-    selection = { filePath, anchor: rawSelection.anchor as number, head: rawSelection.head as number }
+    const fileRef = rawSelection.fileRef === undefined ? undefined : parseWorkspaceFileRef(rawSelection.fileRef)
+    if (fileRef && (fileRef.path !== filePath || !openFileRefKeys.has(canonicalWorkspaceObjectKey(fileRef)))) {
+      throw new Error("SPACE_SELECTION_FILE_REF_NOT_OPEN")
+    }
+    selection = {
+      filePath,
+      ...(fileRef ? { fileRef } : {}),
+      anchor: rawSelection.anchor as number,
+      head: rawSelection.head as number,
+    }
   }
   if (space.activeWindowId !== null && (typeof space.activeWindowId !== "string" || !ids.has(space.activeWindowId))) {
     throw new Error("SPACE_ACTIVE_WINDOW_INVALID")
@@ -522,7 +559,11 @@ export function validateSpaceState(raw: unknown): SpaceState {
   }
   if (selection !== null) {
     const activePane = panes.find((pane) => pane.id === space.activePaneId)
-    if (!activePane || activePane.filePath !== selection.filePath) throw new Error("SPACE_SELECTION_NOT_ACTIVE")
+    if (!activePane || activePane.filePath !== selection.filePath
+      || (selection.fileRef && (!activePane.fileRef
+        || canonicalWorkspaceObjectKey(activePane.fileRef) !== canonicalWorkspaceObjectKey(selection.fileRef)))) {
+      throw new Error("SPACE_SELECTION_NOT_ACTIVE")
+    }
   }
   if (space.runningAppUrl !== null) {
     let url: URL
@@ -530,7 +571,14 @@ export function validateSpaceState(raw: unknown): SpaceState {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("SPACE_RUNNING_APP_URL_INVALID")
   }
 
-  return { ...space, windows, openFiles, panes, selection } as unknown as SpaceState
+  return {
+    ...space,
+    windows,
+    openFiles,
+    ...(fileRefs !== undefined ? { fileRefs } : {}),
+    panes,
+    selection,
+  } as unknown as SpaceState
 }
 
 function assertNoChrome(value: unknown, path: string): void {

@@ -225,6 +225,58 @@ describe("server-derived workspace diff grounding", () => {
     vi.doUnmock("@/lib/loom/workspace-diff")
   })
 
+  it("derives Changes from the selected verified repository mount and identifies that repository", async () => {
+    const derive = vi.fn(async () => ({
+      state: "clean",
+      path: "src/atlas.ts",
+      status: "",
+      patch: "",
+      patchHash: null,
+      baseHash: "b".repeat(40),
+      indexHash: "c".repeat(64),
+      fingerprint: "atlas-fingerprint",
+    }))
+    const resolveBinding = vi.fn(async () => ({ ok: true, binding: {
+      workspaceRoot: process.cwd(),
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryRole: "suite-source",
+      repositoryLabel: "Atlas",
+      repositoryPreviewSource: false,
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "b".repeat(40),
+    } }))
+    vi.resetModules()
+    vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
+    vi.doMock("@/lib/projects/workspace-project-binding", () => ({
+      resolveCanonicalWorkspaceProjectBinding: resolveBinding,
+    }))
+    vi.doMock("@/lib/loom/workspace-diff", () => ({ deriveWorkspaceFileDiff: derive }))
+    const { GET } = await import("@/app/api/loom/diff/route")
+
+    const response = await GET(new Request(
+      "http://localhost/api/loom/diff?projectKey=terrafusion&repositoryKey=atlas&path=src%2Fatlas.ts",
+    ))
+
+    expect(response.status).toBe(200)
+    expect(resolveBinding).toHaveBeenCalledWith("owner-a", "terrafusion", undefined, "atlas")
+    expect(derive).toHaveBeenCalledWith(process.cwd(), "src/atlas.ts")
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      repository: {
+        key: "atlas",
+        identity: "bsvalues/terrafusion-atlas",
+        role: "suite-source",
+        label: "Atlas",
+        previewSource: false,
+        mountKey: "terrafusion:atlas:configured",
+        observedRevision: "b".repeat(40),
+      },
+    }))
+    vi.doUnmock("@/lib/session")
+    vi.doUnmock("@/lib/projects/workspace-project-binding")
+    vi.doUnmock("@/lib/loom/workspace-diff")
+  })
+
   it.each([
     "http://localhost/api/loom/diff",
     "http://localhost/api/loom/diff?path=",

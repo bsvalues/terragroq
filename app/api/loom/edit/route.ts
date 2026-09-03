@@ -9,7 +9,11 @@ import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/r
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError, type SpaceMutationAuthority } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
-import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveWorkspaceFileOperationBinding,
+  sameWorkspaceFileOperationBinding,
+  WorkspaceFileOperationBindingError,
+} from "@/lib/loom/workspace-file-operation-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -34,15 +38,26 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown; projectKey?: unknown }
+  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown; projectKey?: unknown; repositoryKey?: unknown; fileRef?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
-  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const binding = projectBinding.binding
+  let selectedFile
+  try {
+    selectedFile = await resolveWorkspaceFileOperationBinding({
+      userId: session.user.id,
+      projectKey: body.projectKey ?? "terrafusion",
+      repositoryKey: body.repositoryKey,
+      path: body.path,
+      fileRef: body.fileRef,
+    })
+  } catch (error) {
+    const code = error instanceof WorkspaceFileOperationBindingError ? error.code : "WORKSPACE_REPOSITORY_UNAVAILABLE"
+    return Response.json({ error: code }, { status: code === "WORKSPACE_REPOSITORY_UNAVAILABLE" ? 503 : code === "WORKSPACE_FILE_REF_REQUIRED" ? 400 : 409 })
+  }
+  const binding = selectedFile.binding
   const projectRoot = binding.workspaceRoot
 
   const task = typeof body.task === "string" ? body.task.trim() : ""
@@ -68,7 +83,10 @@ export async function POST(request: Request) {
       binding: {
         projectId: binding.projectId,
         projectKey: binding.projectKey,
+        repositoryResourceKey: binding.repositoryKey,
         repositoryIdentity: binding.repositoryIdentity,
+        repositoryMountKey: binding.repositoryMountKey,
+        observedRevision: binding.observedRevision,
         spaceIdentity: binding.project.identity,
       },
       expected: { actor: "sea", capability: "selected-file-change" },
@@ -120,13 +138,26 @@ export async function POST(request: Request) {
   // Every Space/diff/filesystem await above can race the active Work Order or grant. Re-derive the
   // exact SEA authority immediately before spawn and reject any snapshot drift.
   try {
+    const currentFile = await resolveWorkspaceFileOperationBinding({
+      userId: session.user.id,
+      projectKey: body.projectKey ?? "terrafusion",
+      repositoryKey: body.repositoryKey,
+      path: body.path,
+      fileRef: body.fileRef,
+    })
+    if (!sameWorkspaceFileOperationBinding(binding, currentFile.binding)) {
+      return Response.json({ error: "WORKSPACE_FILE_REF_STALE" }, { status: 409 })
+    }
     const terminalAuthority = await deriveSpaceMutationAuthority({
       userId: session.user.id,
       worldId,
       binding: {
         projectId: binding.projectId,
         projectKey: binding.projectKey,
+        repositoryResourceKey: binding.repositoryKey,
         repositoryIdentity: binding.repositoryIdentity,
+        repositoryMountKey: binding.repositoryMountKey,
+        observedRevision: binding.observedRevision,
         spaceIdentity: binding.project.identity,
       },
       expected: { actor: "sea", capability: "selected-file-change" },
@@ -135,12 +166,20 @@ export async function POST(request: Request) {
     if (terminalAuthority.worldRevision !== mutationAuthority.worldRevision
       || terminalAuthority.workOrderId !== mutationAuthority.workOrderId
       || terminalAuthority.grantId !== mutationAuthority.grantId
-      || terminalAuthority.selectedPath !== mutationAuthority.selectedPath) {
+      || terminalAuthority.selectedPath !== mutationAuthority.selectedPath
+      || terminalAuthority.repositoryResourceKey !== mutationAuthority.repositoryResourceKey
+      || terminalAuthority.repositoryIdentity !== mutationAuthority.repositoryIdentity
+      || terminalAuthority.repositoryMountKey !== mutationAuthority.repositoryMountKey
+      || terminalAuthority.observedRevision !== mutationAuthority.observedRevision) {
       return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
     }
   } catch (error) {
-    return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
-      status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
+    const fileBindingStale = error instanceof WorkspaceFileOperationBindingError
+    return Response.json({ error: fileBindingStale
+      ? error.code === "WORKSPACE_REPOSITORY_UNAVAILABLE" ? error.code : "WORKSPACE_FILE_REF_STALE"
+      : error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+      status: fileBindingStale ? error.code === "WORKSPACE_REPOSITORY_UNAVAILABLE" ? 503 : 409
+        : error instanceof SpaceMutationAuthorityError ? 409 : 503,
     })
   }
 
@@ -180,7 +219,7 @@ export async function POST(request: Request) {
         try { controller.close() } catch { /* already closed */ }
       }
 
-      send({ type: "started", file: resolved.relative, model })
+      send({ type: "started", file: resolved.relative, model, fileRef: selectedFile.fileRef })
       void recordLoomStart({
         userId: session.user.id,
         kind: "edit",

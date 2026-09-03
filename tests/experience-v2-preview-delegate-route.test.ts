@@ -16,6 +16,10 @@ const seams = vi.hoisted(() => ({
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
+  createContextManifest: vi.fn(),
+  createDispatchContext: vi.fn(),
+  assessActiveAssignment: vi.fn(),
+  deriveReservationClaims: vi.fn(),
 }))
 
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
@@ -26,8 +30,11 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
     repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
   } }),
   resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
-    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion", projectName: "TerraFusion",
-    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+    workspaceRoot: process.cwd(), configuredWorkspaceRoot: process.cwd(), projectId: 7,
+    projectKey: "terrafusion", projectName: "TerraFusion", repositoryResourceId: 70,
+    repositoryKey: "os-1", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    repositoryRole: "integrated-runtime", repositoryMountKey: "terrafusion:os-1:configured",
+    observedRevision: "a".repeat(40), project: { identity: "c:/terrafusion", name: "TerraFusion" },
   } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
@@ -51,6 +58,15 @@ vi.mock("@/lib/loom/workspace-file-write", () => ({
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({ recordLoomStart: seams.recordLoomStart, recordLoomEnd: seams.recordLoomEnd }))
+vi.mock("@/lib/loom/assignment-context-runtime", () => ({
+  createRepositoryAssignmentContextManifest: seams.createContextManifest,
+  createAssignmentDispatchContextPackage: seams.createDispatchContext,
+  AssignmentContextRuntimeError: class AssignmentContextRuntimeError extends Error { code = "ASSIGNMENT_CONTEXT_SOURCE_MISSING" },
+}))
+vi.mock("@/lib/loom/repository-assignment-runtime", () => ({
+  assessActiveRepositoryAssignment: seams.assessActiveAssignment,
+  deriveRepositoryAssignmentReservationClaims: seams.deriveReservationClaims,
+}))
 
 import { POST } from "@/app/api/loom/agent/route"
 
@@ -78,6 +94,23 @@ function request(body: Record<string, unknown>) {
   })
 }
 
+function configureContextSeams() {
+  seams.assessActiveAssignment.mockResolvedValue({ status: "COMPATIBLE", activeAssignments: [], dependencies: [] })
+  seams.deriveReservationClaims.mockResolvedValue({ contracts: [], environments: [] })
+  seams.createContextManifest.mockImplementation(async ({ assignment }: { assignment: Record<string, unknown> }) => ({
+    assignment: {
+      assignmentId: assignment.assignmentId, worldId: assignment.worldId,
+      workOrderId: assignment.workOrderId, assignmentHash: assignment.assignmentHash,
+      createdAt: assignment.createdAt,
+    },
+    targetRepository: { repositoryResourceId: 70, repositoryKey: "os-1", repositoryIdentity: "bsvalues/terrafusion_os_1.0" },
+    checkout: { repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: "delegate-1", baseRevision: "a".repeat(40) },
+    mutationPosture: { target: { writablePaths: [assignment.selectedPath] } },
+    manifestHash: "f".repeat(64),
+  }))
+  seams.createDispatchContext.mockResolvedValue("VERIFIED DISPATCH CONTEXT")
+}
+
 describe("Preview debugger route", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -91,13 +124,16 @@ describe("Preview debugger route", () => {
     seams.recordLoomStart.mockResolvedValue(undefined)
     seams.deriveSpaceMutationAuthority.mockResolvedValue({
       owner: "owner-1", worldId: "world-a", worldRevision: 3, projectId: 7,
-      projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      projectKey: "terrafusion", repositoryResourceKey: "os-1",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      repositoryMountKey: "terrafusion:os-1:configured", observedRevision: "a".repeat(40),
       outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 51, actor: "claude", selectedPath: "src/app.ts",
     })
     seams.inspectTarget.mockResolvedValue({ content: "before", modifiedAt: "2026-08-30T00:00:00.000Z", digest: "a".repeat(64) })
     seams.createIsolated.mockResolvedValue({ projectRoot: process.cwd(), runtimeRoot: "C:/runtime", root: "C:/runtime/delegate-1", baseSha: "a".repeat(40), selectedPath: "src/app.ts", initialContentDigest: "a".repeat(64) })
     seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
     seams.cleanupIsolated.mockResolvedValue(undefined)
+    configureContextSeams()
     seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/app.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "app.ts" })
     seams.poolQuery.mockResolvedValue({ rows: [{ userId: "owner-1", metadata: {
       provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint,
@@ -220,14 +256,26 @@ describe("Preview debugger route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(3)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(4)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
     }))
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
-    }))
-    const prompt = (seams.spawn.mock.calls[0][1] as string[]).at(-1)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(4, {
+      userId: "owner-1",
+      worldId: "world-a",
+      binding: {
+        projectId: 7,
+        projectKey: "terrafusion",
+        repositoryResourceKey: "os-1",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryMountKey: "terrafusion:os-1:configured",
+        observedRevision: "a".repeat(40),
+        spaceIdentity: "c:/terrafusion",
+      },
+      expected: { actor: "claude", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: "src/app.ts" },
+    })
+    const prompt = child.stdin.end.mock.calls[0][0] as string
     expect(prompt).toContain("exact server-authorized selected file: src/app.ts")
     expect(prompt).toContain("Do not edit, create, delete, rename, or move any other path")
     child.emit("close", 0)

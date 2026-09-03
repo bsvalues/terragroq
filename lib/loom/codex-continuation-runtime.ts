@@ -5,12 +5,15 @@ import { hashRecord } from "@/lib/governance/hash"
 import type {
   CodexContinuationDependencies,
   CodexContinuationRecord,
+  CodexContinuationRepositoryIdentity,
 } from "@/lib/loom/codex-continuation"
 import { deriveCodexPathEvidence } from "@/lib/loom/codex-continuation"
 import { codexContinuationEvidenceEvent } from "@/lib/loom/codex-continuation"
 import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
+import { parseWorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 type BindingRow = Record<string, unknown>
+const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
@@ -162,12 +165,38 @@ async function load(userId: string, worldId: string): Promise<CodexContinuationR
   )
   const evidenceEvents = (eventResult.rows as ReadonlyArray<Record<string, unknown>>)
     .map(codexContinuationEvidenceEvent)
-  const { assignedPaths, completedPaths } = deriveCodexPathEvidence(evidenceEvents)
+  const { assignedPaths, completedPaths, repository: completedRepository } = deriveCodexPathEvidence(evidenceEvents)
   const snapshot = typeof row.worldSnapshot === "string" ? row.worldSnapshot : JSON.stringify(row.worldSnapshot)
+  const world = validateWorkingWorld(JSON.parse(snapshot))
+  let repository: CodexContinuationRepositoryIdentity | undefined
+  if (completedPaths.length > 0) {
+    const projectIdentities = world.resources
+      .filter((resource) => resource.startsWith(WORKSPACE_ROOT_RESOURCE))
+      .map((resource) => resource.slice(WORKSPACE_ROOT_RESOURCE.length))
+      .filter(Boolean)
+    if (!completedRepository || projectIdentities.length !== 1) {
+      throw new Error("CODEX_CONTINUATION_REPOSITORY_UNAVAILABLE")
+    }
+    const verified = parseWorkspaceFileRef({
+      projectIdentity: projectIdentities[0],
+      repositoryResourceKey: completedRepository.repositoryResourceKey,
+      repositoryMountKey: completedRepository.repositoryMountKey,
+      worktreeKey: null,
+      observedRevision: completedRepository.observedRevision,
+      path: completedPaths.at(-1),
+    })
+    repository = {
+      projectIdentity: verified.projectIdentity,
+      repositoryResourceKey: verified.repositoryResourceKey,
+      repositoryIdentity: completedRepository.repositoryIdentity,
+      repositoryMountKey: verified.repositoryMountKey,
+      observedRevision: verified.observedRevision,
+    }
+  }
   return {
     snapshot,
     authorityVersion: authorityVersion(row),
-    world: validateWorkingWorld(JSON.parse(snapshot)),
+    world,
     outcomeKey: String(row.outcomeKey),
     workOrderId: Number(row.workOrderId),
     grantId: Number(row.grantId),
@@ -178,6 +207,7 @@ async function load(userId: string, worldId: string): Promise<CodexContinuationR
     allowedPaths: strings(row.allowedFiles),
     completedPaths,
     assignedPaths,
+    ...(repository ? { repository } : {}),
   }
 }
 
@@ -219,14 +249,19 @@ async function persist(input: Parameters<CodexContinuationDependencies["persist"
 }
 
 export function codexContinuationDependenciesForProjectRoot(
-  verifiedProjectRoot: string,
+  _verifiedProjectRoot: string,
+  resolveRepositoryRoot: (
+    repository: CodexContinuationRepositoryIdentity,
+  ) => Promise<string | null>,
 ): CodexContinuationDependencies {
   return {
     load,
     persist,
-    async inspectTarget(selectedPath) {
+    async inspectTarget(selectedPath, repository) {
       try {
-        await inspectCodexAssignmentTarget(verifiedProjectRoot, selectedPath)
+        const repositoryRoot = await resolveRepositoryRoot(repository)
+        if (!repositoryRoot) return false
+        await inspectCodexAssignmentTarget(repositoryRoot, selectedPath)
         return true
       } catch {
         return false

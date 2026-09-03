@@ -5,6 +5,13 @@ export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
 export const MAX_TOOL_RUN_TRANSCRIPT_BYTES = 98_304
 
 export type ToolOutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
+export type DeveloperToolRepositoryIdentity = Readonly<{
+  projectKey: "terrafusion" | "williamos"
+  repositoryKey: string
+  repositoryIdentity: string
+  repositoryMountKey: string
+  observedRevision: string
+}>
 export type ToolRunTranscript = Readonly<{
   schemaVersion: 1
   id: string
@@ -23,7 +30,7 @@ export type ToolRunTranscript = Readonly<{
 
 type ToolRunEnvelope = Readonly<{ schemaVersion: 1; runs: readonly ToolRunTranscript[] }>
 type ToolRunStorage = Pick<Storage, "getItem" | "setItem">
-type ToolRunCleanupStorage = Pick<Storage, "removeItem">
+type ToolRunCleanupStorage = Pick<Storage, "removeItem"> & Partial<Pick<Storage, "length" | "key">>
 export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | null }>
 export type ToolRunHistoryVerdict = Readonly<{ ok: boolean; runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_NOT_SAVED" | null }>
 
@@ -58,9 +65,46 @@ export function toolRunHistoryStorageKey(scope: string): string {
   return `williamos:tool-runs:v1:${scope}`
 }
 
+function scopeIdentity(value: string, field: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 240 || /[\0\s]/.test(value)) {
+    throw new Error(`TOOL_RUN_${field}_INVALID`)
+  }
+  return encodeURIComponent(value)
+}
+
+/**
+ * Bind browser evidence to the exact checkout revision that produced it. The Space and repository
+ * key remain human-useful prefixes, while canonical repository, mount and revision identities stop
+ * a restored transcript or diff snapshot from appearing beside a different checkout.
+ */
+export function repositoryQualifiedToolHistoryScope(
+  scope: string,
+  repository: DeveloperToolRepositoryIdentity,
+): string {
+  if (repository.projectKey !== "terrafusion" && repository.projectKey !== "williamos") {
+    throw new Error("TOOL_RUN_PROJECT_KEY_INVALID")
+  }
+  if (!/^[a-f0-9]{40,64}$/.test(repository.observedRevision)) {
+    throw new Error("TOOL_RUN_REVISION_INVALID")
+  }
+  const qualified = `${scope}:project:${repository.projectKey}:repository:${scopeIdentity(repository.repositoryKey, "REPOSITORY_KEY")}`
+    + `:identity:${scopeIdentity(repository.repositoryIdentity, "REPOSITORY_IDENTITY")}`
+    + `:mount:${scopeIdentity(repository.repositoryMountKey, "REPOSITORY_MOUNT")}`
+    + `:revision:${repository.observedRevision}`
+  toolRunHistoryStorageKey(qualified)
+  return qualified
+}
+
 export function removeToolRunHistory(storage: ToolRunCleanupStorage, scope: string): boolean {
   try {
-    storage.removeItem(toolRunHistoryStorageKey(scope))
+    const baseKey = toolRunHistoryStorageKey(scope)
+    if (typeof storage.length === "number" && typeof storage.key === "function") {
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key!(index))
+        .filter((key): key is string => key === baseKey || Boolean(key?.startsWith(`${baseKey}:`)))
+      for (const key of keys) storage.removeItem(key)
+    } else {
+      storage.removeItem(baseKey)
+    }
     return true
   } catch {
     return false

@@ -24,7 +24,10 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
   resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
     workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion", projectName: "TerraFusion",
-    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+    repositoryResourceId: 11, repositoryKey: "os-1", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    repositoryRole: "integrated-runtime", repositoryLabel: "OS 1.0", repositoryPreviewSource: true,
+    repositoryMountKey: "terrafusion:os-1:configured", observedRevision: "a".repeat(40),
+    project: { identity: "c:/terrafusion" },
   } }),
 }))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
@@ -57,6 +60,9 @@ class FakeChild extends EventEmitter {
 
 const SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
 const PATH = "src/example.ts"
+const REVISION = "a".repeat(40)
+const REPOSITORY_KEY = "os-1"
+const REPOSITORY_MOUNT_KEY = "terrafusion:os-1:configured"
 const FINGERPRINT = JSON.stringify({
   path: PATH,
   state: "modified",
@@ -79,6 +85,17 @@ const snapshot = {
   reason: null,
 } as const
 
+function fileRef(path = PATH) {
+  return {
+    projectIdentity: "c:/terrafusion",
+    repositoryResourceKey: REPOSITORY_KEY,
+    repositoryMountKey: REPOSITORY_MOUNT_KEY,
+    worktreeKey: null,
+    observedRevision: REVISION,
+    path,
+  }
+}
+
 function world(input: { path?: string; activeWindowId?: string; minimized?: boolean } = {}) {
   const selectedPath = input.path ?? PATH
   return {
@@ -87,8 +104,8 @@ function world(input: { path?: string; activeWindowId?: string; minimized?: bool
     space: {
       activeWindowId: input.activeWindowId ?? "diff",
       activePaneId: "primary",
-      selection: { filePath: selectedPath, anchor: 0, head: 0 },
-      panes: [{ id: "primary", filePath: selectedPath }],
+      selection: { filePath: selectedPath, fileRef: fileRef(selectedPath), anchor: 0, head: 0 },
+      panes: [{ id: "primary", filePath: selectedPath, fileRef: fileRef(selectedPath) }],
       windows: [
         { id: "editor", kind: "editor", minimized: false },
         { id: "diff", kind: "diff", minimized: input.minimized ?? false },
@@ -107,11 +124,14 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
 }
 
 function diffReviewBody(extra: Record<string, unknown> = {}) {
+  const selectedPath = typeof extra.path === "string" ? extra.path : PATH
   return {
     mode: "diff-review",
     provider: "cloud",
     worldId: "world-a",
-    path: PATH,
+    path: selectedPath,
+    repositoryKey: REPOSITORY_KEY,
+    fileRef: fileRef(selectedPath),
     expectedDiffFingerprint: FINGERPRINT,
     sessionId: SESSION_ID,
     resume: false,
@@ -371,14 +391,14 @@ describe("server-grounded diff Reviewer route", () => {
     expect(seams.recordLoomEnd).not.toHaveBeenCalled()
   })
 
-  it("refuses a non-canonical or fingerprint-mismatched selected path before spawning", async () => {
+  it("refuses a non-canonical exact file reference before fingerprint evaluation or provider spawn", async () => {
     seams.resolveRealWorkspacePath.mockResolvedValueOnce({
       ok: true, absolute: "C:/workspace/src/example.ts", relative: PATH,
     })
     const response = await POST(request(diffReviewBody({ path: "src/./example.ts", expectedDiffFingerprint: "browser-stale" })))
 
     expect(response.status).toBe(409)
-    await expect(response.json()).resolves.toEqual({ error: "DIFF_REVIEW_PATH_STALE" })
+    await expect(response.json()).resolves.toEqual({ error: "WORKSPACE_FILE_REF_MISMATCH" })
     expect(seams.spawn).not.toHaveBeenCalled()
   })
 

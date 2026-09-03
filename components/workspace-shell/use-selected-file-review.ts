@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 import type { AgentSessionDiffReview, ExperienceAgentSessionController } from "./agent-sessions"
 
 type ReviewState = Readonly<{
@@ -14,6 +15,7 @@ type ReviewState = Readonly<{
 export type SelectedDiffReviewCapture = Readonly<{
   worldId: string
   path: string
+  fileRef: WorkspaceFileRef
   fingerprint: string
   isCurrent: () => boolean
   beforeStart: () => Promise<void>
@@ -21,6 +23,7 @@ export type SelectedDiffReviewCapture = Readonly<{
 
 export type CapturedFileReviewStart = Readonly<{
   path: string
+  fileRef: WorkspaceFileRef
   isStartCurrent: () => boolean
   isPresentationCurrent: () => boolean
 }>
@@ -28,6 +31,7 @@ export type CapturedFileReviewStart = Readonly<{
 type ActiveReview = {
   id: number
   path: string
+  fileRef: WorkspaceFileRef
   stopRequested: boolean
   stopIssued: boolean
   sessionKey: string | null
@@ -45,10 +49,12 @@ function stopExactReview(operation: ActiveReview, controller: ExperienceAgentSes
 
 export function useSelectedFileReview({
   path,
+  fileRef,
   sessions,
   onReport,
 }: {
   path: string | null
+  fileRef: WorkspaceFileRef | null
   sessions: ExperienceAgentSessionController
   onReport: (path: string, report: string, binding?: AgentSessionDiffReview) => void
 }) {
@@ -82,6 +88,7 @@ export function useSelectedFileReview({
 
   const run = useCallback(async (
     operationPath: string | null,
+    operationFileRef: WorkspaceFileRef | null,
     focus: string,
     diff: SelectedDiffReviewCapture | null,
     capture: CapturedFileReviewStart | null,
@@ -89,6 +96,15 @@ export function useSelectedFileReview({
     if (active.current) return
     if (!operationPath) {
       setState({ running: false, path: null, progress: null, outcome: "Select a file before starting Review." })
+      return
+    }
+    let exactFileRef: WorkspaceFileRef
+    try { exactFileRef = parseWorkspaceFileRef(operationFileRef) } catch {
+      setState({ running: false, path: operationPath, progress: null, outcome: "The selected file identity is unavailable. Reopen the file before starting Review." })
+      return
+    }
+    if (exactFileRef.path !== operationPath) {
+      setState({ running: false, path: operationPath, progress: null, outcome: "The selected file identity changed. Reopen the file before starting Review." })
       return
     }
     if (capture && (capture.path !== operationPath || !capture.isStartCurrent())) {
@@ -99,7 +115,7 @@ export function useSelectedFileReview({
       setState({ running: false, path: operationPath, progress: null, outcome: "The live change changed. Reopen Review from the current Changes surface." })
       return
     }
-    const operation: ActiveReview = { id: ++sequence.current, path: operationPath, stopRequested: false, stopIssued: false, sessionKey: null, diff, capture }
+    const operation: ActiveReview = { id: ++sequence.current, path: operationPath, fileRef: exactFileRef, stopRequested: false, stopIssued: false, sessionKey: null, diff, capture }
     active.current = operation
     setState({ running: true, path: operation.path, progress: "Starting read-only Review…", outcome: null })
     try {
@@ -114,6 +130,8 @@ export function useSelectedFileReview({
         assignment: operation.diff ? `Review current changes · ${operation.path}` : `Review ${operation.path}`,
         mode: operation.diff ? "diff-review" : "review",
         path: operation.path,
+        fileRef: operation.fileRef,
+        repositoryKey: operation.fileRef.repositoryResourceKey,
         ...(operation.diff ? {
           worldId: operation.diff.worldId,
           expectedDiffFingerprint: operation.diff.fingerprint,
@@ -157,15 +175,15 @@ export function useSelectedFileReview({
   }, [sessions])
 
   const start = useCallback((focus: string, diff: SelectedDiffReviewCapture | null = null) => (
-    run(path, focus, diff, null)
-  ), [path, run])
+    run(path, fileRef, focus, diff, null)
+  ), [fileRef, path, run])
 
   const startCapturedPath = useCallback((capture: CapturedFileReviewStart) => (
-    run(capture.path, "", null, capture)
+    run(capture.path, capture.fileRef, "", null, capture)
   ), [run])
 
   const startCapturedDiff = useCallback((diff: SelectedDiffReviewCapture) => (
-    run(diff.path, "", diff, null)
+    run(diff.path, diff.fileRef, "", diff, null)
   ), [run])
 
   return { ...state, canStop: state.running, reset, start, startCapturedPath, startCapturedDiff, stop }

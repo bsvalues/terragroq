@@ -75,6 +75,12 @@ function packet(objective = "Write source through the exact governed reservation
     source: "github", externalRef: "github:owner/repo#1111", title: "External governed change",
     objective, repository: "owner/repo", authorityEvidence: ["owner-confirmation:1111"],
     reservedPaths: ["src/selected.ts"], forbiddenPaths: ["src/forbidden.ts"],
+    contractReservations: [
+      { contractIdentity: "selected-source-v1", revisionIdentity: "1.0.0", role: "producer" as const },
+    ],
+    environmentReservations: [
+      { environmentIdentity: "worktree:external-admission", access: "exclusive" as const },
+    ],
     validators: ["pnpm test"], acceptanceCriteria: ["The exact assignment remains governed"],
     pullRequest: { number: 1111, headSha: "a".repeat(40) },
   }
@@ -135,9 +141,14 @@ runDatabase("external Work Order admission real PostgreSQL contract", { timeout:
         return { id: input.id, category: input.category, markdownPath, jsonPath, sha256: input.id, wrote: true }
       })
       vi.doMock("@/lib/governance/artifacts", () => ({ writeArtifact: artifactWrites }))
-      const [{ admitExternalWorkOrder, previewExternalWorkOrderAdmission }, { deriveCodexAssignment, revalidateCodexAssignment }] = await Promise.all([
+      const [
+        { admitExternalWorkOrder, previewExternalWorkOrderAdmission },
+        { deriveCodexAssignment, revalidateCodexAssignment },
+        { deriveRepositoryAssignmentReservationClaims },
+      ] = await Promise.all([
         import("@/lib/environment/external-work-order-admission"),
         import("@/lib/loom/codex-assignment"),
+        import("@/lib/loom/repository-assignment-runtime"),
       ])
       const admission = (worldId: string, idempotencyKey: string, externalWorkOrder = packet()) => {
         const preview = previewExternalWorkOrderAdmission({ mode: "PREVIEW", worldId, externalWorkOrder })
@@ -186,8 +197,10 @@ runDatabase("external Work Order admission real PostgreSQL contract", { timeout:
       const graph = await fixture.query(`SELECT
         world.snapshot, project.lifecycle, resource."canonicalIdentity", thread."projectId",
         root.role, outcome."lifecycleState", outcome."activeWorkOrderId", outcome."acquisitionKey",
-        work.status AS "workStatus", work."authorityGranted", work."authorityGrantId",
+        work.id AS "workOrderId", work.status AS "workStatus", work."authorityGranted", work."authorityGrantId",
+        implementation.id AS "implementationGrantId",
         implementation."grantedTo" AS "implementationTo", implementation."allowedActions",
+        implementation.scope AS "implementationScope",
         queue."grantedTo" AS "queueTo", queue."allowedActions" AS "queueActions",
         acquisition."firstFencingToken", acquisition."latestFencingToken"
         FROM working_world world
@@ -206,7 +219,20 @@ runDatabase("external Work Order admission real PostgreSQL contract", { timeout:
         lifecycle: "active", canonicalIdentity: "owner/repo", role: "root", lifecycleState: "active",
         workStatus: "active", authorityGranted: "A2_WRITE_OWN", implementationTo: "codex",
         allowedActions: ["src/selected.ts"], queueTo: "operator", queueActions: ["outcome:execute"],
+        implementationScope: JSON.stringify({
+          version: "williamos-repository-reservation-scope.v1",
+          contracts: [{ contractIdentity: "selected-source-v1", revisionIdentity: "1.0.0", role: "producer" }],
+          environments: [{ environmentIdentity: "worktree:external-admission", access: "exclusive" }],
+        }),
         firstFencingToken: 1, latestFencingToken: 1,
+      })
+      await expect(deriveRepositoryAssignmentReservationClaims({
+        userId: "owner",
+        workOrderId: graph.rows[0].workOrderId,
+        grantId: graph.rows[0].implementationGrantId,
+      })).resolves.toEqual({
+        contracts: [{ contractIdentity: "selected-source-v1", revisionIdentity: "1.0.0", role: "producer" }],
+        environments: [{ environmentIdentity: "worktree:external-admission", access: "exclusive" }],
       })
       const explicitDoctrine = await fixture.query(`SELECT metadata FROM governance_event
         WHERE "entityType"='work_order' AND "eventType"='WO_TRANSITION'

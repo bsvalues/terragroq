@@ -28,9 +28,11 @@ import {
   resolveSpaceRepositoryIdentities,
 } from "@/lib/environment/space-outcome-assimilation"
 import { validateWorkingWorld, withBoundOutcome } from "@/lib/environment/working-world"
+import type { ContractReservation, EnvironmentReservation } from "@/lib/loom/repository-reservations"
 
 export const EXTERNAL_WORK_ORDER_ADMISSION_OPERATION = "space.external_work_order.admit"
-export const EXTERNAL_WORK_ORDER_ADMISSION_VERSION = "space-external-work-order-admission.v1"
+export const EXTERNAL_WORK_ORDER_ADMISSION_VERSION = "space-external-work-order-admission.v2"
+export const REPOSITORY_RESERVATION_SCOPE_VERSION = "williamos-repository-reservation-scope.v1"
 const GRANT_HOURS = 72
 const FIXED_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:access", "spend:increase"] as const
 const SAFE_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "DrizzleQueryError", "DatabaseError"])
@@ -60,6 +62,8 @@ export type ExternalWorkOrderPacket = Readonly<{
   authorityEvidence: readonly string[]
   reservedPaths: readonly string[]
   forbiddenPaths: readonly string[]
+  contractReservations: readonly ContractReservation[]
+  environmentReservations: readonly EnvironmentReservation[]
   validators: readonly string[]
   acceptanceCriteria: readonly string[]
   pullRequest?: Readonly<{ number: number; headSha: string }>
@@ -142,6 +146,65 @@ function optionalStringList(value: unknown, error: string): string[] {
   return stringList(value, error)
 }
 
+const RESERVATION_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/
+
+function contractReservationList(value: unknown): ContractReservation[] {
+  if (!Array.isArray(value) || value.length > 64) throw new Error("EXTERNAL_PROVENANCE_INVALID")
+  const normalized = value.map<ContractReservation>((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("EXTERNAL_PROVENANCE_INVALID")
+    }
+    const row = candidate as Record<string, unknown>
+    exactKeys(row, ["contractIdentity", "revisionIdentity", "role"], "EXTERNAL_PROVENANCE_INVALID")
+    const contractIdentity = text(row.contractIdentity, "EXTERNAL_PROVENANCE_INVALID", 200)
+    const revisionIdentity = text(row.revisionIdentity, "EXTERNAL_PROVENANCE_INVALID", 200)
+    const role = row.role
+    if (!RESERVATION_IDENTITY.test(contractIdentity) || !RESERVATION_IDENTITY.test(revisionIdentity)
+      || (role !== "producer" && role !== "consumer")) {
+      throw new Error("EXTERNAL_PROVENANCE_INVALID")
+    }
+    return { contractIdentity, revisionIdentity, role }
+  }).sort((left, right) =>
+    `${left.contractIdentity}\0${left.revisionIdentity}\0${left.role}`.localeCompare(
+      `${right.contractIdentity}\0${right.revisionIdentity}\0${right.role}`,
+    ))
+  if (new Set(normalized.map((claim) => JSON.stringify(claim))).size !== normalized.length) {
+    throw new Error("EXTERNAL_PROVENANCE_INVALID")
+  }
+  return normalized
+}
+
+function environmentReservationList(value: unknown): EnvironmentReservation[] {
+  if (!Array.isArray(value) || value.length > 64) throw new Error("EXTERNAL_PROVENANCE_INVALID")
+  const normalized = value.map<EnvironmentReservation>((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("EXTERNAL_PROVENANCE_INVALID")
+    }
+    const row = candidate as Record<string, unknown>
+    exactKeys(row, ["environmentIdentity", "access"], "EXTERNAL_PROVENANCE_INVALID")
+    const environmentIdentity = text(row.environmentIdentity, "EXTERNAL_PROVENANCE_INVALID", 200)
+    const access = row.access
+    if (!RESERVATION_IDENTITY.test(environmentIdentity)
+      || (access !== "exclusive" && access !== "shared-read")) {
+      throw new Error("EXTERNAL_PROVENANCE_INVALID")
+    }
+    return { environmentIdentity, access }
+  }).sort((left, right) =>
+    `${left.environmentIdentity}\0${left.access}`.localeCompare(`${right.environmentIdentity}\0${right.access}`))
+  if (new Set(normalized.map((claim) => JSON.stringify(claim))).size !== normalized.length) {
+    throw new Error("EXTERNAL_PROVENANCE_INVALID")
+  }
+  return normalized
+}
+
+function repositoryReservationScope(packet: ExternalWorkOrderPacket): string {
+  return JSON.stringify({
+    version: REPOSITORY_RESERVATION_SCOPE_VERSION,
+    contracts: packet.contractReservations,
+    environments: packet.environmentReservations,
+  })
+}
+
 function reservationPath(value: string): boolean {
   return !value.startsWith("/") && !value.startsWith("//") && !/^[A-Za-z]:/.test(value)
     && !value.split("/").some((segment) => segment === "..")
@@ -154,14 +217,17 @@ function normalizeExternalWorkOrderPacket(raw: unknown): ExternalWorkOrderPacket
   const packet = raw as Record<string, unknown>
   exactKeys(packet, [
     "source", "externalRef", "title", "objective", "repository", "authorityEvidence",
-    "reservedPaths", "forbiddenPaths", "validators", "acceptanceCriteria", "pullRequest",
+    "reservedPaths", "forbiddenPaths", "contractReservations", "environmentReservations",
+    "validators", "acceptanceCriteria", "pullRequest",
   ], "EXTERNAL_PROVENANCE_INVALID")
   if (packet.source !== "github" && packet.source !== "other") throw new Error("EXTERNAL_PROVENANCE_INVALID")
   const repository = text(packet.repository, "EXTERNAL_PROVENANCE_INVALID", 200)
     .replace(/\.git$/i, "").toLowerCase()
   if (!/^[^/:\s]+\/[^/\s]+$/.test(repository)) throw new Error("EXTERNAL_PROVENANCE_INVALID")
-  const reservedPaths = stringList(packet.reservedPaths, "EXTERNAL_PROVENANCE_INVALID")
+  const reservedPaths = stringList(packet.reservedPaths, "EXTERNAL_PROVENANCE_INVALID", 3_000)
   const forbiddenPaths = optionalStringList(packet.forbiddenPaths, "EXTERNAL_PROVENANCE_INVALID")
+  const contractReservations = contractReservationList(packet.contractReservations)
+  const environmentReservations = environmentReservationList(packet.environmentReservations)
   if (![...reservedPaths, ...forbiddenPaths].every(reservationPath)) throw new Error("EXTERNAL_PROVENANCE_INVALID")
   if (forbiddenPaths.some((path) => reservedPaths.includes(path))) throw new Error("EXTERNAL_PROVENANCE_INVALID")
   const validators = stringList(packet.validators, "EXTERNAL_PROVENANCE_INVALID", 32, 500)
@@ -189,6 +255,8 @@ function normalizeExternalWorkOrderPacket(raw: unknown): ExternalWorkOrderPacket
     authorityEvidence,
     reservedPaths,
     forbiddenPaths,
+    contractReservations,
+    environmentReservations,
     validators,
     acceptanceCriteria,
     ...(pullRequest ? { pullRequest } : {}),
@@ -281,6 +349,10 @@ function resultFromBinding(
 
 function exactStrings(left: unknown, right: readonly string[]): boolean {
   return Array.isArray(left) && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function exactReservationClaims(left: unknown, right: readonly unknown[]): boolean {
+  return Array.isArray(left) && JSON.stringify(left) === JSON.stringify(right)
 }
 
 export async function admitExternalWorkOrder(
@@ -387,6 +459,8 @@ export async function admitExternalWorkOrder(
         || binding.worldId !== input.worldId || binding.provenanceDigest !== provenanceDigest
         || binding.source !== packet.source || binding.externalRef !== packet.externalRef
         || binding.repository !== packet.repository
+        || !exactReservationClaims(binding.contractReservations, packet.contractReservations)
+        || !exactReservationClaims(binding.environmentReservations, packet.environmentReservations)
         || binding.goalRef !== refs.goal || binding.decisionRef !== refs.decision
         || persistedGoal?.ref !== refs.goal || persistedGoal?.status !== "converted"
         || persistedGoal?.linkedWorkOrderId !== Number(binding.workOrderId)
@@ -416,6 +490,7 @@ export async function admitExternalWorkOrder(
         || !implementationLive || implementationGrant?.workOrderId !== Number(binding.workOrderId)
         || implementationGrant?.grantedTo !== "codex"
         || implementationGrant?.ref !== String(binding.implementationGrantRef)
+        || implementationGrant?.scope !== repositoryReservationScope(packet)
         || !queueLive || queueGrant?.workOrderId !== Number(binding.workOrderId)
         || queueGrant?.grantedTo !== "operator" || queueGrant?.scope !== String(binding.outcomeKey)
         || queueGrant?.ref !== String(binding.queueGrantRef)
@@ -522,6 +597,7 @@ export async function admitExternalWorkOrder(
       const transitioned = await transitionWorkOrderInTransaction({
         transaction, userId, workOrderId: createdWork.id, to, now: admittedAt,
         grantAuthority: to === "approved", grantExpiresAt: expiresAt,
+        ...(to === "approved" ? { grantScope: repositoryReservationScope(packet) } : {}),
       })
       if (!transitioned.ok) throw new ExternalWorkOrderAdmissionError("WORK_ORDER_GOVERNANCE_REFUSED")
     }
@@ -592,6 +668,8 @@ export async function admitExternalWorkOrder(
       implementationGrantId: implementationGrant.id, implementationGrantRef: implementationGrant.ref,
       acquisitionKey,
       reservedPaths: [...packet.reservedPaths], forbiddenPaths: [...implementationGrant.blockedActions],
+      contractReservations: [...packet.contractReservations],
+      environmentReservations: [...packet.environmentReservations],
       doctrineVerdict: activated.doctrineVerdict?.verdict ?? "unspecified",
       provenanceDigest, admittedAt: admittedAt.toISOString(), expiresAt: expiresAt.toISOString(),
     }

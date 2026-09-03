@@ -17,11 +17,48 @@ import { InspectorSurfaceView, inspectorSurfaceWindowTitle } from "@/components/
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
+import { createAssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
 
 const turns = [
   { ownerPrompt: "First owner request", finalResult: "First canonical result", completedAt: "2026-09-01T18:00:00.000Z" },
   { ownerPrompt: "Second owner request", finalResult: "Second canonical result", completedAt: "2026-09-01T18:01:00.000Z" },
 ]
+
+const contextManifest = createAssignmentContextManifest({
+  assignment: {
+    assignmentId: "codex-inspector-1",
+    worldId: "world-context-1",
+    workOrderId: 41,
+    assignmentHash: "a".repeat(64),
+    createdAt: "2026-09-01T17:59:00.000Z",
+  },
+  project: { id: 1, key: "williamos", name: "WilliamOS" },
+  targetRepository: {
+    repositoryResourceId: 1,
+    repositoryKey: "williamos",
+    repositoryIdentity: "bsvalues/terragroq",
+    role: "integrated-runtime",
+  },
+  checkout: {
+    repositoryMountKey: "williamos:williamos:configured",
+    nodeIdentity: "omen",
+    worktreeKey: "codex-inspector-1",
+    baseRevision: "b".repeat(40),
+  },
+  mutationPosture: {
+    writablePaths: ["components/workspace-shell/workspace-shell.tsx"],
+    referenceRepositories: [],
+  },
+  sources: [{
+    kind: "instruction",
+    repositoryResourceId: 1,
+    repositoryKey: "williamos",
+    repositoryIdentity: "bsvalues/terragroq",
+    revisionIdentity: "b".repeat(40),
+    path: "AGENTS.md",
+    blobHash: "c".repeat(64),
+  }],
+})
 
 const codex: DurableAgentSession = {
   schemaVersion: 1,
@@ -29,6 +66,13 @@ const codex: DurableAgentSession = {
   role: "Builder",
   provider: "Codex",
   assignment: "Build the selected WilliamOS slice",
+  repository: {
+    resourceKey: "williamos",
+    identity: "bsvalues/terragroq",
+    mountKey: "williamos:williamos:configured",
+    observedRevision: "b".repeat(40),
+  },
+  contextManifest,
   target: { kind: "file", path: "components/workspace-shell/workspace-shell.tsx" },
   updatedAt: "2026-09-01T18:01:00.000Z",
   completedTurns: turns,
@@ -67,9 +111,11 @@ describe("durable agent session Inspector", () => {
       kind: "agent-session",
       sessionKey: "Codex:codex-inspector-1",
       sessionId: "codex-inspector-1",
+      assignmentId: "codex-inspector-1",
       role: "Builder",
       provider: "Codex",
       assignment: "Build the selected WilliamOS slice",
+      contextManifest,
       verificationAtCapture: "verified",
       capturedAt: "2026-09-01T18:05:00.000Z",
       mode: "delegate",
@@ -86,6 +132,8 @@ describe("durable agent session Inspector", () => {
     expect(inspectorSurfaceWindowTitle(surface)).toBe("Agent session · Builder · Codex")
     const article = screen.getByRole("article", { name: "Durable agent session snapshot" })
     expect(within(article).getByText("Verified at snapshot time 2026-09-01T18:05:00.000Z · current runtime liveness unverified")).toBeTruthy()
+    expect(within(article).getByRole("group", { name: "Context loaded for bsvalues/terragroq" })).toBeTruthy()
+    expect(within(article).getByText("Context evidence · does not grant authority.")).toBeTruthy()
     const first = within(article).getByRole("region", { name: "Completed turn 1" })
     const second = within(article).getByRole("region", { name: "Completed turn 2" })
     expect(first.textContent).toContain("First owner request")
@@ -104,6 +152,17 @@ describe("durable agent session Inspector", () => {
     expect(parseAgentSessionInspectorPayload(oversized)).toBeNull()
     render(<InspectorSurfaceView surface={{ id: "unavailable", kind: AGENT_SESSION_INSPECTOR_SURFACE_KIND, subject: "Builder · Codex", payload: oversized }} />)
     expect(screen.getByRole("status").textContent).toContain("Durable agent session snapshot unavailable.")
+  })
+
+  it("fails closed when persisted context evidence is structurally inconsistent", () => {
+    const payload = encodeAgentSessionInspectorPayload("Codex:codex-inspector-1", {
+      ...codex,
+      contextManifest: {
+        ...contextManifest,
+        targetRepository: { ...contextManifest.targetRepository, repositoryKey: "atlas" },
+      },
+    }, "live", "2026-09-01T18:05:00.000Z")
+    expect(parseAgentSessionInspectorPayload(payload)).toBeNull()
   })
 
   it("records a fork as its own strict mode and renders exact Claude lineage", () => {
@@ -174,6 +233,7 @@ describe("durable agent session Inspector", () => {
     const oversized: DurableAgentSession = {
       ...codex,
       sessionId: "codex-oversized-inspector",
+      contextManifest: undefined,
       completedTurns: [{ ownerPrompt: "Owner", finalResult: "x".repeat(200_000), completedAt: "2026-09-01T18:04:00.000Z" }],
     }
     window.localStorage.setItem(storageKey, JSON.stringify({

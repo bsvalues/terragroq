@@ -3,7 +3,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-tools-surface"
-import { loadToolRunHistory, persistToolRunTranscript, type ToolRunTranscript } from "@/components/workspace-shell/tool-run-history"
+import {
+  loadToolRunHistory,
+  persistToolRunTranscript,
+  repositoryQualifiedToolHistoryScope,
+  type DeveloperToolRepositoryIdentity,
+  type ToolRunTranscript,
+} from "@/components/workspace-shell/tool-run-history"
 
 afterEach(() => {
   cleanup()
@@ -22,6 +28,23 @@ const projectOperations = [
   { id: "repo.log", label: "Recent history", intent: "Show log", scope: "project", mutating: false },
   { id: "build.run", label: "Build the app", intent: "Build", scope: "project", mutating: false },
 ]
+
+const atlasRepositoryContext: DeveloperToolRepositoryIdentity = {
+  projectKey: "terrafusion",
+  repositoryKey: "atlas",
+  repositoryIdentity: "bsvalues/terrafusion-atlas",
+  repositoryMountKey: "terrafusion:atlas:configured",
+  observedRevision: "a".repeat(40),
+}
+
+function repositoryPayload(context: DeveloperToolRepositoryIdentity = atlasRepositoryContext) {
+  return {
+    key: context.repositoryKey,
+    identity: context.repositoryIdentity,
+    mountKey: context.repositoryMountKey,
+    observedRevision: context.observedRevision,
+  }
+}
 
 function saveTranscript({
   scope,
@@ -270,6 +293,90 @@ describe("Experience V2 developer tools", () => {
     expect(await screen.findByText("7 tests passed", { exact: false })).toBeTruthy()
     expect(await screen.findByText("exit 0", { exact: false })).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run", projectKey: "williamos" })
+  })
+
+  it("scopes source tools to one exact TerraFusion repository", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/loom/diff?path=src%2Fapp.ts&repositoryKey=atlas") {
+        return Response.json({ path: "src/app.ts", diff: "", status: "", untracked: false })
+      }
+      if (url === "/api/loom/run" && init?.method === "POST") {
+        return ndjson({ type: "exit", code: 0, reason: null })
+      }
+      if (url === "/api/loom/run") return Response.json({ operations: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<DeveloperToolsSurface kind="diff" repositoryKey="atlas" repositoryLabel="Atlas" selectedPath="src/app.ts" />)
+    expect(await screen.findByText("Atlas · HEAD · src/app.ts")).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="tests" repositoryKey="atlas" repositoryLabel="Atlas" selectedPath="src/app.ts" />)
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
+    await waitFor(() => {
+      const post = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/run" && init?.method === "POST")
+      expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ operation: "tests.run", repositoryKey: "atlas" })
+    })
+  })
+
+  it("fails closed when a diff response belongs to another repository revision", async () => {
+    const scope = repositoryQualifiedToolHistoryScope("server:world-a", atlasRepositoryContext)
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      path: "src/app.ts",
+      state: "modified",
+      fingerprint: "wrong-revision-diff",
+      diff: "+must not render",
+      status: " M src/app.ts",
+      untracked: false,
+      repository: repositoryPayload({ ...atlasRepositoryContext, observedRevision: "b".repeat(40) }),
+    })))
+
+    render(<DeveloperToolsSurface
+      kind="diff"
+      repositoryKey="atlas"
+      repositoryContext={atlasRepositoryContext}
+      selectedPath="src/app.ts"
+      historyScope={scope}
+    />)
+
+    expect((await screen.findAllByText("DIFF_REPOSITORY_IDENTITY_MISMATCH", { exact: false })).length).toBeGreaterThan(0)
+    expect(screen.queryByText("must not render", { exact: false })).toBeNull()
+  })
+
+  it("rejects streamed tool output unless its started event proves the exact repository mount and revision", async () => {
+    const scope = repositoryQualifiedToolHistoryScope("server:world-a", atlasRepositoryContext)
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson(
+        {
+          type: "started",
+          operation: "repo.status",
+          label: "What has changed",
+          repositoryKey: "atlas",
+          repositoryIdentity: "bsvalues/terrafusion-atlas",
+          repositoryMountKey: "terrafusion:atlas:configured",
+          observedRevision: "b".repeat(40),
+        },
+        { type: "stdout", text: "foreign checkout bytes\n" },
+        { type: "exit", code: 0, reason: null },
+      )
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface
+      kind="terminal"
+      repositoryKey="atlas"
+      repositoryContext={atlasRepositoryContext}
+      selectedPath={null}
+      historyScope={scope}
+    />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(await screen.findByText("TOOL_RUN_REPOSITORY_IDENTITY_MISMATCH", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("foreign checkout bytes", { exact: false })).toBeNull()
+    expect(loadToolRunHistory(window.localStorage, scope).runs).toHaveLength(0)
   })
 
   it("reports the exact running tool identity until streamed settlement", async () => {

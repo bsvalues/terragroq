@@ -1,4 +1,7 @@
-import { readCodexContinuation } from "@/lib/loom/codex-continuation"
+import {
+  readCodexContinuation,
+  type CodexContinuationRepositoryIdentity,
+} from "@/lib/loom/codex-continuation"
 import { codexContinuationDependenciesForProjectRoot } from "@/lib/loom/codex-continuation-runtime"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import {
@@ -19,6 +22,17 @@ function worldMatchesWorkspaceProject(
   return world.spine.projectId === binding.projectId
     && world.spine.projectName === binding.projectName
     && world.resources.includes(`${WORKSPACE_ROOT_RESOURCE}${binding.project.identity}`)
+}
+
+function repositoryMatches(
+  repository: CodexContinuationRepositoryIdentity,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  return repository.projectIdentity === binding.project.identity
+    && repository.repositoryResourceKey === binding.repositoryKey
+    && repository.repositoryIdentity === binding.repositoryIdentity
+    && repository.repositoryMountKey === binding.repositoryMountKey
+    && repository.observedRevision === binding.observedRevision
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -45,11 +59,18 @@ export async function GET(request: Request): Promise<Response> {
     if (!worldMatchesWorkspaceProject(world, projectBinding.binding)) {
       return Response.json({ error: "WORLD_PROJECT_MISMATCH" }, { status: 409 })
     }
-    const continuation = await readCodexContinuation(
-      session.user.id,
-      worldId,
-      codexContinuationDependenciesForProjectRoot(projectBinding.binding.workspaceRoot),
-    )
+    const continuation = await readCodexContinuation(session.user.id, worldId,
+      codexContinuationDependenciesForProjectRoot(projectBinding.binding.workspaceRoot, async (repository) => {
+        const resolved = await resolveCanonicalWorkspaceProjectBinding(
+          session.user.id,
+          projectBinding.binding.projectKey,
+          undefined,
+          repository.repositoryResourceKey,
+        )
+        return resolved.ok && repositoryMatches(repository, resolved.binding)
+          ? resolved.binding.workspaceRoot
+          : null
+      }))
     return Response.json(continuation, { headers: { "cache-control": "no-store" } })
   } catch {
     return Response.json({ error: "CODEX_CONTINUATION_UNAVAILABLE" }, { status: 503 })

@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db"
+import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
 
 /**
  * Who a workroom thread belongs to, and whether this caller may resume it.
@@ -27,6 +28,10 @@ export interface LoomThreadDescriptor {
   forkedFrom?: string
   worldId?: string
   evidenceFingerprint?: string
+  repositoryResourceKey?: string
+  repositoryIdentity?: string
+  repositoryMountKey?: string
+  observedRevision?: string
 }
 
 export interface LoomCodexThreadDescriptor {
@@ -40,6 +45,56 @@ export interface LoomCodexThreadDescriptor {
   grantId: number | null
   assignmentHash: string | null
   selectedPath: string | null
+  repositoryResourceKey?: string
+  repositoryIdentity?: string
+  repositoryMountKey?: string
+  observedRevision?: string
+}
+
+type ThreadRepositoryIdentity = Readonly<{
+  repositoryResourceKey: string
+  repositoryIdentity: string
+  repositoryMountKey: string
+  observedRevision: string
+}>
+
+type ThreadRepositoryIdentityVerdict =
+  | Readonly<{ status: "legacy" }>
+  | Readonly<{ status: "valid"; identity: ThreadRepositoryIdentity }>
+  | Readonly<{ status: "invalid" }>
+
+function threadRepositoryIdentity(metadata: Record<string, unknown> | null): ThreadRepositoryIdentityVerdict {
+  const values = [
+    metadata?.repositoryResourceKey,
+    metadata?.repositoryIdentity,
+    metadata?.repositoryMountKey,
+    metadata?.observedRevision,
+  ]
+  if (values.every((value) => value === undefined || value === null)) return { status: "legacy" }
+  const repositoryResourceKey = metadata?.repositoryResourceKey
+  const repositoryIdentity = metadata?.repositoryIdentity
+  const repositoryMountKey = metadata?.repositoryMountKey
+  const observedRevision = metadata?.observedRevision
+  if (typeof repositoryResourceKey !== "string"
+    || typeof repositoryIdentity !== "string"
+    || typeof repositoryMountKey !== "string"
+    || typeof observedRevision !== "string"
+    || !/^[a-f0-9]{40,64}$/.test(observedRevision)) {
+    return { status: "invalid" }
+  }
+  const selection = resolveWorkspaceRepositorySelection(
+    repositoryResourceKey === "williamos" ? "williamos" : "terrafusion",
+    repositoryResourceKey,
+  )
+  if (!selection.ok
+    || selection.repository.identity !== repositoryIdentity
+    || selection.repository.mountKey !== repositoryMountKey) {
+    return { status: "invalid" }
+  }
+  return {
+    status: "valid",
+    identity: { repositoryResourceKey, repositoryIdentity, repositoryMountKey, observedRevision },
+  }
 }
 
 /**
@@ -83,6 +138,8 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
     const metadata = row.metadata && typeof row.metadata === "object"
       ? row.metadata as Record<string, unknown>
       : null
+    const repository = threadRepositoryIdentity(metadata)
+    if (repository.status === "invalid") return null
     const provider = boundedMetadataString(metadata?.provider, 40)
     const workContextReceipt = boundedMetadataString(metadata?.workContextReceipt, 500)
     const worldId = boundedMetadataString(metadata?.worldId, 200)
@@ -100,6 +157,7 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
       ...(forkedFrom ? { forkedFrom } : {}),
       ...(worldId ? { worldId } : {}),
       ...(evidenceFingerprint ? { evidenceFingerprint } : {}),
+      ...(repository.status === "valid" ? repository.identity : {}),
     }
   } catch {
     return null
@@ -137,6 +195,8 @@ export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomC
       : null
     if (typeof row?.userId !== "string") return null
     if (metadata?.committed !== true) return null
+    const repository = threadRepositoryIdentity(metadata)
+    if (repository.status === "invalid") return null
     const workOrderId = typeof metadata.workOrderId === "number" && Number.isSafeInteger(metadata.workOrderId)
       ? metadata.workOrderId
       : null
@@ -154,6 +214,7 @@ export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomC
       grantId,
       assignmentHash: typeof metadata?.assignmentHash === "string" ? metadata.assignmentHash : null,
       selectedPath: typeof metadata?.selectedPath === "string" ? metadata.selectedPath : null,
+      ...(repository.status === "valid" ? repository.identity : {}),
     }
   } catch {
     return null

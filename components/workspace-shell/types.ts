@@ -1,5 +1,7 @@
 import type { WilliamJudgment, WorldSpine } from "@/lib/environment/working-world"
 import { isSummonedSurface } from "@/lib/environment/summon"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 import { parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 
 export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
@@ -136,6 +138,7 @@ export type EditorSelection = Readonly<{ anchor: number; head: number }>
 export type EditorPane = Readonly<{
   id: "primary" | "secondary"
   activePath: string | null
+  activeFileRef?: WorkspaceFileRef | null
   selection: EditorSelection | null
 }>
 
@@ -150,8 +153,10 @@ export type WorkspaceSpace = Readonly<{
   dock: readonly WindowId[]
   activeWindowId: string | null
   selectedPath: string | null
+  selectedFileRef?: WorkspaceFileRef | null
   editor: Readonly<{
     openFiles: readonly string[]
+    openFileRefs?: readonly WorkspaceFileRef[]
     panes: readonly EditorPane[]
     activePaneId: EditorPane["id"]
   }>
@@ -187,7 +192,45 @@ export type SpaceSummary = Readonly<{
   updatedAt: string
 }>
 
-export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+export type WorkspaceProject = Readonly<{
+  identity: string
+  name: string
+  repositories?: readonly WorkspaceRepositoryMountView[]
+}>
+
+/**
+ * Legacy Spaces predate repository-qualified file identity. Their paths were always relative to the
+ * one project root, so the only honest upgrade target is the server-verified default repository for
+ * that same project. If no such binding exists, leave the legacy state untouched and fail closed at
+ * mutation time rather than inventing a repository or revision.
+ */
+export function qualifyLegacyWorkspaceFiles(space: WorkspaceSpace, project: WorkspaceProject | null | undefined): WorkspaceSpace {
+  if (space.editor.openFileRefs !== undefined || space.editor.openFiles.length === 0) return space
+  const repository = project?.repositories?.find((candidate) => candidate.defaultRepository)
+  if (!project || !repository?.mount.verified || !repository.mount.revision) return space
+
+  const refs = space.editor.openFiles.map((path): WorkspaceFileRef => ({
+    projectIdentity: project.identity,
+    repositoryResourceKey: repository.key,
+    repositoryMountKey: repository.mount.key,
+    worktreeKey: null,
+    observedRevision: repository.mount.revision as string,
+    path,
+  }))
+  const refForPath = (path: string | null) => path === null
+    ? null
+    : refs.find((ref) => ref.path === path) ?? null
+
+  return {
+    ...space,
+    selectedFileRef: refForPath(space.selectedPath),
+    editor: {
+      ...space.editor,
+      openFileRefs: refs,
+      panes: space.editor.panes.map((pane) => ({ ...pane, activeFileRef: refForPath(pane.activePath) })),
+    },
+  }
+}
 
 export const WILLIAM_RAIL_WIDTH = 348
 export const WILLIAM_RAIL_BREAKPOINT = 1040
@@ -376,9 +419,19 @@ export function normalizeSpace(
   const rawSelection = candidate.selection && typeof candidate.selection === "object"
     ? candidate.selection as Record<string, unknown>
     : null
+  const openFileRefs = candidate.fileRefs === undefined ? undefined : Array.isArray(candidate.fileRefs)
+    ? candidate.fileRefs.flatMap((value) => {
+      try { return [parseWorkspaceFileRef(value)] } catch { return [] }
+    })
+    : undefined
   const panes: EditorPane[] = rawPanes.flatMap((pane, index) => {
     if (!pane || typeof pane !== "object") return []
     const item = pane as Record<string, unknown>
+    let activeFileRef: WorkspaceFileRef | null | undefined
+    if (item.fileRef === null) activeFileRef = null
+    else if (item.fileRef !== undefined) {
+      try { activeFileRef = parseWorkspaceFileRef(item.fileRef) } catch { activeFileRef = undefined }
+    }
     const paneSelection = item.selection && typeof item.selection === "object"
       ? item.selection as Record<string, unknown>
       : null
@@ -390,6 +443,7 @@ export function normalizeSpace(
     return [{
       id: index === 0 ? "primary" : "secondary",
       activePath: typeof item.filePath === "string" ? item.filePath : null,
+      ...(activeFileRef !== undefined ? { activeFileRef } : {}),
       selection,
     }]
   })
@@ -429,11 +483,18 @@ export function normalizeSpace(
     activeWindowId,
     selectedPath: typeof rawSelection?.filePath === "string"
       ? rawSelection.filePath
-      : panes[activePaneIndex]?.selection ? panes[activePaneIndex].activePath : null,
+      : panes[activePaneIndex]?.activePath ?? null,
+    selectedFileRef: (() => {
+      if (rawSelection?.fileRef !== undefined) {
+        try { return parseWorkspaceFileRef(rawSelection.fileRef) } catch { return null }
+      }
+      return panes[activePaneIndex]?.activeFileRef ?? null
+    })(),
     editor: {
       openFiles: Array.isArray(candidate.openFiles)
         ? candidate.openFiles.filter((path): path is string => typeof path === "string")
         : fallback.editor.openFiles,
+      ...(openFileRefs !== undefined ? { openFileRefs } : {}),
       panes: panes.length > 0 ? panes : fallback.editor.panes,
       activePaneId: activePaneIndex === 1 ? "secondary" : "primary",
     },
@@ -519,9 +580,11 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
       }
     })],
     openFiles: space.editor.openFiles,
+    ...(space.editor.openFileRefs ? { fileRefs: space.editor.openFileRefs } : {}),
     panes: space.editor.panes.map((pane) => ({
       id: pane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary",
       filePath: pane.activePath,
+      ...(pane.activeFileRef !== undefined ? { fileRef: pane.activeFileRef } : {}),
       selection: pane.activePath && pane.selection ? {
         anchor: Math.max(0, Math.round(pane.selection.anchor)),
         head: Math.max(0, Math.round(pane.selection.head)),
@@ -529,6 +592,7 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     })),
     selection: activePane?.activePath && activePane.selection ? {
       filePath: activePane.activePath,
+      ...(activePane.activeFileRef ? { fileRef: activePane.activeFileRef } : {}),
       anchor: Math.max(0, Math.round(activePane.selection.anchor)),
       head: Math.max(0, Math.round(activePane.selection.head)),
     } : null,

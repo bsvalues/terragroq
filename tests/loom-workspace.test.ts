@@ -119,6 +119,40 @@ describe("Experience V2 bounded Terminal route", () => {
     await response.text()
   })
 
+  it("runs an Atlas operation only in its selected verified repository mount", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: "C:/mounts/terrafusion-atlas",
+      projectId: 7,
+      projectKey: "terrafusion",
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryRole: "suite-source",
+      repositoryLabel: "Atlas",
+      repositoryPreviewSource: false,
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+      project: { identity: "c:/terrafusion" },
+    } })
+
+    const response = await POST(terminalRequest({
+      operation: "tests.run",
+      projectKey: "terrafusion",
+      repositoryKey: "atlas",
+    }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.resolveProject).toHaveBeenCalledWith(
+      "owner-1", "terrafusion", undefined, "atlas",
+    )
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+      "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent",
+    ], expect.objectContaining({ cwd: "C:/mounts/terrafusion-atlas" }))
+    child.emit("close", 0)
+    expect(await response.text()).toContain('"repositoryKey":"atlas"')
+  })
+
   it("injects the default commit bound when a typed log inspection omits one", async () => {
     const child = new FakeTerminalChild()
     terminalRouteSeams.spawn.mockReturnValue(child)

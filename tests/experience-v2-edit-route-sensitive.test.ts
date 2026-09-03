@@ -22,7 +22,11 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
     workspaceRoot: process.cwd(),
     projectId: 7,
     projectKey: "terrafusion",
+    repositoryResourceId: 70,
+    repositoryKey: "os-1",
     repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    repositoryMountKey: "terrafusion:os-1:configured",
+    observedRevision: "a".repeat(40),
     project: { identity: "c:/terrafusion" },
   } }),
 }))
@@ -54,7 +58,10 @@ class FakeChild extends EventEmitter {
 const request = (path: string) => new Request("http://williamos.test/api/loom/edit", {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ worldId: "world-a", path, task: "Apply the selected change." }),
+  body: JSON.stringify({
+    worldId: "world-a", path, task: "Apply the selected change.", repositoryKey: "os-1",
+    fileRef: { projectIdentity: "c:/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: "a".repeat(40), path },
+  }),
 })
 
 const improveRequest = (overrides: Record<string, unknown> = {}) => new Request("http://williamos.test/api/loom/edit", {
@@ -66,6 +73,8 @@ const improveRequest = (overrides: Record<string, unknown> = {}) => new Request(
     intent: "improve-diff",
     worldId: "world-a",
     expectedDiffFingerprint: "exact-live-diff",
+    repositoryKey: "os-1",
+    fileRef: { projectIdentity: "c:/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: "a".repeat(40), path: "src/app.ts" },
     ...overrides,
   }),
 })

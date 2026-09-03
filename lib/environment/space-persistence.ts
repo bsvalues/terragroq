@@ -23,6 +23,7 @@ import {
   type CouncilDispositionDirection,
   type CouncilSession,
 } from "@/lib/environment/council-session"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 
 export type OwnedWorkingWorldRecord = Readonly<{
   id: string
@@ -32,7 +33,11 @@ export type OwnedWorkingWorldRecord = Readonly<{
   updatedAt: Date
 }>
 
-export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+export type WorkspaceProject = Readonly<{
+  identity: string
+  name: string
+  repositories?: readonly WorkspaceRepositoryMountView[]
+}>
 export type OwnedSpaceSummary = Readonly<{
   worldId: string
   name: string

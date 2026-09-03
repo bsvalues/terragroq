@@ -38,6 +38,42 @@ afterEach(() => {
 })
 
 describe("prospective delivery adoption UI", () => {
+  it("submits explicit empty semantic and environment arrays when the owner leaves those fields blank", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ error: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" }, 409))
+      .mockResolvedValueOnce(response({
+        status: "READY_FOR_CONFIRMATION",
+        worldId,
+        provenanceDigest: "b".repeat(64),
+        externalWorkOrder: {
+          source: "github", externalRef: "github:owner/repo#1", title: "Bounded work",
+          objective: "Execute bounded work.", repository: "owner/repo",
+          authorityEvidence: ["owner:approved"], reservedPaths: ["src/file.ts"],
+          forbiddenPaths: [], contractReservations: [], environmentReservations: [],
+          validators: ["pnpm test"], acceptanceCriteria: ["The change works."],
+        },
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<ExternalWorkOrderAdmission worldId={worldId} persisted />)
+    await userEvent.click(screen.getByRole("button", { name: "Admit external work" }))
+    await screen.findByLabelText("External Work Order reference")
+    fireEvent.change(screen.getByLabelText("External Work Order reference"), { target: { value: "github:owner/repo#1" } })
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Bounded work" } })
+    fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Execute bounded work." } })
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "owner/repo" } })
+    fireEvent.change(screen.getByLabelText(/Authority evidence/), { target: { value: "owner:approved" } })
+    fireEvent.change(screen.getByLabelText(/Reserved paths/), { target: { value: "src/file.ts" } })
+    fireEvent.change(screen.getByLabelText(/Validators/), { target: { value: "pnpm test" } })
+    fireEvent.change(screen.getByLabelText(/Acceptance criteria/), { target: { value: "The change works." } })
+    await userEvent.click(screen.getByRole("button", { name: "Review packet" }))
+
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      externalWorkOrder: { contractReservations: [], environmentReservations: [] },
+    })
+    expect(await screen.findAllByText("None declared")).toHaveLength(2)
+  })
+
   it("previews an owner-selected exact PR target while keeping repository and paths server-derived", async () => {
     const user = userEvent.setup()
     const idempotencyKey = "44444444-4444-4444-8444-444444444444"
@@ -133,6 +169,8 @@ describe("prospective delivery adoption UI", () => {
           repository: "bsvalues/terragroq",
           authorityEvidence: ["owner-authorized:1117"],
           reservedPaths: ["components/workspace-shell/example.tsx"],
+          contractReservations: [],
+          environmentReservations: [],
           validators: ["pnpm test"],
           acceptanceCriteria: ["Exact reviewed head is delivered."],
           pullRequest: { number: 1117, headSha },
@@ -168,12 +206,20 @@ describe("prospective delivery adoption UI", () => {
     fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "bsvalues/terragroq" } })
     fireEvent.change(screen.getByLabelText(/Authority evidence/), { target: { value: "owner-authorized:1117" } })
     fireEvent.change(screen.getByLabelText(/Reserved paths/), { target: { value: "components/workspace-shell/example.tsx" } })
+    fireEvent.change(screen.getByLabelText(/Contract reservations/), { target: { value: "workspace-shell-v2 | 2.0.0 | producer" } })
+    fireEvent.change(screen.getByLabelText(/Environment reservations/), { target: { value: "preview:williamos | shared-read" } })
     fireEvent.change(screen.getByLabelText(/Pull request number/), { target: { value: "1117" } })
     fireEvent.change(screen.getByLabelText("Exact head SHA"), { target: { value: headSha } })
     fireEvent.change(screen.getByLabelText(/Validators/), { target: { value: "pnpm test" } })
     fireEvent.change(screen.getByLabelText(/Acceptance criteria/), { target: { value: "Exact reviewed head is delivered." } })
 
     await user.click(screen.getByRole("button", { name: "Review packet" }))
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      externalWorkOrder: {
+        contractReservations: [{ contractIdentity: "workspace-shell-v2", revisionIdentity: "2.0.0", role: "producer" }],
+        environmentReservations: [{ environmentIdentity: "preview:williamos", access: "shared-read" }],
+      },
+    })
     await user.click(await screen.findByRole("button", { name: "Admit to this Space" }))
 
     expect(await screen.findByText("Adopt an existing exact artifact")).toBeTruthy()

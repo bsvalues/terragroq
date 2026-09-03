@@ -30,13 +30,15 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown; projectKey?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown; projectKey?: unknown; repositoryKey?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion", undefined, body.repositoryKey)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = projectBinding.binding.workspaceRoot
 
@@ -119,12 +121,28 @@ export async function POST(request: Request) {
         try { controller.close() } catch { /* already closed */ }
       }
 
-      send({ type: "started", operation: operation.id, label: operation.label, mutating: operation.mutating })
+      send({
+        type: "started",
+        operation: operation.id,
+        label: operation.label,
+        mutating: operation.mutating,
+        repositoryKey: projectBinding.binding.repositoryKey,
+        repositoryIdentity: projectBinding.binding.repositoryIdentity,
+        repositoryMountKey: projectBinding.binding.repositoryMountKey,
+        observedRevision: projectBinding.binding.observedRevision,
+      })
       void recordLoomStart({
         userId: session.user.id,
         kind: "operation",
         subject: operation.id,
-        metadata: { scope: operation.scope, mutating: operation.mutating },
+        metadata: {
+          scope: operation.scope,
+          mutating: operation.mutating,
+          repositoryKey: projectBinding.binding.repositoryKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          repositoryMountKey: projectBinding.binding.repositoryMountKey,
+          observedRevision: projectBinding.binding.observedRevision,
+        },
       })
 
       // A runaway process must not be able to fill memory or run forever unattended.

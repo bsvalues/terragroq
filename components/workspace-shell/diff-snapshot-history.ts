@@ -4,7 +4,7 @@ const MAX_STATUS_TEXT = 16_384
 const TRUNCATION_MARKER = "\n… saved browser snapshot truncated …"
 
 type DiffSnapshotStorage = Pick<Storage, "getItem" | "setItem">
-type DiffSnapshotCleanupStorage = Pick<Storage, "removeItem">
+type DiffSnapshotCleanupStorage = Pick<Storage, "removeItem"> & Partial<Pick<Storage, "length" | "key">>
 
 export type DiffBrowserSnapshot = Readonly<{
   schemaVersion: 1
@@ -27,7 +27,14 @@ function storageKey(scope: string): string {
 
 export function removeDiffBrowserSnapshot(storage: DiffSnapshotCleanupStorage, scope: string): boolean {
   try {
-    storage.removeItem(storageKey(scope))
+    const baseKey = storageKey(scope)
+    if (typeof storage.length === "number" && typeof storage.key === "function") {
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key!(index))
+        .filter((key): key is string => key === baseKey || Boolean(key?.startsWith(`${baseKey}:`)))
+      for (const key of keys) storage.removeItem(key)
+    } else {
+      storage.removeItem(baseKey)
+    }
     return true
   } catch {
     return false
