@@ -4,13 +4,14 @@
 
 .DESCRIPTION
   The extracted package is distribution media. Program files are copied into the current user's
-  LocalAppData, while database, model, logs, secrets, and process state remain in a separate user-only
-  data directory. Every network listener is loopback-only. This script never changes Firewall, RDP,
-  OpenSSH, UAC, scheduled tasks, services, or machine-wide environment variables.
+  LocalAppData, while database, model, logs, secrets, process state, and one verified rollback slot
+  remain in a separate user-only data directory. Every network listener is loopback-only. This script
+  never changes Firewall, RDP, OpenSSH, UAC, scheduled tasks, services, or machine-wide environment
+  variables.
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet("Launch", "Install", "Start", "Stop", "Status", "Uninstall")]
+  [ValidateSet("Launch", "Preflight", "Install", "Start", "Stop", "Status", "Verify", "Rollback", "Uninstall")]
   [string]$Action = "Launch",
   [string]$InstallRoot = "$env:LOCALAPPDATA\Programs\WilliamOSCountyDevelopment",
   [string]$DataRoot = "$env:LOCALAPPDATA\WilliamOSCountyDevelopment",
@@ -37,6 +38,10 @@ $StateRoot = Join-Path $DataRoot "state"
 $LogRoot = Join-Path $DataRoot "logs"
 $PostgresData = Join-Path $DataRoot "postgres\data"
 $OllamaModels = Join-Path $DataRoot "ollama\models"
+$RollbackRoot = Join-Path $DataRoot "rollback"
+$RollbackProgramRoot = Join-Path $RollbackRoot "program"
+$RollbackConfigPath = Join-Path $RollbackRoot "county-development.config.json"
+$RollbackMetadataPath = Join-Path $RollbackRoot "rollback.json"
 $AppPidPath = Join-Path $StateRoot "williamos.pid"
 $OllamaPidPath = Join-Path $StateRoot "ollama.pid"
 
@@ -137,7 +142,7 @@ function Test-PackageManifest {
   param([string]$Root)
   $manifestPath = Join-Path $Root "manifest.json"
   if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-    Deny "PACKAGE_MANIFEST_MISSING" "manifest.json is missing from the extracted package."
+    Deny "PACKAGE_MANIFEST_MISSING" "manifest.json is missing from the package root."
   }
   $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
   if ($manifest.schema -ne "williamos.county-development.bundle.v1") {
@@ -167,6 +172,29 @@ function Write-JsonFile {
   Ensure-Directory (Split-Path -Parent $Path)
   $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding utf8
   if ($Protect) { Protect-CurrentUserFile $Path }
+}
+
+function Get-PreflightObject {
+  $manifest = Test-PackageManifest $PackageRoot
+  if ($env:OS -ne "Windows_NT" -or -not [Environment]::Is64BitOperatingSystem) {
+    Deny "WINDOWS_X64_REQUIRED" "County Development requires 64-bit Windows."
+  }
+  $requiredCommands = @("git.exe", "robocopy.exe", "icacls.exe", "powershell.exe")
+  $missing = @($requiredCommands | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+  if ($missing.Count -gt 0) {
+    Deny "COUNTY_PREREQUISITE_MISSING" ($missing -join ', ')
+  }
+  $modelCandidate = Join-Path $PackageRoot "models"
+  return [ordered]@{
+    schema = "williamos.county-development.preflight.v1"
+    result = "PASS"
+    packageRoot = $PackageRoot
+    packageSourceSha = [string]$manifest.sourceSha
+    windowsX64 = $true
+    commands = $requiredCommands
+    bundledModelDirectory = Test-Path -LiteralPath $modelCandidate -PathType Container
+    checkedAt = [DateTimeOffset]::UtcNow.ToString('o')
+  }
 }
 
 function Resolve-InitialConfiguration {
@@ -210,6 +238,13 @@ function Resolve-InitialConfiguration {
     packageSourceSha = [string]$Manifest.sourceSha
   }
   Write-JsonFile $ConfigPath $config
+  return Read-JsonFile $ConfigPath
+}
+
+function Set-ConfiguredPackageSource {
+  param([object]$Config, [string]$SourceSha)
+  $Config | Add-Member -NotePropertyName packageSourceSha -NotePropertyValue $SourceSha -Force
+  Write-JsonFile $ConfigPath $Config
   return Read-JsonFile $ConfigPath
 }
 
@@ -568,26 +603,136 @@ function Get-StatusObject {
     health = $health
     appProcess = if ($app) { [int]$app.ProcessId } else { $null }
     ollamaProcess = if ($ollama) { [int]$ollama.ProcessId } else { $null }
+    rollbackAvailable = Test-Path -LiteralPath (Join-Path $RollbackProgramRoot "manifest.json") -PathType Leaf
     observedAt = [DateTimeOffset]::UtcNow.ToString('o')
   }
 }
 
+function Get-VerificationObject {
+  Assert-InstalledPayload
+  $manifest = Test-PackageManifest $InstallRoot
+  $config = Read-JsonFile $ConfigPath
+  $secrets = Read-JsonFile $SecretsPath
+  if (-not $config -or -not $secrets) {
+    Deny "COUNTY_CONFIGURATION_MISSING" "The installed runtime has no complete configuration and secrets."
+  }
+  $resolvedRoot = Assert-TerraFusionCheckout ([string]$config.terraFusionRoot)
+  if ([string]$config.packageSourceSha -ne [string]$manifest.sourceSha) {
+    Deny "INSTALLED_SOURCE_IDENTITY_MISMATCH" "Configured package source does not match the installed manifest."
+  }
+  $status = Get-StatusObject
+  if (-not $status.health -or -not (Test-HealthyCountyRuntime $status.health $config)) {
+    Deny "COUNTY_RUNTIME_NOT_HEALTHY" "Start the installed runtime and resolve its exact boundary/model health before verification."
+  }
+  $terraFusionRevision = Invoke-Git $resolvedRoot @("rev-parse", "--verify", "HEAD")
+  if (-not $terraFusionRevision -or $terraFusionRevision -notmatch '^[0-9a-fA-F]{40,64}$') {
+    Deny "TERRAFUSION_REVISION_UNAVAILABLE" "The verified checkout has no exact HEAD revision."
+  }
+  return [ordered]@{
+    schema = "williamos.county-development.verification.v1"
+    result = "PASS"
+    packageSourceSha = [string]$manifest.sourceSha
+    deploymentId = [string]$config.deploymentId
+    serviceOrigin = [string]$status.serviceOrigin
+    localOnlyInference = [bool]$status.health.deployment.localOnlyInference
+    dataBoundaryValid = [bool]$status.health.deployment.valid
+    chatModel = [string]$status.health.checks.runtime.chatModel
+    embeddingModel = [string]$status.health.checks.runtime.embeddingModel
+    terraFusionRoot = $resolvedRoot
+    terraFusionRevision = $terraFusionRevision.ToLowerInvariant()
+    rollbackAvailable = [bool]$status.rollbackAvailable
+    verifiedAt = [DateTimeOffset]::UtcNow.ToString('o')
+  }
+}
+
+function Save-RollbackSnapshot {
+  if ($PackageRoot -ieq $InstallRoot) { return $false }
+  if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "manifest.json") -PathType Leaf)) { return $false }
+
+  $installedManifest = Test-PackageManifest $InstallRoot
+  $temporaryRoot = "$RollbackRoot.new-$([guid]::NewGuid().ToString('N'))"
+  $temporaryProgram = Join-Path $temporaryRoot "program"
+  try {
+    Copy-Tree $InstallRoot $temporaryProgram
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+      Copy-Item -LiteralPath $ConfigPath -Destination (Join-Path $temporaryRoot "county-development.config.json") -Force
+    }
+    Write-JsonFile (Join-Path $temporaryRoot "rollback.json") ([ordered]@{
+      schema = "williamos.county-development.rollback.v1"
+      sourceSha = [string]$installedManifest.sourceSha
+      capturedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    })
+    Test-PackageManifest $temporaryProgram | Out-Null
+    if (Test-Path -LiteralPath $RollbackRoot) { Remove-Item -LiteralPath $RollbackRoot -Recurse -Force }
+    Move-Item -LiteralPath $temporaryRoot -Destination $RollbackRoot
+    Write-Event "ROLLBACK_SNAPSHOT_READY" ([string]$installedManifest.sourceSha)
+    return $true
+  } catch {
+    Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+  }
+}
+
+function Restore-RollbackSnapshot {
+  if (-not (Test-Path -LiteralPath (Join-Path $RollbackProgramRoot "manifest.json") -PathType Leaf)) {
+    Deny "ROLLBACK_NOT_AVAILABLE" "No verified previous County Development program version is available."
+  }
+  $rollbackManifest = Test-PackageManifest $RollbackProgramRoot
+  $rollbackMetadata = Read-JsonFile $RollbackMetadataPath
+  if (-not $rollbackMetadata -or $rollbackMetadata.schema -ne "williamos.county-development.rollback.v1" -or
+      [string]$rollbackMetadata.sourceSha -ne [string]$rollbackManifest.sourceSha) {
+    Deny "ROLLBACK_IDENTITY_MISMATCH" "Rollback metadata does not match the verified previous package."
+  }
+  Stop-All
+  Copy-Tree $RollbackProgramRoot $InstallRoot
+  if (Test-Path -LiteralPath $RollbackConfigPath -PathType Leaf) {
+    Copy-Item -LiteralPath $RollbackConfigPath -Destination $ConfigPath -Force
+  }
+  Test-PackageManifest $InstallRoot | Out-Null
+  Start-Installed
+  Write-Event "ROLLBACK_RESTORED" ([string]$rollbackManifest.sourceSha)
+}
+
 function Install-Package {
   $manifest = Test-PackageManifest $PackageRoot
-  if ($PackageRoot -ine $InstallRoot) {
-    Copy-Tree $PackageRoot $InstallRoot @((Join-Path $PackageRoot "models"))
+  $rollbackPrepared = $false
+  $existingInstall = Test-Path -LiteralPath (Join-Path $InstallRoot "manifest.json") -PathType Leaf
+
+  if ($existingInstall -and $PackageRoot -ine $InstallRoot) {
+    Stop-All
+    $rollbackPrepared = Save-RollbackSnapshot
   }
-  Ensure-Directory $DataRoot
-  Ensure-Directory $StateRoot
-  Ensure-Directory $LogRoot
-  Assert-InstalledPayload
-  $config = Resolve-InitialConfiguration $manifest
-  $secrets = Ensure-Secrets
-  Start-Postgres $config $secrets
-  Start-Ollama $config
-  Start-WilliamOS $config $secrets
-  Open-OwnerSurface $config $secrets
-  Write-Event "COUNTY_DEVELOPMENT_RUNNING" ([string]$config.deploymentId)
+
+  try {
+    if ($PackageRoot -ine $InstallRoot) {
+      Copy-Tree $PackageRoot $InstallRoot @((Join-Path $PackageRoot "models"))
+    }
+    Ensure-Directory $DataRoot
+    Ensure-Directory $StateRoot
+    Ensure-Directory $LogRoot
+    Assert-InstalledPayload
+    $config = Resolve-InitialConfiguration $manifest
+    if ([string]$config.packageSourceSha -ne [string]$manifest.sourceSha) {
+      $config = Set-ConfiguredPackageSource $config ([string]$manifest.sourceSha)
+    }
+    $secrets = Ensure-Secrets
+    Start-Postgres $config $secrets
+    Start-Ollama $config
+    Start-WilliamOS $config $secrets
+    Open-OwnerSurface $config $secrets
+    Write-Event "COUNTY_DEVELOPMENT_RUNNING" ([string]$config.deploymentId)
+  } catch {
+    $installFailure = $_
+    if ($rollbackPrepared) {
+      try {
+        Restore-RollbackSnapshot
+        Write-Event "FAILED_UPDATE_RECOVERED" ([string]$manifest.sourceSha)
+      } catch {
+        Write-Event "FAILED_UPDATE_ROLLBACK_FAILED" $_.Exception.Message
+      }
+    }
+    throw $installFailure
+  }
 }
 
 function Start-Installed {
@@ -611,10 +756,16 @@ switch ($Action) {
     if ($installationComplete) { Start-Installed }
     else { Install-Package }
   }
+  "Preflight" { Get-PreflightObject | ConvertTo-Json -Depth 8 }
   "Install" { Install-Package }
   "Start" { Start-Installed }
   "Stop" { Stop-All }
   "Status" { Get-StatusObject | ConvertTo-Json -Depth 10 }
+  "Verify" { Get-VerificationObject | ConvertTo-Json -Depth 10 }
+  "Rollback" {
+    Restore-RollbackSnapshot
+    Get-VerificationObject | ConvertTo-Json -Depth 10
+  }
   "Uninstall" {
     Stop-All
     if (Test-Path -LiteralPath $InstallRoot) { Remove-Item -LiteralPath $InstallRoot -Recurse -Force }
