@@ -10,7 +10,19 @@ import { DeliveryAdoption } from "@/components/workspace-shell/delivery-adoption
 const worldId = "space-adoption"
 const headSha = "8df3d10a2060abe6f51282c5391c7b5723f788da"
 const previewDigest = "a".repeat(64)
-const seal = { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" }
+const sealedPaths = ["app/a.ts", "lib/b.ts"]
+const seal = {
+  payload: {
+    version: "williamos-delivery-seal.v2",
+    adoption: {
+      worldId,
+      outcome: { id: 11, key: "external:outcome", version: 4 },
+      workOrder: { id: 34, ref: "WO-34", version: "2026-09-01T00:00:00.000Z" },
+      artifact: { pullRequest: 1117, headSha, paths: sealedPaths },
+    },
+  },
+  signature: "signed",
+}
 const sealBlock = ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(seal, null, 2), "```"].join("\n")
 
 function response(body: unknown, status = 200) {
@@ -255,6 +267,117 @@ describe("prospective delivery adoption UI", () => {
     expect(await screen.findByText(/delivery seal is issued/i)).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(screen.queryByRole("button", { name: /authorize|issue seal/i })).toBeNull()
+  })
+
+  it("finalizes the restored sealed delivery with the exact WilliamOS request and refreshes the Space", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: ["app/a.ts", "lib/b.ts"],
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({
+        status: "FINALIZED",
+        replayed: false,
+        worldId,
+        outcomeKey: "external:outcome",
+        workOrderId: 34,
+        pullRequest: 1117,
+        headSha,
+        mergeSha: "b".repeat(40),
+        paths: ["app/a.ts", "lib/b.ts"],
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} onFinalized={onFinalized} />)
+    expect(await screen.findByText(/Publish this complete block in PR #1117's description/)).toBeTruthy()
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/environment/space")
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY",
+      worldId,
+      projectKey: "williamos",
+    })
+    await waitFor(() => expect(onFinalized).toHaveBeenCalledOnce())
+    expect(await screen.findByText("Merged delivery finalized and Space refreshed.")).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(String(options?.body ?? "{}"))?.mode === "ISSUE")).toBe(false)
+  })
+
+  it("keeps the sealed delivery actionable and reports a truthful finalization refusal", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: ["app/a.ts", "lib/b.ts"],
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({ error: "MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE" }, 409))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} onFinalized={onFinalized} />)
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    expect((await screen.findByRole("alert")).textContent).toBe("The persisted Space authority no longer matches this sealed delivery. WilliamOS did not finalize it.")
+    expect(onFinalized).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Finalize merged delivery" })).toBeTruthy()
+  })
+
+  it("refuses a finalization response for a different seal than the one displayed", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: sealedPaths,
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({
+        status: "FINALIZED",
+        replayed: false,
+        worldId,
+        outcomeKey: "external:other-outcome",
+        workOrderId: 35,
+        pullRequest: 1118,
+        headSha: "3".repeat(40),
+        mergeSha: "b".repeat(40),
+        paths: ["app/other.ts"],
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} onFinalized={onFinalized} />)
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    expect((await screen.findByRole("alert")).textContent).toBe("WilliamOS returned finalization for a different sealed artifact. This Space was not refreshed.")
+    expect(onFinalized).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Finalize merged delivery" })).toBeTruthy()
   })
 
   it("restores an admitted artifact when the dialog reopens after a page reload", async () => {

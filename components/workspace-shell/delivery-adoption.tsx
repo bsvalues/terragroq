@@ -31,6 +31,18 @@ type ArtifactSeal = Readonly<{
 
 type RestoredArtifactSeal = ArtifactSeal & Omit<ArtifactPreview, "status">
 
+type FinalizedDelivery = Readonly<{
+  status: "FINALIZED"
+  replayed: boolean
+  worldId: string
+  outcomeKey: string
+  workOrderId: number
+  pullRequest: number
+  headSha: string
+  mergeSha: string
+  paths: readonly string[]
+}>
+
 type Failure = Readonly<{ error?: string; detail?: string }>
 type ArtifactTarget = Readonly<{ pullRequest: number; expectedHeadSha: string }>
 type Stage = "loading" | "target" | "ready" | "authorized" | "sealed" | "absent" | "error"
@@ -44,6 +56,10 @@ const ERROR_COPY: Readonly<Record<string, string>> = {
   NOT_OWNER: "Only the WilliamOS owner can authorize delivery adoption.",
   UNAUTHENTICATED: "Sign in before authorizing delivery adoption.",
   CROSS_ORIGIN_REFUSED: "WilliamOS refused this request because it did not come from the active application origin.",
+  MERGED_EXTERNAL_DELIVERY_NOT_PROVEN: "The exact sealed head is not yet proven merged into protected main. WilliamOS did not finalize it.",
+  MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE: "The persisted Space authority no longer matches this sealed delivery. WilliamOS did not finalize it.",
+  MERGED_EXTERNAL_DELIVERY_CONTEXT_INVALID: "The persisted delivery evidence is incomplete or inconsistent. WilliamOS did not finalize it.",
+  MERGED_EXTERNAL_DELIVERY_SEAL_INVALID: "The persisted delivery seal could not be verified. WilliamOS did not finalize it.",
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -114,6 +130,42 @@ function isRestoredSeal(value: unknown): value is RestoredArtifactSeal {
     && value.sealBlock === deliverySealBlock(value.seal)
 }
 
+function isFinalizedDelivery(value: unknown): value is FinalizedDelivery {
+  return isRecord(value)
+    && hasExactKeys(value, ["status", "replayed", "worldId", "outcomeKey", "workOrderId", "pullRequest", "headSha", "mergeSha", "paths"])
+    && value.status === "FINALIZED"
+    && typeof value.replayed === "boolean"
+    && typeof value.worldId === "string"
+    && typeof value.outcomeKey === "string"
+    && Number.isSafeInteger(value.workOrderId) && Number(value.workOrderId) > 0
+    && Number.isSafeInteger(value.pullRequest) && Number(value.pullRequest) > 0
+    && isHead(value.headSha) && isHead(value.mergeSha) && isStrings(value.paths)
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function finalizationMatchesDisplayedSeal(value: FinalizedDelivery, sealed: ArtifactSeal, preview: ArtifactPreview): boolean {
+  const payload = sealed.seal.payload
+  const adoption = isRecord(payload.adoption) ? payload.adoption : null
+  const outcome = adoption && isRecord(adoption.outcome) ? adoption.outcome : null
+  const workOrder = adoption && isRecord(adoption.workOrder) ? adoption.workOrder : null
+  const artifact = adoption && isRecord(adoption.artifact) ? adoption.artifact : null
+  const artifactPaths = artifact && isStrings(artifact.paths) ? artifact.paths : null
+  return adoption?.worldId === value.worldId
+    && outcome?.key === value.outcomeKey
+    && workOrder?.id === value.workOrderId
+    && artifact?.pullRequest === value.pullRequest
+    && artifact?.headSha === value.headSha
+    && artifactPaths !== null && sameStrings(artifactPaths, value.paths)
+    && preview.worldId === value.worldId
+    && preview.pullRequest === value.pullRequest
+    && preview.headSha === value.headSha
+    && sameStrings(preview.paths, value.paths)
+}
+
 function compact(value: string): string {
   return `${value.slice(0, 10)}…${value.slice(-8)}`
 }
@@ -126,10 +178,12 @@ export function DeliveryAdoption({
   worldId,
   restoreOnly = false,
   onAvailabilityChange,
+  onFinalized,
 }: {
   worldId: string
   restoreOnly?: boolean
   onAvailabilityChange?: (available: boolean) => void
+  onFinalized?: () => void | Promise<void>
 }) {
   const [stage, setStage] = useState<Stage>("loading")
   const [preview, setPreview] = useState<ArtifactPreview | null>(null)
@@ -139,6 +193,8 @@ export function DeliveryAdoption({
   const [copyStatus, setCopyStatus] = useState<string | null>(null)
   const [pullRequestInput, setPullRequestInput] = useState("")
   const [expectedHeadInput, setExpectedHeadInput] = useState("")
+  const [finalizing, setFinalizing] = useState(false)
+  const [finalized, setFinalized] = useState(false)
   const attemptRef = useRef<string | null>(null)
   const targetRef = useRef<ArtifactTarget | null>(null)
 
@@ -295,6 +351,33 @@ export function DeliveryAdoption({
     }
   }
 
+  async function finalizeMergedDelivery() {
+    if (!seal || finalizing || finalized) return
+    setFinalizing(true)
+    setError(null)
+    try {
+      const response = await fetch("/api/environment/space", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId, projectKey: "williamos" }),
+        cache: "no-store",
+      })
+      const value = await payload(response)
+      if (!response.ok || !isFinalizedDelivery(value) || value.worldId !== worldId) {
+        throw new Error(explainFailure(value, "WilliamOS could not finalize this merged delivery."))
+      }
+      if (!preview || !finalizationMatchesDisplayedSeal(value, seal, preview)) {
+        throw new Error("WilliamOS returned finalization for a different sealed artifact. This Space was not refreshed.")
+      }
+      await onFinalized?.()
+      setFinalized(true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WilliamOS could not finalize this merged delivery.")
+    } finally {
+      setFinalizing(false)
+    }
+  }
+
   if (stage === "absent") return null
 
   return (
@@ -339,9 +422,13 @@ export function DeliveryAdoption({
         {stage === "loading" ? <p role="status" className="flex items-center gap-2 text-xs text-[#9ca797]"><LoaderCircle className="size-3.5 animate-spin" aria-hidden />Reading current Space authority and exact artifact…</p> : null}
         {stage === "sealed" && seal ? <div className="grid gap-3 rounded border border-[#52634d] bg-[#172016] px-3 py-3 text-xs text-[#dbe7d6]">
           <p role="status" className="flex items-center gap-2"><Check className="size-4" aria-hidden />Exact-head evidence is green and the delivery seal is issued · {compact(seal.adoptionHash)}</p>
-          <p className="leading-5 text-[#aebaa9]">Publish this complete block in PR #{preview?.pullRequest}’s description so the protected delivery check can verify it.</p>
+          <p className="leading-5 text-[#aebaa9]">Publish this complete block in PR #{preview?.pullRequest}&apos;s description before protected merge so the delivery check can verify it. After protected merge, finalize the delivery to close the bound Work Order and refresh this Space.</p>
           <textarea aria-label="Complete WilliamOS delivery seal block" readOnly value={seal.sealBlock} rows={8} className="w-full resize-y rounded border border-[#42503f] bg-[#090c09] p-2 font-mono text-[10px] leading-4 text-[#dbe7d6]" />
-          <button type="button" onClick={() => void copySealBlock()} className="flex items-center gap-2 justify-self-end rounded border border-[#8da083] bg-[#253122] px-3 py-2 font-semibold text-[#edf3e9]"><Clipboard className="size-3.5" aria-hidden />Copy complete seal block</button>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => void copySealBlock()} className="flex items-center gap-2 rounded border border-[#52604f] px-3 py-2 font-semibold text-[#d8e2d4]"><Clipboard className="size-3.5" aria-hidden />Copy complete seal block</button>
+            {!finalized ? <button type="button" disabled={finalizing} onClick={() => void finalizeMergedDelivery()} className="rounded border border-[#8da083] bg-[#253122] px-3 py-2 font-semibold text-[#edf3e9] disabled:opacity-60">{finalizing ? "Finalizing merged delivery…" : "Finalize merged delivery"}</button> : null}
+          </div>
+          {finalized ? <p role="status" className="text-[#cfe0c8]">Merged delivery finalized and Space refreshed.</p> : null}
           {copyStatus ? <p role="status" className="text-[#aebaa9]">{copyStatus}</p> : null}
         </div> : null}
         {error && stage !== "target" ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
