@@ -256,13 +256,25 @@ describe("Preview debugger route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(3)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(4)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
     }))
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
-    }))
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(4, {
+      userId: "owner-1",
+      worldId: "world-a",
+      binding: {
+        projectId: 7,
+        projectKey: "terrafusion",
+        repositoryResourceKey: "os-1",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryMountKey: "terrafusion:os-1:configured",
+        observedRevision: "a".repeat(40),
+        spaceIdentity: "c:/terrafusion",
+      },
+      expected: { actor: "claude", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: "src/app.ts" },
+    })
     const prompt = child.stdin.end.mock.calls[0][0] as string
     expect(prompt).toContain("exact server-authorized selected file: src/app.ts")
     expect(prompt).toContain("Do not edit, create, delete, rename, or move any other path")
