@@ -1825,7 +1825,7 @@ export function AgentSessionStrip({
     const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
     identityGroups.set(key, [...(identityGroups.get(key) ?? []), session])
   }
-  const duplicateLabels = new Map<ExperienceAgentSession, string>()
+  const duplicatePositions = new Map<ExperienceAgentSession, Readonly<{ index: number; total: number }>>()
   for (const group of identityGroups.values()) {
     if (group.length < 2) continue
     const ordered = [...group].sort((left, right) => {
@@ -1833,11 +1833,12 @@ export function AgentSessionStrip({
       const rightIdentity = `${right.updatedAt ?? ""}\u0000${right.id}`
       return leftIdentity.localeCompare(rightIdentity)
     })
-    ordered.forEach((session, index) => duplicateLabels.set(session, `${index + 1} of ${ordered.length}`))
+    ordered.forEach((session, index) => duplicatePositions.set(session, { index, total: ordered.length }))
   }
   const disambiguator = (session: ExperienceAgentSession): string | null => {
-    const ordinal = duplicateLabels.get(session)
-    if (!ordinal) return null
+    const position = duplicatePositions.get(session)
+    if (!position) return null
+    const ordinal = `${position.index + 1} of ${position.total}`
     if (session.updatedAt) {
       const parsed = new Date(session.updatedAt)
       if (!Number.isNaN(parsed.getTime())) {
@@ -1879,12 +1880,15 @@ export function AgentSessionStrip({
         const assignmentLabel = identityDisambiguator
           ? `${session.assignment} · ${identityDisambiguator}`
           : session.assignment
+        const accessibleAssignmentLabel = duplicatePositions.get(session)?.index === 0
+          ? session.assignment
+          : assignmentLabel
         return <button
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
           aria-label={session.kind === "durable-session"
-            ? `${session.role} · ${session.providerLabel} · ${assignmentLabel}`
+            ? `${session.role} · ${session.providerLabel} · ${accessibleAssignmentLabel}`
             : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"

@@ -3243,7 +3243,7 @@ describe("Experience V2 real agent sessions", () => {
 
     render(<AgentSessionStrip sessions={sessions} />)
 
-    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z · 1 of 2" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z · 2 of 2" })).toBeTruthy()
     expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 1 of 2")).toBeTruthy()
     expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 2 of 2")).toBeTruthy()
