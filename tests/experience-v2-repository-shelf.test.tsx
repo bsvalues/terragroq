@@ -215,6 +215,70 @@ describe("Experience V2 repository shelf", () => {
     expect(screen.queryByText(/virtual monorepo|combined tree/i)).toBeNull()
   })
 
+  it("exposes explicit Working Set membership without allowing OS 1.0 removal", async () => {
+    const user = userEvent.setup()
+    const onToggleWorkingSet = vi.fn()
+    render(
+      <RepositoryShelf
+        repositories={repositoryFixtures}
+        onToggleWorkingSet={onToggleWorkingSet}
+      />,
+    )
+
+    await user.click(screen.getByRole("tab", { name: "Core Seven, 4 repositories" }))
+    await user.click(screen.getByRole("button", { name: /^Repository terrafusion-os,/i }))
+    await user.click(screen.getByRole("button", { name: "Add Sovereign OS to Working Set" }))
+    expect(onToggleWorkingSet).toHaveBeenCalledWith("sovereign-os", true)
+
+    await user.click(screen.getByRole("button", { name: /^Repository terrafusion_os_1\.0,/i }))
+    expect((screen.getByRole("button", { name: "OS 1.0 is required in the Working Set" }) as HTMLButtonElement).disabled).toBe(true)
+
+    await user.click(screen.getByRole("button", { name: /^Repository terrafusion-atlas,/i }))
+    await user.click(screen.getByRole("button", { name: "Remove Atlas from Working Set" }))
+    expect(onToggleWorkingSet).toHaveBeenCalledWith("atlas", false)
+  })
+
+  it("lets the owner remove a persisted member whose mount later becomes unavailable", async () => {
+    const user = userEvent.setup()
+    const onToggleWorkingSet = vi.fn()
+    const unavailableMember = repositoryFixtures.map((repository) => repository.repositoryKey === "atlas"
+      ? { ...repository, readOnly: true, mounts: repository.mounts.map((mount) => ({ ...mount, status: "unavailable" as const })) }
+      : repository)
+    render(<RepositoryShelf repositories={unavailableMember} onToggleWorkingSet={onToggleWorkingSet} />)
+
+    await user.click(screen.getByRole("button", { name: /^Repository terrafusion-atlas,/i }))
+    const remove = screen.getByRole("button", { name: "Remove Atlas from Working Set" }) as HTMLButtonElement
+    expect(remove.disabled).toBe(false)
+    await user.click(remove)
+    expect(onToggleWorkingSet).toHaveBeenCalledWith("atlas", false)
+  })
+
+  it("invalidates Working Set search results when membership changes", async () => {
+    const user = userEvent.setup()
+    let resolveSearch!: (response: Response) => void
+    const search = new Promise<Response>((resolve) => { resolveSearch = resolve })
+    vi.stubGlobal("fetch", vi.fn(() => search))
+    const view = render(<RepositoryShelf repositories={repositoryFixtures} />)
+
+    await user.type(screen.getByRole("searchbox", { name: "Search Working Set" }), "parcel")
+    await user.click(screen.getByRole("button", { name: "Search 3 Working Set repositories" }))
+    view.rerender(<RepositoryShelf repositories={repositoryFixtures.map((repository) => ({
+      ...repository,
+      workingSet: repository.repositoryKey === "os-1",
+    }))} />)
+    resolveSearch(Response.json({
+      results: [{
+        repositoryKey: "atlas", repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryMountKey: "atlas-worktree", observedRevision: "3".repeat(40),
+        path: "src/project-atlas-feature.mjs", line: 14, excerpt: "parcel",
+      }],
+      unavailable: [], partial: [], truncated: false,
+    }))
+
+    await Promise.resolve()
+    expect(screen.queryByRole("region", { name: "Working Set search results" })).toBeNull()
+  })
+
   it("searches only the current Working Set and opens a repository-qualified result", async () => {
     const user = userEvent.setup()
     const onOpenEntry = vi.fn()

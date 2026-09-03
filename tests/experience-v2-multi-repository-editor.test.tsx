@@ -120,6 +120,104 @@ describe("Experience V2 multi-repository Source workspace", () => {
     ))
   })
 
+  it("persists explicit Working Set membership and restores its active repository", async () => {
+    const user = userEvent.setup()
+    const onEditorChange = vi.fn()
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      if (url === "/api/loom/files?path=&repositoryKey=atlas") return Response.json({ kind: "directory", entries: [{ name: "src", path: "src", directory: true }] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<EditorSurface project={project} projectKey="terrafusion" space={defaultSpace()} onEditorChange={onEditorChange} />)
+    await screen.findByRole("button", { name: "README.md" })
+    await user.click(screen.getByRole("tab", { name: "Core Seven, 3 repositories" }))
+    await user.click(screen.getByRole("button", { name: /^Repository Atlas,/i }))
+    await user.click(screen.getByRole("button", { name: "Add Atlas to Working Set" }))
+
+    const addedEditor = onEditorChange.mock.calls.at(-1)?.[0] as WorkspaceSpace["editor"]
+    expect(addedEditor.workingSetRepositoryKeys).toEqual(["os-1", "atlas"])
+    expect(addedEditor.activeRepositoryKey).toBe("atlas")
+
+    view.unmount()
+    const restored = { ...defaultSpace(), editor: addedEditor }
+    render(<EditorSurface project={project} projectKey="terrafusion" space={restored} onEditorChange={onEditorChange} />)
+    expect(await screen.findByRole("button", { name: "src" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "Working Set, 2 repositories" })).toBeTruthy()
+
+    await user.click(screen.getByRole("tab", { name: "Core Seven, 3 repositories" }))
+    await user.click(screen.getByRole("button", { name: /^Repository Atlas,/i }))
+    await user.click(screen.getByRole("button", { name: "Remove Atlas from Working Set" }))
+    const removedEditor = onEditorChange.mock.calls.at(-1)?.[0] as WorkspaceSpace["editor"]
+    expect(removedEditor.workingSetRepositoryKeys).toEqual(["os-1"])
+    expect(removedEditor.activeRepositoryKey).toBe("os-1")
+    expect(await screen.findByRole("button", { name: "README.md" })).toBeTruthy()
+  })
+
+  it("restores the default member instead of a persisted hidden non-member", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/loom/files?path=&repositoryKey=os-1") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      throw new Error(`unexpected request ${String(input)}`)
+    }))
+    const space = {
+      ...defaultSpace(),
+      editor: {
+        ...defaultSpace().editor,
+        workingSetRepositoryKeys: ["os-1"],
+        activeRepositoryKey: "atlas",
+      },
+    }
+
+    render(<EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={() => undefined} />)
+    expect(await screen.findByRole("button", { name: "README.md" })).toBeTruthy()
+    expect(screen.getByRole("list", { name: "OS 1.0 file tree" })).toBeTruthy()
+    expect(screen.queryByRole("list", { name: "Atlas file tree" })).toBeNull()
+  })
+
+  it("moves the active repository to the replacement when a selected cross-repository tab closes", async () => {
+    const user = userEvent.setup()
+    const onEditorChange = vi.fn()
+    const osRef = {
+      projectIdentity: project.identity, repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null,
+      observedRevision: revision, path: "README.md",
+    }
+    const atlasRef = {
+      projectIdentity: project.identity, repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured", worktreeKey: null,
+      observedRevision: revision, path: "README.md",
+    }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=atlas") return Response.json({ kind: "directory", entries: [{ name: "src", path: "src", directory: true }] })
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=os-1") return Response.json({ kind: "file", path: "README.md", content: "OS", modifiedAt: "2026-09-02T00:00:00.000Z", repository: { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: revision } })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas") return Response.json({ kind: "file", path: "README.md", content: "Atlas", modifiedAt: "2026-09-02T00:00:00.000Z", repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision } })
+      throw new Error(`unexpected request ${url}`)
+    }))
+    const space = {
+      ...defaultSpace(), selectedPath: "README.md", selectedFileRef: atlasRef,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md", "README.md"], openFileRefs: [osRef, atlasRef],
+        workingSetRepositoryKeys: ["os-1", "atlas"], activeRepositoryKey: "atlas",
+        panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: atlasRef, selection: null }],
+      },
+    }
+
+    render(<EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={onEditorChange} />)
+    await screen.findByRole("button", { name: "Close Atlas · README.md" })
+    await user.click(screen.getByRole("button", { name: "Close Atlas · README.md" }))
+    const editor = onEditorChange.mock.calls.at(-1)?.[0] as WorkspaceSpace["editor"]
+    expect(editor.activeRepositoryKey).toBe("os-1")
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toMatchObject({ repositoryResourceKey: "os-1" })
+    expect(await screen.findByRole("button", { name: "README.md" })).toBeTruthy()
+  })
+
   it("keeps an unavailable restored tab from marking the active verified repository unavailable", async () => {
     const user = userEvent.setup()
     const unavailableAtlasProject: WorkspaceProject = {

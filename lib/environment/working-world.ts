@@ -104,6 +104,10 @@ export type SpaceState = Readonly<{
   /** Client-authored monotonic state version; server rejects stale/equal saves. */
   revision: number
   windows: readonly SpaceWindow[]
+  /** Explicit repository membership for this outcome-centered Space. Legacy snapshots omit it. */
+  workingSetRepositoryKeys?: readonly string[]
+  /** Repository whose source tree was active when the Space was saved. */
+  activeRepositoryKey?: string | null
   openFiles: readonly string[]
   /** Repository-qualified identity for each open file. Legacy snapshots omit this field. */
   fileRefs?: readonly WorkspaceFileRef[]
@@ -425,7 +429,7 @@ export function validateSpaceState(raw: unknown): SpaceState {
   const space = record(raw, "SPACE_MALFORMED")
   exactKeys(space, [
     "schemaVersion", "revision", "windows", "openFiles", "panes", "selection", "activeWindowId", "activePaneId",
-    "runningAppUrl", "fileRefs",
+    "runningAppUrl", "fileRefs", "workingSetRepositoryKeys", "activeRepositoryKey",
   ], "SPACE_UNKNOWN_KEY")
   if (space.schemaVersion !== 1) throw new Error("SPACE_SCHEMA_UNKNOWN")
   if (!Number.isSafeInteger(space.revision) || (space.revision as number) < 0) {
@@ -434,6 +438,25 @@ export function validateSpaceState(raw: unknown): SpaceState {
   if (!Array.isArray(space.windows) || space.windows.length > 24) throw new Error("SPACE_WINDOWS_INVALID")
   if (!Array.isArray(space.openFiles) || space.openFiles.length > 64) throw new Error("SPACE_OPEN_FILES_INVALID")
   if (!Array.isArray(space.panes) || space.panes.length > 16) throw new Error("SPACE_PANES_INVALID")
+
+  const repositoryKey = (value: unknown): string => {
+    if (typeof value !== "string" || value.length === 0 || value.length > 120
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)) {
+      throw new Error("SPACE_REPOSITORY_KEY_INVALID")
+    }
+    return value
+  }
+  const workingSetRepositoryKeys = space.workingSetRepositoryKeys === undefined ? undefined : (() => {
+    if (!Array.isArray(space.workingSetRepositoryKeys) || space.workingSetRepositoryKeys.length > 16) {
+      throw new Error("SPACE_WORKING_SET_REPOSITORIES_INVALID")
+    }
+    const keys = space.workingSetRepositoryKeys.map(repositoryKey)
+    if (new Set(keys).size !== keys.length) throw new Error("SPACE_WORKING_SET_REPOSITORIES_DUPLICATE")
+    return keys
+  })()
+  const activeRepositoryKey = space.activeRepositoryKey === undefined || space.activeRepositoryKey === null
+    ? space.activeRepositoryKey
+    : repositoryKey(space.activeRepositoryKey)
 
   const ids = new Set<string>()
   const windows = space.windows.map((rawWindow) => {
@@ -574,6 +597,8 @@ export function validateSpaceState(raw: unknown): SpaceState {
   return {
     ...space,
     windows,
+    ...(workingSetRepositoryKeys !== undefined ? { workingSetRepositoryKeys } : {}),
+    ...(activeRepositoryKey !== undefined ? { activeRepositoryKey } : {}),
     openFiles,
     ...(fileRefs !== undefined ? { fileRefs } : {}),
     panes,

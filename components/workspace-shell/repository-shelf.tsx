@@ -1,6 +1,6 @@
 "use client"
 
-import { useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 
 import styles from "./repository-shelf.module.css"
 
@@ -67,6 +67,7 @@ export type RepositoryShelfProps = Readonly<{
   projectKey?: string
   initialView?: ShelfView
   onSelectRepository?: (repositoryKey: string) => void
+  onToggleWorkingSet?: (repositoryKey: string, included: boolean) => void
   onOpenEntry?: (repositoryKey: string, entryId: string) => void
   onViewChange?: (view: ShelfView) => void
 }>
@@ -141,7 +142,7 @@ function mountTruth(mount: RepositoryMountView): string {
 
 function repositoryDisplayLabel(repository: RepositoryShelfRepository | undefined, repositoryKey: string): string {
   if (!repository) return repositoryKey
-  if (repository.role === "suite-source" && repository.suite) return repository.suite
+  if (repository.role === "suite-source" && repository.suite) return titleCase(repository.suite)
   if (repository.role === "integrated-runtime") return "OS 1.0"
   if (repository.role === "sovereign-planning-and-promotion") return "Sovereign OS"
   return repository.name
@@ -161,11 +162,13 @@ function RepositoryRow({
   repository,
   expanded,
   onToggle,
+  onToggleWorkingSet,
   onOpenEntry,
 }: Readonly<{
   repository: RepositoryShelfRepository
   expanded: boolean
   onToggle: () => void
+  onToggleWorkingSet?: (repositoryKey: string, included: boolean) => void
   onOpenEntry?: (repositoryKey: string, entryId: string) => void
 }>) {
   const detailsId = `repository-${repository.repositoryKey}-details`
@@ -206,6 +209,27 @@ function RepositoryRow({
       {expanded ? (
         <div id={detailsId} className={styles.details} role="group" aria-label={`${repository.name} repository details`}>
           <p className={styles.identity}>{repository.canonicalIdentity}</p>
+
+          {repository.role !== "attached-source" && onToggleWorkingSet ? (
+            <div className={styles.workingSetControl}>
+              <span>
+                <strong>Working Set</strong>
+                <small>{repository.workingSet ? "Visible in this Space" : "Available to this Space"}</small>
+              </span>
+              <button
+                type="button"
+                disabled={repository.role === "integrated-runtime"
+                  || (!repository.workingSet && repository.mounts.every((mount) => mount.status !== "ready"))}
+                aria-label={repository.role === "integrated-runtime"
+                  ? "OS 1.0 is required in the Working Set"
+                  : `${repository.workingSet ? "Remove" : "Add"} ${repositoryDisplayLabel(repository, repository.repositoryKey)} ${repository.workingSet ? "from" : "to"} Working Set`}
+                onClick={() => onToggleWorkingSet?.(repository.repositoryKey, !repository.workingSet)}
+              >
+                {repository.role === "integrated-runtime" ? "Required"
+                  : repository.workingSet ? "Remove" : "Add"}
+              </button>
+            </div>
+          ) : null}
 
           <div className={styles.detailSection}>
             <h4>Verified mounts</h4>
@@ -277,6 +301,7 @@ export function RepositoryShelf({
   projectKey = "terrafusion",
   initialView = "working-set",
   onSelectRepository,
+  onToggleWorkingSet,
   onOpenEntry,
   onViewChange,
 }: RepositoryShelfProps) {
@@ -285,6 +310,7 @@ export function RepositoryShelf({
   const [expandedRepositoryKey, setExpandedRepositoryKey] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchState, setSearchState] = useState<WorkingSetSearchState>({ status: "idle" })
+  const searchEpoch = useRef(0)
   const tabRefs = useRef<Partial<Record<ShelfView, HTMLButtonElement | null>>>({})
   const coreRepositories = useMemo(
     () => repositories.filter((repository) => repository.role !== "attached-source"),
@@ -298,6 +324,12 @@ export function RepositoryShelf({
     () => coreRepositories.filter((repository) => repository.workingSet),
     [coreRepositories],
   )
+  const workingSetIdentity = workingSet.map((repository) => repository.repositoryKey).join("\0")
+
+  useEffect(() => {
+    searchEpoch.current += 1
+    setSearchState({ status: "idle" })
+  }, [workingSetIdentity])
 
   const counts: Record<ShelfView, number> = {
     "working-set": workingSet.length,
@@ -345,6 +377,8 @@ export function RepositoryShelf({
 
     const parameters = new URLSearchParams({ projectKey, query })
     for (const repository of workingSet) parameters.append("repositoryKey", repository.repositoryKey)
+    const epoch = searchEpoch.current + 1
+    searchEpoch.current = epoch
     setSearchState({ status: "loading" })
     try {
       const response = await fetch(`/api/loom/search?${parameters.toString()}`, { cache: "no-store" })
@@ -354,6 +388,7 @@ export function RepositoryShelf({
         partial?: WorkingSetSearchUnavailable[]
         truncated: boolean
       }>
+      if (epoch !== searchEpoch.current) return
       if (!response.ok || !Array.isArray(payload.results) || !Array.isArray(payload.unavailable)) {
         setSearchState({ status: "error" })
         return
@@ -366,6 +401,7 @@ export function RepositoryShelf({
         truncated: payload.truncated === true,
       })
     } catch {
+      if (epoch !== searchEpoch.current) return
       setSearchState({ status: "error" })
     }
   }
@@ -455,6 +491,7 @@ export function RepositoryShelf({
             repository={repository}
             expanded={expandedRepositoryKey === repository.repositoryKey}
             onToggle={() => toggleRepository(repository.repositoryKey)}
+            onToggleWorkingSet={onToggleWorkingSet}
             onOpenEntry={onOpenEntry}
           />
         ))}

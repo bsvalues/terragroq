@@ -201,7 +201,15 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   reloadKey?: number
   onReloadSettled?: (path: string, key: number, result: "refreshed" | "dirty-conflict" | "failed") => void
 }) {
-  const initialRepository = repositoryForKey(project, space.selectedFileRef?.repositoryResourceKey) ?? defaultRepository(project)
+  const preferredInitialRepository = repositoryForKey(project, space.editor.activeRepositoryKey)
+    ?? repositoryForKey(project, space.selectedFileRef?.repositoryResourceKey)
+    ?? defaultRepository(project)
+  const initialRepository = preferredInitialRepository
+    && (space.editor.workingSetRepositoryKeys === undefined
+      || preferredInitialRepository.defaultRepository
+      || space.editor.workingSetRepositoryKeys.includes(preferredInitialRepository.key))
+    ? preferredInitialRepository
+    : defaultRepository(project)
   const [activeRepositoryKey, setActiveRepositoryKey] = useState<string | null>(initialRepository?.key ?? null)
   const [rootsByRepository, setRootsByRepository] = useState<Record<string, readonly Entry[] | null>>({})
   const [visibleRootCount, setVisibleRootCount] = useState(ROOT_ENTRY_BATCH_SIZE)
@@ -217,6 +225,20 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   const roots = rootsByRepository[activeRootsKey] ?? null
   const treeError = treeErrorsByRepository[activeRootsKey] ?? null
   const openFiles = openFilesForSpace(space, project)
+  const effectiveWorkingSetKeys = useMemo(() => {
+    const repositories = project?.repositories ?? []
+    const knownCoreKeys = new Set(repositories
+      .filter((repository) => repository.role !== "attached-source")
+      .map((repository) => repository.key))
+    const requested = space.editor.workingSetRepositoryKeys === undefined
+      ? [
+        ...repositories.filter((repository) => repository.defaultRepository).map((repository) => repository.key),
+        ...openFiles.flatMap((openFile) => openFile.repositoryKey ? [openFile.repositoryKey] : []),
+      ]
+      : [...space.editor.workingSetRepositoryKeys]
+    for (const repository of repositories) if (repository.defaultRepository) requested.unshift(repository.key)
+    return [...new Set(requested)].filter((key) => knownCoreKeys.has(key))
+  }, [openFiles, project?.repositories, space.editor.workingSetRepositoryKeys])
 
   const clearTreeError = useCallback((repositoryKey: string | null) => {
     const key = repositoryKey ?? "legacy"
@@ -363,9 +385,47 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
     selectedPath = space.selectedPath,
     activePaneId = space.editor.activePaneId,
     selectedFileRef = space.selectedFileRef,
+    activeRepositoryOverride = activeRepositoryKey,
   ) => {
-    onEditorChange({ openFiles: nextOpenFiles, ...(openFileRefs ? { openFileRefs } : {}), panes, activePaneId }, selectedPath, selectedFileRef)
-  }, [onEditorChange, space.editor.activePaneId, space.editor.openFileRefs, space.editor.openFiles, space.selectedFileRef, space.selectedPath])
+    onEditorChange({
+      ...space.editor,
+      openFiles: nextOpenFiles,
+      ...(openFileRefs ? { openFileRefs } : {}),
+      panes,
+      activePaneId,
+      activeRepositoryKey: activeRepositoryOverride,
+    }, selectedPath, selectedFileRef)
+  }, [activeRepositoryKey, onEditorChange, space.editor, space.selectedFileRef, space.selectedPath])
+
+  const persistRepositoryState = useCallback((workingSetRepositoryKeys: readonly string[], activeKey: string | null) => {
+    onEditorChange({ ...space.editor, workingSetRepositoryKeys, activeRepositoryKey: activeKey }, space.selectedPath, space.selectedFileRef)
+  }, [onEditorChange, space.editor, space.selectedFileRef, space.selectedPath])
+
+  const selectRepository = useCallback((repositoryKey: string) => {
+    clearTreeError(repositoryKey)
+    setActiveRepositoryKey(repositoryKey)
+    persistRepositoryState(effectiveWorkingSetKeys, repositoryKey)
+  }, [clearTreeError, effectiveWorkingSetKeys, persistRepositoryState])
+
+  const toggleWorkingSet = useCallback((repositoryKey: string, included: boolean) => {
+    const repository = repositoryForKey(project, repositoryKey)
+    if (!repository || repository.role === "attached-source" || repository.defaultRepository
+      || included && !repository.mount.verified) return
+    const requested = new Set(effectiveWorkingSetKeys)
+    if (included) requested.add(repositoryKey)
+    else requested.delete(repositoryKey)
+    const ordered = (project?.repositories ?? [])
+      .filter((candidate) => candidate.defaultRepository || requested.has(candidate.key))
+      .map((candidate) => candidate.key)
+    const nextActiveKey = !included && activeRepositoryKey === repositoryKey
+      ? defaultRepository(project)?.key ?? null
+      : activeRepositoryKey
+    if (nextActiveKey !== activeRepositoryKey) {
+      setActiveRepositoryKey(nextActiveKey)
+      if (nextActiveKey) void loadRoots(nextActiveKey)
+    }
+    persistRepositoryState(ordered, nextActiveKey)
+  }, [activeRepositoryKey, effectiveWorkingSetKeys, loadRoots, persistRepositoryState, project])
 
   const openFile = useCallback(async (
     path: string,
@@ -408,7 +468,15 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
     const panes = space.editor.panes.map((pane) => pane.id === targetPaneId
       ? { ...pane, activePath: path, activeFileRef: fileRef, selection: null }
       : pane)
-    updatePanes(panes, nextOpen.map((open) => open.path), nextOpen.flatMap((open) => open.fileRef ? [open.fileRef] : []), path, targetPaneId, fileRef)
+    updatePanes(
+      panes,
+      nextOpen.map((open) => open.path),
+      nextOpen.flatMap((open) => open.fileRef ? [open.fileRef] : []),
+      path,
+      targetPaneId,
+      fileRef,
+      repository?.key ?? activeRepositoryKey,
+    )
   }, [activeRepositoryKey, buffers, project, projectKey, setTreeError, space, updatePanes])
 
   const save = useCallback(async (key: string) => {
@@ -455,21 +523,28 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
     const nextOpen = currentOpen.filter((open) => open.key !== key)
     const replacement = nextOpen.at(-1) ?? null
     const target = currentOpen.find((open) => open.key === key)
+    const closesSelectedFile = Boolean(target && (
+      space.selectedFileRef
+        ? canonicalWorkspaceObjectKey(space.selectedFileRef) === key
+        : space.selectedPath === target.path
+    ))
+    const replacementRepositoryKey = replacement?.repositoryKey ?? defaultRepository(project)?.key ?? null
     const panes = space.editor.panes.map((pane) => {
       const paneKey = pane.activeFileRef ? canonicalWorkspaceObjectKey(pane.activeFileRef) : pane.activePath
       return paneKey === key ? { ...pane, activePath: replacement?.path ?? null, activeFileRef: replacement?.fileRef ?? null, selection: null } : pane
     })
+    if (closesSelectedFile) setActiveRepositoryKey(replacementRepositoryKey)
     updatePanes(panes, nextOpen.map((open) => open.path), nextOpen.flatMap((open) => open.fileRef ? [open.fileRef] : []),
-      target && space.selectedFileRef && canonicalWorkspaceObjectKey(space.selectedFileRef) === key ? replacement?.path ?? null : space.selectedPath,
+      closesSelectedFile ? replacement?.path ?? null : space.selectedPath,
       space.editor.activePaneId,
-      target && space.selectedFileRef && canonicalWorkspaceObjectKey(space.selectedFileRef) === key ? replacement?.fileRef ?? null : space.selectedFileRef)
-  }, [project, space, updatePanes])
+      closesSelectedFile ? replacement?.fileRef ?? null : space.selectedFileRef,
+      closesSelectedFile ? replacementRepositoryKey : activeRepositoryKey)
+  }, [activeRepositoryKey, project, space, updatePanes])
 
   const shelfRepositories = useMemo<readonly RepositoryShelfRepository[]>(() => (project?.repositories ?? []).map((repository) => {
     const verified = repository.mount.verified && Boolean(repository.mount.revision)
     const active = repository.key === activeRepositoryKey
-    const inWorkingSet = repository.defaultRepository
-      || openFiles.some((openFile) => openFile.repositoryKey === repository.key)
+    const inWorkingSet = effectiveWorkingSetKeys.includes(repository.key)
     return {
       repositoryKey: repository.key,
       name: repository.label,
@@ -492,7 +567,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       entries: [],
       agents: [],
     }
-  }), [activeRepositoryKey, openFiles, project?.repositories, roots])
+  }), [activeRepositoryKey, effectiveWorkingSetKeys, project?.repositories, roots])
 
   return (
     <div className={styles.editorSurface}>
@@ -502,8 +577,15 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
             <RepositoryShelf
               repositories={shelfRepositories}
               onSelectRepository={(repositoryKey) => {
-                clearTreeError(repositoryKey)
-                setActiveRepositoryKey(repositoryKey)
+                selectRepository(repositoryKey)
+              }}
+              onToggleWorkingSet={toggleWorkingSet}
+              onViewChange={(view) => {
+                if (view !== "working-set" || !activeRepositoryKey || effectiveWorkingSetKeys.includes(activeRepositoryKey)) return
+                const fallbackKey = effectiveWorkingSetKeys[0] ?? defaultRepository(project)?.key ?? null
+                if (!fallbackKey) return
+                setActiveRepositoryKey(fallbackKey)
+                persistRepositoryState(effectiveWorkingSetKeys, fallbackKey)
               }}
               onOpenEntry={(repositoryKey, path) => {
                 if (repositoryKey !== activeRepositoryKey) setActiveRepositoryKey(repositoryKey)
@@ -576,9 +658,9 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                           className={styles.tab}
                           onClick={() => {
                             const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, activePath: openedFile.path, activeFileRef: openedFile.fileRef } : item)
-                            updatePanes(panes, space.editor.openFiles, space.editor.openFileRefs, openedFile.path, pane.id, openedFile.fileRef)
+                            setActiveRepositoryKey(openedFile.repositoryKey)
+                            updatePanes(panes, space.editor.openFiles, space.editor.openFileRefs, openedFile.path, pane.id, openedFile.fileRef, openedFile.repositoryKey)
                             if (!buffers[openedFile.key]) {
-                              setActiveRepositoryKey(openedFile.repositoryKey)
                               void openFile(openedFile.path, pane.id, openedFile.repositoryKey)
                             }
                           }}
