@@ -196,14 +196,19 @@ jobs:
           $smokeData = "$env:RUNNER_TEMP\county-data"
           $evidenceRoot = "$env:RUNNER_TEMP\county-acceptance"
           New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+
+          $preflight = & $manager -Action Preflight -InstallRoot $smokeInstall -DataRoot $smokeData | ConvertFrom-Json
+          if ($preflight.result -ne 'PASS') { throw 'County package preflight did not pass.' }
+          $preflight | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'preflight.json') -Encoding utf8
+
           & $manager -Action Install -InstallRoot $smokeInstall -DataRoot $smokeData `
             -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $tfRoot `
             -DeploymentId 'ci-county-development' -ModelSource $env:MODEL_ROOT `
             -NonInteractive -SkipCockpit
           if ($LASTEXITCODE -ne 0) { throw "County install smoke failed: $LASTEXITCODE" }
 
-          $status = & (Join-Path $smokeInstall 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1') `
-            -Action Status -InstallRoot $smokeInstall -DataRoot $smokeData | ConvertFrom-Json
+          $installedManager = Join-Path $smokeInstall 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          $status = & $installedManager -Action Status -InstallRoot $smokeInstall -DataRoot $smokeData | ConvertFrom-Json
           if (-not $status.health) { throw 'Installed WilliamOS health evidence is missing.' }
           if ($status.health.deployment.profile -ne 'county-development') { throw 'Wrong deployment profile.' }
           if (-not $status.health.deployment.valid) { throw 'County boundary is not valid.' }
@@ -215,12 +220,19 @@ jobs:
             throw 'Exact local embedding model is not healthy.'
           }
 
+          $verification = & $installedManager -Action Verify -InstallRoot $smokeInstall -DataRoot $smokeData | ConvertFrom-Json
+          if ($verification.result -ne 'PASS' -or -not $verification.localOnlyInference -or -not $verification.dataBoundaryValid) {
+            throw 'Installed County verification did not prove the local boundary.'
+          }
+          if ($verification.terraFusionRevision -ne $tfSha) { throw 'Installed verification is not bound to the exact TerraFusion checkout revision.' }
+          $verification | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'initial-verification.json') -Encoding utf8
+
+          "COUNTY_PACKAGE_MANAGER=$manager" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_SMOKE_INSTALL=$smokeInstall" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_SMOKE_DATA=$smokeData" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_SMOKE_TF=$tfRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_SMOKE_TF_SHA=$tfSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "COUNTY_ACCEPTANCE_EVIDENCE=$evidenceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "COUNTY_ACCEPTANCE_BROWSER_PROFILE=$env:RUNNER_TEMP\county-browser-profile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install the browser acceptance driver
         shell: pwsh
@@ -242,6 +254,78 @@ jobs:
           $env:COUNTY_ACCEPTANCE_TERRAFUSION_SHA = $env:COUNTY_SMOKE_TF_SHA
           $env:COUNTY_ACCEPTANCE_EVIDENCE_ROOT = $env:COUNTY_ACCEPTANCE_EVIDENCE
           node scripts/accept-county-development-runtime.cjs
+
+      - name: Verify loopback listeners and child-process connections
+        shell: pwsh
+        run: |
+          function Test-LoopbackAddress {
+            param([string]$Address)
+            return $Address -eq '::1' -or $Address -like '127.*' -or $Address -like '::ffff:127.*'
+          }
+
+          $manager = Join-Path $env:COUNTY_SMOKE_INSTALL 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          $status = & $manager -Action Status -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA | ConvertFrom-Json
+          $expectedPorts = @(3200, 15434, 11434)
+          $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -in $expectedPorts })
+          foreach ($port in $expectedPorts) {
+            if (-not ($listeners | Where-Object { $_.LocalPort -eq $port })) { throw "Expected County loopback listener $port is missing." }
+          }
+          $badListeners = @($listeners | Where-Object { -not (Test-LoopbackAddress ([string]$_.LocalAddress)) })
+          if ($badListeners.Count -gt 0) {
+            throw "A County service is listening beyond loopback: $($badListeners | ConvertTo-Json -Compress)"
+          }
+
+          $ownedPids = @($status.appProcess, $status.ollamaProcess) | Where-Object { $_ -and [int]$_ -gt 0 } | Select-Object -Unique
+          if ($ownedPids.Count -ne 2) { throw 'WilliamOS and Ollama process identities were not both available.' }
+          $connections = @($ownedPids | ForEach-Object {
+            Get-NetTCPConnection -OwningProcess ([int]$_) -ErrorAction SilentlyContinue
+          })
+          $badConnections = @($connections | Where-Object {
+            $_.State -ne 'Listen' -and
+            $_.RemoteAddress -notin @('0.0.0.0', '::') -and
+            -not (Test-LoopbackAddress ([string]$_.RemoteAddress))
+          })
+          if ($badConnections.Count -gt 0) {
+            throw "A County child process established a non-loopback TCP connection: $($badConnections | ConvertTo-Json -Compress)"
+          }
+
+          [ordered]@{
+            schema = 'williamos.county-development.network-boundary.v1'
+            result = 'PASS'
+            observedAt = [DateTimeOffset]::UtcNow.ToString('o')
+            expectedPorts = $expectedPorts
+            listeners = @($listeners | Select-Object LocalAddress, LocalPort, OwningProcess, State)
+            ownedProcessIds = $ownedPids
+            observedConnections = @($connections | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, OwningProcess, State)
+            externalConnections = @()
+          } | ConvertTo-Json -Depth 8 | Set-Content `
+            -LiteralPath (Join-Path $env:COUNTY_ACCEPTANCE_EVIDENCE 'network-boundary.json') -Encoding utf8
+
+      - name: Exercise verified update and rollback
+        shell: pwsh
+        run: |
+          & $env:COUNTY_PACKAGE_MANAGER -Action Install `
+            -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA `
+            -OwnerEmail 'county.bundle@example.gov' -TerraFusionRoot $env:COUNTY_SMOKE_TF `
+            -DeploymentId 'ci-county-development' -ModelSource $env:MODEL_ROOT `
+            -NonInteractive -SkipCockpit
+          if ($LASTEXITCODE -ne 0) { throw "County update exercise failed: $LASTEXITCODE" }
+
+          $installedManager = Join-Path $env:COUNTY_SMOKE_INSTALL 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          $status = & $installedManager -Action Status -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA | ConvertFrom-Json
+          if (-not $status.rollbackAvailable) { throw 'The verified previous-version rollback slot was not created.' }
+
+          $verification = & $installedManager -Action Rollback `
+            -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA `
+            -NonInteractive -SkipCockpit | ConvertFrom-Json
+          if ($verification.result -ne 'PASS' -or -not $verification.rollbackAvailable) {
+            throw 'Explicit rollback did not restore and verify a healthy County runtime.'
+          }
+          if ($verification.terraFusionRevision -ne $env:COUNTY_SMOKE_TF_SHA) {
+            throw 'Rollback verification lost the exact TerraFusion checkout revision.'
+          }
+          $verification | ConvertTo-Json -Depth 10 | Set-Content `
+            -LiteralPath (Join-Path $env:COUNTY_ACCEPTANCE_EVIDENCE 'rollback-verification.json') -Encoding utf8
 
       - name: Exercise the installed County Cockpit relaunch path
         shell: pwsh
