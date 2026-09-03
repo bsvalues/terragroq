@@ -128,4 +128,61 @@ describe("auth-ready TerraFusion checkout setup", () => {
     expect(screen.getByRole("button", { name: "Save TerraFusion checkout" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Keep current checkout" })).toBeTruthy()
   })
+
+  it("shows truthful Core Seven mount state and submits only a catalog repository key plus path", async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(Response.json({
+      ok: true,
+      message: "Saved the Dossier checkout.",
+      restartRequired: true,
+    }))
+    render(
+      <AuthSetupAssistant
+        initialReadiness={ready}
+        defaultAuthUrl="http://localhost:3000"
+        defaultTerraFusionRoot={"C:\\repos\\terrafusion_os_1.0"}
+        initialTerraFusionRootConfigured
+        initialCoreSevenRepositories={[{
+          key: "atlas",
+          identity: "bsvalues/terrafusion-atlas",
+          label: "Atlas",
+          role: "suite-source",
+          suite: "atlas",
+          previewSource: false,
+          defaultRepository: false,
+          mount: {
+            key: "terrafusion:atlas:configured",
+            configured: true,
+            verified: true,
+            branch: "main",
+            revision: "a".repeat(40),
+            refusal: null,
+          },
+        }]}
+        initialProcessStartedAt={100}
+      />,
+    )
+
+    expect(screen.getByRole("heading", { name: "Core Seven repository mounts" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Change Atlas" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Connect Dossier" })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect Dossier" }))
+    fireEvent.change(screen.getByLabelText("Dossier checkout"), {
+      target: { value: "C:\\Repositories\\terrafusion-dossier" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save repository mount" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      operation: "terrafusion-repository-root",
+      repositoryKey: "dossier",
+      repositoryRoot: "C:\\Repositories\\terrafusion-dossier",
+    })
+    expect(await screen.findByText(
+      "Dossier mount saved. Restart WilliamOS before the workspace can use it.",
+    )).toBeTruthy()
+    expect(screen.getByRole("button", { name: "I restarted — check mounts" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Authentication is already configured" })).toBeTruthy()
+  })
 })

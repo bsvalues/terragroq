@@ -206,6 +206,90 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).toHaveBeenCalledTimes(1)
   })
 
+  it("persists a secondary Core Seven mount from the server catalog only", async () => {
+    readFileMock.mockResolvedValue([
+      'DATABASE_URL="postgres://existing"',
+      'WILLIAMOS_TERRAFUSION_ROOT="C:/repos/terrafusion_os_1.0"',
+      'WILLIAMOS_TERRAFUSION_ATLAS_ROOT="C:/repos/old-atlas"',
+      "CUSTOM_FLAG=true",
+      "",
+    ].join("\n"))
+    const atlasRoot = path.resolve("/repos/terrafusion-atlas")
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "terrafusion-repository-root",
+        repositoryKey: "atlas",
+        repositoryRoot: atlasRoot,
+        configuredRootEnvironment: "ATTACKER_CHOSEN_ENV",
+        repositoryIdentity: "attacker/repository",
+      }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+    const writtenEnv = writeFileMock.mock.calls[0][1] as string
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ ok: true, repositoryKey: "atlas", restartRequired: true })
+    expect(verifyCanonicalTerraFusionCheckoutMock).toHaveBeenCalledWith(
+      normalizeProjectRootForEnv(atlasRoot),
+      "bsvalues/terrafusion-atlas",
+    )
+    expect(writtenEnv).toContain("CUSTOM_FLAG=true")
+    expect(writtenEnv).toContain('DATABASE_URL="postgres://existing"')
+    expect(writtenEnv).toContain(
+      `WILLIAMOS_TERRAFUSION_ATLAS_ROOT=${serializeProjectRootEnvValue(normalizeProjectRootForEnv(atlasRoot))}`,
+    )
+    expect(writtenEnv).not.toContain("ATTACKER_CHOSEN_ENV")
+    expect(writtenEnv).not.toContain("attacker/repository")
+    expect(writtenEnv).not.toContain('WILLIAMOS_TERRAFUSION_ATLAS_ROOT="C:/repos/old-atlas"')
+  })
+
+  it("rejects a secondary mount key that is not in the Core Seven catalog", async () => {
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "terrafusion-repository-root",
+        repositoryKey: "terrafusion-sync",
+        repositoryRoot: path.resolve("/repos/terrafusion-sync"),
+      }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.message).toContain("WORKSPACE_REPOSITORY_UNKNOWN")
+    expect(verifyCanonicalTerraFusionCheckoutMock).not.toHaveBeenCalled()
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses a secondary checkout whose origin does not match the selected catalog identity", async () => {
+    verifyCanonicalTerraFusionCheckoutMock.mockResolvedValueOnce({
+      ok: false,
+      error: "WORKSPACE_ROOT_PROJECT_MISMATCH",
+    })
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "terrafusion-repository-root",
+        repositoryKey: "dossier",
+        repositoryRoot: path.resolve("/repos/not-dossier"),
+      }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.message).toContain("WORKSPACE_ROOT_PROJECT_MISMATCH")
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
   it("refuses unauthenticated root-only setup without writing", async () => {
     getSessionMock.mockResolvedValueOnce(null)
     const req = new Request("http://localhost:3000/api/setup/local-config", {
