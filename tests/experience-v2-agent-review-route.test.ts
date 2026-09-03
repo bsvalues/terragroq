@@ -159,6 +159,8 @@ describe("selected-file review route", () => {
     seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
     seams.cleanupIsolated.mockResolvedValue(undefined)
     seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/example.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "example.ts" })
+    seams.recordLoomStart.mockResolvedValue(undefined)
+    seams.recordLoomEnd.mockResolvedValue(undefined)
     seams.poolQuery.mockResolvedValue({
       rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
     })
@@ -456,11 +458,11 @@ describe("selected-file review route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(3)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(4)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: "owner-1", worldId: "world-a", target: { kind: "selected-file" },
     }))
-    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(4, expect.objectContaining({
       worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/example.ts" },
     }))
     expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
@@ -587,6 +589,36 @@ describe("selected-file review route", () => {
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({ error: "SPACE_MUTATION_AUTHORITY_STALE" })
     expect(seams.createIsolated).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.inspectIsolated).not.toHaveBeenCalled()
+    expect(seams.writeGoverned).not.toHaveBeenCalled()
+  })
+
+  it("closes the assignment and refuses spawn when authority changes during context preparation", async () => {
+    seams.deriveSpaceMutationAuthority
+      .mockResolvedValueOnce(mutationAuthority)
+      .mockResolvedValueOnce(mutationAuthority)
+      .mockResolvedValueOnce(mutationAuthority)
+      .mockResolvedValueOnce({ ...mutationAuthority, grantId: mutationAuthority.grantId + 1 })
+
+    const response = await POST(request({
+      provider: "cloud", worldId: "world-a", prompt: "Apply the bounded fix.",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000", resume: false,
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "SPACE_MUTATION_AUTHORITY_STALE" })
+    expect(seams.createContextManifest).toHaveBeenCalledOnce()
+    expect(seams.createDispatchContext).toHaveBeenCalledOnce()
+    expect(seams.assessActiveAssignment).toHaveBeenCalledOnce()
+    expect(seams.recordLoomStart).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1",
+      kind: "agent",
+      subject: "123e4567-e89b-42d3-a456-426614174000",
+      outcome: expect.objectContaining({ reason: "SPACE_MUTATION_AUTHORITY_STALE" }),
+    }))
     expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
     expect(seams.spawn).not.toHaveBeenCalled()
     expect(seams.inspectIsolated).not.toHaveBeenCalled()

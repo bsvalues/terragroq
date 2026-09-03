@@ -112,6 +112,24 @@ function sameResolvedRepository(left: WorkspaceProjectBinding, right: WorkspaceP
     && left.project.identity === right.project.identity
 }
 
+function sameClaudeMutationAuthority(left: SpaceMutationAuthority, right: SpaceMutationAuthority): boolean {
+  return left.owner === right.owner
+    && left.worldId === right.worldId
+    && left.worldRevision === right.worldRevision
+    && left.projectId === right.projectId
+    && left.projectKey === right.projectKey
+    && left.repositoryResourceKey === right.repositoryResourceKey
+    && left.repositoryIdentity === right.repositoryIdentity
+    && left.repositoryMountKey === right.repositoryMountKey
+    && left.observedRevision === right.observedRevision
+    && left.outcomeKey === right.outcomeKey
+    && left.workOrderId === right.workOrderId
+    && left.grantId === right.grantId
+    && left.actor === right.actor
+    && left.selectedPath === right.selectedPath
+    && left.operation === right.operation
+}
+
 function claudeAssignmentHash(input: Readonly<{
   authority: SpaceMutationAuthority
   assignmentId: string
@@ -1015,13 +1033,7 @@ export async function POST(request: Request) {
         expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
       })
-      if (spawnAuthority.worldRevision !== mutationAuthority.worldRevision
-        || spawnAuthority.workOrderId !== mutationAuthority.workOrderId
-        || spawnAuthority.grantId !== mutationAuthority.grantId
-        || spawnAuthority.selectedPath !== mutationAuthority.selectedPath
-        || spawnAuthority.repositoryResourceKey !== mutationAuthority.repositoryResourceKey
-        || spawnAuthority.repositoryMountKey !== mutationAuthority.repositoryMountKey
-        || spawnAuthority.observedRevision !== mutationAuthority.observedRevision) {
+      if (!sameClaudeMutationAuthority(mutationAuthority, spawnAuthority)) {
         await cleanupCodexIsolatedWorkspace(mutationWorkspace)
         mutationWorkspace = null
         return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
@@ -1152,6 +1164,57 @@ export async function POST(request: Request) {
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" }
   delete env.ANTHROPIC_API_KEY
   delete env.ANTHROPIC_AUTH_TOKEN
+
+  // Context materialization, reservation checks, and the durable start receipt all await external
+  // state. Re-resolve the mount and re-earn the complete actor/capability-bound authority snapshot
+  // after those awaits so Claude cannot start from a Space selection that changed during setup.
+  if (mutationAuthority && mutationWorkspace && mutationAssignmentId) {
+    try {
+      const currentBinding = await resolveCanonicalWorkspaceProjectBinding(
+        session.user.id,
+        binding.projectKey,
+        undefined,
+        binding.repositoryKey,
+      )
+      if (!currentBinding.ok || !sameResolvedRepository(binding, currentBinding.binding)) {
+        throw new Error("SPACE_MUTATION_AUTHORITY_STALE")
+      }
+      const currentAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        binding: repositoryMutationBinding(currentBinding.binding),
+        expected: { actor: "claude", capability: "selected-file-change" },
+        target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
+      })
+      if (!sameClaudeMutationAuthority(mutationAuthority, currentAuthority)) {
+        throw new Error("SPACE_MUTATION_AUTHORITY_STALE")
+      }
+    } catch {
+      await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+      mutationWorkspace = null
+      await recordLoomEnd({
+        userId: session.user.id,
+        kind: "agent",
+        subject: mutationAssignmentId,
+        outcome: {
+          provider: provider.id,
+          external: provider.external,
+          mode: "agent",
+          assignmentId: mutationAssignmentId,
+          assignmentHash: mutationAssignmentHash,
+          worldId: mutationAuthority.worldId,
+          workOrderId: mutationAuthority.workOrderId,
+          repositoryResourceKey: mutationAuthority.repositoryResourceKey,
+          repositoryIdentity: mutationAuthority.repositoryIdentity,
+          repositoryMountKey: mutationAuthority.repositoryMountKey,
+          observedRevision: mutationAuthority.observedRevision,
+          code: null,
+          reason: "SPACE_MUTATION_AUTHORITY_STALE",
+        },
+      }).catch(() => undefined)
+      return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+    }
+  }
 
   const child = spawn(AGENT_BIN, args, {
     cwd: mutationWorkspace?.root ?? projectRoot,
