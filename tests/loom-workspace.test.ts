@@ -76,6 +76,21 @@ describe("Experience V2 bounded Terminal route", () => {
     expect(await response.text()).toContain('"type":"exit","code":0')
   })
 
+  it("redacts credential output split across process chunks before streaming it to the browser", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+
+    const response = await POST(terminalRequest({ operation: "repo.status" }))
+    child.stderr.emit("data", Buffer.from("DATABASE_URL=postgresql://owner:split-pa"))
+    child.stderr.emit("data", Buffer.from("ssword@db.example.test/app\nsafe diagnostic\n"))
+    child.emit("close", 1)
+    const streamed = await response.text()
+
+    expect(streamed).not.toMatch(/split-password|postgresql:\/\/owner:/)
+    expect(streamed).toContain("DATABASE_URL=[REDACTED]")
+    expect(streamed).toContain("safe diagnostic")
+  })
+
   it("runs project tests in test mode even when WilliamOS itself is a production server", async () => {
     const child = new FakeTerminalChild()
     terminalRouteSeams.spawn.mockReturnValue(child)

@@ -286,7 +286,8 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
       const relevantHistory = historyForSurface(restored.runs, kind)
       setHistory(relevantHistory)
       setSelectedTranscriptId(relevantHistory.at(-1)?.id ?? null)
-      if (restored.error) setHistoryVerdict("Saved browser transcript history was corrupt and was not loaded.")
+      if (restored.error === "TOOL_RUN_HISTORY_UNSAFE") setHistoryVerdict("Saved browser transcript history contained unsafe output and was not loaded.")
+      else if (restored.error) setHistoryVerdict("Saved browser transcript history was corrupt and was not loaded.")
     } catch {
       setHistory([])
       setHistoryVerdict("Saved browser transcript history is unavailable.")

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { StringDecoder } from "node:string_decoder"
 
 
 import { getSession } from "@/lib/session"
@@ -6,6 +7,7 @@ import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
 import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -94,6 +96,10 @@ export async function POST(request: Request) {
   let bytes = 0
   let settled = false
   const encoder = new TextEncoder()
+  const outputChannels = {
+    stdout: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+    stderr: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -109,6 +115,11 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        for (const channel of ["stdout", "stderr"] as const) {
+          const state = outputChannels[channel]
+          const text = state.redactor.push(state.decoder.end()) + state.redactor.end()
+          if (text) send({ type: channel, text })
+        }
         // Recorded on every exit path -- timeout, output cap, cancel, crash and success alike -- so
         // an operation cannot end without leaving a trace of how it ended.
         void recordLoomEnd({
@@ -159,7 +170,9 @@ export async function POST(request: Request) {
           finish({ type: "exit", code: null, reason: "OUTPUT_LIMIT" })
           return
         }
-        send({ type: channel, text: chunk.toString("utf8") })
+        const state = outputChannels[channel]
+        const text = state.redactor.push(state.decoder.write(chunk))
+        if (text) send({ type: channel, text })
       }
 
       child.stdout.on("data", forward("stdout"))
