@@ -2939,10 +2939,17 @@ export function WorkspaceShell({
     : space.activeWindowId === "diff" ? "diff" as const
     : space.activeWindowId === "editor" && space.selectedPath ? "file" as const
     : "space" as const
+  const selectedFileRepositoryLabel = space.selectedFileRef
+    ? project?.repositories?.find(
+      (repository) => repository.key === space.selectedFileRef?.repositoryResourceKey,
+    )?.label ?? null
+    : null
   const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
     : selectedKind === "preview" ? "TerraFusion developer preview"
     : selectedKind === "diff" ? "Current changes"
-    : selectedKind === "file" ? space.selectedPath!
+    : selectedKind === "file" && selectedFileRepositoryLabel
+      ? `${selectedFileRepositoryLabel} · ${space.selectedPath!}`
+      : selectedKind === "file" ? space.selectedPath!
     : `${project?.name ?? space.name} Space`
   const selectedKindLabel = selectedKind === "file" ? "file"
     : selectedKind === "preview" ? "preview"

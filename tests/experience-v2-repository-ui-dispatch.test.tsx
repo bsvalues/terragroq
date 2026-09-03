@@ -336,6 +336,7 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
+    expect(screen.getByLabelText("Selected object actions").textContent).toContain("Selected file · Atlas · src/atlas.ts")
 
     await waitFor(() => {
       const eligibilityUrls = fetcher.mock.calls
