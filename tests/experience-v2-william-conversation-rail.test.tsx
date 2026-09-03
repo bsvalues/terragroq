@@ -6,7 +6,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
-import { persistToolRunTranscript } from "@/components/workspace-shell/tool-run-history"
+import { persistToolRunTranscript, repositoryQualifiedToolHistoryScope } from "@/components/workspace-shell/tool-run-history"
 import { defaultSpace, normalizeSpace, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
@@ -36,6 +36,16 @@ const judgment = {
   provenance: { provider: "williamos-inference", model: "local-model" },
 }
 
+const repositoryRevision = "a".repeat(40)
+const repositoryContext = {
+  projectKey: "terrafusion" as const,
+  repositoryKey: "os-1",
+  repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  repositoryMountKey: "terrafusion:os-1:configured",
+  observedRevision: repositoryRevision,
+}
+const toolRunScope = repositoryQualifiedToolHistoryScope("server:world-a", repositoryContext)
+
 function selectedFileSpace() {
   const space = defaultSpace(1440, 900, "world-a", "TerraFusion")
   return spaceToServer({
@@ -56,7 +66,27 @@ function spaceEnvelope() {
     space: selectedFileSpace(),
     spine: EMPTY_SPINE,
     judgment,
-    project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+    project: {
+      identity: "c:/repos/terrafusion",
+      name: "TerraFusion",
+      repositories: [{
+        key: "os-1",
+        identity: repositoryContext.repositoryIdentity,
+        label: "OS 1.0",
+        role: "integrated-runtime",
+        suite: null,
+        previewSource: true,
+        defaultRepository: true,
+        mount: {
+          key: repositoryContext.repositoryMountKey,
+          configured: true,
+          verified: true,
+          branch: "main",
+          revision: repositoryRevision,
+          refusal: null,
+        },
+      }],
+    },
     storage: "server",
     conversation: [
       { role: "owner", content: "What changed?", at: "2026-08-29T08:58:00.000Z" },
@@ -304,7 +334,7 @@ describe("durable William conversation rail", () => {
   })
 
   it("attaches bounded structured tool outcomes to William without exposing browser transcript text", async () => {
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1,
       id: "run-tests-1",
       operationId: "tests.run",
@@ -315,7 +345,7 @@ describe("durable William conversation rail", () => {
       outcome: { status: "completed", code: 1, reason: null },
       lines: [{ channel: "stderr", text: "SECRET_TRANSCRIPT_AND_UNTRUSTED_INSTRUCTIONS" }],
     })
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1,
       id: "run-status-1",
       operationId: "repo.status",
@@ -366,7 +396,7 @@ describe("durable William conversation rail", () => {
   })
 
   it("attaches bounded tool outcomes through The Line for natural pass or fail wording", async () => {
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1,
       id: "run-tests-line-1",
       operationId: "tests.run",
@@ -415,7 +445,7 @@ describe("durable William conversation rail", () => {
   })
 
   it("does not attach browser tool history to an unrelated William question", async () => {
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1, id: "run-tests-1", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
       startedAt: "2026-09-02T04:00:00.000Z", endedAt: "2026-09-02T04:02:00.000Z",
       outcome: { status: "completed", code: 1, reason: null }, lines: [],
@@ -446,7 +476,7 @@ describe("durable William conversation rail", () => {
   })
 
   it("rejects a tool-grounded reply when browser history changes during inference", async () => {
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1, id: "run-tests-1", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
       startedAt: "2026-09-02T04:00:00.000Z", endedAt: "2026-09-02T04:02:00.000Z",
       outcome: { status: "completed", code: 1, reason: null }, lines: [],
@@ -475,7 +505,7 @@ describe("durable William conversation rail", () => {
     await userEvent.type(composer, "What is the latest test state?")
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
     await waitFor(() => expect(lineRequested).toBe(true))
-    persistToolRunTranscript(window.localStorage, "server:world-a", {
+    persistToolRunTranscript(window.localStorage, toolRunScope, {
       schemaVersion: 1, id: "run-tests-2", operationId: "tests.run", operationLabel: "Run the tests", alias: "test",
       startedAt: "2026-09-02T04:03:00.000Z", endedAt: "2026-09-02T04:04:00.000Z",
       outcome: { status: "completed", code: 0, reason: null }, lines: [],

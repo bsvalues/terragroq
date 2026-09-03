@@ -4,7 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LOOM_OPERATIONS, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import styles from "./experience-spatial.module.css"
 import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snapshot-history"
-import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type ToolRunTranscript } from "./tool-run-history"
+import {
+  loadToolRunHistory,
+  persistToolRunTranscript,
+  type DeveloperToolRepositoryIdentity,
+  type ToolOutputLine,
+  type ToolRunTranscript,
+} from "./tool-run-history"
 
 type DeveloperToolKind = "tests" | "diff" | "terminal"
 export type LiveDiffContext = Readonly<{ path: string; fingerprint: string }>
@@ -19,6 +25,7 @@ type ActiveRun = {
   lines: ToolOutputLine[]
   historyScope: string | null
   historyStorage: Pick<Storage, "getItem" | "setItem"> | null
+  repositoryContext: DeveloperToolRepositoryIdentity | undefined
 }
 
 function terminalAlias(id: string): string | null {
@@ -39,11 +46,28 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", repositoryKey = null, repositoryLabel = null, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
+function repositoryIdentityMatches(
+  expected: DeveloperToolRepositoryIdentity,
+  received: Readonly<{
+    repositoryKey?: unknown
+    repositoryIdentity?: unknown
+    repositoryMountKey?: unknown
+    observedRevision?: unknown
+  }>,
+): boolean {
+  return received.repositoryKey === expected.repositoryKey
+    && received.repositoryIdentity === expected.repositoryIdentity
+    && received.repositoryMountKey === expected.repositoryMountKey
+    && received.observedRevision === expected.observedRevision
+}
+
+export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", repositoryKey = null, repositoryLabel = null, repositoryContext, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
   projectKey?: "terrafusion" | "williamos"
   repositoryKey?: string | null
   repositoryLabel?: string | null
+  /** Undefined keeps isolated component harnesses compatible; null explicitly means the product has no verified checkout identity. */
+  repositoryContext?: DeveloperToolRepositoryIdentity | null
   worldId?: string | null
   selectedPath: string | null
   active?: boolean
@@ -73,6 +97,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
   const runSequence = useRef(0)
   const historyScopeRef = useRef(historyScope)
   const historyStorageRef = useRef(historyStorage)
+  const repositoryContextRef = useRef(repositoryContext)
   const surfaceKindRef = useRef(kind)
   surfaceKindRef.current = kind
   const diffController = useRef<AbortController | null>(null)
@@ -93,6 +118,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
   }, [kind, running])
   useEffect(() => { historyScopeRef.current = historyScope }, [historyScope])
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
+  useEffect(() => { repositoryContextRef.current = repositoryContext }, [repositoryContext])
 
   const loadDiff = useCallback(async (path = selectedPath, preserveSavedSnapshot = false): Promise<"refreshed" | "failed" | "aborted"> => {
     const epoch = diffRequestEpoch.current + 1
@@ -115,10 +141,30 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
     try {
+      if (repositoryContext === null) throw new Error("REPOSITORY_CONTEXT_UNAVAILABLE")
+      if (repositoryContext && (repositoryContext.projectKey !== projectKey || repositoryContext.repositoryKey !== repositoryKey)) {
+        throw new Error("DIFF_REPOSITORY_CONTEXT_MISMATCH")
+      }
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
-      const payload = await response.json() as { error?: string; path?: string; state?: string; fingerprint?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
+      const payload = await response.json() as {
+        error?: string
+        path?: string
+        state?: string
+        fingerprint?: string
+        diff?: string
+        status?: string
+        note?: string
+        untracked?: boolean
+        repository?: Readonly<{ key?: unknown; identity?: unknown; mountKey?: unknown; observedRevision?: unknown }>
+      }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
       if (diffRequestEpoch.current !== epoch || abort.signal.aborted) return "aborted"
+      if (repositoryContext && !repositoryIdentityMatches(repositoryContext, {
+        repositoryKey: payload.repository?.key,
+        repositoryIdentity: payload.repository?.identity,
+        repositoryMountKey: payload.repository?.mountKey,
+        observedRevision: payload.repository?.observedRevision,
+      })) throw new Error("DIFF_REPOSITORY_IDENTITY_MISMATCH")
       const nextDiff = payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? ""
       const nextStatus = payload.status ?? ""
       setDiff(nextDiff)
@@ -157,7 +203,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
-  }, [projectKey, repositoryKey, selectedPath])
+  }, [projectKey, repositoryContext, repositoryKey, selectedPath])
 
   useEffect(() => {
     if (kind !== "diff") return
@@ -309,12 +355,22 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
     setError(null)
     setCommandVerdict(null)
     setHistoryVerdict(null)
+    const exactRepositoryContext = repositoryContextRef.current
+    if (exactRepositoryContext === null) {
+      setError("REPOSITORY_CONTEXT_UNAVAILABLE")
+      return
+    }
+    if (exactRepositoryContext && (exactRepositoryContext.projectKey !== projectKey || exactRepositoryContext.repositoryKey !== repositoryKey)) {
+      setError("TOOL_RUN_REPOSITORY_CONTEXT_MISMATCH")
+      return
+    }
     const catalogued = LOOM_OPERATIONS.find((candidate) => candidate.id === operation)
     const startedAt = new Date().toISOString()
     const current: ActiveRun = {
       id: `${startedAt}:${++runSequence.current}`, kind, operationId: operation,
       operationLabel: catalogued?.label ?? operations.find((candidate) => candidate.id === operation)?.label ?? operation,
       alias, startedAt, lines: [], historyScope: historyScopeRef.current, historyStorage: historyStorageRef.current,
+      repositoryContext: exactRepositoryContext ?? undefined,
     }
     activeRun.current = current
     setRunning(operation)
@@ -332,6 +388,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let startedVerified = current.repositoryContext === undefined
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -340,9 +397,26 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
         buffer = complete.pop() ?? ""
         for (const entry of complete) {
           if (!entry.trim()) continue
-          let event: { type?: string; text?: string; code?: number | null; reason?: string | null }
+          let event: {
+            type?: string
+            text?: string
+            code?: number | null
+            reason?: string | null
+            operation?: unknown
+            repositoryKey?: unknown
+            repositoryIdentity?: unknown
+            repositoryMountKey?: unknown
+            observedRevision?: unknown
+          }
           try { event = JSON.parse(entry) } catch { continue }
-          if (event.type === "stdout" || event.type === "stderr") {
+          if (event.type === "started") {
+            if (event.operation !== operation || (current.repositoryContext && !repositoryIdentityMatches(current.repositoryContext, event))) {
+              throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_MISMATCH")
+            }
+            startedVerified = true
+          } else if (!startedVerified) {
+            throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED")
+          } else if (event.type === "stdout" || event.type === "stderr") {
             current.lines.push({ channel: event.type, text: event.text ?? "" })
             if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines([...current.lines])
           } else if (event.type === "exit") {
@@ -358,6 +432,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
           }
         }
       }
+      if (!startedVerified) throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED")
       if (!receivedExit && activeRun.current?.id === current.id) {
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
@@ -368,6 +443,15 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
       if ((caught as Error)?.name !== "AbortError" && activeRun.current?.id === current.id) {
         const present = presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)
         if (present) setError(caught instanceof Error ? caught.message : "RUN_UNAVAILABLE")
+        if ((caught as Error)?.message === "TOOL_RUN_REPOSITORY_IDENTITY_MISMATCH"
+          || (caught as Error)?.message === "TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED") {
+          activeRun.current = null
+          setRunning(null)
+          current.lines = []
+          if (present) setLines([])
+          controller.current?.abort()
+          return
+        }
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
         if (present) setLines(next)

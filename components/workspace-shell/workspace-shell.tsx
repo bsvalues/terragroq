@@ -11,7 +11,13 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
-import { loadToolRunHistory, removeToolRunHistory, type ToolRunTranscript } from "./tool-run-history"
+import {
+  loadToolRunHistory,
+  removeToolRunHistory,
+  repositoryQualifiedToolHistoryScope,
+  type DeveloperToolRepositoryIdentity,
+  type ToolRunTranscript,
+} from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentSessionRepository, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
@@ -154,6 +160,31 @@ type SpaceDelegateEligibility = Readonly<{
   selectedPath: string
   repository?: AgentSessionRepository
 }>
+
+function deriveDeveloperToolRepositoryContext(
+  projectKey: "terrafusion" | "williamos",
+  project: WorkspaceProject | null,
+  space: WorkspaceSpace,
+): DeveloperToolRepositoryIdentity | null {
+  const selectedRepository = project?.repositories?.find((repository) => repository.key === space.selectedFileRef?.repositoryResourceKey)
+    ?? project?.repositories?.find((repository) => repository.defaultRepository)
+    ?? null
+  return selectedRepository?.mount.verified
+    && selectedRepository.mount.revision
+    && (!space.selectedFileRef || (
+      space.selectedFileRef.repositoryResourceKey === selectedRepository.key
+      && space.selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && space.selectedFileRef.observedRevision === selectedRepository.mount.revision
+    ))
+    ? {
+      projectKey,
+      repositoryKey: selectedRepository.key,
+      repositoryIdentity: selectedRepository.identity,
+      repositoryMountKey: selectedRepository.mount.key,
+      observedRevision: selectedRepository.mount.revision,
+    }
+    : null
+}
 
 function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
@@ -2263,7 +2294,9 @@ export function WorkspaceShell({
       || transitionEpochRef.current !== context.clientGuard.transitionEpoch
       || storageRef.current !== "server"
       || persistenceErrorRef.current) return false
-    const currentScope = `server:${context.clientGuard.worldId}`
+    const repositoryContext = deriveDeveloperToolRepositoryContext(projectKey, projectRef.current, stateRef.current)
+    if (!repositoryContext) return false
+    const currentScope = repositoryQualifiedToolHistoryScope(`server:${context.clientGuard.worldId}`, repositoryContext)
     if (currentScope !== context.clientGuard.scope) return false
     try {
       return captureToolRunSnapshots(
@@ -2275,7 +2308,7 @@ export function WorkspaceShell({
     } catch {
       return false
     }
-  }, [])
+  }, [projectKey])
 
   const sendWilliamTurn = useCallback(async (
     text: string,
@@ -2344,8 +2377,15 @@ export function WorkspaceShell({
       && selectedContextFingerprint() === requestContext
     try {
       await persistBarrierRef.current()
-      const effectiveContext = context ?? (includeBrowserToolRuns && shouldAttachToolRunSnapshots(normalized) && requestWorldId && storageRef.current === "server"
-        ? captureToolRunSnapshots(window.localStorage, `server:${requestWorldId}`, requestWorldId, requestEpoch)
+      const toolRepositoryContext = deriveDeveloperToolRepositoryContext(projectKey, projectRef.current, stateRef.current)
+      const effectiveContext = context ?? (includeBrowserToolRuns && shouldAttachToolRunSnapshots(normalized) && requestWorldId
+        && storageRef.current === "server" && toolRepositoryContext
+        ? captureToolRunSnapshots(
+          window.localStorage,
+          repositoryQualifiedToolHistoryScope(`server:${requestWorldId}`, toolRepositoryContext),
+          requestWorldId,
+          requestEpoch,
+        )
         : null)
       if (context && typeof context === "object" && context.kind === "agent-snapshot"
         && !agentSnapshotLineContextIsCurrent(context)) {
@@ -4315,12 +4355,15 @@ export function WorkspaceShell({
   const sovereignContext = sovereignRepository?.mount.verified && sovereignRepository.mount.revision
     ? { repositoryName: sovereignRepository.label, revision: sovereignRepository.mount.revision }
     : null
-  const toolRunRepositorySuffix = selectedRepository ? `:repository:${selectedRepository.key}` : ""
-  const toolRunHistoryScope = storage === "server" && worldId
-    ? `server:${worldId}${toolRunRepositorySuffix}`
+  const developerToolRepositoryContext = deriveDeveloperToolRepositoryContext(projectKey, project, space)
+  const toolRunBaseHistoryScope = storage === "server" && worldId
+    ? `server:${worldId}`
     : storage === "browser" && browserStorageKeyRef.current
-      ? `browser:${browserStorageKeyRef.current}${toolRunRepositorySuffix}`
+      ? `browser:${browserStorageKeyRef.current}`
       : null
+  const toolRunHistoryScope = toolRunBaseHistoryScope && developerToolRepositoryContext
+    ? repositoryQualifiedToolHistoryScope(toolRunBaseHistoryScope, developerToolRepositoryContext)
+    : null
 
   return (
     <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? "Workspace"} Space`}>
@@ -4433,7 +4476,7 @@ export function WorkspaceShell({
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} repositoryKey={selectedRepository?.key ?? null} repositoryLabel={selectedRepository?.label ?? null} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} repositoryKey={selectedRepository?.key ?? null} repositoryLabel={selectedRepository?.label ?? null} repositoryContext={developerToolRepositoryContext} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
               const next = context && worldId ? { ...context, worldId } : current?.worldId === worldId ? null : current
               liveDiffContextRef.current = next
               return next
