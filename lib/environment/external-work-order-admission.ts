@@ -224,7 +224,7 @@ function normalizeExternalWorkOrderPacket(raw: unknown): ExternalWorkOrderPacket
   const repository = text(packet.repository, "EXTERNAL_PROVENANCE_INVALID", 200)
     .replace(/\.git$/i, "").toLowerCase()
   if (!/^[^/:\s]+\/[^/\s]+$/.test(repository)) throw new Error("EXTERNAL_PROVENANCE_INVALID")
-  const reservedPaths = stringList(packet.reservedPaths, "EXTERNAL_PROVENANCE_INVALID")
+  const reservedPaths = stringList(packet.reservedPaths, "EXTERNAL_PROVENANCE_INVALID", 3_000)
   const forbiddenPaths = optionalStringList(packet.forbiddenPaths, "EXTERNAL_PROVENANCE_INVALID")
   const contractReservations = contractReservationList(packet.contractReservations)
   const environmentReservations = environmentReservationList(packet.environmentReservations)

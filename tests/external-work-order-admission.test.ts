@@ -61,6 +61,24 @@ describe("external Work Order digest-bound confirmation boundary", () => {
     expect(seams.transaction).not.toHaveBeenCalled()
   })
 
+  it("accepts the exact path set of a large immutable delivery artifact", () => {
+    const reservedPaths = Array.from(
+      { length: 108 },
+      (_, index) => `tests/core-seven/path-${String(index + 1).padStart(3, "0")}.ts`,
+    )
+
+    const preview = previewExternalWorkOrderAdmission({
+      mode: "PREVIEW",
+      worldId: "space-1",
+      externalWorkOrder: { ...packet(), reservedPaths },
+    })
+
+    expect(preview.externalWorkOrder.reservedPaths).toHaveLength(108)
+    expect(preview.externalWorkOrder.reservedPaths[0]).toBe("tests/core-seven/path-001.ts")
+    expect(preview.externalWorkOrder.reservedPaths.at(-1)).toBe("tests/core-seven/path-108.ts")
+    expect(seams.transaction).not.toHaveBeenCalled()
+  })
+
   it("requires an explicit confirmation bound to the preview digest", () => {
     const preview = previewExternalWorkOrderAdmission({
       mode: "PREVIEW", worldId: "space-1", externalWorkOrder: packet(),
