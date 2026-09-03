@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -77,6 +77,70 @@ afterEach(() => {
 })
 
 describe("Experience V2 selected Space actions", () => {
+  it("does not let a delayed post-finalization refresh overwrite newer same-Space window state", async () => {
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({ ...base, revision: 7, activeWindowId: "editor" })
+    const paths = ["components/workspace-shell/workspace-shell.tsx"]
+    const headSha = "a".repeat(40)
+    const adoptionHash = "b".repeat(64)
+    const previewDigest = "c".repeat(64)
+    const seal = {
+      payload: {
+        version: "williamos-delivery-seal.v2",
+        adoption: {
+          worldId: "world-a",
+          outcome: { id: 11, key: BOUND_SPINE.outcomeKey, version: 4 },
+          workOrder: { id: BOUND_SPINE.workOrderId, ref: "WO-1121", version: "2026-09-03T00:00:00.000Z" },
+          artifact: { pullRequest: 1145, headSha, paths },
+        },
+      },
+      signature: "signed",
+    }
+    let resolveRefresh!: (response: Response) => void
+    const refreshResponse = new Promise<Response>((resolve) => { resolveRefresh = resolve })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space?projectKey=williamos" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-03T12:00:00.000Z" })
+      }
+      if (url === "/api/governance/delivery-adoption" && init?.method === "POST") return Response.json({
+        status: "SEALED", worldId: "world-a", pullRequest: 1145, headSha, paths, previewDigest,
+        adoptionHash, seal, sealBlock: ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(seal, null, 2), "```"].join("\n"),
+      })
+      if (url === "/api/environment/space" && init?.method === "PATCH") return Response.json({
+        status: "FINALIZED", replayed: false, worldId: "world-a", outcomeKey: BOUND_SPINE.outcomeKey,
+        workOrderId: BOUND_SPINE.workOrderId, pullRequest: 1145, headSha, mergeSha: "d".repeat(40), paths,
+      })
+      if (url === "/api/environment/space?worldId=world-a&projectKey=williamos") return refreshResponse
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+
+    render(<WorkspaceShell projectKey="williamos" />)
+    await waitFor(() => expect((screen.getByRole("button", { name: "Admit external work" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole("button", { name: "Admit external work" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+    await waitFor(() => expect(resolveRefresh).toBeTypeOf("function"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Source" }))
+    expect(screen.getByRole("button", { name: "Restore Source" })).toBeTruthy()
+    await act(async () => {
+      resolveRefresh(Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: EMPTY_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      }))
+      await refreshResponse
+    })
+
+    expect(screen.getByRole("button", { name: "Restore Source" })).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
   it("delegates a Space only as the exact already-authorized saved selected file", async () => {
     const sessionId = "codex-space-file-1"
     const base = defaultSpace(1440, 900, "world-a", "WilliamOS")

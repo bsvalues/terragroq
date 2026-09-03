@@ -729,6 +729,7 @@ export function WorkspaceShell({
   const automaticSpaceContinueSessionKeyRef = useRef<string | null>(null)
   const automaticSpaceContinueOperationIdRef = useRef<string | null>(null)
   const automaticSpaceContinueBaselineTurnIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const deliveryRefreshRequestRef = useRef(0)
   const spaceDelegateEligibilityRequestRef = useRef(0)
   const spaceDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const fileDelegateEligibilityRequestRef = useRef(0)
@@ -4479,13 +4480,28 @@ export function WorkspaceShell({
               setDeliveryRefreshError(null)
               const activeWorldId = worldRef.current
               if (!activeWorldId) throw new Error("WORLD_NOT_FOUND")
-              const response = await fetch(spaceEndpoint(projectKey, activeWorldId), { cache: "no-store" })
-              const payload = await response.json() as SpaceEnvelope & { error?: string }
-              if (!response.ok || payload.worldId !== activeWorldId || !payload.space) {
-                throw new Error(payload.error ?? `SPACE_${response.status}`)
+              const refreshRequestId = deliveryRefreshRequestRef.current + 1
+              deliveryRefreshRequestRef.current = refreshRequestId
+              const refreshEpoch = transitionEpochRef.current
+              const refreshRevision = revisionRef.current
+              const refreshSpace = stateRef.current
+              const refreshIsCurrent = () => deliveryRefreshRequestRef.current === refreshRequestId
+                && worldRef.current === activeWorldId
+                && transitionEpochRef.current === refreshEpoch
+                && revisionRef.current === refreshRevision
+                && stateRef.current === refreshSpace
+              try {
+                const response = await fetch(spaceEndpoint(projectKey, activeWorldId), { cache: "no-store" })
+                const payload = await response.json() as SpaceEnvelope & { error?: string }
+                if (!refreshIsCurrent()) return
+                if (!response.ok || payload.worldId !== activeWorldId || !payload.space) {
+                  throw new Error(payload.error ?? `SPACE_${response.status}`)
+                }
+                applySpaceEnvelope(payload)
+              } catch (cause) {
+                if (!refreshIsCurrent()) return
+                throw cause
               }
-              if (worldRef.current !== activeWorldId) return
-              applySpaceEnvelope(payload)
             }}
             onFinalizationRefreshError={(message) => {
               setDeliveryRefreshError(`Delivery finalized, but Space refresh failed · ${message}`)
