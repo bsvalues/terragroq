@@ -244,17 +244,6 @@ async function writeTerraFusionRepositoryRoot(
 }
 
 export async function POST(req: Request) {
-  if (!localSetupEnabled()) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message:
-          "Local setup assistant is disabled in this environment. Contact your platform administrator.",
-      },
-      { status: 403 },
-    )
-  }
-
   const url = new URL(req.url)
   if (!isLoopbackHost(url)) {
     return NextResponse.json(
@@ -299,6 +288,17 @@ export async function POST(req: Request) {
         message: error instanceof Error ? error.message : "Invalid setup payload.",
       },
       { status: 400 },
+    )
+  }
+
+  if (!localSetupEnabled() && operation === "full") {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Local setup assistant is disabled in this environment. Contact your platform administrator.",
+      },
+      { status: 403 },
     )
   }
 
