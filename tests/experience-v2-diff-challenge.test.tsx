@@ -61,8 +61,8 @@ describe("Experience V2 exact diff Challenge", () => {
   })
 
   it("concretely disables Challenge without a durable exact live patch", () => {
-    expect(source).toContain('storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."')
-    expect(source).toContain('"Challenge waits until the current Space is durably saved."')
+    expect(source).toContain('storage !== "server" ? "Challenge needs a Space that saves its state to the server."')
+    expect(source).toContain('"Challenge waits until the current Space is saved to the server."')
     expect(source).toContain('"Challenge needs the exact live modified patch for the saved selected file."')
     expect(source).toContain('action === "Challenge unavailable"')
   })

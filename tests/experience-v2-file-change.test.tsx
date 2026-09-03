@@ -302,7 +302,7 @@ describe("Experience V2 selected-file Change", () => {
     fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
 
     const improve = await screen.findByRole("button", { name: "Improve" })
-    await waitFor(() => expect(improve.getAttribute("title")).toContain("server-bound"))
+    await waitFor(() => expect(improve.getAttribute("title")).toContain("saves its state to the server"))
     expect((improve as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const before = true\n")
   })
@@ -331,7 +331,7 @@ describe("Experience V2 selected-file Change", () => {
     await screen.findByLabelText("Source content")
     fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
     const pendingImprove = await screen.findByRole("button", { name: "Improve" })
-    await waitFor(() => expect(pendingImprove.getAttribute("title")).toContain("durably saved"))
+    await waitFor(() => expect(pendingImprove.getAttribute("title")).toContain("saved to the server"))
     expect((pendingImprove as HTMLButtonElement).disabled).toBe(true)
 
     view.unmount()

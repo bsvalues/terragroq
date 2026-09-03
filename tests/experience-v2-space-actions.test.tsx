@@ -303,7 +303,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(unavailable.title).toBe("Delegate needs one clean durably saved selected file in a server-bound active Work Order.")
+    expect(unavailable.title).toBe("Delegate needs one selected file, saved and unchanged, inside an active Work Order.")
     expect(screen.getByText(unavailable.title)).toBeTruthy()
     expect(requests.some((url) => url === "/api/loom/codex" || url === "/api/loom/agent")).toBe(false)
   })
@@ -344,7 +344,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(await screen.findByText("Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")).toBeTruthy()
+    expect(await screen.findByText("Delegate needs current approval from the server for Codex or Claude to edit this file.")).toBeTruthy()
     expect(agentRequests).toEqual([])
   })
 
@@ -637,7 +637,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(screen.getByText("No durable session exists in this Space; use Delegate.")).toBeTruthy()
+    expect(screen.getByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeTruthy()
     expect(requests).not.toContain("/api/environment/line")
   })
 
@@ -674,7 +674,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(unavailable.title).toBe("This saved session is mutation-capable or not verifiably read-only, so Space Continue did not resume it.")
+    expect(unavailable.title).toBe("This saved session can edit files, so Continue (which is read-only) will not resume it.")
     expect(screen.getByText(unavailable.title)).toBeTruthy()
     expect(requests.some((request) => request.includes("/api/loom/codex") || request.includes("/api/loom/agent"))).toBe(false)
   })
@@ -708,12 +708,12 @@ describe("Experience V2 selected Space actions", () => {
   })
 
   it.each([
-    ["corrupt", "{not-json", "Saved durable sessions are corrupt, so Continue cannot verify an exact session."],
-    ["oversized", "x".repeat(262_145), "Saved durable sessions exceed the safe storage limit, so Continue cannot verify an exact session."],
+    ["corrupt", "{not-json", "The saved session records are unreadable, so Continue cannot verify one. Start fresh with Delegate."],
+    ["oversized", "x".repeat(262_145), "The saved session records are too large to read safely, so Continue cannot verify one. Start fresh with Delegate."],
     ["partial", JSON.stringify({ schemaVersion: 3, selectedSessionKey: null, sessions: [
       { schemaVersion: 1, sessionId: LOCAL_ID, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
       { schemaVersion: 1, sessionId: "codex-partial", role: "Builder", provider: "Codex", assignment: "Broken", target: { kind: "file", path: "./unsafe" }, updatedAt: "2026-08-30T05:19:00.000Z", completedTurns: [] },
-    ] }), "Saved durable-session collection integrity is partial, so Continue cannot verify an exact session."],
+    ] }), "Some saved session records are incomplete, so Continue cannot verify one. Start fresh with Delegate."],
   ] as const)("describes %s durable-session storage truthfully instead of claiming no session exists", async (_state, stored, message) => {
     window.localStorage.setItem(SESSION_KEY, stored)
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
@@ -732,7 +732,7 @@ describe("Experience V2 selected Space actions", () => {
     expect(unavailable.disabled).toBe(true)
     await waitFor(() => expect(unavailable.title).toBe(message))
     expect(await screen.findByText(message)).toBeTruthy()
-    expect(screen.queryByText("No durable session exists in this Space; use Delegate.")).toBeNull()
+    expect(screen.queryByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeNull()
   })
 
   it("describes unavailable durable-session storage truthfully instead of claiming no session exists", async () => {
@@ -760,11 +760,11 @@ describe("Experience V2 selected Space actions", () => {
     }))
     render(<WorkspaceShell />)
 
-    const message = "Durable-session storage is unavailable, so Continue cannot verify an exact session."
+    const message = "Session storage is not available, so Continue cannot verify a saved session."
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     await waitFor(() => expect(unavailable.title).toBe(message))
     expect(await screen.findByText(message)).toBeTruthy()
-    expect(screen.queryByText("No durable session exists in this Space; use Delegate.")).toBeNull()
+    expect(screen.queryByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeNull()
   })
 
   it("continues the exact selected durable Reviewer instead of a newer session and appends its transcript", async () => {
