@@ -147,6 +147,16 @@ function repositoryDisplayLabel(repository: RepositoryShelfRepository | undefine
   return repository.name
 }
 
+function searchPartialMessage(label: string, reason: string): string {
+  if (reason === "WORKSPACE_SEARCH_TIMEOUT") {
+    return `${label} search stopped before completion; results may be incomplete.`
+  }
+  if (reason === "WORKSPACE_SEARCH_UNREADABLE_PATHS") {
+    return `${label} search skipped unreadable paths; results may be incomplete.`
+  }
+  return `${label} search returned partial results.`
+}
+
 function RepositoryRow({
   repository,
   expanded,
@@ -422,10 +432,10 @@ export function RepositoryShelf({
             ))}
             {searchState.partial.map((item) => (
               <p key={item.repositoryKey} title={item.reason}>
-                {repositoryDisplayLabel(
+                {searchPartialMessage(repositoryDisplayLabel(
                   workingSet.find((candidate) => candidate.repositoryKey === item.repositoryKey),
                   item.repositoryKey,
-                )} search skipped unreadable paths; results may be incomplete.
+                ), item.reason)}
               </p>
             ))}
             {searchState.truncated ? <p>More matches exist. Refine the query to narrow this bounded view.</p> : null}

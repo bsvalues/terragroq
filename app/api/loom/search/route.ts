@@ -48,10 +48,12 @@ function refuse(error: string, status: number): Response {
   return Response.json({ error }, { status, headers: { "cache-control": "no-store" } })
 }
 
+type SearchPartialReason = "WORKSPACE_SEARCH_TIMEOUT" | "WORKSPACE_SEARCH_UNREADABLE_PATHS"
+
 type RipgrepRun = Readonly<{
   output: string
   truncated: boolean
-  incomplete: boolean
+  partialReason: SearchPartialReason | null
 }>
 
 function hasRipgrepSummary(output: string): boolean {
@@ -103,7 +105,7 @@ function runRipgrep(workspaceRoot: string, query: string): Promise<RipgrepRun> {
 
     const stopAtBound = () => {
       child.kill()
-      settle({ output, truncated: true, incomplete: false })
+      settle({ output, truncated: true, partialReason: null })
     }
 
     child.stdout.setEncoding("utf8")
@@ -141,11 +143,11 @@ function runRipgrep(workspaceRoot: string, query: string): Promise<RipgrepRun> {
     child.on("error", (error) => settle(error))
     child.on("close", (code) => {
       if (code === 0 || code === 1) {
-        settle({ output, truncated: false, incomplete: false })
+        settle({ output, truncated: false, partialReason: null })
         return
       }
       if (code === 2 && hasRipgrepSummary(output)) {
-        settle({ output, truncated: false, incomplete: true })
+        settle({ output, truncated: false, partialReason: "WORKSPACE_SEARCH_UNREADABLE_PATHS" })
         return
       }
       settle(new Error(stderr || `rg exited with code ${String(code)}`))
@@ -153,7 +155,7 @@ function runRipgrep(workspaceRoot: string, query: string): Promise<RipgrepRun> {
 
     const timeout = setTimeout(() => {
       child.kill()
-      settle(new Error("WORKSPACE_SEARCH_TIMEOUT"))
+      settle({ output, truncated: false, partialReason: "WORKSPACE_SEARCH_TIMEOUT" })
     }, SEARCH_TIMEOUT_MS)
     timeout.unref()
   })
@@ -255,7 +257,7 @@ export async function GET(request: Request) {
         results: parseMatches(result.binding, search.output),
         unavailable: null,
         truncated: search.truncated,
-        partial: search.incomplete ? { repositoryKey, reason: "WORKSPACE_SEARCH_INCOMPLETE" } : null,
+        partial: search.partialReason ? { repositoryKey, reason: search.partialReason } : null,
       }
     } catch {
       return {

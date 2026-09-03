@@ -215,6 +215,44 @@ describe("Experience V2 Working Set search route", () => {
     expect(payload.unavailable).toEqual([])
   })
 
+  it("preserves bounded matches and reports partial truth when a valid repository search times out", async () => {
+    vi.useFakeTimers()
+    try {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough
+        stderr: PassThrough
+        kill: ReturnType<typeof vi.fn>
+      }
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      child.kill = vi.fn(() => true)
+      seams.spawn.mockReturnValue(child)
+
+      const responsePromise = GET(new Request(
+        "http://localhost/api/loom/search?projectKey=terrafusion&query=parcel&repositoryKey=os-1",
+      ))
+      await vi.advanceTimersByTimeAsync(0)
+      child.stdout.write(`${rgJson("src/parcel.ts", 7, "const parcel = true")}\n`)
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      const response = await responsePromise
+      const payload = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(payload.results).toEqual([expect.objectContaining({
+        repositoryKey: "os-1",
+        path: "src/parcel.ts",
+        line: 7,
+        excerpt: "const parcel = true",
+      })])
+      expect(payload.unavailable).toEqual([])
+      expect(payload.partial).toEqual([{ repositoryKey: "os-1", reason: "WORKSPACE_SEARCH_TIMEOUT" }])
+      expect(child.kill).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("returns valid results with explicit partial truth when unreadable repository paths make rg exit two", async () => {
     seams.spawn.mockImplementation(() => spawnedRipgrep([
       rgJson("src/safe.ts", 9, "Sovereign domain pack"),
@@ -229,6 +267,6 @@ describe("Experience V2 Working Set search route", () => {
     expect(response.status).toBe(200)
     expect(payload.results).toEqual([expect.objectContaining({ repositoryKey: "os-1", path: "src/safe.ts" })])
     expect(payload.unavailable).toEqual([])
-    expect(payload.partial).toEqual([{ repositoryKey: "os-1", reason: "WORKSPACE_SEARCH_INCOMPLETE" }])
+    expect(payload.partial).toEqual([{ repositoryKey: "os-1", reason: "WORKSPACE_SEARCH_UNREADABLE_PATHS" }])
   })
 })

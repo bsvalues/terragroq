@@ -235,7 +235,10 @@ describe("Experience V2 repository shelf", () => {
           excerpt: "export const parcelProjection = true",
         }],
         unavailable: [{ repositoryKey: "forge", reason: "WORKSPACE_REVISION_UNAVAILABLE" }],
-        partial: [{ repositoryKey: "os-1", reason: "WORKSPACE_SEARCH_INCOMPLETE" }],
+        partial: [
+          { repositoryKey: "os-1", reason: "WORKSPACE_SEARCH_TIMEOUT" },
+          { repositoryKey: "atlas", reason: "WORKSPACE_SEARCH_UNREADABLE_PATHS" },
+        ],
         truncated: false,
       }), { status: 200 })
     })
@@ -248,7 +251,8 @@ describe("Experience V2 repository shelf", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(await screen.findByRole("button", { name: "Open src/project-atlas-feature.mjs in Atlas at line 14" })).toBeTruthy()
     expect(screen.getByText("Forge unavailable for this search.")).toBeTruthy()
-    expect(screen.getByText("OS 1.0 search skipped unreadable paths; results may be incomplete.")).toBeTruthy()
+    expect(screen.getByText("OS 1.0 search stopped before completion; results may be incomplete.")).toBeTruthy()
+    expect(screen.getByText("Atlas search skipped unreadable paths; results may be incomplete.")).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Open src/project-atlas-feature.mjs in Atlas at line 14" }))
     expect(onOpenEntry).toHaveBeenCalledWith("atlas", "src/project-atlas-feature.mjs")
   })
