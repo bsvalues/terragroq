@@ -3189,6 +3189,80 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
   })
 
+  it("aborts a hung HERMES read so a later poll can recover assignment truth", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Recover assignment polling",
+      status: "implementing",
+      evidence: "focused tests · PASS",
+      observedAt: "2026-09-03T14:00:00.000Z",
+    }
+    let executionReads = 0
+    let executionSignal: AbortSignal | null = null
+    const polls: Array<() => void> = []
+    let expireRead: (() => void) | null = null
+    const realSetTimeout = globalThis.setTimeout
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      polls.push(callback as () => void)
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (delay === 12_000) {
+        expireRead = callback as () => void
+        return 2 as unknown as ReturnType<typeof setTimeout>
+      }
+      return realSetTimeout(callback, delay)
+    }) as typeof setTimeout)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionReads += 1
+        if (executionReads === 1) return new Promise<Response>((_resolve, reject) => {
+          executionSignal = init?.signal ?? null
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted", "AbortError")))
+        })
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(expireRead).not.toBeNull())
+    await act(async () => { expireRead!(); await Promise.resolve() })
+    expect(executionSignal?.aborted).toBe(true)
+    expect(await screen.findByText(/Assignment refresh unavailable/)).toBeTruthy()
+
+    await act(async () => { await new Promise<void>((resolve) => realSetTimeout(resolve, 0)) })
+    await act(async () => { polls.forEach((poll) => poll()); await Promise.resolve() })
+    expect(executionReads).toBe(2)
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Recover assignment polling/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
   it("opens a server-owned assignment even when browser session persistence is unavailable", async () => {
     const spine = {
       ...EMPTY_SPINE,

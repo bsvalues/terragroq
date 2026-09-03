@@ -1388,16 +1388,21 @@ export function WorkspaceShell({
     }
     let cancelled = false
     let latestRead = 0
-    let readInFlight = false
+    let inFlightController: AbortController | null = null
     const executionWorldId = worldId
     const executionWorkOrderId = spine.workOrderId
     const executionEpoch = transitionEpochRef.current
     const readExecution = async () => {
-      if (cancelled || readInFlight) return
-      readInFlight = true
+      if (cancelled || inFlightController && !inFlightController.signal.aborted) return
       const readId = ++latestRead
+      const controller = new AbortController()
+      inFlightController = controller
+      const timeout = setTimeout(() => controller.abort(), 12_000)
       try {
-        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
+        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        })
         if (!response.ok) {
           if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
             if (response.status === 409) {
@@ -1447,13 +1452,15 @@ export function WorkspaceShell({
           }))
         }
       } finally {
-        readInFlight = false
+        clearTimeout(timeout)
+        if (inFlightController === controller) inFlightController = null
       }
     }
     void readExecution()
     const timer = setInterval(() => void readExecution(), 4000)
     return () => {
       cancelled = true
+      inFlightController?.abort()
       clearInterval(timer)
     }
   }, [hydrated, spine.outcomeKey, spine.workOrderId, storage, worldId])
