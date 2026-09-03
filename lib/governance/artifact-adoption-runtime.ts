@@ -340,14 +340,11 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
         AND "entityType"='williamos_delivery_seal'
         AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2
-        AND ("metadata"->'seal'->'payload'->'adoption'->'artifact'->>'pullRequest')::integer=$3
-        AND "metadata"->'seal'->'payload'->'adoption'->'artifact'->>'headSha'=$4
-        AND "metadata"->'seal'->'payload'->'adoption'->'outcome'->>'key'=$5
-        AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer=$6
-        ORDER BY "id" DESC LIMIT 2`,
-      [userId, worldId, admittedPullRequest, admittedHeadSha, outcomeKey, workOrderId],
+        AND "metadata"->'seal'->'payload'->'adoption'->'outcome'->>'key'=$3
+        AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer=$4
+        ORDER BY "id" DESC LIMIT 1`,
+      [userId, worldId, outcomeKey, workOrderId],
     )
-    if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current admission delivery seal state is ambiguous")
     if (result.rows.length === 0) return null
     const metadata = object(result.rows[0].metadata)
     const adoptionHash = String(metadata.adoptionHash ?? "")
@@ -375,12 +372,12 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       || adoption.grant.id !== authorization.deliveryGrant.id
       || adoption.grant.ref !== authorization.deliveryGrant.ref
       || adoption.grant.version !== authorization.deliveryGrant.version
+      || authorizationContext.pullRequest !== authorization.artifact.pullRequest
+      || authorizationContext.admittedHeadSha !== authorization.artifact.headSha
       || hashRecord(adoption.reservation) !== hashRecord(authorization.context.reservation)
       || adoption.artifact.pullRequest !== authorization.artifact.pullRequest
       || adoption.artifact.headSha !== authorization.artifact.headSha
       || !same(adoption.artifact.paths, authorization.artifact.paths)
-      || adoption.artifact.pullRequest !== admittedPullRequest
-      || adoption.artifact.headSha !== admittedHeadSha
       || !same(anchorAllowed, admissionAnchorPaths)
       || !same(authorization.context.reservation.allowed, authorization.artifact.paths)
       || delivery.repository !== authorization.context.repository

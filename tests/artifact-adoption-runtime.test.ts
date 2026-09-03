@@ -70,11 +70,9 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
         if (sql.includes("metadata\"->>'adoptionHash'=$2")) return metadata.adoptionHash === values?.[1]
         const adoption = metadata.seal?.payload?.adoption
         return adoption?.worldId === values?.[1]
-          && (values?.length !== 6 || (
-            adoption.artifact?.pullRequest === values[2]
-            && adoption.artifact?.headSha === values[3]
-            && adoption.outcome?.key === values[4]
-            && adoption.workOrder?.id === values[5]
+          && (values?.length !== 4 || (
+            adoption.outcome?.key === values[2]
+            && adoption.workOrder?.id === values[3]
           ))
       }).reverse()
       return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ metadata: event.metadata })) }
@@ -336,7 +334,7 @@ describe("persisted prospective artifact adoption", () => {
     const otherTarget = { pullRequest: 1118, expectedHeadSha: otherHead } as const
     const other = harness(authorityRow({
       admissionRequest: {
-        worldId: "space-1",
+        worldId: "space-other",
         externalWorkOrder: {
           repository: "bsvalues/terragroq",
           reservedPaths: paths,
@@ -344,9 +342,9 @@ describe("persisted prospective artifact adoption", () => {
         },
       },
     }), otherTarget)
-    const otherPreview = await other.runtime.preview("owner-1", "space-1", otherTarget)
-    await other.runtime.authorize("owner-1", "space-1", otherTarget, "adopt:1118:other-artifact", otherPreview.previewDigest)
-    await other.runtime.issue("owner-1", "space-1", "adopt:1118:other-artifact")
+    const otherPreview = await other.runtime.preview("owner-1", "space-other", otherTarget)
+    await other.runtime.authorize("owner-1", "space-other", otherTarget, "adopt:1118:other-artifact", otherPreview.previewDigest)
+    await other.runtime.issue("owner-1", "space-other", "adopt:1118:other-artifact")
     current.events.push(...structuredClone(other.events.filter((event) =>
       event.type === "ARTIFACT_ADOPTION_AUTHORIZED" || event.type === "EVIDENCE_RECORDED")))
     current.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
@@ -386,6 +384,33 @@ describe("persisted prospective artifact adoption", () => {
       pullRequest: 1117,
       headSha: head,
       paths: prospectivePaths,
+      adoptionHash: sealed.adoptionHash,
+    })
+  })
+
+  it("restores the latest prospective artifact when its PR head differs from the historical admission anchor", async () => {
+    const anchorHead = "4".repeat(40)
+    const artifactHead = "5".repeat(40)
+    const artifactTarget = { pullRequest: 1139, expectedHeadSha: artifactHead } as const
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: 1121, headSha: anchorHead },
+        },
+      },
+    }), artifactTarget)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", artifactTarget)
+    await candidate.runtime.authorize("owner-1", "space-1", artifactTarget, "adopt:1139:separate-anchor", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1139:separate-anchor")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1139,
+      headSha: artifactHead,
       adoptionHash: sealed.adoptionHash,
     })
   })

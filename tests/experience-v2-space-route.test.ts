@@ -364,7 +364,7 @@ describe("merged external Space delivery finalization", () => {
     const context = {
       owner: "owner", worldId: "space-1", spaceRevision: 0,
       workspace: "C:/HermesLab/williamos-source", repository: "https://github.com/bsvalues/terragroq",
-      pullRequest: 1124, admittedHeadSha: "a".repeat(40),
+      pullRequest: 1139, admittedHeadSha: "c".repeat(40),
       outcome: { id: 48, key: "external:anchor", version: 1 },
       workOrder: { id: 74, ref: "WO-74", version: "2026-09-01T19:07:15.475Z" },
       grant: { id: 79, ref: "GRANT-79", version: "b".repeat(64), expiresAt: "2026-09-04T19:07:15.475Z" },
@@ -372,7 +372,7 @@ describe("merged external Space delivery finalization", () => {
       reservation: { allowed: artifactAllowed, forbidden, version: "c".repeat(64) },
     }
     const artifact = {
-      pullRequest: 1124, headSha: "a".repeat(40), pullRequestBaseSha: "d".repeat(40),
+      pullRequest: 1139, headSha: "c".repeat(40), pullRequestBaseSha: "d".repeat(40),
       baseRefSha: "e".repeat(40), baseSha: "f".repeat(40), paths: artifactAllowed,
     }
     const previewDigest = hashRecord({ version: "williamos-delivery-seal.v2", value: { context, artifact } })
@@ -384,7 +384,7 @@ describe("merged external Space delivery finalization", () => {
     const base = {
       authorizationMetadata: { adoptionHash, previewDigest, idempotencyKey, context, artifact },
       userId: "owner", worldId: "space-1", repository: "bsvalues/terragroq",
-      pullRequest: 1124, headSha: "a".repeat(40), spaceRevision: 0,
+      pullRequest: 1139, headSha: "c".repeat(40), spaceRevision: 0,
       outcome: context.outcome, workOrder: context.workOrder,
       implementationGrant: { id: 79, ref: "GRANT-79", version: "b".repeat(64) },
       anchorAllowed, anchorForbidden: forbidden,
@@ -393,6 +393,7 @@ describe("merged external Space delivery finalization", () => {
       signedAdoptionHash: adoptionHash, signedReservation: context.reservation,
     }
     expect(exact(base)).toBe(true)
+    expect(exact({ ...base, headSha: "a".repeat(40) })).toBe(false)
     expect(exact({ ...base, anchorAllowed: artifactAllowed })).toBe(false)
     expect(exact({ ...base, admittedAllowed: artifactAllowed })).toBe(false)
     expect(exact({ ...base, admittedForbidden: [...forbidden].reverse() })).toBe(false)
