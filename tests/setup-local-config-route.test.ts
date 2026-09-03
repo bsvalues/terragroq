@@ -296,6 +296,30 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps full bootstrap disabled when production mount setup is explicitly enabled", async () => {
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "full",
+        databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
+        authSecret: "12345678901234567890123456789012",
+        authUrl: "http://localhost:3000",
+        terraFusionRoot: projectRoot,
+      }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.message).toContain("Full local bootstrap is disabled in production")
+    expect(verifyCanonicalTerraFusionCheckoutMock).not.toHaveBeenCalled()
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
   it("refuses a secondary checkout whose origin does not match the selected catalog identity", async () => {
     verifyCanonicalTerraFusionCheckoutMock.mockResolvedValueOnce({
       ok: false,

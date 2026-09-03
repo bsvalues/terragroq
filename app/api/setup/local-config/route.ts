@@ -302,6 +302,16 @@ export async function POST(req: Request) {
     )
   }
 
+  if (operation === "full" && process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Full local bootstrap is disabled in production. Use the authenticated owner mount operations only.",
+      },
+      { status: 403 },
+    )
+  }
+
   if (operation === "terrafusion-root" || operation === "terrafusion-repository-root") {
     const session = await getSession()
     if (!session?.user) {
