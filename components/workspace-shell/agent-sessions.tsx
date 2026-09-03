@@ -1828,12 +1828,15 @@ export function AgentSessionStrip({
   const disambiguator = (session: ExperienceAgentSession): string | null => {
     const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
     if ((duplicateIdentityCounts.get(key) ?? 0) < 2) return null
+    const exactId = session.id.split(":").at(-1) ?? session.id
+    const stableSuffix = exactId.slice(-8)
     if (session.updatedAt) {
       const parsed = new Date(session.updatedAt)
-      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().replace("T", " ").slice(0, 16) + "Z"
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${parsed.toISOString().replace("T", " ").slice(0, 16)}Z · ${stableSuffix}`
+      }
     }
-    const exactId = session.id.split(":").at(-1) ?? session.id
-    return `session ${exactId.slice(-8)}`
+    return `session ${stableSuffix}`
   }
   return (
     <nav

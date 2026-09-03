@@ -3235,18 +3235,18 @@ describe("Experience V2 real agent sessions", () => {
     expect(persist).not.toHaveBeenCalled()
   })
 
-  it("disambiguates otherwise identical restored conversations by their persisted update time", () => {
+  it("disambiguates otherwise identical restored conversations even when they share one update minute", () => {
     const sessions = [
-      { id: "Local:first", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:16.157Z" },
-      { id: "Local:second", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T06:07:48.304Z" },
+      { id: "Local:123e4567-e89b-42d3-a456-426614174000", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:16.157Z" },
+      { id: "Local:223e4567-e89b-42d3-a456-426614175000", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:48.304Z" },
     ]
 
     render(<AgentSessionStrip sessions={sessions} />)
 
-    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 06:07Z" })).toBeTruthy()
-    expect(screen.getByText("Conversation · 2026-09-02 05:31Z")).toBeTruthy()
-    expect(screen.getByText("Conversation · 2026-09-02 06:07Z")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z · 14174000" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z · 14175000" })).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 14174000")).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 14175000")).toBeTruthy()
   })
 
   it("marks assignment refresh truthfully, removes mismatches, recovers automatically, and keeps Mission Control unknown", async () => {
