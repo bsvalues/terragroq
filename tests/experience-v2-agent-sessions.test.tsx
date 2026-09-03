@@ -508,8 +508,8 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(projection.state).toBe("available")
     expect(projection.sessions).toEqual([
-      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) } }),
-      expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified" }),
+      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified", updatedAt: "2026-08-29T10:00:00.000Z", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) } }),
+      expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified", updatedAt: "2026-08-29T10:01:00.000Z" }),
     ])
     expect(window.localStorage.getItem(key)).toBe(stored)
   })
@@ -3121,7 +3121,7 @@ describe("Experience V2 real agent sessions", () => {
     })
   })
 
-  it("keeps a newer successful HERMES poll when an older failed read settles afterward", async () => {
+  it("serializes HERMES polling so a slow read cannot starve every later update", async () => {
     const spine = {
       ...EMPTY_SPINE,
       projectId: 1,
@@ -3135,8 +3135,8 @@ describe("Experience V2 real agent sessions", () => {
       ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
       editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
     }
-    let settleOlderRead!: (response: Response) => void
-    const olderRead = new Promise<Response>((resolve) => { settleOlderRead = resolve })
+    let settleSlowRead!: (response: Response) => void
+    const slowRead = new Promise<Response>((resolve) => { settleSlowRead = resolve })
     const successfulSession: ProjectedWorldWorkerSession = {
       id: "world-worker:server-world:41:hermes-codex-bridge",
       worldId: "server-world",
@@ -3165,7 +3165,7 @@ describe("Experience V2 real agent sessions", () => {
       }))
       if (url.startsWith("/api/environment/execution?")) {
         executionReads += 1
-        if (executionReads === 1) return olderRead
+        if (executionReads === 1) return slowRead
         return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: successfulSession }))
       }
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
@@ -3179,11 +3179,74 @@ describe("Experience V2 real agent sessions", () => {
     render(<WorkspaceShell />)
     await waitFor(() => expect(poll).not.toBeNull())
     act(() => poll!())
-    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(executionReads).toBe(1)
 
-    await act(async () => settleOlderRead(new Response(null, { status: 503 })))
+    await act(async () => settleSlowRead(new Response(null, { status: 503 })))
+    act(() => poll!())
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(executionReads).toBe(2)
     expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
     expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
+  it("opens a server-owned assignment even when browser session persistence is unavailable", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "validating" as const,
+    }
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Inspect persisted execution",
+      status: "validating",
+      evidence: "focused tests · PASS",
+      observedAt: "2026-09-03T13:00:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    const worker = await screen.findByRole("button", { name: /HERMES · Local execution · Inspect persisted execution/i })
+    const persist = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage denied") })
+    fireEvent.click(worker)
+
+    expect(await screen.findByText("Assignment · Work Order #41")).toBeTruthy()
+    expect(persist).not.toHaveBeenCalled()
+  })
+
+  it("disambiguates otherwise identical restored conversations by their persisted update time", () => {
+    const sessions = [
+      { id: "Local:first", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:16.157Z" },
+      { id: "Local:second", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T06:07:48.304Z" },
+    ]
+
+    render(<AgentSessionStrip sessions={sessions} />)
+
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 06:07Z" })).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 05:31Z")).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 06:07Z")).toBeTruthy()
   })
 
   it("marks assignment refresh truthfully, removes mismatches, recovers automatically, and keeps Mission Control unknown", async () => {

@@ -1388,10 +1388,13 @@ export function WorkspaceShell({
     }
     let cancelled = false
     let latestRead = 0
+    let readInFlight = false
     const executionWorldId = worldId
     const executionWorkOrderId = spine.workOrderId
     const executionEpoch = transitionEpochRef.current
     const readExecution = async () => {
+      if (cancelled || readInFlight) return
+      readInFlight = true
       const readId = ++latestRead
       try {
         const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
@@ -1443,6 +1446,8 @@ export function WorkspaceShell({
               : null,
           }))
         }
+      } finally {
+        readInFlight = false
       }
     }
     void readExecution()
@@ -4409,7 +4414,6 @@ export function WorkspaceShell({
         </div>
         <div className={spatial.agentPresence}>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
-          if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
           if (agent.kind === "world-worker") {
             setFocusedAgentId(agent.id)
             setDelegateContext(null)
@@ -4417,6 +4421,7 @@ export function WorkspaceShell({
             materializeExecutionAssignment(agent.id)
             return
           }
+          if (!agentSessions.selectSession(agent.id)) return
           const running = agentSessions.activeSessionIds.includes(agent.id)
           if (running && agent.kind === "durable-session") {
             setFocusedAgentId(agent.id)
