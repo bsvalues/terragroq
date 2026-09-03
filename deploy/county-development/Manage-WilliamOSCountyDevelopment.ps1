@@ -94,7 +94,11 @@ function Protect-CurrentUserFile {
 function Test-LoopbackUrl {
   param([string]$Value, [string[]]$Protocols)
   try { $uri = [Uri]$Value } catch { return $false }
-  return $uri.IsAbsoluteUri -and $Protocols.Contains($uri.Scheme) -and $uri.Host -in @("127.0.0.1", "localhost", "::1")
+  return $uri.IsAbsoluteUri -and
+    $Protocols.Contains($uri.Scheme) -and
+    $uri.Host -in @("127.0.0.1", "localhost", "::1") -and
+    -not $uri.UserInfo -and
+    -not $uri.Query
 }
 
 function Invoke-Git {
@@ -182,9 +186,11 @@ function Resolve-InitialConfiguration {
   $resolvedRoot = Assert-TerraFusionCheckout $root
   $preview = if ($PreviewUrl) { $PreviewUrl.Trim() } else { "http://127.0.0.1:3102/" }
   if (-not (Test-LoopbackUrl $preview @('http', 'https'))) {
-    Deny "PREVIEW_URL_INVALID" "County developer Preview must be one loopback HTTP(S) URL."
+    Deny "PREVIEW_URL_INVALID" "County developer Preview must be one loopback HTTP(S) URL without credentials or query parameters."
   }
-  $preview = ([Uri]$preview).AbsoluteUri
+  $previewBuilder = [UriBuilder]$preview
+  $previewBuilder.Fragment = ""
+  $preview = $previewBuilder.Uri.AbsoluteUri
   $id = if ($DeploymentId) { $DeploymentId } else { "benton-county-development-$($env:COMPUTERNAME.ToLowerInvariant())" }
   if ($id -notmatch '^[a-z0-9][a-z0-9.-]{2,79}$') {
     Deny "DEPLOYMENT_ID_INVALID" "Use 3-80 lowercase letters, digits, dots, or hyphens."
