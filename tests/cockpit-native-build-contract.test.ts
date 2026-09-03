@@ -11,8 +11,13 @@ const invoke = fs.readFileSync(path.join(cockpit, "scripts", "invoke-native.ps1"
 const cargoLock = fs.readFileSync(path.join(cockpit, "src-tauri", "Cargo.lock"), "utf8")
 
 describe("the reproducible WilliamOS Cockpit native build", () => {
-  it("pins the documented Windows GNU compiler instead of inheriting a machine default", () => {
-    expect(toolchain).toContain('channel = "1.88.0-x86_64-pc-windows-gnu"')
+  it("uses valid channel metadata and explicitly activates the pinned Windows GNU host", () => {
+    expect(toolchain).toContain('channel = "1.88.0"')
+    expect(toolchain).not.toContain('channel = "1.88.0-x86_64-pc-windows-gnu"')
+    expect(invoke).toContain('$pinnedToolchain = "1.88.0-x86_64-pc-windows-gnu"')
+    expect(invoke).toContain("toolchain install $pinnedToolchain --profile minimal")
+    expect(invoke).toContain("$env:RUSTUP_TOOLCHAIN = $pinnedToolchain")
+    expect(invoke).toContain('host: x86_64-pc-windows-gnu')
   })
 
   it("stages the loader before native tests and both Tauri entry points", () => {
@@ -41,12 +46,13 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
     expect(invoke).toMatch(/if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
   })
 
-  it("provides an installed x64 MinGW dlltool to cargo and every dependency", () => {
+  it("provides an installed x64 MinGW compiler and dlltool to every child process", () => {
     expect(invoke).toContain("WILLIAMOS_MINGW_BIN")
     expect(invoke).toContain('C:\\msys64\\mingw64\\bin')
     expect(invoke).toContain('C:\\mingw64\\bin')
     expect(invoke).toContain("Get-Command dlltool.exe")
     expect(invoke).toContain('Join-Path $candidate "dlltool.exe"')
+    expect(invoke).toContain('Join-Path $candidate "gcc.exe"')
     expect(invoke).toMatch(/\$env:PATH\s*=\s*"\$mingwBin;/)
   })
 
