@@ -343,11 +343,13 @@ describe("merged external Space delivery finalization", () => {
     expect(exact(["owner/path.ts"], queueBlocked)).toBe(false)
   })
 
-  it("requires the locked Space revision to equal the signed revision", () => {
+  it("accepts monotonic Space saves after the signed authority snapshot and rejects rollback", () => {
     const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact as (input: Record<string, unknown>) => boolean
     const active = { persistedRevision: 7, signedRevision: 7, lifecycleState: "active", workOrderStatus: "active" }
     expect(exact(active)).toBe(true)
-    expect(exact({ ...active, persistedRevision: 8 })).toBe(false)
+    expect(exact({ ...active, persistedRevision: 19 })).toBe(true)
+    expect(exact({ ...active, persistedRevision: 6 })).toBe(false)
+    expect(exact({ ...active, signedRevision: 20 })).toBe(false)
     expect(exact({ ...active, persistedRevision: "7" })).toBe(false)
     const replay = { ...active, lifecycleState: "completed", workOrderStatus: "closed" }
     expect(exact({ ...replay, persistedRevision: 8 })).toBe(true)

@@ -238,9 +238,13 @@ function mergedExternalSpaceRevisionIsExact(input: Readonly<{
   lifecycleState: unknown
   workOrderStatus: unknown
 }>): boolean {
-  if (!Number.isSafeInteger(input.persistedRevision)) return false
+  if (!Number.isSafeInteger(input.persistedRevision) || !Number.isSafeInteger(input.signedRevision)) return false
   if (input.lifecycleState === "active" && input.workOrderStatus === "active") {
-    return input.persistedRevision === input.signedRevision
+    // The seal binds the authority-bearing Space snapshot. Later ordinary Space saves may
+    // advance that same persisted Space while the immutable outcome, Work Order, grant,
+    // artifact, and admission bindings remain exact. A rollback behind the signed snapshot
+    // still fails closed.
+    return Number(input.persistedRevision) >= input.signedRevision
   }
   if (input.lifecycleState === "completed" && input.workOrderStatus === "closed") {
     return Number(input.persistedRevision) >= input.signedRevision
@@ -558,6 +562,9 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       eq(authorityGrant.userId, userId),
       sql`${authorityGrant.id} IN (${expected.implementationGrantId}, ${expected.queueGrantId}, ${expected.deliveryGrantId})`,
     )).for("update")
+    const workOrderGrants = await transaction.select().from(authorityGrant).where(and(
+      eq(authorityGrant.userId, userId), eq(authorityGrant.workOrderId, expected.workOrderId),
+    )).for("update")
     const [world] = await transaction.select({ snapshot: workingWorld.snapshot }).from(workingWorld).where(and(
       eq(workingWorld.userId, userId), eq(workingWorld.id, expected.worldId),
     )).limit(1).for("update")
@@ -762,7 +769,8 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
         && prior?.evidenceHash === evidenceHash && prior?.terminalKey === terminalKey
         && prior?.headSha === expected.headSha && prior?.mergeSha === inspection.mergeSha
         && exactCanonicalPaths(Array.isArray(prior?.paths) ? prior.paths.map(String) : [], expected.paths)
-        && grants.every((grant) => grant.status === "revoked" && grant.revokedAt !== null)
+        && workOrderGrants.length >= expectedGrantIds.size
+        && workOrderGrants.every((grant) => grant.status === "revoked" && grant.revokedAt !== null)
         && persistedSpine?.execution === "complete"
       if (!replayExact) throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE")
       return { replayed: true }
@@ -796,14 +804,19 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       terminalKey,
       terminalAt: at, updatedAt: at, version: expected.outcomeVersion + 1,
     }).where(and(eq(outcomeQueueItem.userId, userId), eq(outcomeQueueItem.id, expected.outcomeId)))
+    const activeWorkOrderGrants = workOrderGrants.filter((grant) => grant.status === "active" && grant.revokedAt === null)
     const revokedGrants = await transaction.update(authorityGrant).set({
       status: "revoked", revokedAt: at, revokedBy: userId,
       revokeReason: "MERGED_EXTERNAL_DELIVERY_PROVEN",
-    }).where(and(eq(authorityGrant.userId, userId), sql`${authorityGrant.id} IN (${expected.implementationGrantId}, ${expected.queueGrantId}, ${expected.deliveryGrantId})`)).returning()
-    if (revokedGrants.length !== expectedGrantIds.size) {
+    }).where(and(
+      eq(authorityGrant.userId, userId), eq(authorityGrant.workOrderId, expected.workOrderId),
+      eq(authorityGrant.status, "active"),
+    )).returning()
+    if (revokedGrants.length !== activeWorkOrderGrants.length
+      || [...expectedGrantIds].some((id) => !revokedGrants.some((grant) => grant.id === id))) {
       throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE")
     }
-    for (const grant of grants) {
+    for (const grant of activeWorkOrderGrants) {
       const revoked = revokedGrants.find((candidate) => candidate.id === grant.id)
       if (!revoked || revoked.status !== "revoked" || revoked.revokedAt?.getTime() !== at.getTime()) {
         throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE")
