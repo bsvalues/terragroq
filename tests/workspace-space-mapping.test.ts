@@ -1,11 +1,138 @@
 import { describe, expect, it } from "vitest"
 
-import { defaultSpace, normalizeSpace, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
+import { defaultSpace, normalizeSpace, qualifyLegacyWorkspaceFiles, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
 import { validateSpaceState } from "@/lib/environment/working-world"
+import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 const geometry = (z: number) => ({ x: 100, y: 90, width: 560, height: 480, z, minimized: false })
 
 describe("browser-to-server Space mapping", () => {
+  it("round-trips repository, mount, worktree and observed-revision identity for same-path files", () => {
+    const base = defaultSpace(1440, 900)
+    const atlas: WorkspaceFileRef = {
+      projectIdentity: "project:terrafusion",
+      repositoryResourceKey: "repo:terrafusion-atlas",
+      repositoryMountKey: "mount:hermes:terrafusion-atlas:protected-main",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "README.md",
+    }
+    const os1: WorkspaceFileRef = {
+      ...atlas,
+      repositoryResourceKey: "repo:terrafusion-os-1",
+      repositoryMountKey: "mount:hermes:terrafusion-os-1:protected-main",
+    }
+
+    const mapped = spaceToServer({
+      ...base,
+      selectedPath: atlas.path,
+      selectedFileRef: atlas,
+      editor: {
+        openFiles: [atlas.path, os1.path],
+        openFileRefs: [atlas, os1],
+        panes: [
+          { id: "primary", activePath: atlas.path, activeFileRef: atlas, selection: { anchor: 1, head: 2 } },
+          { id: "secondary", activePath: os1.path, activeFileRef: os1, selection: { anchor: 3, head: 4 } },
+        ],
+        activePaneId: "primary",
+      },
+    })
+
+    expect(mapped.fileRefs).toEqual([atlas, os1])
+    expect(mapped.panes.map((pane) => pane.fileRef)).toEqual([atlas, os1])
+    expect(mapped.selection?.fileRef).toEqual(atlas)
+    expect(() => validateSpaceState(mapped)).not.toThrow()
+
+    const restored = normalizeSpace(validateSpaceState(mapped), base)
+    expect(restored.selectedFileRef).toEqual(atlas)
+    expect(restored.editor.openFileRefs).toEqual([atlas, os1])
+    expect(restored.editor.panes.map((pane) => pane.activeFileRef)).toEqual([atlas, os1])
+  })
+
+  it("keeps legacy path-only editor state path-only until a repository-qualified file is opened", () => {
+    const base = defaultSpace(1440, 900)
+    const legacy = spaceToServer({
+      ...base,
+      selectedPath: "README.md",
+      editor: {
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", activePath: "README.md", selection: { anchor: 0, head: 0 } }],
+        activePaneId: "primary",
+      },
+    })
+
+    expect(legacy.fileRefs).toBeUndefined()
+    const restored = normalizeSpace(validateSpaceState(legacy), base)
+    expect(restored.editor.openFileRefs).toBeUndefined()
+    expect(() => validateSpaceState(spaceToServer(restored))).not.toThrow()
+  })
+
+  it("restores the active file from its pane even when no cursor range was persisted", () => {
+    const base = defaultSpace(1440, 900)
+    const persisted = spaceToServer({
+      ...base,
+      selectedPath: "README.md",
+      editor: {
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", activePath: "README.md", selection: null }],
+        activePaneId: "primary",
+      },
+    })
+
+    expect(persisted.selection).toBeNull()
+    const restored = normalizeSpace(validateSpaceState(persisted), base)
+    expect(restored.selectedPath).toBe("README.md")
+    expect(restored.editor.panes[0]).toMatchObject({ activePath: "README.md", selection: null })
+  })
+
+  it("upgrades legacy path-only state from the server-verified default repository binding", () => {
+    const base = defaultSpace(1440, 900)
+    const legacy = normalizeSpace(validateSpaceState(spaceToServer({
+      ...base,
+      selectedPath: "README.md",
+      editor: {
+        openFiles: ["README.md"],
+        panes: [{ id: "primary", activePath: "README.md", selection: { anchor: 2, head: 4 } }],
+        activePaneId: "primary",
+      },
+    })), base)
+    const project = {
+      identity: "c:/repos/terrafusion_os_1.0",
+      name: "TerraFusion",
+      repositories: [{
+        key: "os-1",
+        identity: "bsvalues/terrafusion_os_1.0",
+        label: "OS 1.0",
+        role: "integrated-runtime" as const,
+        suite: null,
+        previewSource: true,
+        defaultRepository: true,
+        mount: {
+          key: "terrafusion:os-1:configured",
+          configured: true,
+          verified: true,
+          branch: "main",
+          revision: "a".repeat(40),
+          refusal: null,
+        },
+      }],
+    }
+
+    const upgraded = qualifyLegacyWorkspaceFiles(legacy, project)
+    expect(upgraded.editor.openFileRefs).toHaveLength(1)
+    expect(upgraded.editor.openFileRefs?.[0]).toMatchObject({
+      projectIdentity: project.identity,
+      repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "README.md",
+    })
+    expect(upgraded.editor.panes[0].activeFileRef).toEqual(upgraded.editor.openFileRefs?.[0])
+    expect(upgraded.selectedFileRef).toEqual(upgraded.editor.openFileRefs?.[0])
+    expect(() => validateSpaceState(spaceToServer(upgraded))).not.toThrow()
+  })
+
   it("keeps server Space identity and place separate across two durable snapshots", () => {
     const aBase = defaultSpace(1440, 900, "world-a", "Build")
     const bBase = defaultSpace(1440, 900, "world-b", "Recovery")

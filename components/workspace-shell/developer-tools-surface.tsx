@@ -39,9 +39,11 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
+export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", repositoryKey = null, repositoryLabel = null, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
   projectKey?: "terrafusion" | "williamos"
+  repositoryKey?: string | null
+  repositoryLabel?: string | null
   worldId?: string | null
   selectedPath: string | null
   active?: boolean
@@ -105,7 +107,11 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
     }
     liveDiffContextChanged.current?.(null)
     setError(null)
-    const query = path ? `?path=${encodeURIComponent(path)}${projectKey === "williamos" ? "&projectKey=williamos" : ""}` : projectKey === "williamos" ? "?projectKey=williamos" : ""
+    const params = new URLSearchParams()
+    if (path) params.set("path", path)
+    if (projectKey === "williamos") params.set("projectKey", "williamos")
+    if (repositoryKey) params.set("repositoryKey", repositoryKey)
+    const query = params.size > 0 ? `?${params.toString()}` : ""
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
     try {
@@ -151,7 +157,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
-  }, [projectKey, selectedPath])
+  }, [projectKey, repositoryKey, selectedPath])
 
   useEffect(() => {
     if (kind !== "diff") return
@@ -318,8 +324,8 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
     try {
       const response = await fetch("/api/loom/run", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand
-          ? { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), operation, terminalCommand }
-          : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), operation }),
+          ? { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation, terminalCommand }
+          : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
       if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
@@ -371,7 +377,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
       if (controller.current === abort) controller.current = null
     }
-  }, [kind, operations, projectKey, settleRun, stop, worldId])
+  }, [kind, operations, projectKey, repositoryKey, settleRun, stop, worldId])
 
   const executeCommand = useCallback(() => {
     const operation = resolveProjectTerminalCommand(command)
@@ -405,7 +411,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", worldI
       <div className={styles.utilityBody}>
         {kind === "diff" ? <>
           <div className={styles.utilityControls}>
-            <span className={styles.muted}>{selectedPath ? `HEAD · ${selectedPath}` : "HEAD · working tree"}</span>
+            <span className={styles.muted}>{repositoryLabel ? `${repositoryLabel} · ` : ""}{selectedPath ? `HEAD · ${selectedPath}` : "HEAD · working tree"}</span>
             <button type="button" className={styles.utilityButton} onClick={refreshDiff}>Refresh</button>
           </div>
           {status ? <pre className={styles.utilityOutput}>{status}</pre> : null}

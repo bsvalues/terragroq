@@ -467,6 +467,24 @@
   box-shadow: 0 30px 110px rgb(0 0 0 / 70%);
 }
 
+.previewHost { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.previewCompositionButton {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid #596653;
+  border-radius: 4px;
+  color: #d5ded1;
+  background: rgb(15 20 15 / 92%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 36%);
+  font: 8.5px var(--font-geist-mono), monospace;
+}
+
 @media (max-width: 1040px) {
   .topBar { grid-template-columns: minmax(220px, 1fr) auto; }
   .agentPresence { display: contents; }

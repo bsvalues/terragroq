@@ -7,6 +7,12 @@ import { and, eq } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { project, projectResource } from "@/lib/db/schema"
 import { workspaceProjectFromRoot, type WorkspaceProject } from "@/lib/environment/space-persistence"
+import {
+  CORE_SEVEN_REPOSITORIES,
+  resolveWorkspaceRepositorySelection,
+  type WorkspaceRepositoryDefinition,
+  type WorkspaceRepositoryMountView,
+} from "@/lib/projects/core-seven-repositories"
 import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-env"
 
 const TERRAFUSION_PROJECT_KEY = "terrafusion"
@@ -20,11 +26,18 @@ export type WorkspaceProjectBinding = Readonly<{
   projectId: number
   projectKey: string
   projectName: string
+  repositoryResourceId: number | null
+  repositoryKey: string
   repositoryIdentity: string
+  repositoryRole: WorkspaceRepositoryDefinition["role"]
+  repositoryLabel: string
+  repositoryPreviewSource: boolean
+  repositoryMountKey: string
+  observedRevision: string | null
   configuredWorkspaceRoot: string
   workspaceRoot: string
   workspaceAppUrl: string | null
-  project: WorkspaceProject
+  project: WorkspaceProject & Readonly<{ repositories?: readonly WorkspaceRepositoryMountView[] }>
 }>
 
 export type WorkspaceProjectBindingResult =
@@ -35,6 +48,7 @@ export type VerifiedTerraFusionWorkspaceRoot = Readonly<{
   projectId: number
   projectKey: string
   projectName: string
+  repositoryKey: string
   repositoryIdentity: string
   configuredWorkspaceRoot: string
   workspaceRoot: string
@@ -53,13 +67,19 @@ type ProjectBindingRow = Readonly<{
   projectId: number
   projectKey: string
   projectName: string
+  repositoryResourceId?: number
   repositoryIdentity: string
+  repositoryLabel?: string
+  repositoryKey?: string | null
+  repositoryRelationship?: string
 }>
 
 export type WorkspaceProjectBindingDependencies = Readonly<{
   loadProjectRows: (userId: string, projectKey: CanonicalWorkspaceProjectKey) => Promise<readonly ProjectBindingRow[]>
   readGitRemoteOrigin: (workspaceRoot: string) => Promise<string>
   readGitTopLevel: (workspaceRoot: string) => Promise<string>
+  readGitRevision?: (workspaceRoot: string) => Promise<string>
+  readGitBranch?: (workspaceRoot: string) => Promise<string>
   realpath: (workspaceRoot: string) => Promise<string>
 }>
 
@@ -111,6 +131,28 @@ function readGitTopLevel(workspaceRoot: string): Promise<string> {
   })
 }
 
+function readGitRevision(workspaceRoot: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "git",
+      ["-C", workspaceRoot, "rev-parse", "--verify", "HEAD"],
+      { encoding: "utf8", windowsHide: true },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim()),
+    )
+  })
+}
+
+function readGitBranch(workspaceRoot: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "git",
+      ["-C", workspaceRoot, "branch", "--show-current"],
+      { encoding: "utf8", windowsHide: true },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim()),
+    )
+  })
+}
+
 const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies = {
   async loadProjectRows(userId, projectKey) {
     return db
@@ -118,21 +160,261 @@ const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies =
         projectId: project.id,
         projectKey: project.key,
         projectName: project.name,
+        repositoryResourceId: projectResource.id,
         repositoryIdentity: projectResource.canonicalIdentity,
+        repositoryLabel: projectResource.label,
+        repositoryKey: projectResource.resourceKey,
+        repositoryRelationship: projectResource.relationship,
       })
       .from(project)
       .innerJoin(projectResource, and(
         eq(projectResource.projectId, project.id),
         eq(projectResource.userId, userId),
         eq(projectResource.type, "repo"),
-        eq(projectResource.relationship, "primary-repo"),
       ))
       .where(and(eq(project.userId, userId), eq(project.key, projectKey)))
-      .limit(2)
+      .limit(16)
   },
   readGitRemoteOrigin,
   readGitTopLevel,
+  readGitRevision,
+  readGitBranch,
   realpath: fs.realpath,
+}
+
+type PersistedRepositoryResult =
+  | Readonly<{ ok: true; row: ProjectBindingRow }>
+  | Readonly<{ ok: false; error: string }>
+
+async function resolvePersistedRepository(
+  userId: string,
+  definition: WorkspaceRepositoryDefinition,
+  dependencies: WorkspaceProjectBindingDependencies,
+): Promise<PersistedRepositoryResult> {
+  let rows: readonly ProjectBindingRow[]
+  try {
+    rows = await dependencies.loadProjectRows(userId, definition.projectKey)
+  } catch {
+    return { ok: false, error: "WORKSPACE_PROJECT_LOOKUP_UNAVAILABLE" }
+  }
+
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      error: definition.projectKey === TERRAFUSION_PROJECT_KEY && definition.defaultRepository
+        ? "TERRAFUSION_PROJECT_UNBOUND"
+        : definition.projectKey === WILLIAMOS_PROJECT_KEY
+          ? "WILLIAMOS_PROJECT_UNBOUND"
+          : "WORKSPACE_REPOSITORY_UNBOUND",
+    }
+  }
+
+  const keyed = rows.filter((row) => row.repositoryKey === definition.key)
+  // Existing primary repository rows predate resourceKey. Preserve only that exact legacy binding;
+  // secondary repositories always require their explicit stable key.
+  const candidates = keyed.length > 0
+    ? keyed
+    : definition.defaultRepository
+      ? rows.filter((row) => (
+        (row.repositoryKey === undefined || row.repositoryKey === null)
+        && (row.repositoryRelationship === undefined || row.repositoryRelationship === "primary-repo")
+      ))
+      : []
+
+  if (candidates.length === 0) return { ok: false, error: "WORKSPACE_REPOSITORY_UNBOUND" }
+  if (candidates.length !== 1) {
+    return {
+      ok: false,
+      error: definition.projectKey === TERRAFUSION_PROJECT_KEY && definition.defaultRepository
+        ? "TERRAFUSION_PRIMARY_REPO_AMBIGUOUS"
+        : definition.projectKey === WILLIAMOS_PROJECT_KEY
+          ? "WILLIAMOS_PRIMARY_REPO_AMBIGUOUS"
+          : "WORKSPACE_REPOSITORY_AMBIGUOUS",
+    }
+  }
+
+  const row = candidates[0]
+  const validRelationship = row.repositoryRelationship === undefined
+    ? definition.defaultRepository
+    : row.repositoryRelationship === definition.relationship
+  if (
+    row.projectKey !== definition.projectKey
+    || normalizeRepositoryIdentity(row.repositoryIdentity) !== definition.identity
+    || !validRelationship
+  ) {
+    return {
+      ok: false,
+      error: definition.projectKey === TERRAFUSION_PROJECT_KEY && definition.defaultRepository
+        ? "TERRAFUSION_PRIMARY_REPO_INVALID"
+        : definition.projectKey === WILLIAMOS_PROJECT_KEY
+          ? "WILLIAMOS_PRIMARY_REPO_INVALID"
+          : "WORKSPACE_REPOSITORY_RESOURCE_INVALID",
+    }
+  }
+  return { ok: true, row }
+}
+
+async function observeRevision(
+  workspaceRoot: string,
+  dependencies: WorkspaceProjectBindingDependencies,
+): Promise<Readonly<{ ok: true; revision: string | null }> | Readonly<{ ok: false; error: string }>> {
+  // Custom deterministic seams written before revision-qualified mounts may omit this function.
+  // The real server dependency always supplies it and therefore always verifies a concrete HEAD.
+  if (!dependencies.readGitRevision) return { ok: true, revision: null }
+  try {
+    const revision = (await dependencies.readGitRevision(workspaceRoot)).trim().toLowerCase()
+    return /^[a-f0-9]{40,64}$/.test(revision)
+      ? { ok: true, revision }
+      : { ok: false, error: "WORKSPACE_REVISION_UNAVAILABLE" }
+  } catch {
+    return { ok: false, error: "WORKSPACE_REVISION_UNAVAILABLE" }
+  }
+}
+
+async function buildTerraFusionRepositoryCatalog(
+  userId: string,
+  dependencies: WorkspaceProjectBindingDependencies,
+): Promise<readonly WorkspaceRepositoryMountView[]> {
+  let registeredRows: readonly ProjectBindingRow[] = []
+  try {
+    registeredRows = await dependencies.loadProjectRows(userId, TERRAFUSION_PROJECT_KEY)
+  } catch {
+    // The selected primary binding already reports a durable lookup failure. Catalog enrichment is
+    // read-only presentation and cannot turn an otherwise valid mount into invented source truth.
+  }
+  const core = await Promise.all(CORE_SEVEN_REPOSITORIES.map(async (definition): Promise<WorkspaceRepositoryMountView> => {
+    const configuredRoot = process.env[definition.configuredRootEnvironment]?.trim()
+    const registered = registeredRows.filter((row) => row.repositoryKey === definition.key)
+    const base = {
+      ...(registered.length === 1 && registered[0].repositoryResourceId
+        ? { repositoryResourceId: registered[0].repositoryResourceId }
+        : {}),
+      key: definition.key,
+      identity: definition.identity,
+      label: definition.label,
+      role: definition.role,
+      suite: definition.suite,
+      previewSource: definition.previewSource,
+      defaultRepository: definition.defaultRepository,
+    }
+    if (!configuredRoot) {
+      return {
+        ...base,
+        mount: {
+          key: definition.mountKey,
+          configured: false,
+          verified: false,
+          branch: null,
+          revision: null,
+          refusal: "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED",
+        },
+      }
+    }
+
+    const persisted = await resolvePersistedRepository(userId, definition, dependencies)
+    if (!persisted.ok) {
+      return {
+        ...base,
+        mount: {
+          key: definition.mountKey,
+          configured: true,
+          verified: false,
+          branch: null,
+          revision: null,
+          refusal: persisted.error,
+        },
+      }
+    }
+    const boundBase = {
+      ...base,
+      ...(persisted.row.repositoryResourceId ? { repositoryResourceId: persisted.row.repositoryResourceId } : {}),
+    }
+    const checkout = await verifyCanonicalTerraFusionCheckout(configuredRoot, definition.identity, dependencies)
+    if (!checkout.ok) {
+      return {
+        ...boundBase,
+        mount: {
+          key: definition.mountKey,
+          configured: true,
+          verified: false,
+          branch: null,
+          revision: null,
+          refusal: checkout.error,
+        },
+      }
+    }
+    const revision = await observeRevision(checkout.binding.workspaceRoot, dependencies)
+    if (!revision.ok || revision.revision === null) {
+      return {
+        ...boundBase,
+        mount: {
+          key: definition.mountKey,
+          configured: true,
+          verified: false,
+          branch: null,
+          revision: null,
+          refusal: revision.ok ? "WORKSPACE_REVISION_UNAVAILABLE" : revision.error,
+        },
+      }
+    }
+    let branch: string | null = null
+    if (dependencies.readGitBranch) {
+      try {
+        branch = (await dependencies.readGitBranch(checkout.binding.workspaceRoot)).trim() || null
+      } catch {
+        // Detached or otherwise unavailable branch state does not invalidate the verified revision.
+      }
+    }
+    return {
+      ...boundBase,
+      mount: {
+        key: definition.mountKey,
+        configured: true,
+        verified: true,
+        branch,
+        revision: revision.revision,
+        refusal: null,
+      },
+    }
+  }))
+
+  const coreKeys = new Set<string>(CORE_SEVEN_REPOSITORIES.map((repository) => repository.key))
+  const attachedCandidates = registeredRows.filter((row) => row.repositoryRelationship === "attached-source"
+    && typeof row.repositoryResourceId === "number" && Number.isSafeInteger(row.repositoryResourceId) && row.repositoryResourceId > 0
+    && typeof row.repositoryKey === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(row.repositoryKey)
+    && !coreKeys.has(row.repositoryKey)
+    && typeof row.repositoryLabel === "string" && row.repositoryLabel.trim().length > 0
+    && normalizeRepositoryIdentity(row.repositoryIdentity) !== null)
+  const keyCounts = new Map<string, number>()
+  const identityCounts = new Map<string, number>()
+  for (const row of attachedCandidates) {
+    keyCounts.set(row.repositoryKey!, (keyCounts.get(row.repositoryKey!) ?? 0) + 1)
+    const identity = normalizeRepositoryIdentity(row.repositoryIdentity)!
+    identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1)
+  }
+  const attached = attachedCandidates
+    .filter((row) => keyCounts.get(row.repositoryKey!) === 1
+      && identityCounts.get(normalizeRepositoryIdentity(row.repositoryIdentity)!) === 1)
+    .sort((left, right) => left.repositoryKey!.localeCompare(right.repositoryKey!))
+    .map((row): WorkspaceRepositoryMountView => ({
+      repositoryResourceId: row.repositoryResourceId!,
+      key: row.repositoryKey!,
+      identity: normalizeRepositoryIdentity(row.repositoryIdentity)!,
+      label: row.repositoryLabel!.trim(),
+      role: "attached-source",
+      suite: null,
+      previewSource: false,
+      defaultRepository: false,
+      mount: {
+        key: `terrafusion:${row.repositoryKey}:attached`,
+        configured: false,
+        verified: false,
+        branch: null,
+        revision: null,
+        refusal: "ATTACHED_SOURCE_READ_ONLY_REFERENCE",
+      },
+    }))
+  return [...core, ...attached]
 }
 
 /**
@@ -143,20 +425,29 @@ const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies =
 export async function resolveTerraFusionWorkspaceBinding(
   userId: string,
   dependencies: WorkspaceProjectBindingDependencies = workspaceProjectBindingDependencies,
+  repositoryKey?: unknown,
 ): Promise<WorkspaceProjectBindingResult> {
-  const configuredRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT?.trim()
-  if (!configuredRoot) return { ok: false, error: "WORKSPACE_ROOT_NOT_CONFIGURED" }
-  const verified = await verifyTerraFusionWorkspaceRoot(userId, configuredRoot, dependencies)
-  if (!verified.ok) return verified
+  const selection = resolveWorkspaceRepositorySelection(TERRAFUSION_PROJECT_KEY, repositoryKey)
+  if (!selection.ok) return selection
+  const definition = selection.repository
+  const configuredRoot = process.env[definition.configuredRootEnvironment]?.trim()
+  if (!configuredRoot) {
+    return {
+      ok: false,
+      error: definition.defaultRepository
+        ? "WORKSPACE_ROOT_NOT_CONFIGURED"
+        : "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED",
+    }
+  }
+  const persisted = await resolvePersistedRepository(userId, definition, dependencies)
+  if (!persisted.ok) return persisted
+  const checkout = await verifyCanonicalTerraFusionCheckout(configuredRoot, definition.identity, dependencies)
+  if (!checkout.ok) return checkout
+  const revision = await observeRevision(checkout.binding.workspaceRoot, dependencies)
+  if (!revision.ok) return revision
 
-  const {
-    projectId,
-    projectKey,
-    projectName,
-    repositoryIdentity,
-    configuredWorkspaceRoot,
-    workspaceRoot,
-  } = verified.binding
+  const { projectId, projectKey, projectName } = persisted.row
+  const { configuredWorkspaceRoot, workspaceRoot } = checkout.binding
 
   // Filesystem operations follow the currently verified checkout. Space identity is a separate,
   // server-managed continuity key: /setup seeds it from the first root and preserves it when that
@@ -164,22 +455,36 @@ export async function resolveTerraFusionWorkspaceBinding(
   let configuredSpaceIdentity: string
   try {
     configuredSpaceIdentity = normalizePortableAbsolutePathIdentity(
-      process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY || configuredWorkspaceRoot,
+      process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
+        || process.env.WILLIAMOS_TERRAFUSION_ROOT
+        || configuredWorkspaceRoot,
     )
   } catch {
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }
-  const projectBinding = workspaceProjectFromRoot(configuredSpaceIdentity, projectName)
+  const projectBinding = {
+    ...workspaceProjectFromRoot(configuredSpaceIdentity, projectName),
+    repositories: await buildTerraFusionRepositoryCatalog(userId, dependencies),
+  }
   return {
     ok: true,
     binding: {
       projectId,
       projectKey,
       projectName,
-      repositoryIdentity,
+      repositoryResourceId: persisted.row.repositoryResourceId ?? null,
+      repositoryKey: definition.key,
+      repositoryIdentity: definition.identity,
+      repositoryRole: definition.role,
+      repositoryLabel: definition.label,
+      repositoryPreviewSource: definition.previewSource,
+      repositoryMountKey: definition.mountKey,
+      observedRevision: revision.revision,
       configuredWorkspaceRoot,
       workspaceRoot,
-      workspaceAppUrl: process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null,
+      workspaceAppUrl: definition.previewSource
+        ? process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null
+        : null,
       project: projectBinding,
     },
   }
@@ -196,21 +501,12 @@ export async function resolveWilliamOsWorkspaceBinding(
 ): Promise<WorkspaceProjectBindingResult> {
   const configuredRoot = process.env.WILLIAMOS_PROJECT_ROOT?.trim()
   if (!configuredRoot) return { ok: false, error: "WILLIAMOS_WORKSPACE_ROOT_NOT_CONFIGURED" }
-
-  let rows: readonly ProjectBindingRow[]
-  try {
-    rows = await dependencies.loadProjectRows(userId, WILLIAMOS_PROJECT_KEY)
-  } catch {
-    return { ok: false, error: "WORKSPACE_PROJECT_LOOKUP_UNAVAILABLE" }
-  }
-  if (rows.length === 0) return { ok: false, error: "WILLIAMOS_PROJECT_UNBOUND" }
-  if (rows.length !== 1) return { ok: false, error: "WILLIAMOS_PRIMARY_REPO_AMBIGUOUS" }
-
-  const row = rows[0]
-  if (
-    row.projectKey !== WILLIAMOS_PROJECT_KEY
-    || normalizeRepositoryIdentity(row.repositoryIdentity) !== WILLIAMOS_REPOSITORY_IDENTITY
-  ) return { ok: false, error: "WILLIAMOS_PRIMARY_REPO_INVALID" }
+  const selection = resolveWorkspaceRepositorySelection(WILLIAMOS_PROJECT_KEY, "williamos")
+  if (!selection.ok) return selection
+  const definition = selection.repository
+  const persisted = await resolvePersistedRepository(userId, definition, dependencies)
+  if (!persisted.ok) return persisted
+  const row = persisted.row
 
   const checkout = await verifyCanonicalTerraFusionCheckout(
     configuredRoot,
@@ -218,6 +514,8 @@ export async function resolveWilliamOsWorkspaceBinding(
     dependencies,
   )
   if (!checkout.ok) return checkout
+  const revision = await observeRevision(checkout.binding.workspaceRoot, dependencies)
+  if (!revision.ok) return revision
 
   let configuredSpaceIdentity: string
   try {
@@ -237,7 +535,14 @@ export async function resolveWilliamOsWorkspaceBinding(
       projectId: row.projectId,
       projectKey: row.projectKey,
       projectName: row.projectName,
-      repositoryIdentity: row.repositoryIdentity,
+      repositoryResourceId: row.repositoryResourceId ?? null,
+      repositoryKey: definition.key,
+      repositoryIdentity: definition.identity,
+      repositoryRole: definition.role,
+      repositoryLabel: definition.label,
+      repositoryPreviewSource: definition.previewSource,
+      repositoryMountKey: definition.mountKey,
+      observedRevision: revision.revision,
       ...checkout.binding,
       workspaceAppUrl: null,
       project: workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName),
@@ -249,10 +554,12 @@ export async function resolveCanonicalWorkspaceProjectBinding(
   userId: string,
   projectKey: unknown,
   dependencies?: WorkspaceProjectBindingDependencies,
+  repositoryKey?: unknown,
 ): Promise<WorkspaceProjectBindingResult> {
+  const selection = resolveWorkspaceRepositorySelection(projectKey, repositoryKey)
+  if (!selection.ok) return selection
   if (projectKey === WILLIAMOS_PROJECT_KEY) return resolveWilliamOsWorkspaceBinding(userId, dependencies)
-  if (projectKey === TERRAFUSION_PROJECT_KEY) return resolveTerraFusionWorkspaceBinding(userId, dependencies)
-  return { ok: false, error: "SPACE_PROJECT_INVALID" }
+  return resolveTerraFusionWorkspaceBinding(userId, dependencies, selection.repository.key)
 }
 
 /**
@@ -265,21 +572,12 @@ export async function verifyTerraFusionWorkspaceRoot(
   configuredRoot: string,
   dependencies: WorkspaceProjectBindingDependencies = workspaceProjectBindingDependencies,
 ): Promise<VerifiedTerraFusionWorkspaceRootResult> {
-  let rows: readonly ProjectBindingRow[]
-  try {
-    rows = await dependencies.loadProjectRows(userId, TERRAFUSION_PROJECT_KEY)
-  } catch {
-    return { ok: false, error: "WORKSPACE_PROJECT_LOOKUP_UNAVAILABLE" }
-  }
-
-  if (rows.length === 0) return { ok: false, error: "TERRAFUSION_PROJECT_UNBOUND" }
-  if (rows.length !== 1) return { ok: false, error: "TERRAFUSION_PRIMARY_REPO_AMBIGUOUS" }
-
-  const row = rows[0]
-  const canonicalRepository = normalizeRepositoryIdentity(row.repositoryIdentity)
-  if (!canonicalRepository) return { ok: false, error: "TERRAFUSION_PRIMARY_REPO_INVALID" }
-
-  const checkout = await verifyCanonicalTerraFusionCheckout(configuredRoot, canonicalRepository, dependencies)
+  const selection = resolveWorkspaceRepositorySelection(TERRAFUSION_PROJECT_KEY, "os-1")
+  if (!selection.ok) return selection
+  const persisted = await resolvePersistedRepository(userId, selection.repository, dependencies)
+  if (!persisted.ok) return persisted
+  const row = persisted.row
+  const checkout = await verifyCanonicalTerraFusionCheckout(configuredRoot, selection.repository.identity, dependencies)
   if (!checkout.ok) return checkout
 
   return {
@@ -288,7 +586,8 @@ export async function verifyTerraFusionWorkspaceRoot(
       projectId: row.projectId,
       projectKey: row.projectKey,
       projectName: row.projectName,
-      repositoryIdentity: row.repositoryIdentity,
+      repositoryKey: selection.repository.key,
+      repositoryIdentity: selection.repository.identity,
       ...checkout.binding,
     },
   }

@@ -272,6 +272,31 @@ describe("Experience V2 developer tools", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run", projectKey: "williamos" })
   })
 
+  it("scopes source tools to one exact TerraFusion repository", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/loom/diff?path=src%2Fapp.ts&repositoryKey=atlas") {
+        return Response.json({ path: "src/app.ts", diff: "", status: "", untracked: false })
+      }
+      if (url === "/api/loom/run" && init?.method === "POST") {
+        return ndjson({ type: "exit", code: 0, reason: null })
+      }
+      if (url === "/api/loom/run") return Response.json({ operations: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<DeveloperToolsSurface kind="diff" repositoryKey="atlas" repositoryLabel="Atlas" selectedPath="src/app.ts" />)
+    expect(await screen.findByText("Atlas · HEAD · src/app.ts")).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="tests" repositoryKey="atlas" repositoryLabel="Atlas" selectedPath="src/app.ts" />)
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
+    await waitFor(() => {
+      const post = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/run" && init?.method === "POST")
+      expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ operation: "tests.run", repositoryKey: "atlas" })
+    })
+  })
+
   it("reports the exact running tool identity until streamed settlement", async () => {
     let resolve!: (response: Response) => void
     const fetcher = vi.fn(() => new Promise<Response>((done) => { resolve = done }))

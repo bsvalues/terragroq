@@ -16,6 +16,9 @@ const seams = vi.hoisted(() => ({
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
+  createContextManifest: vi.fn(),
+  assessActiveAssignment: vi.fn(),
+  deriveReservationClaims: vi.fn(),
 }))
 
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
@@ -32,8 +35,11 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
     project: { identity: "c:/terrafusion" },
   } }),
   resolveCanonicalWorkspaceProjectBinding: async () => ({ ok: true, binding: {
-    workspaceRoot: process.cwd(), projectId: 7, projectKey: "terrafusion",
-    repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+    workspaceRoot: process.cwd(), configuredWorkspaceRoot: process.cwd(), projectId: 7,
+    projectKey: "terrafusion", projectName: "TerraFusion", repositoryResourceId: 70,
+    repositoryKey: "os-1", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    repositoryRole: "integrated-runtime", repositoryMountKey: "terrafusion:os-1:configured",
+    observedRevision: "a".repeat(40), project: { identity: "c:/terrafusion", name: "TerraFusion" },
   } }),
 }))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
@@ -59,6 +65,13 @@ vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: seams.recordLoomStart,
   recordLoomEnd: seams.recordLoomEnd,
 }))
+vi.mock("@/lib/loom/assignment-context-runtime", () => ({
+  createRepositoryAssignmentContextManifest: seams.createContextManifest,
+}))
+vi.mock("@/lib/loom/repository-assignment-runtime", () => ({
+  assessActiveRepositoryAssignment: seams.assessActiveAssignment,
+  deriveRepositoryAssignmentReservationClaims: seams.deriveReservationClaims,
+}))
 
 import { POST } from "@/app/api/loom/agent/route"
 import { loomThreadDescriptor, loomThreadOwner } from "@/lib/loom/threads"
@@ -72,7 +85,9 @@ class FakeChild extends EventEmitter {
 
 const mutationAuthority = {
   owner: "owner-1", worldId: "world-a", worldRevision: 3, projectId: 7,
-  projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  projectKey: "terrafusion", repositoryResourceKey: "os-1",
+  repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  repositoryMountKey: "terrafusion:os-1:configured", observedRevision: "a".repeat(40),
   outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 51, actor: "claude", selectedPath: "src/example.ts",
 }
 
@@ -83,6 +98,39 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
     body: JSON.stringify({ projectKey: "terrafusion", ...body }),
     signal,
   })
+}
+
+function configureContextSeams() {
+  seams.assessActiveAssignment.mockResolvedValue({ status: "COMPATIBLE", activeAssignments: [], dependencies: [] })
+  seams.deriveReservationClaims.mockResolvedValue({ contracts: [], environments: [] })
+  seams.createContextManifest.mockImplementation(async ({ assignment }: { assignment: Record<string, unknown> }) => ({
+    schemaVersion: "williamos-assignment-context-manifest.v1",
+    authorityEffect: "none",
+    assignment: {
+      assignmentId: assignment.assignmentId, worldId: assignment.worldId,
+      workOrderId: assignment.workOrderId, assignmentHash: assignment.assignmentHash,
+      createdAt: assignment.createdAt,
+    },
+    project: { id: 7, key: "terrafusion", name: "TerraFusion" },
+    targetRepository: {
+      repositoryResourceId: 70, repositoryKey: "os-1",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0", role: "integrated-runtime",
+    },
+    checkout: {
+      repositoryMountKey: "terrafusion:os-1:configured", nodeIdentity: "omen",
+      worktreeKey: "delegate-1", baseRevision: "a".repeat(40),
+    },
+    mutationPosture: {
+      target: {
+        repositoryResourceId: 70, repositoryKey: "os-1",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        access: "write-under-assignment-reservation", writablePaths: [assignment.selectedPath],
+      },
+      references: [],
+    },
+    sources: [],
+    manifestHash: "f".repeat(64),
+  }))
 }
 
 describe("selected-file review route", () => {
@@ -104,6 +152,7 @@ describe("selected-file review route", () => {
       rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
     })
     seams.stat.mockResolvedValue({ isFile: () => true })
+    configureContextSeams()
   })
 
   it("spawns an exact path-bound Claude review with only read-only tools", async () => {
@@ -400,14 +449,28 @@ describe("selected-file review route", () => {
       userId: "owner-1",
       kind: "agent",
       subject: "123e4567-e89b-42d3-a456-426614174000",
-      metadata: {
+      metadata: expect.objectContaining({
         provider: "cloud", external: true, metered: true, resumed: false,
         mode: "agent", worldId: "world-a", path: "src/example.ts",
-      },
+        assignmentVersion: "loom-claude-assignment.v1",
+        assignmentId: "123e4567-e89b-42d3-a456-426614174000",
+        repositoryResourceKey: "os-1",
+        contextManifest: expect.objectContaining({ authorityEffect: "none" }),
+        reservation: expect.objectContaining({ allowed: ["src/example.ts"], contracts: [], environments: [] }),
+      }),
     })
+    expect(seams.assessActiveAssignment).toHaveBeenCalledTimes(1)
 
     child.emit("close", 0)
-    await response.text()
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toMatchObject({
+      type: "session",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      assignmentId: "123e4567-e89b-42d3-a456-426614174000",
+      assignmentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      repositoryResourceKey: "os-1",
+      contextManifest: expect.objectContaining({ authorityEffect: "none" }),
+    })
     expect(seams.createIsolated).toHaveBeenCalledWith(expect.objectContaining({
       projectRoot: process.cwd(), selectedPath: "src/example.ts", initialContent: "before",
     }))
@@ -417,6 +480,65 @@ describe("selected-file review route", () => {
     expect(seams.writeGoverned).toHaveBeenCalledWith(expect.objectContaining({
       path: "src/example.ts", content: "after", modifiedAt: "2026-08-30T00:00:00.000Z",
     }), expect.any(Object))
+    expect(seams.assessActiveAssignment).toHaveBeenCalledTimes(2)
+  })
+
+  it("refuses a colliding repository assignment before Claude starts", async () => {
+    seams.assessActiveAssignment.mockResolvedValueOnce({
+      status: "BLOCKED",
+      activeAssignments: [],
+      collisions: [{ kind: "path", leftAssignmentId: "active", rightAssignmentId: "candidate" }],
+      dependencies: [],
+    })
+
+    const response = await POST(request({
+      provider: "cloud",
+      worldId: "world-a",
+      prompt: "Implement the selected change.",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      resume: false,
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE" })
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+  })
+
+  it("refuses before Claude starts when the server-owned reservation scope is unavailable", async () => {
+    seams.deriveReservationClaims.mockRejectedValue(Object.assign(new Error("missing scope"), {
+      code: "ASSIGNMENT_RESERVATION_CLAIMS_UNAVAILABLE",
+    }))
+
+    const response = await POST(request({
+      provider: "cloud",
+      worldId: "world-a",
+      prompt: "Implement the selected change.",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      resume: false,
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE" })
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+  })
+
+  it("rejects client-authored semantic and environment reservations", async () => {
+    const response = await POST(request({
+      provider: "cloud",
+      worldId: "world-a",
+      prompt: "Implement the selected change.",
+      contracts: [{ contractIdentity: "client-invented", revisionIdentity: "1", role: "producer" }],
+      environments: [{ environmentIdentity: "client-invented", access: "exclusive" }],
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "BAD_REQUEST" })
+    expect(seams.createIsolated).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it("cleans the disposable checkout and refuses before spawn when authority changes during isolation setup", async () => {
@@ -502,6 +624,7 @@ describe("Claude Builder fork route", () => {
     seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
     seams.cleanupIsolated.mockResolvedValue(undefined)
     seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/example.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "example.ts" })
+    configureContextSeams()
     seams.poolQuery.mockResolvedValue({ rows: [{
       userId: "owner-1",
       metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/example.ts" },
@@ -547,17 +670,22 @@ describe("Claude Builder fork route", () => {
         "Explore the smaller implementation without changing the source thread.",
       ].join("\n\n"),
     ])
-    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).toHaveBeenCalledTimes(1)
+    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+      subject: expect.stringMatching(/^claude:/),
+      metadata: expect.objectContaining({ assignmentVersion: "loom-claude-assignment.v1" }),
+    }))
 
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: childId })}\n`))
     await vi.waitFor(() => expect(seams.recordLoomStart).toHaveBeenCalledWith({
       userId: "owner-1",
       kind: "agent",
       subject: childId,
-      metadata: {
+      metadata: expect.objectContaining({
         provider: "cloud", external: true, metered: true, resumed: false,
         mode: "agent", worldId: "world-a", path: "src/example.ts", forkedFrom: sourceId,
-      },
+        assignmentVersion: "loom-claude-assignment.v1",
+      }),
     }))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({
       type: "result", subtype: "success", is_error: false, session_id: childId, result: "Child result",
@@ -565,8 +693,11 @@ describe("Claude Builder fork route", () => {
     child.emit("close", 0)
 
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "session", sessionId: childId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: sourceId,
+      assignmentId: expect.stringMatching(/^claude:/),
+      repositoryResourceKey: "os-1",
+      contextManifest: expect.objectContaining({ authorityEffect: "none" }),
     })
     expect(events[1]).toEqual({ type: "event", event: { type: "system", subtype: "init", session_id: childId } })
     expect(events.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
@@ -600,7 +731,7 @@ describe("Claude Builder fork route", () => {
     ["same child identity", { type: "system", subtype: "init", session_id: sourceId }, "FORK_SESSION_ID_INVALID"],
     ["missing canonical init", { type: "result", subtype: "success", session_id: childId, result: "No init" }, "FORK_SESSION_ID_REQUIRED"],
     ["malformed child identity", { type: "system", subtype: "init", session_id: "not-a-uuid" }, "FORK_SESSION_ID_INVALID"],
-  ])("materializes nothing for %s", async (_label, frame, reason) => {
+  ])("publishes no child session and terminalizes the exact assignment for %s", async (_label, frame, reason) => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
     const response = await POST(request({ mode: "fork", provider: "cloud", worldId: "world-a", sourceSessionId: sourceId, prompt: "Diverge." }))
@@ -608,8 +739,8 @@ describe("Claude Builder fork route", () => {
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
     expect(events).toEqual([{ type: "done", reason, code: null }])
-    expect(seams.recordLoomStart).not.toHaveBeenCalled()
-    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
   })
 
   it("cancels before canonical child identity without materializing a child", async () => {
@@ -624,8 +755,8 @@ describe("Claude Builder fork route", () => {
     await vi.waitFor(() => expect(seams.cleanupIsolated).toHaveBeenCalledOnce())
     expect(seams.inspectIsolated).not.toHaveBeenCalled()
     expect(seams.writeGoverned).not.toHaveBeenCalled()
-    expect(seams.recordLoomStart).not.toHaveBeenCalled()
-    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
   })
 
   it("carries receipt-bound fork lineage through a normal child resume", async () => {
@@ -643,7 +774,7 @@ describe("Claude Builder fork route", () => {
     expect(seams.spawn.mock.calls[0][1]).toContain("--resume")
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "session", sessionId: childId, provider: "Claude", mode: "delegate",
       resumed: true, forkedFrom: sourceId,
       worldId: mutationAuthority.worldId,
@@ -653,6 +784,9 @@ describe("Claude Builder fork route", () => {
       grantId: mutationAuthority.grantId,
       actor: mutationAuthority.actor,
       selectedPath: mutationAuthority.selectedPath,
+      assignmentId: childId,
+      repositoryResourceKey: "os-1",
+      contextManifest: expect.objectContaining({ authorityEffect: "none" }),
     })
     expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
       subject: childId,

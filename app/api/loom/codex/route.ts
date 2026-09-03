@@ -14,6 +14,13 @@ import {
   revalidateCodexAssignment,
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
+import { createCodexAssignmentContextManifest } from "@/lib/loom/assignment-context-runtime"
+import {
+  assessActiveRepositoryAssignment,
+  deriveRepositoryAssignmentReservationClaims,
+  type RepositoryAssignmentReservationClaims,
+} from "@/lib/loom/repository-assignment-runtime"
+import type { AssignmentReservationSet } from "@/lib/loom/repository-reservations"
 import { prepareCodexContinuation, readCodexContinuation } from "@/lib/loom/codex-continuation"
 import {
   acquireCodexContinuationClaim,
@@ -30,10 +37,18 @@ import {
   writeGovernedWorkspaceFile,
 } from "@/lib/loom/workspace-file-write"
 import {
+  deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError,
+  type SpaceMutationAuthority,
+} from "@/lib/governance/space-mutation-authority"
+import {
   CodexAppServerClient,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
-import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type WorkspaceProjectBinding,
+} from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -48,6 +63,112 @@ const FORCED_CLOSE_MS = 1_000
 const PROVIDER_CLOSE_TIMEOUT_MS = 5_000
 
 type CodexClient = InstanceType<typeof CodexAppServerClient>
+
+function repositoryMutationBinding(binding: WorkspaceProjectBinding) {
+  return {
+    projectId: binding.projectId,
+    projectKey: binding.projectKey,
+    repositoryResourceKey: binding.repositoryKey,
+    repositoryIdentity: binding.repositoryIdentity,
+    repositoryMountKey: binding.repositoryMountKey,
+    observedRevision: binding.observedRevision,
+    spaceIdentity: binding.project.identity,
+  }
+}
+
+function sameResolvedRepository(left: WorkspaceProjectBinding, right: WorkspaceProjectBinding): boolean {
+  return left.projectId === right.projectId
+    && left.projectKey === right.projectKey
+    && left.repositoryKey === right.repositoryKey
+    && left.repositoryIdentity === right.repositoryIdentity
+    && left.repositoryMountKey === right.repositoryMountKey
+    && left.observedRevision === right.observedRevision
+    && left.workspaceRoot === right.workspaceRoot
+    && left.project.identity === right.project.identity
+}
+
+function sameRepositoryAuthority(left: SpaceMutationAuthority, right: SpaceMutationAuthority): boolean {
+  return left.worldRevision === right.worldRevision
+    && left.outcomeKey === right.outcomeKey
+    && left.workOrderId === right.workOrderId
+    && left.grantId === right.grantId
+    && left.selectedPath === right.selectedPath
+    && left.repositoryResourceKey === right.repositoryResourceKey
+    && left.repositoryIdentity === right.repositoryIdentity
+    && left.repositoryMountKey === right.repositoryMountKey
+    && left.observedRevision === right.observedRevision
+}
+
+function exactRepositoryReservation(
+  assignmentId: string,
+  contextManifest: Awaited<ReturnType<typeof createCodexAssignmentContextManifest>>,
+  claims: RepositoryAssignmentReservationClaims,
+): AssignmentReservationSet {
+  return {
+    assignmentId,
+    repository: {
+      repositoryResourceId: contextManifest.targetRepository.repositoryResourceId,
+      repositoryKey: contextManifest.targetRepository.repositoryKey,
+      repositoryIdentity: contextManifest.targetRepository.repositoryIdentity,
+      repositoryMountKey: contextManifest.checkout.repositoryMountKey,
+      worktreeKey: contextManifest.checkout.worktreeKey,
+      baseRevision: contextManifest.checkout.baseRevision,
+    },
+    paths: contextManifest.mutationPosture.target.writablePaths,
+    contracts: [...claims.contracts],
+    environments: [...claims.environments],
+  }
+}
+
+async function assertRepositoryReservationAvailable(input: Readonly<{
+  userId: string
+  worldId: string
+  projectId: number
+  workOrderId: number
+  grantId: number
+  candidate: AssignmentReservationSet
+}>): Promise<void> {
+  const currentClaims = await deriveRepositoryAssignmentReservationClaims(input)
+  if (JSON.stringify(currentClaims) !== JSON.stringify({
+    contracts: input.candidate.contracts,
+    environments: input.candidate.environments,
+  })) {
+    throw Object.assign(new Error("the server-owned repository reservation claims changed"), {
+      code: "CODEX_ASSIGNMENT_RESERVATION_UNAVAILABLE",
+    })
+  }
+  const assessment = await assessActiveRepositoryAssignment(input)
+  if (assessment.status === "COMPATIBLE") return
+  throw Object.assign(new Error(assessment.status === "BLOCKED"
+    ? "the exact repository assignment collides with active path, contract, or environment reservations"
+    : "an active assignment has no exact collision-checkable reservation evidence"), {
+    code: "CODEX_ASSIGNMENT_RESERVATION_UNAVAILABLE",
+  })
+}
+
+function durableSessionMatchesRepository(
+  descriptor: Record<string, unknown>,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  const values = [
+    descriptor.repositoryResourceKey,
+    descriptor.repositoryIdentity,
+    descriptor.repositoryMountKey,
+    descriptor.observedRevision,
+  ]
+  const present = values.filter((value) => value !== null && value !== undefined).length
+  if (present === 0) {
+    // Missing repository evidence is a legacy primary-repository session, never a secondary mount.
+    return binding.repositoryKey === undefined
+      || binding.repositoryKey === "os-1"
+      || binding.repositoryKey === "williamos"
+  }
+  return present === values.length
+    && descriptor.repositoryResourceKey === binding.repositoryKey
+    && descriptor.repositoryIdentity === binding.repositoryIdentity
+    && descriptor.repositoryMountKey === binding.repositoryMountKey
+    && descriptor.observedRevision === binding.observedRevision
+}
 
 function sameWorkspace(left: string, right: string): boolean {
   const normalizedLeft = path.resolve(left)
@@ -64,6 +185,8 @@ function failureReason(error: unknown): string {
   if (code === "APP_SERVER_CANCELLED") return "CANCELLED"
   if (code === "CODEX_AUTH_REQUIRED") return code
   if (code === "CODEX_RECEIPT_FAILED") return code
+  if (/^ASSIGNMENT_CONTEXT_/.test(code)) return code
+  if (code === "CODEX_ASSIGNMENT_RESERVATION_UNAVAILABLE") return code
   if (/^CODEX_(?:ASSIGNMENT|ISOLATION|CLEANUP|NO_CHANGE|PROMOTION|PROVIDER_CLOSE)/.test(code)) return code
   const allowed = new Set([
     "APP_SERVER_APPROVAL_REQUIRED",
@@ -105,23 +228,33 @@ function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  let body: { worldId?: unknown; projectKey?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
+  let body: { worldId?: unknown; projectKey?: unknown; repositoryKey?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "projectKey", "prompt", "sessionId", "resume", "automatic"].includes(key))) {
+  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "projectKey", "repositoryKey", "prompt", "sessionId", "resume", "automatic"].includes(key))) {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
+    : await resolveCanonicalWorkspaceProjectBinding(
+      session.user.id,
+      body.projectKey,
+      undefined,
+      body.repositoryKey,
+    )
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
   const configuredProjectRoot = path.resolve(projectBinding.binding.configuredWorkspaceRoot)
   const assignmentProjectBinding = {
     projectId: projectBinding.binding.projectId,
     projectKey: projectBinding.binding.projectKey,
+    repositoryResourceKey: projectBinding.binding.repositoryKey,
     repositoryIdentity: projectBinding.binding.repositoryIdentity,
+    repositoryMountKey: projectBinding.binding.repositoryMountKey,
+    observedRevision: projectBinding.binding.observedRevision,
     spaceIdentity: projectBinding.binding.project.identity,
   }
   const continuationDependencies = codexContinuationDependenciesForProjectRoot(projectRoot)
@@ -149,6 +282,25 @@ export async function POST(request: Request) {
   }
   if (automatic && (resuming || requestedId)) {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+
+  let repositoryAuthority: SpaceMutationAuthority | null = null
+  if (body.repositoryKey !== undefined) {
+    try {
+      repositoryAuthority = await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId,
+        binding: repositoryMutationBinding(projectBinding.binding),
+        expected: { actor: "codex", capability: "selected-file-change" },
+        target: { kind: "selected-file" },
+      })
+    } catch (error) {
+      return Response.json({
+        error: error instanceof SpaceMutationAuthorityError
+          ? error.code
+          : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE",
+      }, { status: error instanceof SpaceMutationAuthorityError ? 403 : 503 })
+    }
   }
 
   let releaseContinuationClaim: (() => Promise<void>) | null = null
@@ -184,6 +336,33 @@ export async function POST(request: Request) {
     const detail = sanitizeAppServerText((error as { message?: unknown })?.message).slice(0, 500)
     return Response.json(
       { error: code, ...(detail ? { detail } : {}) },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    )
+  }
+
+  if (repositoryAuthority && (assignment.worldId !== repositoryAuthority.worldId
+    || assignment.outcomeKey !== repositoryAuthority.outcomeKey
+    || assignment.workOrderId !== repositoryAuthority.workOrderId
+    || assignment.grantId !== repositoryAuthority.grantId
+    || assignment.selectedPath !== repositoryAuthority.selectedPath)) {
+    await releaseClaim()
+    return Response.json(
+      { error: "CODEX_ASSIGNMENT_STALE" },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    )
+  }
+
+  let repositoryReservationClaims: RepositoryAssignmentReservationClaims
+  try {
+    repositoryReservationClaims = await deriveRepositoryAssignmentReservationClaims({
+      userId: session.user.id,
+      workOrderId: assignment.workOrderId,
+      grantId: assignment.grantId,
+    })
+  } catch {
+    await releaseClaim()
+    return Response.json(
+      { error: "CODEX_ASSIGNMENT_RESERVATION_UNAVAILABLE" },
       { status: 409, headers: { "cache-control": "no-store" } },
     )
   }
@@ -260,7 +439,11 @@ export async function POST(request: Request) {
       || descriptor.workOrderId !== assignment.workOrderId
       || descriptor.grantId !== assignment.grantId
       || !assignmentHashMatches
-      || descriptor.selectedPath !== assignment.selectedPath) {
+      || descriptor.selectedPath !== assignment.selectedPath
+      || !durableSessionMatchesRepository(
+        descriptor as unknown as Record<string, unknown>,
+        projectBinding.binding,
+      )) {
       return Response.json(
         { error: "THREAD_DESCRIPTOR_MISMATCH" },
         { status: 403, headers: { "cache-control": "no-store" } },
@@ -347,6 +530,31 @@ export async function POST(request: Request) {
         let threadId: string | null = requestedId
         try {
           assertNotCancelled()
+          if (repositoryAuthority) {
+            const currentBinding = await resolveCanonicalWorkspaceProjectBinding(
+              session.user.id,
+              projectBinding.binding.projectKey,
+              undefined,
+              projectBinding.binding.repositoryKey,
+            )
+            if (!currentBinding.ok || !sameResolvedRepository(projectBinding.binding, currentBinding.binding)) {
+              throw Object.assign(new Error("the selected repository revision changed before Codex execution"), {
+                code: "CODEX_ASSIGNMENT_STALE",
+              })
+            }
+            const currentAuthority = await deriveSpaceMutationAuthority({
+              userId: session.user.id,
+              worldId: repositoryAuthority.worldId,
+              binding: repositoryMutationBinding(currentBinding.binding),
+              expected: { actor: "codex", capability: "selected-file-change" },
+              target: { kind: "selected-file", requestedPath: repositoryAuthority.selectedPath },
+            })
+            if (!sameRepositoryAuthority(repositoryAuthority, currentAuthority)) {
+              throw Object.assign(new Error("the repository-qualified Space authority changed before Codex execution"), {
+                code: "CODEX_ASSIGNMENT_STALE",
+              })
+            }
+          }
           isolated = await createCodexIsolatedWorkspace({
             projectRoot,
             selectedPath: assignment.selectedPath,
@@ -392,6 +600,28 @@ export async function POST(request: Request) {
             throw Object.assign(new Error("Codex did not return a thread id"), { code: "APP_SERVER_UNSUPPORTED_REQUEST" })
           }
           const durableThreadId = threadId
+          const assignmentCreatedAt = new Date().toISOString()
+          const contextManifest = await createCodexAssignmentContextManifest({
+            assignment,
+            assignmentId: durableThreadId,
+            assignmentCreatedAt,
+            projectBinding: projectBinding.binding,
+            isolatedWorkspace: isolated,
+          })
+          const repositoryReservation = exactRepositoryReservation(
+            durableThreadId,
+            contextManifest,
+            repositoryReservationClaims,
+          )
+          await assertRepositoryReservationAvailable({
+            userId: session.user.id,
+            worldId: assignment.worldId,
+            projectId: assignment.binding.projectId,
+            workOrderId: assignment.workOrderId,
+            grantId: assignment.grantId,
+            candidate: repositoryReservation,
+          })
+          assertNotCancelled()
           const taskDigest = createHash("sha256").update(prompt, "utf8").digest("hex")
           const taskText = sanitizeAppServerText(prompt).slice(0, MAX_PROMPT_CHARS)
           const executionBindingHash = createHash("sha256").update([
@@ -423,6 +653,8 @@ export async function POST(request: Request) {
               grantVersion: assignment.binding.grantVersion,
               allowed: assignment.allowed,
               forbidden: assignment.forbidden,
+              contracts: [...repositoryReservation.contracts],
+              environments: [...repositoryReservation.environments],
               reservationVersion: assignment.binding.reservationVersion,
               selectedPath: assignment.selectedPath,
               assignmentHash: assignment.assignmentHash,
@@ -431,6 +663,13 @@ export async function POST(request: Request) {
               executionBindingHash,
               isolatedBaseSha: isolated.baseSha,
               resumed: resuming,
+              repositoryResourceKey: assignment.binding.repositoryResourceKey,
+              repositoryIdentity: assignment.binding.repositoryResourceKey
+                ? assignment.binding.repositoryIdentity
+                : undefined,
+              repositoryMountKey: assignment.binding.repositoryMountKey,
+              observedRevision: assignment.binding.observedRevision,
+              contextManifest,
             })
           } catch {
             throw Object.assign(new Error("Codex assignment receipt was not durable"), {
@@ -448,6 +687,13 @@ export async function POST(request: Request) {
             resumed: resuming,
             selectedPath: assignment.selectedPath,
             assignmentHash: assignment.assignmentHash,
+            contextManifest,
+            ...(repositoryAuthority ? {
+              repositoryResourceKey: repositoryAuthority.repositoryResourceKey,
+              repositoryIdentity: repositoryAuthority.repositoryIdentity,
+              repositoryMountKey: repositoryAuthority.repositoryMountKey,
+              observedRevision: repositoryAuthority.observedRevision,
+            } : {}),
           })
           const turn = await client.runTurn({
             threadId: durableThreadId,
@@ -505,7 +751,44 @@ export async function POST(request: Request) {
                 }
               }
               try {
+                if (repositoryAuthority) {
+                  const currentBinding = await resolveCanonicalWorkspaceProjectBinding(
+                    session.user.id,
+                    projectBinding.binding.projectKey,
+                    undefined,
+                    projectBinding.binding.repositoryKey,
+                  )
+                  if (!currentBinding.ok || !sameResolvedRepository(projectBinding.binding, currentBinding.binding)) {
+                    return {
+                      ok: false,
+                      failure: "FAILED_AUTHORITY_NOT_GRANTED" as const,
+                      detail: "the selected repository revision changed before promotion",
+                    }
+                  }
+                  const currentAuthority = await deriveSpaceMutationAuthority({
+                    userId: session.user.id,
+                    worldId: repositoryAuthority.worldId,
+                    binding: repositoryMutationBinding(currentBinding.binding),
+                    expected: { actor: "codex", capability: "selected-file-change" },
+                    target: { kind: "selected-file", requestedPath },
+                  })
+                  if (!sameRepositoryAuthority(repositoryAuthority, currentAuthority)) {
+                    return {
+                      ok: false,
+                      failure: "FAILED_AUTHORITY_NOT_GRANTED" as const,
+                      detail: "the repository-qualified Space authority changed before promotion",
+                    }
+                  }
+                }
                 await revalidateCodexAssignment(assignment)
+                await assertRepositoryReservationAvailable({
+                  userId: session.user.id,
+                  worldId: assignment.worldId,
+                  projectId: assignment.binding.projectId,
+                  workOrderId: assignment.workOrderId,
+                  grantId: assignment.grantId,
+                  candidate: repositoryReservation,
+                })
                 return { ok: true }
               } catch {
                 return {
@@ -544,6 +827,13 @@ export async function POST(request: Request) {
                   baseSha: isolatedBaseSha,
                   taskDigest,
                   executionBindingHash,
+                  repositoryResourceKey: assignment.binding.repositoryResourceKey,
+                  repositoryIdentity: assignment.binding.repositoryResourceKey
+                    ? assignment.binding.repositoryIdentity
+                    : undefined,
+                  repositoryMountKey: assignment.binding.repositoryMountKey,
+                  observedRevision: assignment.binding.observedRevision,
+                  contextManifest,
                   promotionAudit: {
                     ...audit,
                     outcome: "SAVED",

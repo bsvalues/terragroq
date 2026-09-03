@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
+import { AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, Layers3, TerminalSquare, Users, X } from "lucide-react"
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
@@ -14,19 +14,25 @@ import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { loadToolRunHistory, removeToolRunHistory, type ToolRunTranscript } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentSessionRepository, type AgentTurnPresentation, type DurableAgentSession, type ExperienceAgentSession, type RunAgentTurnInput } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
+import { changeSetSurfaceModel } from "./change-set-projection"
+import { ChangeSetSurface } from "./change-set-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
 import { encodeExecutionAssignmentInspectorPayload, EXECUTION_ASSIGNMENT_INSPECTOR_KIND, executionAssignmentInspectorIdentity, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { agentSessionInspectorId, agentSessionInspectorIdFromIdentity, agentSessionInspectorIdentity, AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX, AGENT_SESSION_INSPECTOR_SURFACE_KIND, encodeAgentSessionInspectorPayload, isRestorableAgentSessionInspector, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { PreviewComposition, type PendingSuiteChange } from "./preview-composition"
+import { RepositoryMapSurface, type RepositoryRelationship } from "./repository-map-surface"
+import type { RepositoryShelfRepository } from "./repository-shelf"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorPayload, spaceInViewport, spaceToServer, type PreviewInspectorPayload, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorPayload, qualifyLegacyWorkspaceFiles, spaceInViewport, spaceToServer, type PreviewInspectorPayload, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
+import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -38,7 +44,7 @@ type LineReply = Readonly<{
 
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number; keepalive: boolean }>
 type SpaceStorage = "server" | "browser"
-type EnvironmentOverlay = "council" | "mission-control" | null
+type EnvironmentOverlay = "council" | "mission-control" | "repository-map" | "change-set" | "preview-composition" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
 type DurableLineSnapshot = Awaited<ReturnType<typeof durableLineSnapshot>>
@@ -123,6 +129,7 @@ type StandardDelegateContext = Readonly<{
     path: string
     actor: "codex" | "claude"
     proofSource: "space" | "file"
+    repository?: AgentSessionRepository
   }>
   fileAssignmentProofs?: Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>
   fileAssignmentProofSource?: "space" | "file"
@@ -144,11 +151,32 @@ type SpaceDelegateEligibility = Readonly<{
   grantId: number
   actor: "codex" | "claude"
   selectedPath: string
+  repository?: AgentSessionRepository
 }>
 
 function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
+  const repositoryValues = [
+    candidate.repositoryResourceKey,
+    candidate.repositoryIdentity,
+    candidate.repositoryMountKey,
+    candidate.observedRevision,
+  ]
+  const repositoryAbsent = repositoryValues.every((entry) => entry === undefined)
+  const repository = repositoryAbsent ? undefined
+    : typeof candidate.repositoryResourceKey === "string"
+      && typeof candidate.repositoryIdentity === "string"
+      && typeof candidate.repositoryMountKey === "string"
+      && typeof candidate.observedRevision === "string"
+      && /^[0-9a-f]{40,64}$/.test(candidate.observedRevision)
+      ? {
+        resourceKey: candidate.repositoryResourceKey,
+        identity: candidate.repositoryIdentity,
+        mountKey: candidate.repositoryMountKey,
+        observedRevision: candidate.observedRevision,
+      }
+      : null
   return candidate.eligible === true
     && typeof candidate.worldId === "string"
     && Number.isSafeInteger(candidate.worldRevision)
@@ -157,7 +185,18 @@ function parseSpaceDelegateEligibility(value: unknown): SpaceDelegateEligibility
     && Number.isSafeInteger(candidate.grantId)
     && (candidate.actor === "codex" || candidate.actor === "claude")
     && typeof candidate.selectedPath === "string"
-    ? candidate as SpaceDelegateEligibility
+    && repository !== null
+    ? {
+      eligible: true,
+      worldId: candidate.worldId,
+      worldRevision: candidate.worldRevision as number,
+      outcomeKey: candidate.outcomeKey,
+      workOrderId: candidate.workOrderId as number,
+      grantId: candidate.grantId as number,
+      actor: candidate.actor,
+      selectedPath: candidate.selectedPath,
+      ...(repository ? { repository } : {}),
+    }
     : null
 }
 type ReviewerDelegateContext = Readonly<{
@@ -651,6 +690,10 @@ export function WorkspaceShell({
   const [williamBusy, setWilliamBusy] = useState(false)
   const [williamError, setWilliamError] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
+  const [changeSetProjection, setChangeSetProjection] = useState<CrossRepositoryChangeSetProjection | null>(null)
+  const [changeSetBusy, setChangeSetBusy] = useState(false)
+  const [changeSetError, setChangeSetError] = useState<string | null>(null)
+  const [repositoryFocusKey, setRepositoryFocusKey] = useState<string | null>(null)
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
   const [councilSession, setCouncilSession] = useState<BrainCouncilSession | null>(null)
@@ -706,6 +749,7 @@ export function WorkspaceShell({
   const persistencePendingRef = useRef(persistencePending)
   const browserStorageKeyRef = useRef<string | null>(null)
   const previewEvidenceRequestRef = useRef(0)
+  const changeSetRequestRef = useRef(0)
   const previewExplainEvidenceRef = useRef<Readonly<{
     worldId: string
     transitionEpoch: number
@@ -757,6 +801,26 @@ export function WorkspaceShell({
   fileDelegateEligibilityRef.current = fileDelegateEligibility
   focusedAgentIdRef.current = focusedAgentId
 
+  function selectedRepositoryBindingIsCurrent(repository: AgentSessionRepository | undefined): boolean {
+    const selectedFileRef = stateRef.current.selectedFileRef
+    if (!selectedFileRef) return true
+    const selectedRepository = projectRef.current?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    return Boolean(repository
+      && selectedRepository
+      && selectedRepository.mount.verified
+      && selectedRepository.mount.revision
+      && selectedFileRef.path === stateRef.current.selectedPath
+      && selectedFileRef.projectIdentity === projectRef.current?.identity
+      && selectedFileRef.repositoryResourceKey === repository.resourceKey
+      && selectedFileRef.repositoryMountKey === repository.mountKey
+      && selectedFileRef.observedRevision === repository.observedRevision
+      && selectedRepository.identity === repository.identity
+      && selectedRepository.mount.key === repository.mountKey
+      && selectedRepository.mount.revision === repository.observedRevision)
+  }
+
   function exactFileAssignmentBindingIsCurrent(binding: NonNullable<StandardDelegateContext["fileAssignmentBinding"]>): boolean {
     const proof = binding.proofSource === "space"
       ? spaceDelegateEligibilityRef.current[binding.actor] ?? null
@@ -781,6 +845,9 @@ export function WorkspaceShell({
       && proof.grantId === binding.grantId
       && proof.actor === binding.actor
       && proof.selectedPath === binding.path
+      && selectedRepositoryBindingIsCurrent(binding.repository)
+      && selectedRepositoryBindingIsCurrent(proof.repository)
+      && JSON.stringify(proof.repository) === JSON.stringify(binding.repository)
   }
 
   function exactFileAssignmentOperationIsCurrent(operation: NonNullable<typeof fileAssignmentOperationRef.current>): boolean {
@@ -812,14 +879,17 @@ export function WorkspaceShell({
       ?? delegateContext.fileAssignmentProofs?.codex?.selectedPath
       ?? delegateContext.fileAssignmentProofs?.claude?.selectedPath
       ?? delegateContext.label
-    if (capturedPath === space.selectedPath) return
+    const capturedRepository = delegateContext.fileAssignmentBinding?.repository
+      ?? delegateContext.fileAssignmentProofs?.codex?.repository
+      ?? delegateContext.fileAssignmentProofs?.claude?.repository
+    if (capturedPath === space.selectedPath && selectedRepositoryBindingIsCurrent(capturedRepository)) return
     // Delegate is an object action. If the selected object changes before dispatch, discard the
     // stale client intent; the server will derive authority only from the newly persisted Space.
     setDelegateContext(null)
     setLineTarget("william")
     setLineInput("")
     setLineOpen(false)
-  }, [delegateContext, space.selectedPath])
+  }, [delegateContext, project, space.selectedFileRef, space.selectedPath])
 
   const appendConversation = useCallback((role: WilliamConversationEntry["role"], text: string) => {
     const normalized = text.trim()
@@ -1060,10 +1130,13 @@ export function WorkspaceShell({
         }
         const identity = payload.worldId
         const name = payload.name ?? payload.project?.name ?? "Space"
-        const restoredBase = normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        })
+        const restoredBase = qualifyLegacyWorkspaceFiles(
+          normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          }),
+          payload.project,
+        )
         const savedPreview = payload.project
           ? loadPreviewEvidenceSnapshot(payload.worldId, payload.project.identity)
           : null
@@ -1132,10 +1205,13 @@ export function WorkspaceShell({
     if (!response.ok) throw new Error(payload.error ?? `CONTINUATION_SPACE_${response.status}`)
     if (worldRef.current !== requestWorldId || transitionEpochRef.current !== requestEpoch
       || payload.worldId !== requestWorldId) throw new Error("CONTINUATION_SPACE_CHANGED")
-    const restored = normalizeSpace(
-      payload.space,
-      defaultSpace(window.innerWidth, window.innerHeight, requestWorldId, payload.name ?? projectRef.current?.name ?? "Space"),
-      { width: window.innerWidth, height: window.innerHeight },
+    const restored = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        payload.space,
+        defaultSpace(window.innerWidth, window.innerHeight, requestWorldId, payload.name ?? projectRef.current?.name ?? "Space"),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      payload.project ?? projectRef.current,
     )
     if (expectedSelectedPath !== undefined && restored.selectedPath !== expectedSelectedPath) {
       throw new Error("CONTINUATION_SELECTION_MISMATCH")
@@ -1520,6 +1596,48 @@ export function WorkspaceShell({
       }
     }
   }, [materializeSurfaces])
+
+  const openRepositoryDeliverySurface = useCallback(async (target: "change-set" | "preview-composition") => {
+    setOverlay(target)
+    setChangeSetError(null)
+    if (projectKey !== "terrafusion") {
+      setChangeSetProjection(null)
+      setChangeSetError("Cross-repository delivery belongs to the TerraFusion Project.")
+      return
+    }
+    const requestWorldId = worldRef.current
+    const requestEpoch = transitionEpochRef.current
+    const requestId = changeSetRequestRef.current + 1
+    changeSetRequestRef.current = requestId
+    if (!requestWorldId || storageRef.current !== "server") {
+      setChangeSetProjection(null)
+      setChangeSetError("Change Set evidence needs an open persistent server Space.")
+      return
+    }
+    setChangeSetBusy(true)
+    try {
+      const response = await fetch(`/api/environment/change-set?worldId=${encodeURIComponent(requestWorldId)}`, { cache: "no-store" })
+      const payload = await response.json() as CrossRepositoryChangeSetProjection & Readonly<{ error?: string }>
+      if (changeSetRequestRef.current !== requestId
+        || worldRef.current !== requestWorldId
+        || transitionEpochRef.current !== requestEpoch) return
+      if (!response.ok || payload.version !== "williamos-cross-repository-change-set.v1" || payload.worldId !== requestWorldId) {
+        throw new Error(payload.error ?? `CHANGE_SET_${response.status}`)
+      }
+      setChangeSetProjection(payload)
+    } catch (error) {
+      if (changeSetRequestRef.current === requestId
+        && worldRef.current === requestWorldId
+        && transitionEpochRef.current === requestEpoch) {
+        setChangeSetProjection(null)
+        setChangeSetError(error instanceof Error ? error.message : "Change Set evidence is unavailable.")
+      }
+    } finally {
+      if (changeSetRequestRef.current === requestId
+        && worldRef.current === requestWorldId
+        && transitionEpochRef.current === requestEpoch) setChangeSetBusy(false)
+    }
+  }, [projectKey])
 
   const openWilliamJudgmentInspector = useCallback(() => {
     const surface = williamJudgmentInspectorSurface(judgment)
@@ -2674,6 +2792,9 @@ export function WorkspaceShell({
                 && delegateContext.kind === "file" && delegateContext.fileAssignmentBinding
                 ? {
                   target: { kind: "file" as const, path: delegateContext.fileAssignmentBinding.path },
+                  ...(delegateContext.fileAssignmentBinding.repository
+                    ? { repositoryKey: delegateContext.fileAssignmentBinding.repository.resourceKey }
+                    : {}),
                   ...(delegateContext.provider === "Claude" ? {
                     expectedFileAuthority: {
                       worldId: delegateContext.fileAssignmentBinding.worldId,
@@ -2834,10 +2955,20 @@ export function WorkspaceShell({
     spaceDelegateEligibilityRequestRef.current = requestId
     setSpaceDelegateEligibility({})
     const path = space.selectedPath
+    const selectedFileRef = space.selectedFileRef
+    const selectedRepository = selectedFileRef && project?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    const repositorySelectionReady = !selectedFileRef || Boolean(selectedRepository
+      && selectedRepository.mount.verified && selectedRepository.mount.revision
+      && selectedFileRef.path === path && selectedFileRef.projectIdentity === project?.identity
+      && selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "space" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
       && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
     if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
       setSpaceDelegateEligibilityPending(false)
@@ -2846,12 +2977,19 @@ export function WorkspaceShell({
     const guard = {
       worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
       revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+      repositoryKey: selectedFileRef?.repositoryResourceKey ?? null,
+      repositoryIdentity: selectedRepository?.identity ?? null,
+      repositoryMountKey: selectedFileRef?.repositoryMountKey ?? null,
+      repositoryRevision: selectedFileRef?.observedRevision ?? null,
     }
     const controller = new AbortController()
     setSpaceDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({
+          worldId, actor, path, projectKey,
+          ...(guard.repositoryKey ? { repositoryKey: guard.repositoryKey } : {}),
+        }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2871,7 +3009,12 @@ export function WorkspaceShell({
       const exact = Object.fromEntries(proofs.flatMap((proof) => proof
         && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
         && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
-        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+        && proof.selectedPath === guard.path
+        && (!guard.repositoryKey || proof.repository?.resourceKey === guard.repositoryKey
+          && proof.repository.identity === guard.repositoryIdentity
+          && proof.repository.mountKey === guard.repositoryMountKey
+          && proof.repository.observedRevision === guard.repositoryRevision)
+        ? [[proof.actor, proof]] : []))
       setSpaceDelegateEligibility(exact)
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted && spaceDelegateEligibilityRequestRef.current === requestId) {
@@ -2881,7 +3024,7 @@ export function WorkspaceShell({
     return () => controller.abort()
   }, [
     dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
-    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+    space.selectedFileRef, space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
   useEffect(() => {
@@ -2889,10 +3032,20 @@ export function WorkspaceShell({
     fileDelegateEligibilityRequestRef.current = requestId
     setFileDelegateEligibility({})
     const path = space.selectedPath
+    const selectedFileRef = space.selectedFileRef
+    const selectedRepository = selectedFileRef && project?.repositories?.find(
+      (candidate) => candidate.key === selectedFileRef.repositoryResourceKey,
+    )
+    const repositorySelectionReady = !selectedFileRef || Boolean(selectedRepository
+      && selectedRepository.mount.verified && selectedRepository.mount.revision
+      && selectedFileRef.path === path && selectedFileRef.projectIdentity === project?.identity
+      && selectedFileRef.repositoryMountKey === selectedRepository.mount.key
+      && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "file" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
       && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
+      && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
     if (!baselineReady || !worldId || !project || !path || !spine.outcomeKey || spine.workOrderId === null) {
       setFileDelegateEligibilityPending(false)
@@ -2901,12 +3054,19 @@ export function WorkspaceShell({
     const guard = {
       worldId, transitionEpoch: transitionEpochRef.current, projectIdentity: project.identity,
       revision: space.revision, path, outcomeKey: spine.outcomeKey, workOrderId: spine.workOrderId,
+      repositoryKey: selectedFileRef?.repositoryResourceKey ?? null,
+      repositoryIdentity: selectedRepository?.identity ?? null,
+      repositoryMountKey: selectedFileRef?.repositoryMountKey ?? null,
+      repositoryRevision: selectedFileRef?.observedRevision ?? null,
     }
     const controller = new AbortController()
     setFileDelegateEligibilityPending(true)
     void Promise.all((["codex", "claude"] as const).map(async (actor) => {
       try {
-        const response = await fetch(`/api/loom/agent?${new URLSearchParams({ worldId, actor, path, projectKey }).toString()}`, {
+        const response = await fetch(`/api/loom/agent?${new URLSearchParams({
+          worldId, actor, path, projectKey,
+          ...(guard.repositoryKey ? { repositoryKey: guard.repositoryKey } : {}),
+        }).toString()}`, {
           cache: "no-store", signal: controller.signal,
         })
         const payload = await response.json().catch(() => null)
@@ -2926,7 +3086,12 @@ export function WorkspaceShell({
       const exact = Object.fromEntries(proofs.flatMap((proof) => proof
         && proof.worldId === guard.worldId && proof.worldRevision === guard.revision
         && proof.outcomeKey === guard.outcomeKey && proof.workOrderId === guard.workOrderId
-        && proof.selectedPath === guard.path ? [[proof.actor, proof]] : []))
+        && proof.selectedPath === guard.path
+        && (!guard.repositoryKey || proof.repository?.resourceKey === guard.repositoryKey
+          && proof.repository.identity === guard.repositoryIdentity
+          && proof.repository.mountKey === guard.repositoryMountKey
+          && proof.repository.observedRevision === guard.repositoryRevision)
+        ? [[proof.actor, proof]] : []))
       setFileDelegateEligibility(exact)
     }).catch(() => undefined).finally(() => {
       if (!controller.signal.aborted && fileDelegateEligibilityRequestRef.current === requestId) {
@@ -2936,7 +3101,7 @@ export function WorkspaceShell({
     return () => controller.abort()
   }, [
     dirtyPaths, persistenceError, persistencePending, project, projectKey, selectedKind, space.revision,
-    space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
+    space.selectedFileRef, space.selectedPath, spine.execution, spine.outcomeKey, spine.workOrderId, storage, worldId,
   ])
 
   function currentLineObjectBinding(): LineObjectBinding | null {
@@ -3257,12 +3422,15 @@ export function WorkspaceShell({
     change.invalidate()
     inspectorReturnWindowRef.current.clear()
     const name = payload.name ?? payload.project?.name ?? "Space"
-    const restoredBase = normalizeSpace(
-      payload.space,
-      defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
-      { width: window.innerWidth, height: window.innerHeight },
-    )
     const restoredProject = payload.project ?? projectRef.current
+    const restoredBase = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        payload.space,
+        defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      restoredProject,
+    )
     const savedPreview = restoredProject
       ? loadPreviewEvidenceSnapshot(payload.worldId, restoredProject.identity)
       : null
@@ -3289,6 +3457,7 @@ export function WorkspaceShell({
       activeWindowId: previewSurface.id,
     } satisfies WorkspaceSpace : restoredBase
     transitionEpochRef.current += 1
+    changeSetRequestRef.current += 1
     invalidateCouncilView()
     councilSessionRef.current = null
     worldRef.current = payload.worldId
@@ -3328,6 +3497,9 @@ export function WorkspaceShell({
     setConversation(restoredConversation(payload.conversation))
     setWilliamInput("")
     setWilliamError(null)
+    setChangeSetProjection(null)
+    setChangeSetBusy(false)
+    setChangeSetError(null)
     setFocusedAgentId(null)
     setLineOpen(false)
     setLineInput("")
@@ -3479,10 +3651,13 @@ export function WorkspaceShell({
   }
   const missionSpaces: readonly MissionControlSpaceProjection[] = spaceSummaries.map((summary) => {
     if (summary.worldId === worldId) return currentMissionSpace
-    const restored = normalizeSpace(
-      summary.space,
-      defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
-      { width: window.innerWidth, height: window.innerHeight },
+    const restored = qualifyLegacyWorkspaceFiles(
+      normalizeSpace(
+        summary.space,
+        defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+      project,
     )
     const savedAgents = project
       ? loadSavedAgentSessionProjection(summary.worldId, project.identity)
@@ -3944,6 +4119,7 @@ export function WorkspaceShell({
         path: proof.selectedPath,
         actor,
         proofSource: current.fileAssignmentProofSource ?? "file",
+        ...(proof.repository ? { repository: proof.repository } : {}),
       }
       return exactFileAssignmentBindingIsCurrent(binding)
         ? { ...current, provider, fileAssignmentBinding: binding }
@@ -4012,10 +4188,88 @@ export function WorkspaceShell({
     }
   }
 
+  const selectedRepository = project?.repositories?.find((repository) => repository.key === space.selectedFileRef?.repositoryResourceKey)
+    ?? project?.repositories?.find((repository) => repository.defaultRepository)
+    ?? null
+  const repositoryViews: readonly RepositoryShelfRepository[] = (project?.repositories ?? []).map((repository) => ({
+    repositoryKey: repository.key,
+    ...(repository.repositoryResourceId ? { repositoryResourceId: repository.repositoryResourceId } : {}),
+    name: repository.label,
+    canonicalIdentity: repository.identity,
+    role: repository.role,
+    ...(repository.suite ? { suite: repository.suite } : {}),
+    workingSet: repository.defaultRepository || Boolean(space.editor.openFileRefs?.some((file) => file.repositoryResourceKey === repository.key)),
+    active: selectedRepository?.key === repository.key,
+    readOnly: !repository.mount.verified,
+    preview: repository.previewSource ? "source" : "none",
+    mounts: repository.mount.configured ? [{
+      id: repository.mount.key,
+      node: "Current host",
+      label: repository.mount.verified ? "verified checkout" : "configured mount",
+      branch: repository.mount.branch ?? "branch unavailable",
+      revision: repository.mount.revision ?? repository.mount.refusal ?? "revision unavailable",
+      status: repository.mount.verified ? "ready" : "unavailable",
+      cleanliness: "unknown",
+    }] : [],
+    entries: [],
+    agents: agentSessions.sessions.filter((session) => session.repository?.resourceKey === repository.key).map((session) => ({
+      id: session.id,
+      name: session.providerLabel,
+      role: session.role,
+      activity: session.presentation ?? session.assignment,
+      state: session.status === "working" || session.status === "thinking"
+        ? session.role === "Reviewer" ? "reviewing" as const : "working" as const
+        : session.status === "blocked" ? "blocked" as const : "waiting" as const,
+    })),
+  }))
+  const repositoryRelationships: readonly RepositoryRelationship[] = repositoryViews.flatMap((repository): RepositoryRelationship[] => {
+    if (repository.role === "suite-source") return [{
+      id: `${repository.repositoryKey}:os-1`,
+      fromRepositoryKey: repository.repositoryKey,
+      toRepositoryKey: "os-1",
+      label: `${repository.name} integration`,
+      kind: "consumed-by" as const,
+      status: "waiting" as const,
+      detail: "No assimilated artifact evidence is attached to the current Space.",
+    }]
+    if (repository.role === "sovereign-planning-and-promotion") return [{
+      id: `${repository.repositoryKey}:os-1`,
+      fromRepositoryKey: repository.repositoryKey,
+      toRepositoryKey: "os-1",
+      label: "Sovereign planning context",
+      kind: "informs" as const,
+      status: "reference" as const,
+      detail: "Planning and promotion context only; runtime dependency is none.",
+    }]
+    return []
+  })
+  const changeSetModel = changeSetProjection
+    ? changeSetSurfaceModel(changeSetProjection, (project?.repositories ?? []).map((repository) => ({
+        key: repository.key,
+        label: repository.label,
+        role: repository.role,
+      })))
+    : null
+  const pendingSuiteChanges: readonly PendingSuiteChange[] = (changeSetProjection?.units ?? []).flatMap((unit) => {
+    const repository = project?.repositories?.find((candidate) => candidate.key === unit.repository.key)
+    if (repository?.role !== "suite-source" || !repository.suite || !unit.git.revision) return []
+    return [{
+      suite: repository.label,
+      repositoryKey: repository.key,
+      revision: unit.git.revision,
+      state: unit.delivery.state === "sealed" ? "delivery-sealed" as const : "repository-changed" as const,
+      detail: "No runtime-composition attestation links this exact repository delivery to the running Preview.",
+    }]
+  })
+  const sovereignRepository = project?.repositories?.find((repository) => repository.role === "sovereign-planning-and-promotion") ?? null
+  const sovereignContext = sovereignRepository?.mount.verified && sovereignRepository.mount.revision
+    ? { repositoryName: sovereignRepository.label, revision: sovereignRepository.mount.revision }
+    : null
+  const toolRunRepositorySuffix = selectedRepository ? `:repository:${selectedRepository.key}` : ""
   const toolRunHistoryScope = storage === "server" && worldId
-    ? `server:${worldId}`
+    ? `server:${worldId}${toolRunRepositorySuffix}`
     : storage === "browser" && browserStorageKeyRef.current
-      ? `browser:${browserStorageKeyRef.current}`
+      ? `browser:${browserStorageKeyRef.current}${toolRunRepositorySuffix}`
       : null
 
   return (
@@ -4117,16 +4371,19 @@ export function WorkspaceShell({
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
         <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={Boolean(sourceMinimizeDisabledReason)} minimizeDisabledReason={sourceMinimizeDisabledReason}>
-          <EditorSurface key={worldId ?? "unhydrated"} projectName={project?.name ?? "Project"} projectKey={projectKey} space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
+          <EditorSurface key={worldId ?? "unhydrated"} project={project ?? undefined} projectName={project?.name ?? "Project"} projectKey={projectKey} requestedRepositoryKey={repositoryFocusKey} space={space} onEditorChange={(editor, selectedPath, selectedFileRef) => setSpace((current) => ({ ...current, editor, selectedPath, ...(selectedFileRef !== undefined ? { selectedFileRef } : {}) }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
-          {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
-            <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
-          )}
+          <div className={spatial.previewHost}>
+            <button type="button" className={spatial.previewCompositionButton} onClick={() => void openRepositoryDeliverySurface("preview-composition")} aria-label="Inspect Preview composition" title="Inspect exact runtime composition"><Layers3 size={13} />Composition</button>
+            {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
+              <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
+            )}
+          </div>
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} projectKey={projectKey} repositoryKey={selectedRepository?.key ?? null} repositoryLabel={selectedRepository?.label ?? null} worldId={worldId} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
               const next = context && worldId ? { ...context, worldId } : current?.worldId === worldId ? null : current
               liveDiffContextRef.current = next
               return next
@@ -4147,6 +4404,8 @@ export function WorkspaceShell({
           </button>
         ))}
         <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
+        {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => setOverlay("repository-map")} aria-label="Open Repository Map" title="Repository Map"><GitFork size={15} /></button> : null}
+        {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => void openRepositoryDeliverySurface("change-set")} aria-label="Open Change Set" title="Cross-repository Change Set"><GitPullRequest size={15} /></button> : null}
         <button type="button" className={spatial.dockButton} onClick={() => void openCouncilHistory()} aria-label="Open Brain Council" title="Brain Council"><Users size={15} /></button>
       </nav>
 
@@ -4215,6 +4474,24 @@ export function WorkspaceShell({
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} busy={councilBusy} error={councilError} onDismiss={dismissCouncil} onAdvisoryAction={(action) => void handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={dismissCouncil}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={dismissCouncil} onSelect={selectCouncilHistory} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
       {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} onRemoveSpace={removeMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
+      {overlay === "repository-map" ? <div className={spatial.councilHost}><RepositoryMapSurface repositories={repositoryViews} relationships={repositoryRelationships} onDismiss={() => setOverlay(null)} onSelectRepository={(repositoryKey) => {
+        setRepositoryFocusKey(repositoryKey)
+        setOverlay(null)
+        activate("editor")
+      }} /></div> : null}
+      {overlay === "change-set" ? <div className={spatial.councilHost}>{changeSetModel ? <ChangeSetSurface {...changeSetModel} onDismiss={() => setOverlay(null)} onSelectRepository={(repositoryKey) => {
+        setRepositoryFocusKey(repositoryKey)
+        setOverlay(null)
+        activate("editor")
+      }} /> : <section className={spatial.utilitySurface} aria-label="Cross-repository Change Set"><header className={spatial.utilityMeta}><span>Change Set</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{changeSetBusy ? "Loading persisted delivery evidence…" : "Change Set unavailable"}</strong><p className={spatial.muted}>{changeSetError ?? "No repository-qualified delivery is recorded for this Space."}</p></div></section>}</div> : null}
+      {overlay === "preview-composition" ? <div className={spatial.councilHost}><PreviewComposition
+        state={space.runningAppUrl ? "unverified" : "unavailable"}
+        runtime={null}
+        consumedArtifacts={[]}
+        pendingSuiteChanges={pendingSuiteChanges}
+        sovereignContext={sovereignContext}
+        onDismiss={() => setOverlay(null)}
+      /></div> : null}
     </main>
   )
 }

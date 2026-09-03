@@ -30,6 +30,10 @@ const seams = vi.hoisted(() => ({
   sanitize: vi.fn(),
   onConstruct: vi.fn(),
   resolveProjectBinding: vi.fn(),
+  createContextManifest: vi.fn(),
+  deriveAuthority: vi.fn(),
+  assessActiveRepositoryAssignment: vi.fn(),
+  deriveReservationClaims: vi.fn(),
   clientOptions: [] as unknown[],
 }))
 
@@ -41,6 +45,19 @@ vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
   deriveCodexAssignmentForVerifiedRootAlias: seams.deriveCodexAssignmentForVerifiedRootAlias,
   revalidateCodexAssignment: seams.revalidateCodexAssignment,
+}))
+vi.mock("@/lib/loom/assignment-context-runtime", () => ({
+  createCodexAssignmentContextManifest: seams.createContextManifest,
+}))
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: seams.deriveAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error {
+    readonly code = "SPACE_MUTATION_AUTHORITY_REFUSED"
+  },
+}))
+vi.mock("@/lib/loom/repository-assignment-runtime", () => ({
+  assessActiveRepositoryAssignment: seams.assessActiveRepositoryAssignment,
+  deriveRepositoryAssignmentReservationClaims: seams.deriveReservationClaims,
 }))
 vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
   createCodexIsolatedWorkspace: seams.createIsolatedWorkspace,
@@ -92,6 +109,24 @@ import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 const ASSIGNMENT_HASH = "a".repeat(64)
 const STALE_ASSIGNMENT_HASH = "b".repeat(64)
 const CONFIGURED_ALIAS_ASSIGNMENT_HASH = "c".repeat(64)
+const CONTEXT_MANIFEST = {
+  schemaVersion: "williamos-assignment-context-manifest.v1",
+  authorityEffect: "none",
+  targetRepository: {
+    repositoryResourceId: 1,
+    repositoryKey: "os-1",
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+  },
+  checkout: {
+    repositoryMountKey: "terrafusion:os-1:configured",
+    worktreeKey: "delegate-1",
+    baseRevision: "a".repeat(40),
+  },
+  mutationPosture: {
+    target: { writablePaths: ["src/selected.ts"] },
+  },
+  manifestHash: "9".repeat(64),
+} as const
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
@@ -131,6 +166,25 @@ describe("durable Codex delegate route", () => {
     seams.recordLoomEnd.mockResolvedValue(undefined)
     seams.recordLoomCodexAssignment.mockResolvedValue(undefined)
     seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
+    seams.createContextManifest.mockResolvedValue(CONTEXT_MANIFEST)
+    seams.assessActiveRepositoryAssignment.mockResolvedValue({ status: "COMPATIBLE", activeAssignments: [], dependencies: [] })
+    seams.deriveReservationClaims.mockResolvedValue({
+      contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+      environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+    })
+    seams.deriveAuthority.mockResolvedValue({
+      owner: "owner-1",
+      worldId: "world-1",
+      worldRevision: 7,
+      projectId: 1,
+      projectKey: "terrafusion",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      outcomeKey: "OUTCOME-1",
+      workOrderId: 41,
+      grantId: 9,
+      actor: "codex",
+      selectedPath: "src/selected.ts",
+    })
     seams.prepareCodexContinuation.mockResolvedValue({ status: "WORK_ORDER_PATHS_COMPLETE" })
     seams.readCodexContinuation.mockResolvedValue({ status: "NO_ACTIVE_ASSIGNMENT" })
     seams.acquireCodexContinuationClaim.mockResolvedValue(vi.fn().mockResolvedValue(undefined))
@@ -145,6 +199,8 @@ describe("durable Codex delegate route", () => {
       selectedPath: "src/selected.ts",
       allowed: ["src/selected.ts"],
       forbidden: ["src/forbidden.ts"],
+      contracts: [],
+      environments: [],
       binding: {
         spaceRevision: 7,
         outcomeId: 5,
@@ -228,6 +284,34 @@ describe("durable Codex delegate route", () => {
     expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
   })
 
+  it("refuses before provider startup when the server-owned reservation scope is unavailable", async () => {
+    seams.deriveReservationClaims.mockRejectedValue(Object.assign(new Error("missing scope"), {
+      code: "ASSIGNMENT_RESERVATION_CLAIMS_UNAVAILABLE",
+    }))
+
+    const response = await POST(request({
+      prompt: "Implement the selected change.",
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "CODEX_ASSIGNMENT_RESERVATION_UNAVAILABLE" })
+    expect(seams.connect).not.toHaveBeenCalled()
+    expect(seams.startThread).not.toHaveBeenCalled()
+    expect(seams.recordLoomCodexAssignment).not.toHaveBeenCalled()
+  })
+
+  it("rejects client-authored semantic and environment reservations", async () => {
+    const response = await POST(request({
+      prompt: "Implement the selected change.",
+      contracts: [{ contractIdentity: "client-invented", revisionIdentity: "1", role: "producer" }],
+      environments: [{ environmentIdentity: "client-invented", access: "exclusive" }],
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "BAD_REQUEST" })
+    expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
+  })
+
   it("starts one exact-workspace non-ephemeral Codex Builder turn and emits one strict settlement", async () => {
     const response = await POST(request({ prompt: "Implement the selected change." }))
     const output = await events(response)
@@ -264,12 +348,25 @@ describe("durable Codex delegate route", () => {
       grantId: 9,
       allowed: ["src/selected.ts"],
       forbidden: ["src/forbidden.ts"],
+      contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+      environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
       reservationVersion: "f".repeat(64),
       selectedPath: "src/selected.ts",
       assignmentHash: ASSIGNMENT_HASH,
       taskText: "Implement the selected change.",
       isolatedBaseSha: "a".repeat(40),
       resumed: false,
+      contextManifest: CONTEXT_MANIFEST,
+    }))
+    expect(seams.deriveReservationClaims).toHaveBeenCalledWith({
+      userId: "owner-1", workOrderId: 41, grantId: 9,
+    })
+    expect(seams.assessActiveRepositoryAssignment).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", worldId: "world-1", projectId: 1,
+      candidate: expect.objectContaining({
+        contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+        environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+      }),
     }))
     expect(seams.runTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: "codex-thread-1",
@@ -286,6 +383,7 @@ describe("durable Codex delegate route", () => {
       {
         type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false,
         selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
+        contextManifest: CONTEXT_MANIFEST,
       },
       { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
       { type: "result", text: "Implemented the selected change." },
@@ -300,6 +398,7 @@ describe("durable Codex delegate route", () => {
       assignmentHash: ASSIGNMENT_HASH,
       selectedPath: "src/selected.ts",
       promotionDigest: "after-digest",
+      contextManifest: CONTEXT_MANIFEST,
     }))
     expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
     expect(seams.writeGovernedWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
@@ -469,6 +568,7 @@ describe("durable Codex delegate route", () => {
     expect(output[0]).toEqual({
       type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: true,
       selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
+      contextManifest: CONTEXT_MANIFEST,
     })
   })
 

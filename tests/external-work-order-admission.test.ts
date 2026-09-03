@@ -21,6 +21,13 @@ const packet = () => ({
   authorityEvidence: ["owner-message:2026-08-30", "github:issue:1111"],
   reservedPaths: ["tests/**", "lib/environment/**"],
   forbiddenPaths: ["docs/quarantine/**"],
+  contractReservations: [
+    { contractIdentity: "workspace-source-v1", revisionIdentity: "1.0.0", role: "consumer" },
+    { contractIdentity: "admission-api-v2", revisionIdentity: "2.0.0", role: "producer" },
+  ],
+  environmentReservations: [
+    { environmentIdentity: "postgres:external-admission", access: "shared-read" },
+  ],
   validators: ["pnpm test", "pnpm lint"],
   acceptanceCriteria: ["No client-derived authority", "Exact replay is stable"],
   pullRequest: { number: 1111, headSha: "a".repeat(40) },
@@ -45,6 +52,10 @@ describe("external Work Order digest-bound confirmation boundary", () => {
     expect(first.worldId).toBe("space-1")
     expect(first.externalWorkOrder.repository).toBe("williamagreen/william-os-devops")
     expect(first.externalWorkOrder.reservedPaths).toEqual(["lib/environment/**", "tests/**"])
+    expect(first.externalWorkOrder.contractReservations).toEqual([
+      { contractIdentity: "admission-api-v2", revisionIdentity: "2.0.0", role: "producer" },
+      { contractIdentity: "workspace-source-v1", revisionIdentity: "1.0.0", role: "consumer" },
+    ])
     expect(first.provenanceDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(second.provenanceDigest).toBe(first.provenanceDigest)
     expect(seams.transaction).not.toHaveBeenCalled()
@@ -80,6 +91,21 @@ describe("external Work Order digest-bound confirmation boundary", () => {
     expect(seams.transaction).not.toHaveBeenCalled()
   })
 
+  it("binds semantic and environment reservation drift into the confirmation digest", async () => {
+    const preview = previewExternalWorkOrderAdmission({
+      mode: "PREVIEW", worldId: "space-1", externalWorkOrder: packet(),
+    })
+    await expect(admitExternalWorkOrder("owner-1", {
+      mode: "ADMIT",
+      worldId: "space-1",
+      idempotencyKey: "admit:github:1111",
+      confirmation: "ADMIT_EXTERNAL_WORK_ORDER",
+      confirmedProvenanceDigest: preview.provenanceDigest,
+      externalWorkOrder: { ...packet(), environmentReservations: [] },
+    })).rejects.toMatchObject({ code: "CONFIRMATION_STALE" } satisfies Partial<ExternalWorkOrderAdmissionError>)
+    expect(seams.transaction).not.toHaveBeenCalled()
+  })
+
   it("rejects missing confirmation and unsafe repository or reservation inputs", () => {
     expect(() => normalizeExternalWorkOrderAdmissionInput({
       mode: "ADMIT", worldId: "space-1", idempotencyKey: "admit:github:1111",
@@ -95,6 +121,11 @@ describe("external Work Order digest-bound confirmation boundary", () => {
       mode: "PREVIEW", worldId: "space-1", externalWorkOrder: {
         ...packet(), reservedPaths: ["app/**"], forbiddenPaths: ["app/**"],
       },
+    })).toThrow("EXTERNAL_PROVENANCE_INVALID")
+    const withoutClaims = { ...packet() } as Record<string, unknown>
+    delete withoutClaims.contractReservations
+    expect(() => previewExternalWorkOrderAdmission({
+      mode: "PREVIEW", worldId: "space-1", externalWorkOrder: withoutClaims,
     })).toThrow("EXTERNAL_PROVENANCE_INVALID")
   })
 

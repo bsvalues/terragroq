@@ -468,7 +468,7 @@ describe("Experience V2 real agent sessions", () => {
       schemaVersion: 3,
       selectedSessionKey: `Claude:${first}`,
       sessions: [
-        { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review current work", reviewPath: "src/app.ts", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review current work", reviewPath: "src/app.ts", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) }, updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
         { schemaVersion: 1, sessionId: second, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] },
       ],
     })
@@ -478,7 +478,7 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(projection.state).toBe("available")
     expect(projection.sessions).toEqual([
-      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified" }),
+      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) } }),
       expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified" }),
     ])
     expect(window.localStorage.getItem(key)).toBe(stored)

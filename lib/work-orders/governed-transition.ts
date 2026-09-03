@@ -28,6 +28,7 @@ export async function transitionWorkOrderInTransaction(input: Readonly<{
   grantAuthority?: boolean
   approveDoctrine?: boolean
   grantExpiresAt?: Date | null
+  grantScope?: string | null
 }>): Promise<GovernedTransitionResult> {
   const rows = await input.transaction.select().from(workOrder).where(and(
     eq(workOrder.id, input.workOrderId), eq(workOrder.userId, input.userId),
@@ -79,7 +80,8 @@ export async function transitionWorkOrderInTransaction(input: Readonly<{
   if (granting && authorityRank(current.authorityLevel) > authorityRank("A0_READ_ONLY")) {
     const result = await createAuthorityGrantInTransaction(input.transaction, input.userId, {
       workOrderId: current.id, grantedTo: current.agent ?? "operator",
-      authorityLevel: current.authorityLevel, scope: current.scope,
+      authorityLevel: current.authorityLevel,
+      scope: input.grantScope === undefined ? current.scope : input.grantScope,
       allowedActions: current.allowedFiles, blockedActions: current.forbiddenFiles,
       reason: `Granted on authorization of ${current.ref ?? `#${current.id}`}`,
       expiresAt: input.grantExpiresAt ?? null,

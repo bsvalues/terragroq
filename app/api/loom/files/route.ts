@@ -6,7 +6,10 @@ import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
 import { isIgnoredEntry, isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
-import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import {
+  resolveCanonicalWorkspaceProjectBinding,
+  type WorkspaceProjectBinding,
+} from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -17,13 +20,27 @@ const MAX_WRITE_BODY_BYTES = MAX_FILE_BYTES + 32_000
 const refuse = (refusal: string, status: number) =>
   Response.json({ error: refusal }, { status, headers: { "cache-control": "no-store" } })
 
+const repositoryProjection = (binding: WorkspaceProjectBinding) => ({
+  key: binding.repositoryKey,
+  identity: binding.repositoryIdentity,
+  role: binding.repositoryRole,
+  label: binding.repositoryLabel,
+  previewSource: binding.repositoryPreviewSource,
+  mountKey: binding.repositoryMountKey,
+  observedRevision: binding.observedRevision,
+})
+
 /** List a directory, or read a file, from inside the workspace. */
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
   const url = new URL(request.url)
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey") ?? "terrafusion")
+  const projectKey = url.searchParams.get("projectKey") ?? "terrafusion"
+  const repositoryKey = url.searchParams.get("repositoryKey")
+  const projectBinding = repositoryKey === null
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey, undefined, repositoryKey)
   if (!projectBinding.ok) return refuse(projectBinding.error, 503)
   const binding = projectBinding.binding
 
@@ -43,6 +60,7 @@ export async function GET(request: Request) {
     return Response.json({
       kind: "directory",
       project: binding.project,
+      repository: repositoryProjection(binding),
       path: resolved.relative,
       entries: entries
         .filter((entry) => !isIgnoredEntry(entry.name))
@@ -60,11 +78,12 @@ export async function GET(request: Request) {
 
   const bytes = await fs.readFile(resolved.absolute)
   if (looksBinary(bytes)) {
-    return Response.json({ kind: "binary", project: binding.project, path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
+    return Response.json({ kind: "binary", project: binding.project, repository: repositoryProjection(binding), path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
   }
   return Response.json({
     kind: "file",
     project: binding.project,
+    repository: repositoryProjection(binding),
     path: resolved.relative,
     content: bytes.toString("utf8"),
     size: stats.size,
@@ -94,9 +113,11 @@ export async function PUT(request: Request) {
 
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
-  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown; projectKey?: unknown }
+  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown; projectKey?: unknown; repositoryKey?: unknown }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion", undefined, body.repositoryKey)
   if (!projectBinding.ok) return refuse(projectBinding.error, 503)
   const binding = projectBinding.binding
 
@@ -108,5 +129,9 @@ export async function PUT(request: Request) {
   if (!result.ok) {
     return Response.json(result, { status: result.status, headers: { "cache-control": "no-store" } })
   }
-  return Response.json({ ...result, project: binding.project }, { headers: { "cache-control": "no-store" } })
+  return Response.json({
+    ...result,
+    project: binding.project,
+    repository: repositoryProjection(binding),
+  }, { headers: { "cache-control": "no-store" } })
 }

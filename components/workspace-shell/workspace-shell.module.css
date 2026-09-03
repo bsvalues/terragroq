@@ -193,6 +193,77 @@
   scrollbar-width: thin;
 }
 
+.multiRepositoryFileTree {
+  display: grid;
+  grid-template-rows: minmax(156px, 42%) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.repositoryShelfFrame {
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 1px solid var(--steel);
+}
+
+.repositoryShelfFrame > nav {
+  height: 100%;
+}
+
+.activeRepositoryTree {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: #39414b transparent;
+  scrollbar-width: thin;
+}
+
+.activeRepositoryTreeHeader {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid #252b32;
+  color: #aeb6bf;
+  background: #13171c;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+
+.activeRepositoryTreeHeader strong {
+  overflow: hidden;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activeRepositoryTreeHeader span {
+  flex: none;
+  color: #6f7882;
+}
+
+.treeMore {
+  width: calc(100% - 16px);
+  min-height: 28px;
+  margin: 0 8px 9px;
+  border: 1px solid #303842;
+  border-radius: 4px;
+  color: #9ca6b0;
+  background: #191e24;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.treeMore:hover,
+.treeMore:focus-visible {
+  color: var(--fog);
+  border-color: #56616d;
+  outline: none;
+}
+
 .fileTreeName {
   position: sticky;
   z-index: 1;

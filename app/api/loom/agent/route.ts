@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 import fs from "node:fs/promises"
 
@@ -13,6 +13,16 @@ import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
+import {
+  createRepositoryAssignmentContextManifest,
+  type RepositoryAssignmentContextInput,
+} from "@/lib/loom/assignment-context-runtime"
+import {
+  assessActiveRepositoryAssignment,
+  deriveRepositoryAssignmentReservationClaims,
+  type RepositoryAssignmentReservationClaims,
+} from "@/lib/loom/repository-assignment-runtime"
+import type { AssignmentReservationSet } from "@/lib/loom/repository-reservations"
 import {
   cleanupCodexIsolatedWorkspace,
   createCodexIsolatedWorkspace,
@@ -57,6 +67,136 @@ const MAX_DIFF_REVIEW_PATCH_BYTES = 20_000
 const MAX_DIFF_REVIEW_PROMPT_UNITS = 24_000
 const ELIGIBILITY_HEADERS = { "cache-control": "no-store" }
 const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
+const CLIENT_FORBIDDEN_REPOSITORY_FIELDS = new Set([
+  "workspaceRoot",
+  "configuredWorkspaceRoot",
+  "repositoryIdentity",
+  "repositoryRole",
+  "repositoryMountKey",
+  "observedRevision",
+  "canonicalIdentity",
+  "remote",
+  "contracts",
+  "environments",
+  "reservation",
+])
+
+function repositoryMutationBinding(binding: WorkspaceProjectBinding) {
+  return {
+    projectId: binding.projectId,
+    projectKey: binding.projectKey,
+    repositoryResourceKey: binding.repositoryKey,
+    repositoryIdentity: binding.repositoryIdentity,
+    repositoryMountKey: binding.repositoryMountKey,
+    observedRevision: binding.observedRevision,
+    spaceIdentity: binding.project.identity,
+  }
+}
+
+function sameResolvedRepository(left: WorkspaceProjectBinding, right: WorkspaceProjectBinding): boolean {
+  return left.projectId === right.projectId
+    && left.projectKey === right.projectKey
+    && left.repositoryKey === right.repositoryKey
+    && left.repositoryIdentity === right.repositoryIdentity
+    && left.repositoryMountKey === right.repositoryMountKey
+    && left.observedRevision === right.observedRevision
+    && left.workspaceRoot === right.workspaceRoot
+    && left.project.identity === right.project.identity
+}
+
+function claudeAssignmentHash(input: Readonly<{
+  authority: SpaceMutationAuthority
+  assignmentId: string
+  targetDigest: string
+}>): string {
+  return createHash("sha256").update(JSON.stringify({
+    assignmentId: input.assignmentId,
+    owner: input.authority.owner,
+    worldId: input.authority.worldId,
+    worldRevision: input.authority.worldRevision,
+    projectId: input.authority.projectId,
+    projectKey: input.authority.projectKey,
+    outcomeKey: input.authority.outcomeKey,
+    workOrderId: input.authority.workOrderId,
+    grantId: input.authority.grantId,
+    actor: input.authority.actor,
+    selectedPath: input.authority.selectedPath,
+    repositoryResourceKey: input.authority.repositoryResourceKey,
+    repositoryIdentity: input.authority.repositoryIdentity,
+    repositoryMountKey: input.authority.repositoryMountKey,
+    observedRevision: input.authority.observedRevision,
+    targetDigest: input.targetDigest,
+  }), "utf8").digest("hex")
+}
+
+function exactClaudeReservation(
+  contextManifest: Awaited<ReturnType<typeof createRepositoryAssignmentContextManifest>>,
+  claims: RepositoryAssignmentReservationClaims,
+): AssignmentReservationSet {
+  return {
+    assignmentId: contextManifest.assignment.assignmentId,
+    repository: {
+      repositoryResourceId: contextManifest.targetRepository.repositoryResourceId,
+      repositoryKey: contextManifest.targetRepository.repositoryKey,
+      repositoryIdentity: contextManifest.targetRepository.repositoryIdentity,
+      repositoryMountKey: contextManifest.checkout.repositoryMountKey,
+      worktreeKey: contextManifest.checkout.worktreeKey,
+      baseRevision: contextManifest.checkout.baseRevision,
+    },
+    paths: [...contextManifest.mutationPosture.target.writablePaths],
+    contracts: [...claims.contracts],
+    environments: [...claims.environments],
+  }
+}
+
+async function assertClaudeReservationAvailable(input: Readonly<{
+  userId: string
+  worldId: string
+  projectId: number
+  workOrderId: number
+  grantId: number
+  candidate: AssignmentReservationSet
+}>): Promise<void> {
+  let currentClaims: RepositoryAssignmentReservationClaims
+  try {
+    currentClaims = await deriveRepositoryAssignmentReservationClaims(input)
+  } catch {
+    throw new Error("CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE")
+  }
+  if (JSON.stringify(currentClaims) !== JSON.stringify({
+    contracts: input.candidate.contracts,
+    environments: input.candidate.environments,
+  })) {
+    throw new Error("CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE")
+  }
+  const assessment = await assessActiveRepositoryAssignment(input)
+  if (assessment.status !== "COMPATIBLE") {
+    throw new Error("CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE")
+  }
+}
+
+function durableSessionMatchesRepository(
+  descriptor: Record<string, unknown>,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  const values = [
+    descriptor.repositoryResourceKey,
+    descriptor.repositoryIdentity,
+    descriptor.repositoryMountKey,
+    descriptor.observedRevision,
+  ]
+  const present = values.filter((value) => value !== null && value !== undefined).length
+  if (present === 0) {
+    return binding.repositoryKey === undefined
+      || binding.repositoryKey === "os-1"
+      || binding.repositoryKey === "williamos"
+  }
+  return present === values.length
+    && descriptor.repositoryResourceKey === binding.repositoryKey
+    && descriptor.repositoryIdentity === binding.repositoryIdentity
+    && descriptor.repositoryMountKey === binding.repositoryMountKey
+    && descriptor.observedRevision === binding.observedRevision
+}
 
 function worldMatchesWorkspaceProject(
   world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>,
@@ -81,11 +221,13 @@ export async function GET(request: Request) {
   }
   const url = new URL(request.url)
   const queryKeys = [...url.searchParams.keys()].sort()
-  const exactQuery = queryKeys.join("\0") === "actor\0path\0projectKey\0worldId"
+  const exactQuery = (queryKeys.join("\0") === "actor\0path\0projectKey\0worldId"
+      || queryKeys.join("\0") === "actor\0path\0projectKey\0repositoryKey\0worldId")
     && url.searchParams.getAll("worldId").length === 1
     && url.searchParams.getAll("actor").length === 1
     && url.searchParams.getAll("path").length === 1
     && url.searchParams.getAll("projectKey").length === 1
+    && url.searchParams.getAll("repositoryKey").length <= 1
   const worldId = url.searchParams.get("worldId")
   const actor = url.searchParams.get("actor")
   const selectedPath = exactEligibilityPath(url.searchParams.get("path"))
@@ -96,7 +238,15 @@ export async function GET(request: Request) {
   if (isSensitiveWorkspacePath(selectedPath)) {
     return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey"))
+  const requestedRepositoryKey = url.searchParams.get("repositoryKey")
+  const projectBinding = requestedRepositoryKey === null
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, url.searchParams.get("projectKey"))
+    : await resolveCanonicalWorkspaceProjectBinding(
+      session.user.id,
+      url.searchParams.get("projectKey"),
+      undefined,
+      requestedRepositoryKey,
+    )
   if (!projectBinding.ok) {
     return Response.json({ eligible: false, reason: "PROJECT_BINDING_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
   }
@@ -105,12 +255,7 @@ export async function GET(request: Request) {
     const authority = await deriveSpaceMutationAuthority({
       userId: session.user.id,
       worldId,
-      binding: {
-        projectId: binding.projectId,
-        projectKey: binding.projectKey,
-        repositoryIdentity: binding.repositoryIdentity,
-        spaceIdentity: binding.project.identity,
-      },
+      binding: repositoryMutationBinding(binding),
       expected: { actor, capability: "selected-file-change" },
       target: { kind: "selected-file", requestedPath: selectedPath },
     })
@@ -126,6 +271,12 @@ export async function GET(request: Request) {
       grantId: authority.grantId,
       actor: authority.actor,
       selectedPath: authority.selectedPath,
+      ...(authority.repositoryResourceKey ? {
+        repositoryResourceKey: authority.repositoryResourceKey,
+        repositoryIdentity: authority.repositoryIdentity,
+        repositoryMountKey: authority.repositoryMountKey,
+        observedRevision: authority.observedRevision,
+      } : {}),
     }, { status: 200, headers: ELIGIBILITY_HEADERS })
   } catch {
     return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" }, { status: 200, headers: ELIGIBILITY_HEADERS })
@@ -380,13 +531,25 @@ export async function POST(request: Request) {
     worldId?: unknown
     expectedDiffFingerprint?: unknown
     projectKey?: unknown
+    repositoryKey?: unknown
   }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
+  if (!body || typeof body !== "object" || Array.isArray(body)
+    || Object.keys(body).some((key) => CLIENT_FORBIDDEN_REPOSITORY_FIELDS.has(key))) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
+    : await resolveCanonicalWorkspaceProjectBinding(
+      session.user.id,
+      body.projectKey,
+      undefined,
+      body.repositoryKey,
+    )
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const binding = projectBinding.binding
   const projectRoot = binding.workspaceRoot
@@ -680,10 +843,7 @@ export async function POST(request: Request) {
       mutationAuthority = await deriveSpaceMutationAuthority({
         userId: session.user.id,
         worldId: typeof body.worldId === "string" ? body.worldId : "",
-        binding: {
-          projectId: binding.projectId, projectKey: binding.projectKey,
-          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
-        },
+        binding: repositoryMutationBinding(binding),
         expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file" },
       })
@@ -694,6 +854,10 @@ export async function POST(request: Request) {
     }
     const priorMatches = priorThread?.provider === "cloud" && priorThread.mode === "agent"
       && priorThread.worldId === mutationAuthority.worldId && priorThread.path === mutationAuthority.selectedPath
+      && durableSessionMatchesRepository(
+        priorThread as unknown as Record<string, unknown>,
+        binding,
+      )
     if ((forkMode || resuming) && !priorMatches) {
       return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
     }
@@ -731,16 +895,16 @@ export async function POST(request: Request) {
       const terminal = await deriveSpaceMutationAuthority({
         userId: session.user.id,
         worldId: mutationAuthority.worldId,
-        binding: {
-          projectId: binding.projectId, projectKey: binding.projectKey,
-          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
-        },
+        binding: repositoryMutationBinding(binding),
         expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
       })
       if (terminal.worldRevision !== mutationAuthority.worldRevision
         || terminal.workOrderId !== mutationAuthority.workOrderId || terminal.grantId !== mutationAuthority.grantId
-        || terminal.selectedPath !== mutationAuthority.selectedPath) {
+        || terminal.selectedPath !== mutationAuthority.selectedPath
+        || terminal.repositoryResourceKey !== mutationAuthority.repositoryResourceKey
+        || terminal.repositoryMountKey !== mutationAuthority.repositoryMountKey
+        || terminal.observedRevision !== mutationAuthority.observedRevision) {
         return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
       }
     } catch (error) {
@@ -752,6 +916,11 @@ export async function POST(request: Request) {
 
   let mutationWorkspace: CodexIsolatedWorkspace | null = null
   let mutationTarget: Awaited<ReturnType<typeof inspectCodexAssignmentTarget>> | null = null
+  let mutationAssignmentId: string | null = null
+  let mutationAssignmentHash: string | null = null
+  let mutationContextManifest: Awaited<ReturnType<typeof createRepositoryAssignmentContextManifest>> | null = null
+  let mutationReservation: AssignmentReservationSet | null = null
+  let mutationStartMetadata: Record<string, unknown> | null = null
   if (mutationAuthority) {
     try {
       mutationTarget = await inspectCodexAssignmentTarget(projectRoot, mutationAuthority.selectedPath!)
@@ -762,29 +931,129 @@ export async function POST(request: Request) {
       })
       // Target inspection and detached-worktree creation are asynchronous. Re-earn the exact
       // actor/capability/path snapshot after both complete and immediately before provider spawn.
+      const currentBinding = await resolveCanonicalWorkspaceProjectBinding(
+        session.user.id,
+        binding.projectKey,
+        undefined,
+        binding.repositoryKey,
+      )
+      if (!currentBinding.ok || !sameResolvedRepository(binding, currentBinding.binding)) {
+        await cleanupCodexIsolatedWorkspace(mutationWorkspace)
+        mutationWorkspace = null
+        return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
       const spawnAuthority = await deriveSpaceMutationAuthority({
         userId: session.user.id,
         worldId: mutationAuthority.worldId,
-        binding: {
-          projectId: binding.projectId, projectKey: binding.projectKey,
-          repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
-        },
+        binding: repositoryMutationBinding(currentBinding.binding),
         expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
       })
       if (spawnAuthority.worldRevision !== mutationAuthority.worldRevision
         || spawnAuthority.workOrderId !== mutationAuthority.workOrderId
         || spawnAuthority.grantId !== mutationAuthority.grantId
-        || spawnAuthority.selectedPath !== mutationAuthority.selectedPath) {
+        || spawnAuthority.selectedPath !== mutationAuthority.selectedPath
+        || spawnAuthority.repositoryResourceKey !== mutationAuthority.repositoryResourceKey
+        || spawnAuthority.repositoryMountKey !== mutationAuthority.repositoryMountKey
+        || spawnAuthority.observedRevision !== mutationAuthority.observedRevision) {
         await cleanupCodexIsolatedWorkspace(mutationWorkspace)
         mutationWorkspace = null
         return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
       }
+
+      const assignmentCreatedAt = new Date().toISOString()
+      mutationAssignmentId = !forkMode && sessionId ? sessionId : `claude:${randomUUID()}`
+      mutationAssignmentHash = claudeAssignmentHash({
+        authority: mutationAuthority,
+        assignmentId: mutationAssignmentId,
+        targetDigest: mutationTarget.digest,
+      })
+      const contextAssignment: RepositoryAssignmentContextInput = {
+        assignmentId: mutationAssignmentId,
+        worldId: mutationAuthority.worldId,
+        workOrderId: mutationAuthority.workOrderId,
+        assignmentHash: mutationAssignmentHash,
+        createdAt: assignmentCreatedAt,
+        selectedPath: mutationAuthority.selectedPath!,
+        writablePaths: [mutationAuthority.selectedPath!],
+        projectId: mutationAuthority.projectId,
+        projectKey: mutationAuthority.projectKey,
+        repositoryKey: mutationAuthority.repositoryResourceKey!,
+        repositoryIdentity: mutationAuthority.repositoryIdentity,
+        repositoryMountKey: mutationAuthority.repositoryMountKey!,
+        observedRevision: mutationAuthority.observedRevision!,
+        spaceIdentity: binding.project.identity,
+        projectRoot,
+        targetDigest: mutationTarget.digest,
+      }
+      mutationContextManifest = await createRepositoryAssignmentContextManifest({
+        assignment: contextAssignment,
+        projectBinding: binding,
+        isolatedWorkspace: mutationWorkspace,
+      })
+      let reservationClaims: RepositoryAssignmentReservationClaims
+      try {
+        reservationClaims = await deriveRepositoryAssignmentReservationClaims({
+          userId: session.user.id,
+          workOrderId: mutationAuthority.workOrderId,
+          grantId: mutationAuthority.grantId,
+        })
+      } catch {
+        throw new Error("CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE")
+      }
+      mutationReservation = exactClaudeReservation(mutationContextManifest, reservationClaims)
+      await assertClaudeReservationAvailable({
+        userId: session.user.id,
+        worldId: mutationAuthority.worldId,
+        projectId: mutationAuthority.projectId,
+        workOrderId: mutationAuthority.workOrderId,
+        grantId: mutationAuthority.grantId,
+        candidate: mutationReservation,
+      })
+      mutationStartMetadata = {
+        provider: provider.id,
+        external: provider.external,
+        metered: provider.metered,
+        resumed: resuming,
+        mode: "agent",
+        assignmentVersion: "loom-claude-assignment.v1",
+        assignmentId: mutationAssignmentId,
+        assignmentHash: mutationAssignmentHash,
+        worldId: mutationAuthority.worldId,
+        workOrderId: mutationAuthority.workOrderId,
+        grantId: mutationAuthority.grantId,
+        path: mutationAuthority.selectedPath,
+        repositoryResourceId: mutationContextManifest.targetRepository.repositoryResourceId,
+        repositoryResourceKey: mutationAuthority.repositoryResourceKey,
+        repositoryIdentity: mutationAuthority.repositoryIdentity,
+        repositoryMountKey: mutationAuthority.repositoryMountKey,
+        observedRevision: mutationAuthority.observedRevision,
+        isolatedBaseSha: mutationWorkspace.baseSha,
+        contextManifest: mutationContextManifest,
+        reservation: {
+          allowed: [...mutationReservation.paths],
+          forbidden: [],
+          contracts: [...mutationReservation.contracts],
+          environments: [...mutationReservation.environments],
+          version: mutationContextManifest.manifestHash,
+        },
+        ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
+      }
+      // Persist the exact active reservation before any repository-writing provider process starts.
+      await recordLoomStart({
+        userId: session.user.id,
+        kind: "agent",
+        subject: mutationAssignmentId,
+        metadata: mutationStartMetadata,
+      })
     } catch (error) {
       if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
       mutationWorkspace = null
       if (error instanceof SpaceMutationAuthorityError) {
         return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+      }
+      if ((error as Error)?.message === "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE") {
+        return Response.json({ error: "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE" }, { status: 409 })
       }
       return Response.json({ error: "CLAUDE_ISOLATION_UNAVAILABLE" }, { status: 503 })
     }
@@ -849,11 +1118,12 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
-        if (sessionId && (!previewMode || previewIdentityEstablished) && (!diffReviewMode || diffReviewIdentityEstablished)) {
+        const terminalSubject = sessionId ?? mutationAssignmentId
+        if (terminalSubject && (!previewMode || previewIdentityEstablished) && (!diffReviewMode || diffReviewIdentityEstablished)) {
           void recordLoomEnd({
             userId: session.user.id,
             kind: "agent",
-            subject: sessionId,
+            subject: terminalSubject,
             outcome: {
               provider: provider.id,
               external: provider.external,
@@ -864,6 +1134,17 @@ export async function POST(request: Request) {
               } : {}),
               ...(forkMode ? { mode: "agent", forkedFrom: forkSourceId } : {}),
               ...(!forkMode && resumeForkedFrom ? { mode: "agent", forkedFrom: resumeForkedFrom } : {}),
+              ...(mutationAuthority?.repositoryResourceKey ? {
+                mode: "agent",
+                assignmentId: mutationAssignmentId,
+                assignmentHash: mutationAssignmentHash,
+                worldId: mutationAuthority.worldId,
+                workOrderId: mutationAuthority.workOrderId,
+                repositoryResourceKey: mutationAuthority.repositoryResourceKey,
+                repositoryIdentity: mutationAuthority.repositoryIdentity,
+                repositoryMountKey: mutationAuthority.repositoryMountKey,
+                observedRevision: mutationAuthority.observedRevision,
+              } : {}),
               code: event.code ?? null,
               reason: event.reason ?? null,
             },
@@ -893,13 +1174,22 @@ export async function POST(request: Request) {
             worldRevision: mutationAuthority.worldRevision, outcomeKey: mutationAuthority.outcomeKey,
             workOrderId: mutationAuthority.workOrderId, grantId: mutationAuthority.grantId,
             actor: mutationAuthority.actor, selectedPath: mutationAuthority.selectedPath,
+            assignmentId: mutationAssignmentId,
+            assignmentHash: mutationAssignmentHash,
+            contextManifest: mutationContextManifest,
+            ...(mutationAuthority.repositoryResourceKey ? {
+              repositoryResourceKey: mutationAuthority.repositoryResourceKey,
+              repositoryIdentity: mutationAuthority.repositoryIdentity,
+              repositoryMountKey: mutationAuthority.repositoryMountKey,
+              observedRevision: mutationAuthority.observedRevision,
+            } : {}),
           } : {}),
           ...(previewMode ? { provider: "Claude", mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
           ...(resumeForkedFrom ? { provider: "Claude", mode: "delegate", forkedFrom: resumeForkedFrom } : {}),
         })
         // An external turn is the case the doctrine cares most about: the receipt names the provider
         // and records that work left the machine.
-        if (!previewMode) void recordLoomStart({
+        if (!previewMode && !mutationAuthority) void recordLoomStart({
           userId: session.user.id,
           kind: "agent",
           subject: sessionId!,
@@ -910,7 +1200,6 @@ export async function POST(request: Request) {
             resumed: resuming,
             ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {
               mode: "agent",
-              ...(mutationAuthority ? { worldId: mutationAuthority.worldId, path: mutationAuthority.selectedPath } : {}),
               ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             }),
           },
@@ -964,11 +1253,7 @@ export async function POST(request: Request) {
               userId: session.user.id,
               kind: "agent",
               subject: childSessionId,
-              metadata: {
-                provider: provider.id, external: provider.external, metered: provider.metered,
-                resumed: false, mode: "agent", worldId: mutationAuthority!.worldId,
-                path: mutationAuthority!.selectedPath, forkedFrom: forkSourceId,
-              },
+              metadata: { ...mutationStartMetadata!, resumed: false, forkedFrom: forkSourceId },
             })
           } catch {
             finish({ type: "done", reason: "FORK_IDENTITY_NOT_DURABLE", code: null })
@@ -977,7 +1262,19 @@ export async function POST(request: Request) {
           }
           if (settled) return
           sessionId = childSessionId
-          send({ type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: forkSourceId })
+          send({
+            type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false,
+            forkedFrom: forkSourceId, assignmentId: mutationAssignmentId, assignmentHash: mutationAssignmentHash,
+            worldId: mutationAuthority!.worldId, worldRevision: mutationAuthority!.worldRevision,
+            outcomeKey: mutationAuthority!.outcomeKey, workOrderId: mutationAuthority!.workOrderId,
+            grantId: mutationAuthority!.grantId, actor: mutationAuthority!.actor,
+            selectedPath: mutationAuthority!.selectedPath,
+            repositoryResourceKey: mutationAuthority!.repositoryResourceKey,
+            repositoryIdentity: mutationAuthority!.repositoryIdentity,
+            repositoryMountKey: mutationAuthority!.repositoryMountKey,
+            observedRevision: mutationAuthority!.observedRevision,
+            contextManifest: mutationContextManifest,
+          })
         }
         if (previewMode) {
           if (!previewSessionInitialized) {
@@ -1224,6 +1521,14 @@ export async function POST(request: Request) {
               const isolatedResult = await inspectCodexIsolatedWorkspace(mutationWorkspace)
               await cleanupCodexIsolatedWorkspace(mutationWorkspace)
               mutationWorkspace = null
+              await assertClaudeReservationAvailable({
+                userId: session.user.id,
+                worldId: mutationAuthority.worldId,
+                projectId: mutationAuthority.projectId,
+                workOrderId: mutationAuthority.workOrderId,
+                grantId: mutationAuthority.grantId,
+                candidate: mutationReservation!,
+              })
               const baseWriter = workspaceFileWriteDependencies(projectRoot)
               const promoted = await writeGovernedWorkspaceFile({
                 userId: session.user.id,
@@ -1237,19 +1542,28 @@ export async function POST(request: Request) {
                     return { ok: false, failure: "FAILED_SCOPE_COLLISION", detail: "Claude promotion escaped the exact Space selection" }
                   }
                   try {
+                    const currentBinding = await resolveCanonicalWorkspaceProjectBinding(
+                      session.user.id,
+                      binding.projectKey,
+                      undefined,
+                      binding.repositoryKey,
+                    )
+                    if (!currentBinding.ok || !sameResolvedRepository(binding, currentBinding.binding)) {
+                      return { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude repository revision changed before promotion" }
+                    }
                     const terminal = await deriveSpaceMutationAuthority({
                       userId: session.user.id,
                       worldId: mutationAuthority!.worldId,
-                      binding: {
-                        projectId: binding.projectId, projectKey: binding.projectKey,
-                        repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
-                      },
+                      binding: repositoryMutationBinding(currentBinding.binding),
                       expected: { actor: "claude", capability: "selected-file-change" },
                       target: { kind: "selected-file", requestedPath },
                     })
                     return terminal.worldRevision === mutationAuthority!.worldRevision
                       && terminal.workOrderId === mutationAuthority!.workOrderId
                       && terminal.grantId === mutationAuthority!.grantId
+                      && terminal.repositoryResourceKey === mutationAuthority!.repositoryResourceKey
+                      && terminal.repositoryMountKey === mutationAuthority!.repositoryMountKey
+                      && terminal.observedRevision === mutationAuthority!.observedRevision
                       ? { ok: true }
                       : { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude Space authority changed before promotion" }
                   } catch {
