@@ -115,7 +115,7 @@ describe("Experience V2 Space route", () => {
     }))],
     ["PATCH", () => PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "a", projectKey: "foreign" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "a", projectKey: "foreign", adoptionHash: "d".repeat(64) }),
     }))],
   ])("rejects an unregistered %s project selector before binding or persistence", async (_method, invoke) => {
     seams.resolveBinding.mockClear()
@@ -447,6 +447,30 @@ describe("merged external Space delivery finalization", () => {
     })).toBe(true)
   })
 
+  it("requires canonical ledger identities for the sealed finalization evidence chain", () => {
+    const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalEvidenceIdentitiesAreExact as (input: Record<string, unknown>) => boolean
+    const validationDigest = "1".repeat(64)
+    const reviewDigest = "2".repeat(64)
+    const base = {
+      sealEntityId: "signed-seal",
+      sealSignature: "signed-seal",
+      adoptionHash: "3".repeat(64),
+      authorization: { entityType: "williamos_artifact_adoption_authorization", entityId: "3".repeat(64) },
+      validation: { entityType: "williamos_artifact_adoption_validation", entityId: validationDigest },
+      review: { entityType: "williamos_artifact_adoption_review", entityId: reviewDigest },
+      validationDigest,
+      reviewDigest,
+    }
+    expect(exact(base)).toBe(true)
+    expect(exact({ ...base, sealEntityId: "wrong" })).toBe(false)
+    expect(exact({ ...base, authorization: { ...base.authorization, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, authorization: { ...base.authorization, entityId: "4".repeat(64) } })).toBe(false)
+    expect(exact({ ...base, validation: { ...base.validation, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, validation: { ...base.validation, entityId: "5".repeat(64) } })).toBe(false)
+    expect(exact({ ...base, review: { ...base.review, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, review: { ...base.review, entityId: "6".repeat(64) } })).toBe(false)
+  })
+
   it("loads historical Ed25519 verification keys from the configured public-key ring", () => {
     const configuredKeys = (globalThis as Record<string, unknown>).__williamosConfiguredDeliveryVerificationKeys as () => Record<string, unknown>
     const priorRing = process.env.WILLIAMOS_DELIVERY_SEAL_PUBLIC_KEYS_JSON
@@ -464,6 +488,7 @@ describe("merged external Space delivery finalization", () => {
 
   const headSha = "a".repeat(40)
   const mergeSha = "b".repeat(40)
+  const adoptionHash = "d".repeat(64)
   const context = {
     worldId: "space-1",
     outcomeKey: "external:outcome",
@@ -478,6 +503,7 @@ describe("merged external Space delivery finalization", () => {
     headSha,
     paths: ["app/api/environment/space/route.ts", "tests/experience-v2-space-route.test.ts"],
     admissionDigest: "c".repeat(64),
+    adoptionHash,
     seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } as never,
     terminal: false,
   }
@@ -494,7 +520,7 @@ describe("merged external Space delivery finalization", () => {
     })
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(complete).toHaveBeenCalledWith("owner", mixedContext, mixedInspection)
@@ -514,7 +540,7 @@ describe("merged external Space delivery finalization", () => {
     seams.assertOwner.mockReturnValueOnce({ ok: false, failure: "NOT_OWNER", detail: "current owner required" })
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(403)
     expect(await response.json()).toEqual({ error: "NOT_OWNER", detail: "current owner required" })
@@ -537,12 +563,23 @@ describe("merged external Space delivery finalization", () => {
     }
   }
 
+  it("loads and finalizes only the owner-selected exact persisted adoption", async () => {
+    const deps = dependencies()
+    ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
+    const response = await PATCH(new Request("http://localhost/api/environment/space", {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
+    }))
+    expect(response.status).toBe(200)
+    expect(deps.load).toHaveBeenCalledWith("owner", "space-1", adoptionHash)
+  })
+
   it("terminalizes only after the exact sealed head and paths are merged into protected main", async () => {
     const deps = dependencies()
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
@@ -572,7 +609,7 @@ describe("merged external Space delivery finalization", () => {
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({ error: "MERGED_EXTERNAL_DELIVERY_NOT_PROVEN" })
@@ -590,7 +627,7 @@ describe("merged external Space delivery finalization", () => {
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ status: "FINALIZED", replayed: true })

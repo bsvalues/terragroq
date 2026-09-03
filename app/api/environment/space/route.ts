@@ -50,6 +50,7 @@ const CANONICAL_WILLIAMOS_URL = process.env.BETTER_AUTH_URL?.trim() || null
 const MAX_SPACE_BYTES = 256_000
 const FINALIZE_MERGED_EXTERNAL_DELIVERY = "space.external_work_order.finalize_merged_delivery"
 const SHA = /^[0-9a-f]{40}$/
+const DIGEST = /^[0-9a-f]{64}$/
 const EXTERNAL_QUEUE_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:access", "spend:increase"] as const
 const HERMES_LEGACY_TIME_ZONE = "America/Los_Angeles"
 
@@ -67,6 +68,7 @@ type MergedExternalContext = Readonly<{
   headSha: string
   paths: readonly string[]
   admissionDigest: string
+  adoptionHash: string
   seal: WilliamOSDeliverySeal
   terminal: boolean
 }>
@@ -83,7 +85,7 @@ type MergedExternalInspection = Readonly<{
 }>
 
 type MergedExternalFinalizationDependencies = Readonly<{
-  load(userId: string, worldId: string): Promise<MergedExternalContext>
+  load(userId: string, worldId: string, adoptionHash: string): Promise<MergedExternalContext>
   inspect(context: MergedExternalContext): Promise<MergedExternalInspection>
   complete(userId: string, context: MergedExternalContext, inspection: MergedExternalInspection): Promise<{ replayed: boolean }>
 }>
@@ -101,6 +103,26 @@ function exactCanonicalPaths(left: readonly string[], right: readonly string[]):
     && new Set(values).size === values.length
     && JSON.stringify(values) === JSON.stringify([...values].sort())
   return canonical(left) && canonical(right) && JSON.stringify(left) === JSON.stringify(right)
+}
+
+function mergedExternalEvidenceIdentitiesAreExact(input: Readonly<{
+  sealEntityId: unknown
+  sealSignature: unknown
+  adoptionHash: unknown
+  authorization: Readonly<{ entityType?: unknown; entityId?: unknown }> | null
+  validation: Readonly<{ entityType?: unknown; entityId?: unknown }> | null
+  review: Readonly<{ entityType?: unknown; entityId?: unknown }> | null
+  validationDigest: unknown
+  reviewDigest: unknown
+}>): boolean {
+  return typeof input.adoptionHash === "string" && DIGEST.test(input.adoptionHash)
+    && input.sealEntityId === input.sealSignature
+    && input.authorization?.entityType === "williamos_artifact_adoption_authorization"
+    && input.authorization?.entityId === input.adoptionHash
+    && input.validation?.entityType === "williamos_artifact_adoption_validation"
+    && input.validation?.entityId === input.validationDigest
+    && input.review?.entityType === "williamos_artifact_adoption_review"
+    && input.review?.entityId === input.reviewDigest
 }
 
 function mergedExternalOutcomeVersionIsExact(input: Readonly<{
@@ -408,14 +430,16 @@ function mergedExternalAuthorizationBindingIsExact(input: Readonly<{
 
 if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalAuthorizationBindingIsExact = mergedExternalAuthorizationBindingIsExact
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalEvidenceIdentitiesAreExact = mergedExternalEvidenceIdentitiesAreExact
 }
 
 async function reconcileMergedExternalAdoption(
-  input: Readonly<{ userId: string; worldId: string }>,
+  input: Readonly<{ userId: string; worldId: string; adoptionHash: string }>,
   dependencies: MergedExternalFinalizationDependencies,
 ) {
-  const context = await dependencies.load(input.userId, input.worldId)
-  if (context.worldId !== input.worldId || !SHA.test(context.headSha) || context.paths.length === 0) {
+  const context = await dependencies.load(input.userId, input.worldId, input.adoptionHash)
+  if (context.worldId !== input.worldId || context.adoptionHash !== input.adoptionHash
+    || !DIGEST.test(context.adoptionHash) || !SHA.test(context.headSha) || context.paths.length === 0) {
     throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_INVALID")
   }
   const inspected = await dependencies.inspect(context)
@@ -433,6 +457,7 @@ async function reconcileMergedExternalAdoption(
     worldId: context.worldId,
     outcomeKey: context.outcomeKey,
     workOrderId: context.workOrderId,
+    adoptionHash: context.adoptionHash,
     pullRequest: context.pullRequest,
     headSha: context.headSha,
     mergeSha: inspected.mergeSha,
@@ -440,13 +465,18 @@ async function reconcileMergedExternalAdoption(
   }
 }
 
-async function loadMergedExternalContext(userId: string, worldId: string): Promise<MergedExternalContext> {
+async function loadMergedExternalContext(
+  userId: string,
+  worldId: string,
+  adoptionHash: string,
+): Promise<MergedExternalContext> {
+  if (!DIGEST.test(adoptionHash)) throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_INVALID")
   const result = await pool.query(`
     SELECT receipt."resultBinding", receipt."requestBinding",
       world."snapshot", outcome."id" AS "outcomeId", outcome."outcomeKey", outcome."version" AS "outcomeVersion",
       outcome."lifecycleState", outcome."terminalResult", outcome."terminalEvidenceRefs",
       work."id" AS "workOrderId", work."status" AS "workOrderStatus",
-      seal_event."metadata" AS "sealMetadata"
+      seal_event."entityId" AS "sealEntityId", seal_event."metadata" AS "sealMetadata"
     FROM "outcome_queue_mutation_receipt" receipt
     JOIN "working_world" world ON world."userId"=receipt."userId" AND world."id"=$2
     JOIN "outcome_queue_item" outcome ON outcome."userId"=receipt."userId"
@@ -454,7 +484,7 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     JOIN "work_order" work ON work."userId"=receipt."userId"
       AND work."id"=(receipt."resultBinding"->>'workOrderId')::integer
     JOIN LATERAL (
-      SELECT "metadata" FROM "governance_event"
+      SELECT "entityId", "metadata" FROM "governance_event"
       WHERE "userId"=receipt."userId" AND "eventType"='EVIDENCE_RECORDED'
         AND "entityType"='williamos_delivery_seal'
         AND "metadata"->'seal'->'payload'->>'version'='williamos-delivery-seal.v2'
@@ -463,11 +493,12 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
           =receipt."resultBinding"->>'outcomeKey'
         AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer
           =(receipt."resultBinding"->>'workOrderId')::integer
-      ORDER BY "id" DESC LIMIT 1
+        AND "metadata"->>'adoptionHash'=$3
+      ORDER BY "id" DESC LIMIT 2
     ) seal_event ON TRUE
     WHERE receipt."userId"=$1 AND receipt."operation"='space.external_work_order.admit'
       AND receipt."resultBinding"->>'worldId'=$2
-    ORDER BY receipt."id" DESC LIMIT 2`, [userId, worldId])
+    ORDER BY receipt."id" DESC LIMIT 2`, [userId, worldId, adoptionHash])
   if (result.rows.length !== 1) throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_INVALID")
   const row = result.rows[0]
   const binding = record(row.resultBinding)
@@ -477,7 +508,10 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
   const seal = sealMetadata.seal as WilliamOSDeliverySeal
   const verificationKeys = configuredDeliveryVerificationKeys()
   if (Object.keys(verificationKeys).length === 0 || !verifyWilliamOSDeliverySeal(seal, verificationKeys)
-    || seal.payload.version !== "williamos-delivery-seal.v2") {
+    || seal.payload.version !== "williamos-delivery-seal.v2"
+    || sealMetadata.adoptionHash !== adoptionHash
+    || seal.payload.adoption.adoptionHash !== adoptionHash
+    || row.sealEntityId !== seal.signature) {
     throw new Error("MERGED_EXTERNAL_DELIVERY_SEAL_INVALID")
   }
   const adoption = seal.payload.adoption
@@ -529,6 +563,7 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     headSha: artifact.headSha,
     paths: artifactPaths,
     admissionDigest: hashRecord({ resultBinding: binding, requestBinding }),
+    adoptionHash,
     seal,
     terminal,
   }
@@ -587,7 +622,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
         AND "resultBinding"->>'worldId'=${expected.worldId}
       ORDER BY "id" DESC LIMIT 2 FOR UPDATE`)
     const sealRows = await transaction.execute(sql`
-      SELECT "metadata" FROM "governance_event"
+      SELECT "entityId", "metadata" FROM "governance_event"
       WHERE "userId"=${userId} AND "eventType"='EVIDENCE_RECORDED'
         AND "entityType"='williamos_delivery_seal'
         AND "metadata"->>'adoptionHash'=${expected.seal.payload.version === "williamos-delivery-seal.v2"
@@ -599,6 +634,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
     const lockedAdmission = admissionRows.rows[0]
     const lockedBinding = lockedAdmission ? record(lockedAdmission.resultBinding) : null
     const lockedSealMetadata = sealRows.rows[0] ? record(sealRows.rows[0].metadata) : null
+    const lockedSealEntityId = sealRows.rows[0]?.entityId
     const lockedSeal = lockedSealMetadata?.seal as WilliamOSDeliverySeal | undefined
     const authorizationEventId = Number(lockedSealMetadata?.authorizationEventId)
     const validationEventId = Number(lockedSealMetadata?.validationEventId)
@@ -606,7 +642,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
     const authorityEvidenceRows = Number.isSafeInteger(authorizationEventId)
       && Number.isSafeInteger(validationEventId) && Number.isSafeInteger(reviewEventId)
       ? await transaction.execute(sql`
-          SELECT "id", "eventType", "metadata" FROM "governance_event"
+          SELECT "id", "eventType", "entityType", "entityId", "metadata" FROM "governance_event"
           WHERE "userId"=${userId} AND "id" IN (${authorizationEventId}, ${validationEventId}, ${reviewEventId})
           ORDER BY "id" FOR UPDATE`)
       : { rows: [] }
@@ -738,7 +774,9 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && persistedSpine?.outcomeKey === expected.outcomeKey && persistedSpine?.workOrderId === expected.workOrderId
       && admissionRows.rows.length === 1 && lockedAdmissionDigest === expected.admissionDigest
       && sealRows.rows.length === 1 && lockedSeal?.signature === expected.seal.signature
+      && lockedSealMetadata?.adoptionHash === expected.adoptionHash
       && lockedSeal?.payload.version === "williamos-delivery-seal.v2"
+      && lockedSeal.payload.adoption.adoptionHash === expected.adoptionHash
       && lockedSeal.payload.adoption.workOrder.id === expected.workOrderId
       && lockedSeal.payload.adoption.grant.id === expected.deliveryGrantId
       && exactCanonicalPaths(lockedSeal.payload.adoption.artifact.paths, expected.paths)
@@ -746,6 +784,16 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       && authorityEvidence.get(authorizationEventId)?.eventType === "ARTIFACT_ADOPTION_AUTHORIZED"
       && authorityEvidence.get(validationEventId)?.eventType === "ARTIFACT_ADOPTION_VALIDATED"
       && authorityEvidence.get(reviewEventId)?.eventType === "ARTIFACT_ADOPTION_REVIEWED"
+      && mergedExternalEvidenceIdentitiesAreExact({
+        sealEntityId: lockedSealEntityId,
+        sealSignature: lockedSeal.signature,
+        adoptionHash: expected.adoptionHash,
+        authorization: authorityEvidence.get(authorizationEventId) ?? null,
+        validation: authorityEvidence.get(validationEventId) ?? null,
+        review: authorityEvidence.get(reviewEventId) ?? null,
+        validationDigest: lockedSeal.payload.adoption.evidence.validationDigest,
+        reviewDigest: lockedSeal.payload.adoption.evidence.reviewDigest,
+      })
       && authorizationMetadata?.adoptionHash === lockedSeal.payload.adoption.adoptionHash
       && validationMetadata?.adoptionHash === lockedSeal.payload.adoption.adoptionHash
       && reviewMetadata?.adoptionHash === lockedSeal.payload.adoption.adoptionHash
@@ -762,6 +810,7 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       outcomeKey: expected.outcomeKey, workOrderId: expected.workOrderId,
       pullRequest: expected.pullRequest, headSha: expected.headSha, mergeSha: inspection.mergeSha,
       paths: [...expected.paths], admissionDigest: expected.admissionDigest,
+      adoptionHash: expected.adoptionHash,
       sealSignature: expected.seal.signature,
     })
     const terminalKey = `${FINALIZE_MERGED_EXTERNAL_DELIVERY}:${evidenceHash}`
@@ -1074,10 +1123,11 @@ export async function PATCH(request: Request) {
   if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
     return reply({ error: "MERGED_EXTERNAL_DELIVERY_REQUEST_INVALID" }, 400)
   }
-  const body = parsed.value as { mode?: unknown; worldId?: unknown; projectKey?: unknown }
-  if (Object.keys(body).sort().join("\0") !== "mode\0projectKey\0worldId"
+  const body = parsed.value as { mode?: unknown; worldId?: unknown; projectKey?: unknown; adoptionHash?: unknown }
+  if (Object.keys(body).sort().join("\0") !== "adoptionHash\0mode\0projectKey\0worldId"
     || body.mode !== "FINALIZE_MERGED_EXTERNAL_DELIVERY"
-    || !validWorldId(body.worldId)) {
+    || !validWorldId(body.worldId)
+    || typeof body.adoptionHash !== "string" || !DIGEST.test(body.adoptionHash)) {
     return reply({ error: "MERGED_EXTERNAL_DELIVERY_REQUEST_INVALID" }, 400)
   }
   const projectKey = canonicalProjectKey(body.projectKey)
@@ -1091,6 +1141,7 @@ export async function PATCH(request: Request) {
     return reply(await reconcileMergedExternalAdoption({
       userId: session.user.id,
       worldId: body.worldId,
+      adoptionHash: body.adoptionHash,
     }, finalizationDependencies()))
   } catch (error) {
     const code = error instanceof Error && /^MERGED_EXTERNAL_DELIVERY_|^WILLIAMOS_PROJECT_ROOT_/.test(error.message)

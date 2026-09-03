@@ -41,7 +41,7 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
   const artifactPaths = artifactPathSet ?? (Array.isArray(row.allowedFiles)
     ? row.allowedFiles.filter((value): value is string => typeof value === "string")
     : paths)
-  const events: Array<{ type: string; entity: string; metadata: unknown }> = []
+  const events: Array<{ type: string; entity: string; entityId?: string; metadata: unknown }> = []
   const grants: Array<Record<string, unknown>> = []
   let expireGrantAtFence = false
   const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
@@ -74,8 +74,14 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
             adoption.outcome?.key === values[2]
             && adoption.workOrder?.id === values[3]
           ))
+          && (values?.length !== 6 || (
+            adoption.outcome?.key === values[2]
+            && adoption.workOrder?.id === values[3]
+            && adoption.artifact?.pullRequest === values[4]
+            && adoption.artifact?.headSha === values[5]
+          ))
       }).reverse()
-      return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ metadata: event.metadata })) }
+      return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ entityId: event.entityId, metadata: event.metadata })) }
     }
     if (sql.includes("FROM \"governance_event\"") && sql.includes("ARTIFACT_ADOPTION_AUTHORIZED")) {
       const matching = events.filter((event) => {
@@ -91,13 +97,22 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
     if (sql.includes("FROM \"governance_event\"") && sql.includes("ARTIFACT_ADOPTION_VALIDATED")) {
       const validation = events.find((event) => event.type === "ARTIFACT_ADOPTION_VALIDATED")
       const review = events.find((event) => event.type === "ARTIFACT_ADOPTION_REVIEWED")
-      return { rows: validation && review ? [{ validationEventId: 102, validationMetadata: validation.metadata, reviewEventId: 103, reviewMetadata: review.metadata }] : [] }
+      return { rows: validation && review ? [{
+        validationEventId: 102,
+        validationEntityType: validation.entity,
+        validationEntityId: validation.entityId,
+        validationMetadata: validation.metadata,
+        reviewEventId: 103,
+        reviewEntityType: review.entity,
+        reviewEntityId: review.entityId,
+        reviewMetadata: review.metadata,
+      }] : [] }
     }
     if (sql.includes("INSERT INTO \"governance_event\"")) {
       const type = String(values?.[1])
       const entity = String(values?.[2])
       const metadata = JSON.parse(String(values?.[5]))
-      events.push({ type, entity, metadata })
+      events.push({ type, entity, entityId: String(values?.[3] ?? ""), metadata })
       return { rows: [{ id: 100 + events.length }] }
     }
     return { rows: [] }
@@ -127,7 +142,7 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
     if (sql.includes("ARTIFACT_ADOPTION_AUTHORIZED") && sql.includes("FOR UPDATE")) return { rows: [] }
     if (sql.includes("INSERT INTO \"governance_event\"")) {
       if (sql.includes("williamos_delivery_seal")) {
-        events.push({ type: "EVIDENCE_RECORDED", entity: "williamos_delivery_seal", metadata: JSON.parse(String(values?.[2])) })
+        events.push({ type: "EVIDENCE_RECORDED", entity: "williamos_delivery_seal", entityId: String(values?.[1] ?? ""), metadata: JSON.parse(String(values?.[2])) })
         return { rows: [{ id: 104 }] }
       }
       if (values?.[1] === "ARTIFACT_ADOPTION_AUTHORIZED") events.push({ type: String(values[1]), entity: String(values[2]), metadata: JSON.parse(String(values[5])) })
@@ -234,6 +249,72 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
   })
 
+  it("restores a verified deferred-target seal after the pull request is merged", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:merged", preview.previewDigest)
+    await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:merged")
+    candidate.lifecycle.inspectPullRequest.mockClear()
+    candidate.lifecycle.inspectPullRequest.mockResolvedValue({
+      number: 1117,
+      state: "MERGED",
+      headRefOid: head,
+      isDraft: false,
+      reviewDecision: "",
+      checksGreen: true,
+      checksComplete: true,
+      reviewed: true,
+      reviewCompleted: true,
+      unresolvedThreadCount: 0,
+    })
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      worldId: "space-1",
+      pullRequest: 1117,
+      headSha: head,
+      paths,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("requires and honors an exact target selector when one Space has multiple sealed artifacts", async () => {
+    const deferred = authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    })
+    const candidate = harness(deferred)
+    const firstPreview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:first", firstPreview.previewDigest)
+    const firstSeal = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:first")
+
+    const otherTarget = { pullRequest: 1154, expectedHeadSha: "4".repeat(40) } as const
+    const other = harness(deferred, otherTarget)
+    const otherPreview = await other.runtime.preview("owner-1", "space-1", otherTarget)
+    await other.runtime.authorize("owner-1", "space-1", otherTarget, "adopt:1154:second", otherPreview.previewDigest)
+    await other.runtime.issue("owner-1", "space-1", "adopt:1154:second")
+    candidate.events.push(...structuredClone(other.events))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_TARGET_REQUIRED" })
+    candidate.lifecycle.inspectPullRequest.mockClear()
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+    await expect(candidate.runtime.preview("owner-1", "space-1", target)).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1117,
+      headSha: head,
+      adoptionHash: firstSeal.adoptionHash,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
   it("still rejects a partially recorded pull request identity", async () => {
     const candidate = harness(authorityRow({
       admissionRequest: {
@@ -249,6 +330,67 @@ describe("persisted prospective artifact adoption", () => {
     await expect(candidate.runtime.preview("owner-1", "space-1"))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
     expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("rejects coercible or over-specified persisted admission targets", async () => {
+    const invalidTargets = [
+      { number: "1117", headSha: head },
+      { number: true, headSha: head },
+      { number: 1117, headSha: head, mutable: true },
+    ]
+    for (const pullRequest of invalidTargets) {
+      const candidate = harness(authorityRow({
+        admissionRequest: {
+          worldId: "space-1",
+          externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths, pullRequest },
+        },
+      }))
+      await expect(candidate.runtime.preview("owner-1", "space-1"))
+        .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+      expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    }
+  })
+
+  it("requires exact ledger entity identities when restoring a persisted seal", async () => {
+    const cases = [
+      ["seal entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.entity === "williamos_delivery_seal")!
+        event.entityId = "wrong-signature"
+      }],
+      ["validation entity type", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_VALIDATED")!
+        event.entity = "wrong_validation_type"
+      }],
+      ["validation entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_VALIDATED")!
+        event.entityId = "f".repeat(64)
+      }],
+      ["review entity type", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_REVIEWED")!
+        event.entity = "wrong_review_type"
+      }],
+      ["review entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_REVIEWED")!
+        event.entityId = "f".repeat(64)
+      }],
+    ] as const
+    for (const [label, mutate] of cases) {
+      const candidate = harness(authorityRow({
+        admissionRequest: {
+          worldId: "space-1",
+          externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+        },
+      }))
+      const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+      await candidate.runtime.authorize("owner-1", "space-1", target, `adopt:1117:ledger:${label}`, preview.previewDigest)
+      await candidate.runtime.issue("owner-1", "space-1", `adopt:1117:ledger:${label}`)
+      mutate(candidate)
+      candidate.lifecycle.inspectPullRequest.mockClear()
+
+      await expect(candidate.runtime.preview("owner-1", "space-1"))
+        .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+      expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    }
   })
 
   it("accepts a canonical literal Next route path containing a dynamic segment", async () => {
