@@ -186,7 +186,7 @@ function ProjectExplorer({
                       : "hover:bg-[var(--workbench-raised)]",
                   )}
                 >
-                  <span className="block truncate text-sm">{thread.title}{thread.runCount && thread.runCount > 1 ? ` · ${thread.runCount} runs` : ""}</span>
+                  <span className="block truncate text-sm">{thread.title}{thread.runCount && thread.runCount > 1 ? ` · ${thread.runCountPartial ? `${thread.runCount}+` : thread.runCount} runs` : ""}</span>
                   <span className="mt-0.5 block font-mono text-[10px] text-[var(--workbench-muted)]">{stamp(thread.lastActivityAt)}</span>
                 </button>
               ))}
