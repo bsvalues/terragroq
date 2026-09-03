@@ -202,6 +202,55 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
   })
 
+  it("allows an active Space admitted before a pull request exists to choose its exact target later", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("never restores an unverified seal through the later-target fallback", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:deferred", preview.previewDigest)
+    await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:deferred")
+    const persisted = candidate.events.find((event) => event.type === "EVIDENCE_RECORDED")
+    const metadata = persisted?.metadata as { seal?: { signature?: string } } | undefined
+    if (!metadata?.seal) throw new Error("expected a persisted seal")
+    metadata.seal.signature = "tampered"
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+  })
+
+  it("still rejects a partially recorded pull request identity", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: 1117 },
+        },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
   it("accepts a canonical literal Next route path containing a dynamic segment", async () => {
     const dynamicRoutePaths = ["app/api/environment/spaces/[worldId]/route.ts"]
     const row = authorityRow({

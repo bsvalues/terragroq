@@ -321,19 +321,27 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     const binding = object(current.resultBinding)
     const request = object(current.requestBinding)
     const external = object(request.externalWorkOrder)
-    const pullRequest = object(external.pullRequest)
+    const hasAdmittedTarget = Object.prototype.hasOwnProperty.call(external, "pullRequest")
+    const pullRequest = hasAdmittedTarget ? object(external.pullRequest) : null
     const outcomeKey = String(current.outcomeKey ?? "")
     const outcomeId = Number(current.outcomeId)
     const workOrderId = Number(current.workOrderId)
-    const admittedPullRequest = Number(pullRequest.number)
-    const admittedHeadSha = String(pullRequest.headSha ?? "")
     const admissionAnchorPaths = exactPaths(binding.reservedPaths)
     if (binding.worldId !== worldId || binding.outcomeKey !== outcomeKey
       || Number(binding.workOrderId) !== workOrderId || !Number.isSafeInteger(outcomeId) || outcomeId <= 0
       || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
-      || !Number.isSafeInteger(admittedPullRequest) || admittedPullRequest <= 0 || !SHA.test(admittedHeadSha)
       || String(external.repository ?? "").trim().toLowerCase() !== SUPPORTED_REPOSITORY
       || !same(admissionAnchorPaths, exactPaths(external.reservedPaths))) {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
+    }
+    // A Work Order can be admitted before its delivery artifact exists. That is a valid active
+    // Space, not stale authority: let the caller fall through to the existing exact-target picker.
+    // Once a pullRequest field is present, however, its complete immutable identity remains
+    // mandatory so partial or malformed historical bindings still fail closed.
+    if (!hasAdmittedTarget) return null
+    const admittedPullRequest = Number(pullRequest?.number)
+    const admittedHeadSha = String(pullRequest?.headSha ?? "")
+    if (!Number.isSafeInteger(admittedPullRequest) || admittedPullRequest <= 0 || !SHA.test(admittedHeadSha)) {
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
     }
     const result = await options.database.query(
@@ -625,8 +633,14 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         [userId, authorization.adoptionHash],
       )
       if (sealed.rows[0]) {
-        const metadata = object(sealed.rows[0].metadata)
-        const seal = metadata.seal as WilliamOSDeliverySeal
+        // Never surface a stored seal directly. Deferred-target admissions deliberately fall through
+        // restorePersistedSeal so the exact target picker remains available, but a later restore can
+        // still encounter an issued seal here. Re-run the same authority, evidence, signature, and
+        // delivery validation used by issuance before representing that seal as durable truth.
+        const seal = await issueProspectiveArtifactAdoptionSeal({
+          userId,
+          adoptionHash: authorization.adoptionHash,
+        }, dependencies)
         return {
           ...ready,
           status: "SEALED" as const,
