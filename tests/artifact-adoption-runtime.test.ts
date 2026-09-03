@@ -215,6 +215,25 @@ describe("persisted prospective artifact adoption", () => {
     expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
   })
 
+  it("never restores an unverified seal through the later-target fallback", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:deferred", preview.previewDigest)
+    await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:deferred")
+    const persisted = candidate.events.find((event) => event.type === "EVIDENCE_RECORDED")
+    const metadata = persisted?.metadata as { seal?: { signature?: string } } | undefined
+    if (!metadata?.seal) throw new Error("expected a persisted seal")
+    metadata.seal.signature = "tampered"
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+  })
+
   it("still rejects a partially recorded pull request identity", async () => {
     const candidate = harness(authorityRow({
       admissionRequest: {

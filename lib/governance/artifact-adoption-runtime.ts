@@ -633,8 +633,14 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         [userId, authorization.adoptionHash],
       )
       if (sealed.rows[0]) {
-        const metadata = object(sealed.rows[0].metadata)
-        const seal = metadata.seal as WilliamOSDeliverySeal
+        // Never surface a stored seal directly. Deferred-target admissions deliberately fall through
+        // restorePersistedSeal so the exact target picker remains available, but a later restore can
+        // still encounter an issued seal here. Re-run the same authority, evidence, signature, and
+        // delivery validation used by issuance before representing that seal as durable truth.
+        const seal = await issueProspectiveArtifactAdoptionSeal({
+          userId,
+          adoptionHash: authorization.adoptionHash,
+        }, dependencies)
         return {
           ...ready,
           status: "SEALED" as const,
