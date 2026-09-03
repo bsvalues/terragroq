@@ -359,7 +359,8 @@ export function createAssignmentContextManifest(
 }
 
 function payloadOf(manifest: AssignmentContextManifest): Omit<AssignmentContextManifest, "manifestHash"> {
-  const { manifestHash: _manifestHash, ...payload } = manifest
+  const { manifestHash, ...payload } = manifest
+  void manifestHash
   return payload
 }
 
