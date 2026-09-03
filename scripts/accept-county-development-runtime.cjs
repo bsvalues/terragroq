@@ -157,6 +157,28 @@ async function openWilliam(page) {
   return rail
 }
 
+async function rootFileButton(page, fileName) {
+  const selector = `button[title="${fileName.replace(/"/g, '\\"')}"]`
+  for (let batch = 0; batch < 20; batch += 1) {
+    const target = page.locator(selector).first()
+    if (await target.isVisible().catch(() => false)) return target
+
+    const more = page.locator('button[aria-label^="Show "][aria-label*=" more "][aria-label$=" entries"]').first()
+    if (await more.isVisible().catch(() => false)) {
+      await more.click()
+      continue
+    }
+    await page.waitForTimeout(500)
+  }
+  throw new Error(`${fileName} did not become visible in the active TerraFusion repository tree`)
+}
+
+async function workspaceTreeFromRootFile(rootFile) {
+  const tree = rootFile.locator('xpath=ancestor::nav[@aria-label="Workspace files"] | ancestor::ul[contains(@aria-label, " file tree")]').first()
+  await tree.waitFor({ state: "visible", timeout: 30_000 })
+  return tree
+}
+
 async function focusDeveloperPreview(page) {
   await page.getByRole("button", { name: /^(Restore|Focus) Developer preview$/ }).click()
   const frameElement = page.locator('iframe[title="Running TerraFusion application"]')
@@ -225,13 +247,11 @@ async function main() {
     await page.waitForURL((url) => url.origin === origin && url.pathname === "/", { timeout: 90_000 })
     await page.waitForLoadState("networkidle")
 
-    const fileTree = page.getByRole("navigation", { name: "Workspace files" })
-    await fileTree.waitFor({ state: "visible", timeout: 90_000 })
-    assert.match(await fileTree.innerText(), /TERRAFUSION/i)
-    observe("REAL_SOURCE_PINNED_TERRAFUSION_WORKSPACE_OPENED", { terraFusionSha })
-
-    const readmeButton = fileTree.locator('button[title="README.md"]')
-    await readmeButton.waitFor({ state: "visible", timeout: 30_000 })
+    const readmeButton = await rootFileButton(page, "README.md")
+    const fileTree = await workspaceTreeFromRootFile(readmeButton)
+    const treeIdentity = `${await fileTree.getAttribute("aria-label") || ""} ${await fileTree.innerText()}`
+    assert.match(treeIdentity, /TERRAFUSION/i)
+    observe("REAL_SOURCE_PINNED_TERRAFUSION_WORKSPACE_OPENED", { terraFusionSha, treeIdentity: treeIdentity.slice(0, 200) })
     await readmeButton.click()
 
     const editor = page.locator('[aria-label="README.md"] .cm-content')
@@ -250,8 +270,7 @@ async function main() {
     await poll("saved README marker", async () => (await fsp.readFile(readmePath, "utf8")).includes(marker), 30_000)
     observe("REAL_FILE_EDIT_SAVED", { path: "README.md", marker })
 
-    const packageButton = fileTree.locator('button[title="package.json"]')
-    await packageButton.waitFor({ state: "visible", timeout: 30_000 })
+    const packageButton = await rootFileButton(page, "package.json")
     await packageButton.click()
     await page.locator('[aria-label="package.json"] .cm-content').waitFor({ state: "visible", timeout: 30_000 })
     observe("SECOND_REAL_FILE_OPENED", { path: "package.json" })
@@ -299,7 +318,7 @@ async function main() {
         return response?.querySelector("p")?.textContent?.trim() || ""
       })
     }, 240_000, 1_000)
-    assert.ok(responseText.length > 0)
+    assert.match(responseText, /COUNTY_LOCAL_OK/)
     assert.equal(await rail.locator('[role="alert"]').count(), 0)
     observe("LOCAL_ASSISTANT_RESPONDED", { response: responseText.slice(0, 500) })
     await page.screenshot({ path: path.join(evidenceRoot, "02-county-w1-before-reopen.png"), fullPage: true })
@@ -314,7 +333,7 @@ async function main() {
     context = ownerSurface.context
     page = ownerSurface.page
     await page.goto(origin, { waitUntil: "networkidle", timeout: 90_000 })
-    await page.getByRole("navigation", { name: "Workspace files" }).waitFor({ state: "visible", timeout: 90_000 })
+    await rootFileButton(page, "README.md")
     observe("OWNER_SURFACE_REOPENED")
 
     await assertSplitFiles(page, marker)
