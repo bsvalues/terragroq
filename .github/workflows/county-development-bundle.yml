@@ -241,42 +241,64 @@ jobs:
           $env:COUNTY_ACCEPTANCE_TERRAFUSION_ROOT = $env:COUNTY_SMOKE_TF
           $env:COUNTY_ACCEPTANCE_TERRAFUSION_SHA = $env:COUNTY_SMOKE_TF_SHA
           $env:COUNTY_ACCEPTANCE_EVIDENCE_ROOT = $env:COUNTY_ACCEPTANCE_EVIDENCE
-          $env:COUNTY_ACCEPTANCE_BROWSER_PROFILE = $env:COUNTY_ACCEPTANCE_BROWSER_PROFILE
           node scripts/accept-county-development-runtime.cjs
 
-      - name: Exercise the County Cockpit native surface
+      - name: Exercise the installed County Cockpit relaunch path
         shell: pwsh
         run: |
-          $cockpit = Join-Path $env:COUNTY_SMOKE_INSTALL 'cockpit\williamos-cockpit.exe'
-          if (-not (Test-Path -LiteralPath $cockpit -PathType Leaf)) { throw 'Installed County Cockpit is missing.' }
-          $process = Start-Process -FilePath $cockpit -WorkingDirectory (Split-Path -Parent $cockpit) -PassThru
-          try {
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+          $manager = Join-Path $env:COUNTY_SMOKE_INSTALL 'deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1'
+          $cockpitPath = Join-Path $env:COUNTY_SMOKE_INSTALL 'cockpit\williamos-cockpit.exe'
+          if (-not (Test-Path -LiteralPath $cockpitPath -PathType Leaf)) { throw 'Installed County Cockpit is missing.' }
+
+          function Start-And-ObserveCountyCockpit {
+            param([int]$Attempt)
+            $before = @(Get-Process -Name 'williamos-cockpit' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+            & $manager -Action Launch -InstallRoot $env:COUNTY_SMOKE_INSTALL -DataRoot $env:COUNTY_SMOKE_DATA
+
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+            $process = $null
             do {
               Start-Sleep -Milliseconds 750
-              $process.Refresh()
-              if ($process.HasExited) { throw "County Cockpit exited during startup with code $($process.ExitCode)." }
-            } while ($process.MainWindowHandle -eq 0 -and [DateTimeOffset]::UtcNow -lt $deadline)
+              $process = Get-Process -Name 'williamos-cockpit' -ErrorAction SilentlyContinue |
+                Where-Object { $before -notcontains $_.Id } |
+                Sort-Object StartTime -Descending |
+                Select-Object -First 1
+              if ($process) {
+                $process.Refresh()
+                if ($process.HasExited) { throw "County Cockpit attempt $Attempt exited during startup with code $($process.ExitCode)." }
+              }
+            } while ((-not $process -or $process.MainWindowHandle -eq 0) -and [DateTimeOffset]::UtcNow -lt $deadline)
 
-            if ($process.MainWindowHandle -eq 0) { throw 'County Cockpit did not expose a native main window.' }
-            if ($process.MainWindowTitle -ne 'WilliamOS County Development') {
-              throw "County Cockpit exposed the wrong native title: $($process.MainWindowTitle)"
+            if (-not $process -or $process.MainWindowHandle -eq 0) {
+              throw "County Cockpit attempt $Attempt did not expose a native main window through the installed Launch lifecycle."
             }
-            $observation = [ordered]@{
-              schema = 'williamos.county-development.cockpit-acceptance.v1'
-              result = 'PASS'
-              observedAt = [DateTimeOffset]::UtcNow.ToString('o')
+            if ($process.MainWindowTitle -ne 'WilliamOS County Development') {
+              throw "County Cockpit attempt $Attempt exposed the wrong native title: $($process.MainWindowTitle)"
+            }
+            $result = [ordered]@{
+              attempt = $Attempt
               processId = $process.Id
               mainWindowObserved = $true
               mainWindowTitle = $process.MainWindowTitle
               processAlive = -not $process.HasExited
-              configuredOrigin = 'http://127.0.0.1:3200'
             }
-            $observation | ConvertTo-Json -Depth 5 | Set-Content `
-              -LiteralPath (Join-Path $env:COUNTY_ACCEPTANCE_EVIDENCE 'cockpit-acceptance.json') -Encoding utf8
-          } finally {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $process.Id -Force
+            Start-Sleep -Milliseconds 750
+            return $result
           }
+
+          $first = Start-And-ObserveCountyCockpit 1
+          $second = Start-And-ObserveCountyCockpit 2
+          $observation = [ordered]@{
+            schema = 'williamos.county-development.cockpit-acceptance.v2'
+            result = 'PASS'
+            observedAt = [DateTimeOffset]::UtcNow.ToString('o')
+            launchMode = 'installed-manager-after-owner-enrollment'
+            configuredOrigin = 'http://127.0.0.1:3200'
+            launches = @($first, $second)
+          }
+          $observation | ConvertTo-Json -Depth 8 | Set-Content `
+            -LiteralPath (Join-Path $env:COUNTY_ACCEPTANCE_EVIDENCE 'cockpit-acceptance.json') -Encoding utf8
 
       - name: Remove the smoke installation
         if: always()
