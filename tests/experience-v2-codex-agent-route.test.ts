@@ -31,6 +31,7 @@ const seams = vi.hoisted(() => ({
   onConstruct: vi.fn(),
   resolveProjectBinding: vi.fn(),
   createContextManifest: vi.fn(),
+  createDispatchContext: vi.fn(),
   deriveAuthority: vi.fn(),
   assessActiveRepositoryAssignment: vi.fn(),
   deriveReservationClaims: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("@/lib/loom/codex-assignment", () => ({
 }))
 vi.mock("@/lib/loom/assignment-context-runtime", () => ({
   createCodexAssignmentContextManifest: seams.createContextManifest,
+  createAssignmentDispatchContextPackage: seams.createDispatchContext,
 }))
 vi.mock("@/lib/governance/space-mutation-authority", () => ({
   deriveSpaceMutationAuthority: seams.deriveAuthority,
@@ -167,6 +169,7 @@ describe("durable Codex delegate route", () => {
     seams.recordLoomCodexAssignment.mockResolvedValue(undefined)
     seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
     seams.createContextManifest.mockResolvedValue(CONTEXT_MANIFEST)
+    seams.createDispatchContext.mockResolvedValue("VERIFIED DISPATCH CONTEXT")
     seams.assessActiveRepositoryAssignment.mockResolvedValue({ status: "COMPATIBLE", activeAssignments: [], dependencies: [] })
     seams.deriveReservationClaims.mockResolvedValue({
       contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
@@ -379,6 +382,12 @@ describe("durable Codex delegate route", () => {
         }),
       }),
     }))
+    expect(seams.createDispatchContext).toHaveBeenCalledWith({
+      manifest: CONTEXT_MANIFEST,
+      projectBinding: expect.objectContaining({ projectId: 1, projectKey: "terrafusion" }),
+      isolatedWorkspace: expect.objectContaining({ root: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1" }),
+    })
+    expect(seams.runTurn.mock.calls[0][0].prompt).toContain("VERIFIED DISPATCH CONTEXT")
     expect(output).toEqual([
       {
         type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false,

@@ -6,6 +6,7 @@ import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execut
 import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
 import type { CanonicalWorkspaceProjectKey } from "@/lib/projects/workspace-project-binding"
 import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 import { parseAssignmentContextManifestView } from "./assignment-context-view"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -82,6 +83,7 @@ export type DurableAgentSession = Readonly<{
   repository?: AgentSessionRepository
   contextManifest?: AssignmentContextManifest
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
   reviewPath?: string
   diffReview?: AgentSessionDiffReview
   forkedFrom?: string
@@ -113,6 +115,7 @@ export type ExperienceAgentSession = Readonly<{
   repository?: AgentSessionRepository
   contextManifest?: AssignmentContextManifest
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
   reviewPath?: string
   diffReview?: AgentSessionDiffReview
   forkedFrom?: string
@@ -159,6 +162,7 @@ export type RunClaudeTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string, binding?: AgentSessionDiffReview) => void
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
   repositoryKey?: string
   expectedFileAuthority?: AgentSessionFileAuthorityProof
   requiredSessionKey?: string
@@ -413,6 +417,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const updatedAt = typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
     ? candidate.updatedAt : null
   const target = candidate.target === undefined ? undefined : parseFileTarget(candidate.target)
+  let fileRef: WorkspaceFileRef | undefined
+  try { fileRef = candidate.fileRef === undefined ? undefined : parseWorkspaceFileRef(candidate.fileRef) } catch { return null }
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
   const forkedFrom = candidate.forkedFrom === undefined ? undefined
     : typeof candidate.forkedFrom === "string" && CLAUDE_SESSION_ID.test(candidate.forkedFrom) && candidate.forkedFrom !== candidate.sessionId
@@ -432,9 +438,13 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || (candidate.contextManifest !== undefined && !contextManifest)
     || (candidate.assignmentId !== undefined && !assignmentId)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
+    || (candidate.fileRef !== undefined && !fileRef)
     || target !== undefined && (role !== "Builder"
       || candidate.provider !== "Codex" && candidate.provider !== "Claude" || reviewPath !== undefined)
     || isClaudeReviewer !== (reviewPath !== undefined)
+    || fileRef !== undefined && (!isClaudeReviewer || fileRef.path !== reviewPath
+      || !repository || fileRef.repositoryResourceKey !== repository.resourceKey
+      || fileRef.repositoryMountKey !== repository.mountKey || fileRef.observedRevision !== repository.observedRevision)
     || (candidate.diffReview !== undefined && !diffReview)
     || diffReview != null && (candidate.provider !== "Claude" || role !== "Reviewer" || reviewPath !== diffReview.path
       || target !== undefined || preview !== undefined || forkedFrom !== undefined)
@@ -459,6 +469,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     ...(repository ? { repository } : {}),
     ...(contextManifest ? { contextManifest } : {}),
     ...(target ? { target } : {}),
+    ...(fileRef ? { fileRef } : {}),
     ...(reviewPath ? { reviewPath } : {}),
     ...(diffReview ? { diffReview } : {}),
     ...(forkedFrom ? { forkedFrom } : {}),
@@ -676,6 +687,7 @@ function projectSessions(
       ...(descriptor.repository ? { repository: descriptor.repository } : {}),
       ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
@@ -702,6 +714,7 @@ function projectSessions(
       ...(descriptor.repository ? { repository: descriptor.repository } : {}),
       ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
@@ -1023,6 +1036,10 @@ export function useExperienceAgentSessions({
     const expectedDiffFingerprint = candidateDiffFingerprint && new TextEncoder().encode(candidateDiffFingerprint).byteLength <= 16_384
       ? candidateDiffFingerprint : null
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
+    let requestedFileRef: WorkspaceFileRef | null = null
+    try { requestedFileRef = input.fileRef === undefined ? null : parseWorkspaceFileRef(input.fileRef) } catch {
+      throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    }
     const requestedRepository = input.repositoryKey === undefined
       ? null
       : resolveWorkspaceRepositorySelection(projectKey, input.repositoryKey)
@@ -1042,7 +1059,11 @@ export function useExperienceAgentSessions({
       || expectedFileAuthority.actor !== input.provider.toLowerCase())) throw new Error("AGENT_TARGET_INVALID")
     if (input.provider === "Claude" && requestedTarget && !expectedFileAuthority) throw new Error("AGENT_TARGET_INVALID")
     if (input.provider !== "Claude" && input.expectedFileAuthority !== undefined) throw new Error("AGENT_TARGET_INVALID")
-    if ((mode === "review" || diffReviewMode) && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    if ((mode === "review" || diffReviewMode) && (!reviewPath || !requestedFileRef
+      || requestedFileRef.path !== reviewPath || !requestedRepositoryKey
+      || requestedFileRef.repositoryResourceKey !== requestedRepositoryKey
+      || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    if (mode !== "review" && !diffReviewMode && input.fileRef !== undefined) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (diffReviewMode && (!reviewWorldId || reviewWorldId !== worldId || !expectedDiffFingerprint)) throw new Error("AGENT_DIFF_REVIEW_INPUT_INVALID")
     if ((mode === "review" || diffReviewMode) && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if ((mode === "review" || diffReviewMode) && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
@@ -1073,6 +1094,7 @@ export function useExperienceAgentSessions({
         || requiredPrior.diffReview?.fingerprint !== expectedDiffFingerprint : Boolean(requiredPrior.diffReview))
       || (previewMode ? requiredPrior.preview?.worldId !== worldId : Boolean(requiredPrior.preview))
       || (requestedTarget ? requiredPrior.target?.path !== requestedTarget.path : Boolean(requiredPrior.target))
+      || (requestedFileRef ? JSON.stringify(requiredPrior.fileRef) !== JSON.stringify(requestedFileRef) : Boolean(requiredPrior.fileRef))
     )
     if (requiredSessionKey && (selectedSessionKeyRef.current !== requiredSessionKey
       || continuationMetadataMismatch
@@ -1109,6 +1131,9 @@ export function useExperienceAgentSessions({
       throw new Error("AGENT_REPOSITORY_SCOPE_MISMATCH")
     }
     const effectiveRepositoryKey = repositoryBoundPrior?.repository?.resourceKey ?? requestedRepositoryKey
+    if ((mode === "review" || diffReviewMode) && effectiveRepositoryKey !== requestedFileRef!.repositoryResourceKey) {
+      throw new Error("AGENT_REPOSITORY_SCOPE_MISMATCH")
+    }
     const writerTarget = requestedTarget?.path ?? repositoryBoundPrior?.target?.path ?? "server-selected"
     const lane: ActiveAgentOperation["lane"] = (input.provider === "Codex" || input.provider === "Claude")
       && role === "Builder" && (mode === "delegate" || forkMode)
@@ -1182,6 +1207,7 @@ export function useExperienceAgentSessions({
           projectKey,
           worldId: reviewWorldId,
           path: reviewPath,
+          fileRef: requestedFileRef,
           expectedDiffFingerprint,
           ...(focus ? { focus } : {}),
           provider: "cloud",
@@ -1191,6 +1217,7 @@ export function useExperienceAgentSessions({
           mode: "review",
           projectKey,
           path: reviewPath,
+          fileRef: requestedFileRef,
           ...(focus ? { focus } : {}),
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
@@ -1383,6 +1410,7 @@ export function useExperienceAgentSessions({
             ...(repository ? { repository } : {}),
             ...(contextManifest ? { contextManifest } : {}),
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
+            ...(requestedFileRef ? { fileRef: requestedFileRef } : {}),
             ...(mode === "review" || diffReviewMode ? { reviewPath: reviewPath! } : {}),
             ...(diffReviewBinding ? { diffReview: diffReviewBinding } : {}),
             ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
@@ -1716,7 +1744,9 @@ export function useExperienceAgentSessions({
         expectedDiffFingerprint: prior.diffReview!.fingerprint,
       } : {}),
       path: prior.reviewPath,
+      fileRef: prior.fileRef,
       target: prior.target,
+      repositoryKey: prior.repository?.resourceKey,
       mode,
       requiredSessionKey: exactKey,
       exactContinuation: true,

@@ -63,7 +63,7 @@ function workspaceFileRef(project: WorkspaceProject, repository: WorkspaceReposi
 
 function responseWorkspaceFileRef(
   project: WorkspaceProject,
-  repository: WorkspaceRepositoryMountView,
+  repository: WorkspaceRepositoryMountView | null,
   requestedPath: string,
   payload: Readonly<Record<string, unknown>>,
 ): WorkspaceFileRef {
@@ -73,8 +73,8 @@ function responseWorkspaceFileRef(
     throw new Error("WORKSPACE_FILE_REF_RESPONSE_MISMATCH")
   }
   const identity = responseRepository as Record<string, unknown>
-  if (identity.key !== repository.key || identity.identity !== repository.identity
-    || identity.mountKey !== repository.mount.key) {
+  if (repository && (identity.key !== repository.key || identity.identity !== repository.identity
+    || identity.mountKey !== repository.mount.key)) {
     throw new Error("WORKSPACE_FILE_REF_RESPONSE_MISMATCH")
   }
   try {
@@ -119,18 +119,28 @@ export function acknowledgeSavedBuffer(
   return { ...current, savedContent: submittedContent, modifiedAt, saving: false, error: null }
 }
 
-function TreeNode({ entry, depth, selectedPath, projectKey, repositoryKey, onOpen }: {
+function TreeNode({ entry, depth, selectedPath, projectKey, repositoryKey, onOpen, selectedFileRef, projectIdentity, repositoryMountKey }: {
   entry: Entry
   depth: number
   selectedPath: string | null
   projectKey: WorkspaceProjectKey
   repositoryKey: string | null
   onOpen: (path: string) => void
+  selectedFileRef?: WorkspaceFileRef | null
+  projectIdentity?: string | null
+  repositoryMountKey?: string | null
 }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<readonly Entry[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
+  const selected = selectedFileRef
+    ? selectedFileRef.projectIdentity === projectIdentity
+      && selectedFileRef.repositoryResourceKey === repositoryKey
+      && selectedFileRef.repositoryMountKey === repositoryMountKey
+      && selectedFileRef.worktreeKey === null
+      && selectedFileRef.path === entry.path
+    : selectedPath === entry.path
 
   async function activate() {
     if (!entry.directory) return onOpen(entry.path)
@@ -156,7 +166,7 @@ function TreeNode({ entry, depth, selectedPath, projectKey, repositoryKey, onOpe
     <li>
       <button
         type="button"
-        className={`${styles.treeEntry} ${selectedPath === entry.path ? styles.treeEntrySelected : ""}`}
+        className={`${styles.treeEntry} ${selected ? styles.treeEntrySelected : ""}`}
         style={{ paddingLeft: depth * 13 + 8 }}
         onClick={() => void activate()}
         title={entry.path}
@@ -171,7 +181,7 @@ function TreeNode({ entry, depth, selectedPath, projectKey, repositoryKey, onOpe
           {loading ? <li className={styles.treeNote} style={{ paddingLeft: depth * 13 + 25 }}>opening…</li> : null}
           {failed ? <li className={styles.treeError} style={{ paddingLeft: depth * 13 + 25 }}>directory unavailable</li> : null}
           {(children ?? []).map((child) => (
-            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} projectKey={projectKey} repositoryKey={repositoryKey} onOpen={onOpen} />
+            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} projectKey={projectKey} repositoryKey={repositoryKey} onOpen={onOpen} selectedFileRef={selectedFileRef} projectIdentity={projectIdentity} repositoryMountKey={repositoryMountKey} />
           ))}
         </ul>
       ) : null}
@@ -247,7 +257,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
           const repository = repositoryForKey(project, openFile.repositoryKey)
-          const responseFileRef = repository && project
+          const responseFileRef = project && (repository || payload.repository)
             ? responseWorkspaceFileRef(project, repository, openFile.path, payload)
             : openFile.fileRef
           if (openFile.fileRef && responseFileRef
@@ -294,7 +304,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
         const payload = await response.json()
         if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
         const repository = repositoryForKey(project, target?.repositoryKey)
-        const responseFileRef = repository && project
+        const responseFileRef = project && (repository || payload.repository)
           ? responseWorkspaceFileRef(project, repository, reloadPath, payload)
           : target?.fileRef ?? null
         if (target?.fileRef && responseFileRef
@@ -356,9 +366,12 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")
-        fileRef = repository && project ? responseWorkspaceFileRef(project, repository, path, payload) : null
-        setBuffers((current) => (bufferEpoch.current.get(key) ?? 0) !== epoch ? current : ({ ...current, [key]: {
-          key,
+        fileRef = project && (repository || payload.repository)
+          ? responseWorkspaceFileRef(project, repository, path, payload)
+          : null
+        const resolvedKey = fileRef ? canonicalWorkspaceObjectKey(fileRef) : key
+        setBuffers((current) => (bufferEpoch.current.get(key) ?? 0) !== epoch ? current : ({ ...current, [resolvedKey]: {
+          key: resolvedKey,
           path: payload.path,
           fileRef,
           repositoryKey: repository?.key ?? null,
@@ -385,14 +398,16 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
     const buffer = buffers[key]
     if (!buffer || buffer.saving || buffer.content === buffer.savedContent) return
     const submittedContent = buffer.content
+    if (!buffer.fileRef) {
+      setBuffers((current) => ({ ...current, [key]: { ...current[key], error: "WORKSPACE_FILE_REF_REQUIRED" } }))
+      return
+    }
     setBuffers((current) => ({ ...current, [key]: { ...current[key], saving: true, error: null } }))
     try {
       const response = await fetch("/api/loom/files", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: buffer.path, content: submittedContent, modifiedAt: buffer.modifiedAt,
-          ...(projectKey === "williamos" ? { projectKey } : {}),
-          ...(buffer.repositoryKey ? { repositoryKey: buffer.repositoryKey } : {}) }),
+        body: JSON.stringify({ projectKey, fileRef: buffer.fileRef, content: submittedContent, modifiedAt: buffer.modifiedAt }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -485,7 +500,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
             {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
             <ul aria-label={`${activeRepository?.label ?? projectName} file tree`}>
               {(roots ?? []).slice(0, visibleRootCount).map((entry) => (
-                <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} projectKey={projectKey} repositoryKey={activeRepository?.key ?? null} onOpen={(path) => void openFile(path)} />
+                <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} projectKey={projectKey} repositoryKey={activeRepository?.key ?? null} onOpen={(path) => void openFile(path)} selectedFileRef={space.selectedFileRef} projectIdentity={project?.identity ?? null} repositoryMountKey={activeRepository?.mount.key ?? null} />
               ))}
             </ul>
             {(roots?.length ?? 0) > visibleRootCount ? (
@@ -506,7 +521,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
           <ul>
             {(roots ?? []).map((entry) => (
-              <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} projectKey={projectKey} repositoryKey={null} onOpen={(path) => void openFile(path)} />
+              <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} projectKey={projectKey} repositoryKey={null} onOpen={(path) => void openFile(path)} selectedFileRef={space.selectedFileRef} projectIdentity={project?.identity ?? null} repositoryMountKey={null} />
             ))}
           </ul>
         </nav>

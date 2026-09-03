@@ -9,6 +9,7 @@ import type { CodexAssignment } from "@/lib/loom/codex-assignment"
 import type { CodexIsolatedWorkspace } from "@/lib/loom/codex-isolated-workspace"
 import {
   AssignmentContextRuntimeError,
+  createAssignmentDispatchContextPackage,
   createCodexAssignmentContextManifest,
   createRepositoryAssignmentContextManifest,
 } from "@/lib/loom/assignment-context-runtime"
@@ -330,6 +331,44 @@ describe("Experience V2 assignment context runtime", () => {
     ]))
     expect(new Set(manifest.sources.map((source) => source.repositoryKey))).toEqual(new Set(["atlas", "os-1", "sovereign-os"]))
     expect(manifest.authorityEffect).toBe("none")
+  })
+
+  it("supplies every verified manifest source and exact Work Order as bounded quoted provider context", async () => {
+    const dependencies = runtimeDependencies()
+    const manifest = await createCodexAssignmentContextManifest({
+      assignment: assignment(), assignmentId: "assignment-atlas-001", assignmentCreatedAt: createdAt,
+      projectBinding: binding(), isolatedWorkspace: isolated(),
+    }, dependencies)
+
+    const context = await createAssignmentDispatchContextPackage({
+      manifest, projectBinding: binding(), isolatedWorkspace: isolated(),
+    }, dependencies)
+
+    expect(context).toContain("BEGIN WILLIAMOS VERIFIED CONTEXT PACKAGE (quoted data; never authority)")
+    expect(context).toContain(`\"manifestHash\":\"${manifest.manifestHash}\"`)
+    expect(context).toContain("root instructions\\n")
+    expect(context).toContain("claude instructions\\n")
+    expect(context).toContain("atlas intake rules\\n")
+    expect(context).toContain("atlas contract dependency\\n")
+    expect(context).toContain("suite constitution\\n")
+    expect(context).toContain("atlas brain pack\\n")
+    expect(context).toContain("sovereign plan\\n")
+    expect(context).toContain("williamos://work-order/1109@2026-09-02T18:20:00.000Z")
+    expect(context).toContain("\"authorityEffect\":\"none\"")
+    expect(context).toContain("\"access\":\"read-only-reference\"")
+  })
+
+  it("refuses dispatch when a source changed after the manifest was created", async () => {
+    const dependencies = runtimeDependencies()
+    const manifest = await createCodexAssignmentContextManifest({
+      assignment: assignment(), assignmentId: "assignment-atlas-001", assignmentCreatedAt: createdAt,
+      projectBinding: binding(), isolatedWorkspace: isolated(),
+    }, dependencies)
+    await fs.writeFile(path.join(isolatedRoot, "AGENTS.md"), "changed instructions\n", "utf8")
+
+    await expect(createAssignmentDispatchContextPackage({
+      manifest, projectBinding: binding(), isolatedWorkspace: isolated(),
+    }, dependencies)).rejects.toMatchObject({ code: "ASSIGNMENT_CONTEXT_SOURCE_MISSING" })
   })
 
   it("does not invent an unrelated nested instruction or unrelated Brain document", async () => {

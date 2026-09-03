@@ -17,6 +17,7 @@ const seams = vi.hoisted(() => ({
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
   createContextManifest: vi.fn(),
+  createDispatchContext: vi.fn(),
   assessActiveAssignment: vi.fn(),
   deriveReservationClaims: vi.fn(),
 }))
@@ -59,6 +60,8 @@ vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({ recordLoomStart: seams.recordLoomStart, recordLoomEnd: seams.recordLoomEnd }))
 vi.mock("@/lib/loom/assignment-context-runtime", () => ({
   createRepositoryAssignmentContextManifest: seams.createContextManifest,
+  createAssignmentDispatchContextPackage: seams.createDispatchContext,
+  AssignmentContextRuntimeError: class AssignmentContextRuntimeError extends Error { code = "ASSIGNMENT_CONTEXT_SOURCE_MISSING" },
 }))
 vi.mock("@/lib/loom/repository-assignment-runtime", () => ({
   assessActiveRepositoryAssignment: seams.assessActiveAssignment,
@@ -105,6 +108,7 @@ function configureContextSeams() {
     mutationPosture: { target: { writablePaths: [assignment.selectedPath] } },
     manifestHash: "f".repeat(64),
   }))
+  seams.createDispatchContext.mockResolvedValue("VERIFIED DISPATCH CONTEXT")
 }
 
 describe("Preview debugger route", () => {
@@ -259,7 +263,7 @@ describe("Preview debugger route", () => {
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
       worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
     }))
-    const prompt = (seams.spawn.mock.calls[0][1] as string[]).at(-1)
+    const prompt = child.stdin.end.mock.calls[0][0] as string
     expect(prompt).toContain("exact server-authorized selected file: src/app.ts")
     expect(prompt).toContain("Do not edit, create, delete, rename, or move any other path")
     child.emit("close", 0)

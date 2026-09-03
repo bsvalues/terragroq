@@ -19,6 +19,13 @@ import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execut
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
 const ASSIGNMENT_HASH = "a".repeat(64)
+const REVIEW_REVISION = "b".repeat(40)
+const REVIEW_REPOSITORY = { resourceKey: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: REVIEW_REVISION } as const
+const REVIEW_FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVIEW_REVISION, path: "src/app.ts" } as const
+const WORKSPACE_REPOSITORY = { key: "os-1", identity: REVIEW_REPOSITORY.identity, label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: REVIEW_REPOSITORY.mountKey, configured: true, verified: true, branch: "main", revision: REVIEW_REVISION, refusal: null } }
+const reviewFileRef = (path = "src/app.ts") => ({ ...REVIEW_FILE_REF, path })
+const reviewInput = { fileRef: REVIEW_FILE_REF, repositoryKey: "os-1" } as const
+const reviewSessionFrame = { repositoryResourceKey: "os-1", repositoryIdentity: REVIEW_REPOSITORY.identity, repositoryMountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
 const DELEGATE_SPINE = {
   ...EMPTY_SPINE,
   outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
@@ -46,21 +53,26 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function workspaceResponse(storage: "browser" | "server" = "browser", delegate = false) {
-  const space = {
+function workspaceResponse(storage: "browser" | "server" = "browser", delegate = false, exactRepository = false) {
+  const space = exactRepository ? {
+    ...defaultSpace(), ...(delegate ? { revision: 7 } : {}), selectedPath: "src/app.ts", selectedFileRef: REVIEW_FILE_REF, activeWindowId: "editor" as const,
+    editor: { openFiles: ["src/app.ts", "src/other.ts"], openFileRefs: [REVIEW_FILE_REF, reviewFileRef("src/other.ts")], panes: [{ id: "primary" as const, activePath: "src/app.ts", activeFileRef: REVIEW_FILE_REF, selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+  } : {
     ...defaultSpace(), ...(delegate ? { revision: 7 } : {}), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
     editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
-  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: delegate ? DELEGATE_SPINE : EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
+  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: delegate ? DELEGATE_SPINE : EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion", ...(exactRepository ? { repositories: [WORKSPACE_REPOSITORY] } : {}) }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
 }
 
 function exactDelegateEligibility(url: string, eligibleActor: "codex" | "claude" = "codex"): Response | null {
   if (!url.startsWith("/api/loom/agent?")) return null
-  const actor = new URL(url, "http://localhost").searchParams.get("actor")
+  const params = new URL(url, "http://localhost").searchParams
+  const actor = params.get("actor")
   return Response.json(actor === eligibleActor ? {
     eligible: true, worldId: "server-world", worldRevision: 8,
     outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1122, grantId: 45,
     actor: eligibleActor, selectedPath: "src/app.ts",
+    ...(params.get("repositoryKey") ? reviewSessionFrame : {}),
   } : { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
 }
 
@@ -100,7 +112,7 @@ describe("Experience V2 real agent sessions", () => {
   it("restores and starts a pending server continuation after reload", async () => {
     const onAutoContinuation = vi.fn()
     const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url.startsWith("/api/loom/codex/continuation")) {
         return Promise.resolve(Response.json({
           status: "NEXT_ASSIGNMENT",
@@ -372,11 +384,11 @@ describe("Experience V2 real agent sessions", () => {
     },
     {
       label: "Claude Reviewer",
-      descriptor: { schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      descriptor: { schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { mode: "review", path: "src/app.ts", focus: "Continue exactly.", provider: "cloud", sessionId: "223e4567-e89b-42d3-a456-426614174000", resume: true },
+      body: { mode: "review", path: "src/app.ts", ...reviewInput, focus: "Continue exactly.", provider: "cloud", sessionId: "223e4567-e89b-42d3-a456-426614174000", resume: true },
       events: [
-        { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true },
+        { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Review continued." } },
         { type: "done", code: 0, reason: null },
       ],
@@ -584,10 +596,10 @@ describe("Experience V2 real agent sessions", () => {
     act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-concurrent", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
 
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "123e4567-e89b-42d3-a456-426614174000"
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
 
     let local!: Promise<unknown>
     act(() => { local = expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." }) })
@@ -656,9 +668,9 @@ describe("Experience V2 real agent sessions", () => {
 
     const reviewId = "323e4567-e89b-42d3-a456-426614174000"
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams.has("Review")).toBe(true))
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await waitFor(() => expect(expose!.activeSessionIds).toEqual([
       "Codex:codex-stop-isolation",
       `Claude:${reviewId}`,
@@ -700,9 +712,9 @@ describe("Experience V2 real agent sessions", () => {
 
     const reviewId = "623e4567-e89b-42d3-a456-426614174000"
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams).toHaveLength(2))
-    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await waitFor(() => expect(expose!.activeSessionIds).toContain(`Claude:${reviewId}`))
 
     act(() => expect(expose!.selectSession(`Claude:${reviewId}`)).toBe(true))
@@ -729,7 +741,7 @@ describe("Experience V2 real agent sessions", () => {
     ]))
 
     let redirect!: Promise<unknown>
-    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Redirect exactly." }) })
+    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, focus: "Redirect exactly." }) })
     await waitFor(() => expect(streams).toHaveLength(3))
     expect(requests[2]).toMatchObject({
       url: "/api/loom/agent",
@@ -1044,17 +1056,18 @@ describe("Experience V2 real agent sessions", () => {
     const encoder = new TextEncoder()
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const rawUrl = String(input)
+      const url = rawUrl.replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(rawUrl)
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
       if ((url === "/api/loom/codex" || url === "/api/loom/agent") && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { mode?: string; provider?: string }
@@ -1072,14 +1085,14 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Build safely." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
     await waitFor(() => expect(streams.has("Codex")).toBe(true))
-    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-ui-concurrent", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH })}\n`)))
+    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-ui-concurrent", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame })}\n`)))
     await screen.findByRole("button", { name: "Stop Codex Builder turn" })
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "423e4567-e89b-42d3-a456-426614174000"
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await screen.findByRole("button", { name: "Stop Claude Reviewer turn" })
 
     fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
@@ -1477,12 +1490,12 @@ describe("Experience V2 real agent sessions", () => {
       schemaVersion: 2,
       selectedSessionId: reviewId,
       sessions: [
-        { schemaVersion: 1, sessionId: reviewId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: reviewId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
         { schemaVersion: 1, sessionId: builderId, role: "Builder", provider: "Claude", assignment: "src/other.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
       ],
     }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: reviewId, resumed: true },
+      { type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Verified review" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -1491,7 +1504,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: reviewId, resume: true, path: "src/app.ts", mode: "review" })
@@ -2990,7 +3003,7 @@ describe("Experience V2 real agent sessions", () => {
   it("allows bounded Claude diagnostics after Review result without replacing its report", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId, resumed: false },
+      { type: "session", sessionId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical review report" } },
       { type: "stderr", text: "Claude transport cleanup diagnostic" },
       { type: "done", code: 0, reason: null },
@@ -2999,7 +3012,7 @@ describe("Experience V2 real agent sessions", () => {
     let report = ""
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: (text) => { report = text } })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: (text) => { report = text } })
     })
     expect(report).toBe("Canonical review report")
   })
@@ -3557,7 +3570,7 @@ describe("Experience V2 real agent sessions", () => {
     ["Claude Builder without a server binding", () => expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Work.", target: { kind: "file", path: "src/app.ts" } })],
     ["Local conversation", () => expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "src/app.ts", prompt: "Think.", target: { kind: "file", path: "src/app.ts" } })],
     ["non-Builder delegate", () => expose!.runAgentTurn({ provider: "Claude", role: "Reviewer", assignment: "src/app.ts", prompt: "Inspect.", target: { kind: "file", path: "src/app.ts" } })],
-    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", target: { kind: "file", path: "src/app.ts" } })],
+    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, target: { kind: "file", path: "src/app.ts" } })],
   ])("refuses target metadata on %s", async (_case, start) => {
     vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INELIGIBLE_TARGET") }))
     render(<Harness />)
@@ -3789,9 +3802,9 @@ describe("Experience V2 real agent sessions", () => {
   it("resumes Review only from a matching Reviewer and captured-path descriptor", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
-    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId, resumed: true },
+      { type: "session", sessionId, provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Review report" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -3801,12 +3814,12 @@ describe("Experience V2 real agent sessions", () => {
 
     let report = ""
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Security", onReviewComplete: (text) => { report = text } })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, focus: "Security", onReviewComplete: (text) => { report = text } })
     })
 
     expect(report).toBe("Review report")
     expect(expose!.sessions[0]).toMatchObject({ mode: "review", reviewPath: "src/app.ts" })
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", focus: "Security", provider: "cloud", sessionId, resume: true })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", ...reviewInput, focus: "Security", provider: "cloud", sessionId, resume: true })
   })
 
   it.each([
@@ -3846,6 +3859,7 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/app.ts",
       mode: "review",
       path: "src/app.ts",
+      ...reviewInput,
       focus: "Continue exactly.",
       requiredSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
     })).rejects.toThrow("AGENT_REVIEW_PRIOR_REQUIRED")
@@ -3867,6 +3881,8 @@ describe("Experience V2 real agent sessions", () => {
         provider: "Claude",
         assignment: "Review src/app.ts",
         reviewPath: "src/app.ts",
+        fileRef: REVIEW_FILE_REF,
+        repository: REVIEW_REPOSITORY,
         updatedAt: "2026-08-29T10:00:00.000Z",
         completedTurns: [],
       }],
@@ -3881,6 +3897,8 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/other.ts",
       mode: "review",
       path: "src/other.ts",
+      fileRef: reviewFileRef("src/other.ts"),
+      repositoryKey: "os-1",
       focus: "Redirect exactly.",
       requiredSessionKey: `Claude:${sessionId}`,
     })).rejects.toThrow("AGENT_REVIEW_SESSION_MISMATCH")
@@ -3890,6 +3908,7 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/app.ts",
       mode: "review",
       path: "src/app.ts",
+      ...reviewInput,
       focus: "Do not reinterpret this as Builder work.",
       requiredSessionKey: `Claude:${sessionId}`,
     })).rejects.toThrow("AGENT_REVIEW_ROLE_INVALID")
@@ -3904,7 +3923,7 @@ describe("Experience V2 real agent sessions", () => {
   ])("starts Review fresh rather than resuming a valid but incompatible %s descriptor", async (role, reviewPath) => {
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role, provider: "Claude", assignment: "Prior work", ...(reviewPath ? { reviewPath } : {}), updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Fresh review" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -3913,7 +3932,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: null, resume: false })
@@ -3921,9 +3940,9 @@ describe("Experience V2 real agent sessions", () => {
 
   it("rejects a resumed Review whose outer session does not echo the exact requested session", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
-    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z" }))
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: true },
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Wrong thread" } },
       { type: "done", code: 0, reason: null },
     )))
@@ -3931,7 +3950,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
 
     await expect(act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })).rejects.toThrow("AGENT_REVIEW_STREAM_INVALID")
     expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${sessionId}`, truth: "resume-unverified" })])
   })

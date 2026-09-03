@@ -159,7 +159,7 @@ describe("TerraFusion Core Seven repository catalog", () => {
     }))
   })
 
-  it("saves a file only through the selected repository mount", async () => {
+  it("saves only through the exact repository-qualified file reference that was opened", async () => {
     const resolveBinding = vi.fn(async () => ({ ok: true, binding: {
       workspaceRoot: "C:/mounts/terrafusion-atlas",
       project: { identity: "c:/terrafusion", name: "TerraFusion OS" },
@@ -190,13 +190,20 @@ describe("TerraFusion Core Seven repository catalog", () => {
     vi.doMock("@/lib/loom/manual-owner-file-save", () => ({ writeManualOwnerWorkspaceFile: write }))
     const { PUT } = await import("@/app/api/loom/files/route")
 
+    const fileRef = {
+      projectIdentity: "c:/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "README.md",
+    }
     const response = await PUT(new Request("http://localhost/api/loom/files", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         projectKey: "terrafusion",
-        repositoryKey: "atlas",
-        path: "README.md",
+        fileRef,
         content: "updated Atlas\n",
         modifiedAt: "2026-09-02T11:00:00.000Z",
       }),
@@ -211,6 +218,91 @@ describe("TerraFusion Core Seven repository catalog", () => {
     }, "C:/mounts/terrafusion-atlas")
     await expect(response.json()).resolves.toEqual(expect.objectContaining({
       repository: expect.objectContaining({ key: "atlas", mountKey: "terrafusion:atlas:configured" }),
+      fileRef,
     }))
+  })
+
+  it.each([
+    ["project identity", { projectIdentity: "c:/another-project" }],
+    ["repository resource", { repositoryResourceKey: "dais" }],
+    ["mount", { repositoryMountKey: "terrafusion:atlas:other" }],
+    ["worktree", { worktreeKey: "worktree:atlas:other" }],
+    ["revision", { observedRevision: "b".repeat(40) }],
+  ])("refuses a save when the opened file's %s no longer matches the server binding", async (_label, changed) => {
+    const resolveBinding = vi.fn(async () => ({ ok: true, binding: {
+      workspaceRoot: "C:/mounts/terrafusion-atlas",
+      project: { identity: "c:/terrafusion", name: "TerraFusion OS" },
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryRole: "suite-source",
+      repositoryLabel: "Atlas",
+      repositoryPreviewSource: false,
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    } }))
+    const write = vi.fn()
+    vi.resetModules()
+    vi.doMock("@/lib/session", () => ({ getSession: async () => ({ user: { id: "owner" } }) }))
+    vi.doMock("@/lib/projects/workspace-project-binding", () => ({
+      resolveCanonicalWorkspaceProjectBinding: resolveBinding,
+    }))
+    vi.doMock("@/lib/governance/owner", () => ({
+      resolveOwnerUserId: async () => "owner",
+      assertOwner: () => ({ ok: true }),
+    }))
+    vi.doMock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
+    vi.doMock("@/lib/loom/manual-owner-file-save", () => ({ writeManualOwnerWorkspaceFile: write }))
+    const { PUT } = await import("@/app/api/loom/files/route")
+    const response = await PUT(new Request("http://localhost/api/loom/files", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectKey: "terrafusion",
+        fileRef: {
+          projectIdentity: "c:/terrafusion",
+          repositoryResourceKey: "atlas",
+          repositoryMountKey: "terrafusion:atlas:configured",
+          worktreeKey: null,
+          observedRevision: "a".repeat(40),
+          path: "README.md",
+          ...changed,
+        },
+        content: "must not be written\n",
+        modifiedAt: "2026-09-02T11:00:00.000Z",
+      }),
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORKSPACE_FILE_REF_STALE" })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it("refuses a path-only save because it cannot prove which mounted file was opened", async () => {
+    const write = vi.fn()
+    vi.resetModules()
+    vi.doMock("@/lib/session", () => ({ getSession: async () => ({ user: { id: "owner" } }) }))
+    vi.doMock("@/lib/governance/owner", () => ({
+      resolveOwnerUserId: async () => "owner",
+      assertOwner: () => ({ ok: true }),
+    }))
+    vi.doMock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
+    vi.doMock("@/lib/loom/manual-owner-file-save", () => ({ writeManualOwnerWorkspaceFile: write }))
+    const { PUT } = await import("@/app/api/loom/files/route")
+
+    const response = await PUT(new Request("http://localhost/api/loom/files", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectKey: "terrafusion",
+        repositoryKey: "atlas",
+        path: "README.md",
+        content: "must not be written\n",
+        modifiedAt: "2026-09-02T11:00:00.000Z",
+      }),
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "WORKSPACE_FILE_REF_REQUIRED" })
+    expect(write).not.toHaveBeenCalled()
   })
 })

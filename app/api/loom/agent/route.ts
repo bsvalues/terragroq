@@ -14,6 +14,8 @@ import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
 import {
+  AssignmentContextRuntimeError,
+  createAssignmentDispatchContextPackage,
   createRepositoryAssignmentContextManifest,
   type RepositoryAssignmentContextInput,
 } from "@/lib/loom/assignment-context-runtime"
@@ -32,6 +34,11 @@ import {
 import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import {
+  resolveWorkspaceFileOperationBinding,
+  sameWorkspaceFileOperationBinding,
+  WorkspaceFileOperationBindingError,
+} from "@/lib/loom/workspace-file-operation-binding"
+import {
   deriveSpaceMutationAuthority,
   SpaceMutationAuthorityError,
   type SpaceMutationAuthority,
@@ -40,6 +47,7 @@ import {
   resolveCanonicalWorkspaceProjectBinding,
   type WorkspaceProjectBinding,
 } from "@/lib/projects/workspace-project-binding"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -304,6 +312,23 @@ function selectedWorldPath(world: NonNullable<Awaited<ReturnType<typeof loadOwne
   return space.selection?.filePath ?? activePane?.filePath ?? null
 }
 
+function selectedWorldFileRef(world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>): WorkspaceFileRef | null {
+  const space = world.space
+  if (!space) return null
+  const activePane = space.panes.find((pane) => pane.id === space.activePaneId) ?? null
+  try { return parseWorkspaceFileRef(space.selection?.fileRef ?? activePane?.fileRef) } catch { return null }
+}
+
+function sameExactFileRef(left: WorkspaceFileRef | null, right: WorkspaceFileRef): boolean {
+  return Boolean(left
+    && left.projectIdentity === right.projectIdentity
+    && left.repositoryResourceKey === right.repositoryResourceKey
+    && left.repositoryMountKey === right.repositoryMountKey
+    && left.worktreeKey === right.worktreeKey
+    && left.observedRevision === right.observedRevision
+    && left.path === right.path)
+}
+
 function hasActiveDiff(world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>): boolean {
   const space = world.space
   if (!space) return false
@@ -532,6 +557,7 @@ export async function POST(request: Request) {
     expectedDiffFingerprint?: unknown
     projectKey?: unknown
     repositoryKey?: unknown
+    fileRef?: unknown
   }
   try {
     body = await request.json()
@@ -542,20 +568,33 @@ export async function POST(request: Request) {
     || Object.keys(body).some((key) => CLIENT_FORBIDDEN_REPOSITORY_FIELDS.has(key))) {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  const projectBinding = body.repositoryKey === undefined
-    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
-    : await resolveCanonicalWorkspaceProjectBinding(
-      session.user.id,
-      body.projectKey,
-      undefined,
-      body.repositoryKey,
-    )
+  const reviewMode = body.mode === "review"
+  const diffReviewMode = body.mode === "diff-review"
+  let reviewFileBinding: Awaited<ReturnType<typeof resolveWorkspaceFileOperationBinding>> | null = null
+  if (reviewMode || diffReviewMode) {
+    try {
+      reviewFileBinding = await resolveWorkspaceFileOperationBinding({
+        userId: session.user.id, projectKey: body.projectKey,
+        repositoryKey: body.repositoryKey, path: body.path, fileRef: body.fileRef,
+      })
+    } catch (error) {
+      const code = error instanceof WorkspaceFileOperationBindingError ? error.code : "WORKSPACE_REPOSITORY_UNAVAILABLE"
+      return Response.json({ error: code }, { status: code === "WORKSPACE_REPOSITORY_UNAVAILABLE" ? 503 : code === "WORKSPACE_FILE_REF_REQUIRED" ? 400 : 409 })
+    }
+  }
+  const projectBinding = reviewFileBinding ? { ok: true as const, binding: reviewFileBinding.binding }
+    : body.repositoryKey === undefined
+      ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey)
+      : await resolveCanonicalWorkspaceProjectBinding(
+        session.user.id,
+        body.projectKey,
+        undefined,
+        body.repositoryKey,
+      )
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const binding = projectBinding.binding
   const projectRoot = binding.workspaceRoot
 
-  const reviewMode = body.mode === "review"
-  const diffReviewMode = body.mode === "diff-review"
   const forkMode = body.mode === "fork"
   const previewMode = body.mode === "preview"
   let reviewPath: string | null = null
@@ -610,7 +649,8 @@ export async function POST(request: Request) {
     }
     // Both the browser path and the persisted selection must already be the exact canonical path.
     // A syntactic alias is not allowed to inherit authority merely because it resolves to the same file.
-    if (body.path !== resolved.relative || selectedWorldPath(world) !== resolved.relative) {
+    if (body.path !== resolved.relative || selectedWorldPath(world) !== resolved.relative
+      || !sameExactFileRef(selectedWorldFileRef(world), reviewFileBinding!.fileRef)) {
       return Response.json({ error: "DIFF_REVIEW_PATH_STALE" }, { status: 409 })
     }
     const snapshot = await deriveDiffReviewSnapshot(projectRoot, resolved.relative)
@@ -628,7 +668,11 @@ export async function POST(request: Request) {
     diffReviewPatch = snapshot.patch
     reviewPath = resolved.relative
     reviewFocus = focus || null
-    prompt = diffReviewPrompt(snapshot, reviewFocus)
+    prompt = [
+      diffReviewPrompt(snapshot, reviewFocus),
+      `Repository: ${binding.repositoryIdentity} (${binding.repositoryKey})`,
+      `Verified mount: ${binding.repositoryMountKey} @ ${binding.observedRevision}`,
+    ].join("\n\n")
     if (prompt.length > MAX_DIFF_REVIEW_PROMPT_UNITS
       || Buffer.byteLength(prompt, "utf8") > MAX_DIFF_REVIEW_PROMPT_UNITS) {
       return Response.json({ error: "DIFF_REVIEW_PATCH_UNAVAILABLE" }, { status: 413 })
@@ -716,6 +760,8 @@ export async function POST(request: Request) {
     reviewFocus = focus || null
     prompt = [
       `Review the selected workspace file: ${reviewPath}`,
+      `Repository: ${binding.repositoryIdentity} (${binding.repositoryKey})`,
+      `Verified mount: ${binding.repositoryMountKey} @ ${binding.observedRevision}`,
       ...(reviewFocus ? [`Focus: ${reviewFocus}`] : []),
       "Perform a mechanically read-only code review. Inspect this file and only the relevant read-only context.",
       "Report actionable findings first, ordered by severity, with exact file and line references.",
@@ -812,7 +858,8 @@ export async function POST(request: Request) {
   if (!resume.ok) {
     return Response.json({ error: resume.failure, detail: resume.detail }, { status: 403, headers: { "cache-control": "no-store" } })
   }
-  if (reviewMode && resuming && (priorThread?.mode !== "review" || priorThread.path !== reviewPath)) {
+  if (reviewMode && resuming && (priorThread?.mode !== "review" || priorThread.path !== reviewPath
+    || !durableSessionMatchesRepository(priorThread as unknown as Record<string, unknown>, binding))) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
   if (diffReviewMode && resuming) {
@@ -821,7 +868,8 @@ export async function POST(request: Request) {
       || metadata.worldId !== diffReviewContext!.worldId || metadata.path !== diffReviewContext!.path
       || metadata.fingerprint !== diffReviewContext!.fingerprint
       || metadata.baseHash !== diffReviewContext!.baseHash || metadata.indexHash !== diffReviewContext!.indexHash
-      || metadata.patchHash !== diffReviewContext!.patchHash) {
+      || metadata.patchHash !== diffReviewContext!.patchHash
+      || !durableSessionMatchesRepository(metadata, binding)) {
       return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
     }
   }
@@ -877,7 +925,8 @@ export async function POST(request: Request) {
   if (diffReviewMode) {
     const currentWorld = await loadOwnedWorkingWorld(session.user.id, diffReviewContext!.worldId)
     if (!currentWorld || !hasActiveDiff(currentWorld)
-      || selectedWorldPath(currentWorld) !== diffReviewContext!.path) {
+      || selectedWorldPath(currentWorld) !== diffReviewContext!.path
+      || !sameExactFileRef(selectedWorldFileRef(currentWorld), reviewFileBinding!.fileRef)) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
     }
     const currentSnapshot = await deriveDiffReviewSnapshot(projectRoot, diffReviewContext!.path)
@@ -887,6 +936,22 @@ export async function POST(request: Request) {
       { ...currentIdentity, worldId: diffReviewContext!.worldId },
     )) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+  }
+
+  if (reviewFileBinding) {
+    try {
+      const currentFile = await resolveWorkspaceFileOperationBinding({
+        userId: session.user.id, projectKey: body.projectKey,
+        repositoryKey: body.repositoryKey, path: body.path, fileRef: body.fileRef,
+      })
+      if (!sameWorkspaceFileOperationBinding(reviewFileBinding.binding, currentFile.binding)) {
+        return Response.json({ error: "WORKSPACE_FILE_REF_STALE" }, { status: 409 })
+      }
+    } catch (error) {
+      const code = error instanceof WorkspaceFileOperationBindingError && error.code === "WORKSPACE_REPOSITORY_UNAVAILABLE"
+        ? error.code : "WORKSPACE_FILE_REF_STALE"
+      return Response.json({ error: code }, { status: code === "WORKSPACE_REPOSITORY_UNAVAILABLE" ? 503 : 409 })
     }
   }
 
@@ -919,6 +984,7 @@ export async function POST(request: Request) {
   let mutationAssignmentId: string | null = null
   let mutationAssignmentHash: string | null = null
   let mutationContextManifest: Awaited<ReturnType<typeof createRepositoryAssignmentContextManifest>> | null = null
+  let mutationDispatchContext: string | null = null
   let mutationReservation: AssignmentReservationSet | null = null
   let mutationStartMetadata: Record<string, unknown> | null = null
   if (mutationAuthority) {
@@ -991,6 +1057,11 @@ export async function POST(request: Request) {
         projectBinding: binding,
         isolatedWorkspace: mutationWorkspace,
       })
+      mutationDispatchContext = await createAssignmentDispatchContextPackage({
+        manifest: mutationContextManifest,
+        projectBinding: binding,
+        isolatedWorkspace: mutationWorkspace,
+      })
       let reservationClaims: RepositoryAssignmentReservationClaims
       try {
         reservationClaims = await deriveRepositoryAssignmentReservationClaims({
@@ -1046,6 +1117,7 @@ export async function POST(request: Request) {
         subject: mutationAssignmentId,
         metadata: mutationStartMetadata,
       })
+      prompt = [prompt, mutationDispatchContext].join("\n\n")
     } catch (error) {
       if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
       mutationWorkspace = null
@@ -1054,6 +1126,9 @@ export async function POST(request: Request) {
       }
       if ((error as Error)?.message === "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE") {
         return Response.json({ error: "CLAUDE_ASSIGNMENT_RESERVATION_UNAVAILABLE" }, { status: 409 })
+      }
+      if (error instanceof AssignmentContextRuntimeError) {
+        return Response.json({ error: error.code }, { status: 409 })
       }
       return Response.json({ error: "CLAUDE_ISOLATION_UNAVAILABLE" }, { status: 503 })
     }
@@ -1067,7 +1142,7 @@ export async function POST(request: Request) {
     "--permission-mode", reviewMode || previewMode || diffReviewMode ? "plan" : "acceptEdits",
     ...(reviewMode || diffReviewMode ? ["--tools", "Read,Grep,Glob"] : previewMode ? ["--tools", ""] : []),
     ...(forkMode ? ["--resume", forkSourceId!, "--fork-session"] : [resuming ? "--resume" : "--session-id", sessionId!]),
-    prompt,
+    ...(mutationAuthority ? [] : [prompt]),
   ]
 
   // An API key in the environment silently outranks the operator's signed-in subscription, so the
@@ -1095,9 +1170,10 @@ export async function POST(request: Request) {
     else earlyChildError = normalized
   })
 
-  // The prompt is passed as an argument, but --print still waits on stdin and then fails the turn.
-  // Closing it immediately tells the CLI there is nothing coming.
-  child.stdin.end()
+  // A repository-writing turn receives its potentially larger verified context over stdin, avoiding
+  // the Windows argv ceiling. Other modes keep their existing argument-bound prompt. In both cases
+  // stdin is closed immediately so --print cannot wait for an interactive continuation.
+  child.stdin.end(mutationAuthority ? prompt : undefined)
 
   let settled = false
   let terminate: ((reason: "TIMEOUT" | "CANCELLED") => void) | null = null
@@ -1169,6 +1245,13 @@ export async function POST(request: Request) {
       if (!forkMode && !previewMode && !diffReviewMode) {
         send({
           type: "session", sessionId, resumed: resuming,
+          ...(reviewMode && reviewFileBinding ? {
+            provider: "Claude", mode: "review", path: reviewPath,
+            repositoryResourceKey: binding.repositoryKey,
+            repositoryIdentity: binding.repositoryIdentity,
+            repositoryMountKey: binding.repositoryMountKey,
+            observedRevision: binding.observedRevision,
+          } : {}),
           ...(mutationAuthority ? {
             provider: "Claude", mode: "delegate", worldId: mutationAuthority.worldId,
             worldRevision: mutationAuthority.worldRevision, outcomeKey: mutationAuthority.outcomeKey,
@@ -1198,7 +1281,13 @@ export async function POST(request: Request) {
             external: provider.external,
             metered: provider.metered,
             resumed: resuming,
-            ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {
+            ...(reviewMode ? {
+              mode: "review", path: reviewPath, focus: reviewFocus,
+              repositoryResourceKey: binding.repositoryKey,
+              repositoryIdentity: binding.repositoryIdentity,
+              repositoryMountKey: binding.repositoryMountKey,
+              observedRevision: binding.observedRevision,
+            } : {
               mode: "agent",
               ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             }),
@@ -1496,6 +1585,10 @@ export async function POST(request: Request) {
                 metadata: {
                   provider: provider.id, external: provider.external, metered: provider.metered,
                   resumed: resuming, mode: "diff-review", ...diffReviewContext!, completedAt: diffReviewCompletedAt,
+                  repositoryResourceKey: binding.repositoryKey,
+                  repositoryIdentity: binding.repositoryIdentity,
+                  repositoryMountKey: binding.repositoryMountKey,
+                  observedRevision: binding.observedRevision,
                 },
               })
             } catch {
@@ -1507,6 +1600,10 @@ export async function POST(request: Request) {
             send({
               type: "session", sessionId, resumed: resuming, provider: "Claude", mode: "diff-review",
               ...diffReviewContext!, completedAt: diffReviewCompletedAt,
+              repositoryResourceKey: binding.repositoryKey,
+              repositoryIdentity: binding.repositoryIdentity,
+              repositoryMountKey: binding.repositoryMountKey,
+              observedRevision: binding.observedRevision,
             })
             if (!settled) send({ type: "event", event: diffReviewResultEvent })
             finish({ type: "done", reason: null, code })

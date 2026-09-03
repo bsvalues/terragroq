@@ -13,6 +13,27 @@ const COLLISION = "423e4567-e89b-42d3-a456-426614174000"
 const BUILDER = "523e4567-e89b-42d3-a456-426614174001"
 const PREVIEW = "623e4567-e89b-42d3-a456-426614174002"
 const LOCAL = "723e4567-e89b-42d3-a456-426614174003"
+const OS1_REVISION = "a".repeat(40)
+const OS1_REPOSITORY = {
+  resourceKey: "os-1",
+  identity: "bsvalues/terrafusion_os_1.0",
+  mountKey: "terrafusion:os-1:configured",
+  observedRevision: OS1_REVISION,
+} as const
+
+function reviewerFileBinding(path: string) {
+  return {
+    repository: OS1_REPOSITORY,
+    fileRef: {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+      repositoryMountKey: OS1_REPOSITORY.mountKey,
+      worktreeKey: null,
+      observedRevision: OS1_REVISION,
+      path,
+    },
+  } as const
+}
 
 let liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
 let workspaceActiveWindowId: "editor" | null = "editor"
@@ -63,13 +84,15 @@ function fetcher(storage: "browser" | "server" = "browser") {
 }
 
 function descriptor(sessionId: string, assignment: string) {
+  const reviewPath = assignment.endsWith("other.ts") ? "src/other.ts" : "src/app.ts"
   return {
     schemaVersion: 1 as const,
     sessionId,
     role: "Reviewer",
     provider: "Claude" as const,
     assignment,
-    reviewPath: assignment.endsWith("other.ts") ? "src/other.ts" : "src/app.ts",
+    reviewPath,
+    ...reviewerFileBinding(reviewPath),
     updatedAt: "2026-08-30T12:00:00.000Z",
     completedTurns: [{ ownerPrompt: "Review it.", finalResult: `Saved ${assignment}`, completedAt: "2026-08-30T12:00:00.000Z" }],
   }
@@ -88,6 +111,7 @@ function projected(sessionId: string, assignment: string, truth: "live" | "resum
     kind: "durable-session" as const,
     mode: "review" as const,
     reviewPath,
+    ...reviewerFileBinding(reviewPath),
     lastResult: `Saved ${assignment}`,
   }
 }
@@ -350,14 +374,14 @@ describe("Experience V2 Line durable-session targets", () => {
     const durable = {
       schemaVersion: 1 as const, sessionId, role, provider, assignment,
       ...(mode === "preview" ? { preview: { worldId: "browser-world", evidenceFingerprint: "preview-fingerprint" } } : {}),
-      ...(reviewPath ? { reviewPath } : {}),
+      ...(reviewPath ? { reviewPath, ...reviewerFileBinding(reviewPath) } : {}),
       updatedAt: "2026-08-30T12:00:00.000Z", completedTurns: [],
     }
     const projection = {
       id: exactKey, role, providerLabel: provider, assignment, status: "ready", evidence: "saved transcript",
       truth: "live" as const, kind: "durable-session" as const, mode,
       ...(mode === "preview" ? { preview: durable.preview } : {}),
-      ...(reviewPath ? { reviewPath } : {}),
+      ...(reviewPath ? { reviewPath, ...reviewerFileBinding(reviewPath) } : {}),
     }
     harness.controller.savedSessions = [durable]
     harness.controller.savedDescriptor = durable

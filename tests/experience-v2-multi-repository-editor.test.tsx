@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { EditorSurface } from "@/components/workspace-shell/editor-surface"
 import { defaultSpace, type WorkspaceProject } from "@/components/workspace-shell/types"
 
-vi.mock("next/dynamic", () => ({ default: () => function Editor() { return null } }))
+vi.mock("next/dynamic", () => ({
+  default: () => function Editor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+    return <textarea aria-label="Test source editor" value={value} onChange={(event) => onChange(event.target.value)} />
+  },
+}))
 
 const revision = "1".repeat(40)
 const project: WorkspaceProject = {
@@ -124,9 +128,12 @@ describe("Experience V2 multi-repository Source workspace", () => {
 
     const osSpace = { ...defaultSpace(), editor: first?.[0], selectedPath: first?.[1], selectedFileRef: first?.[2] }
     view.rerender(<EditorSurface project={project} projectKey="terrafusion" space={osSpace} onEditorChange={onEditorChange} />)
+    expect(screen.getByRole("button", { name: "README.md" }).className).toContain("treeEntrySelected")
     await user.click(screen.getByRole("tab", { name: "Core Seven, 3 repositories" }))
     await user.click(screen.getByRole("button", { name: /^Repository Atlas,/i }))
-    await user.click(await screen.findByRole("button", { name: "README.md" }))
+    const atlasTreeEntry = await screen.findByRole("button", { name: "README.md" })
+    expect(atlasTreeEntry.className).not.toContain("treeEntrySelected")
+    await user.click(atlasTreeEntry)
     const second = onEditorChange.mock.calls.at(-1)
     expect(second?.[2]).toMatchObject({ repositoryResourceKey: "atlas", repositoryMountKey: "terrafusion:atlas:configured", path: "README.md" })
     expect(second?.[0].openFileRefs).toHaveLength(2)
@@ -244,5 +251,63 @@ describe("Experience V2 multi-repository Source workspace", () => {
 
     expect(await screen.findByText("WORKSPACE_FILE_REF_STALE")).toBeTruthy()
     expect(screen.queryByText("new bytes")).toBeNull()
+  })
+
+  it("saves with the exact repository mount and revision identity used to open the tab", async () => {
+    const user = userEvent.setup()
+    const fileRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const space = {
+      ...defaultSpace(),
+      selectedPath: "README.md",
+      selectedFileRef: fileRef,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md"],
+        openFileRefs: [fileRef],
+        panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: fileRef, selection: null }],
+      },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=atlas" && !init?.method) {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas" && !init?.method) {
+        return Response.json({
+          kind: "file", path: "README.md", content: "before\n", modifiedAt: "2026-09-02T00:00:00.000Z",
+          repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision },
+        })
+      }
+      if (url === "/api/loom/files" && init?.method === "PUT") {
+        return Response.json({
+          ok: true, path: "README.md", modifiedAt: "2026-09-02T00:01:00.000Z",
+          fileRef,
+          repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={() => undefined} />)
+    const editor = await screen.findByRole("textbox", { name: "Test source editor" })
+    await user.clear(editor)
+    await user.type(editor, "after")
+    await user.click(screen.getByRole("button", { name: "Save README.md" }))
+
+    const saveRequest = fetcher.mock.calls.find((call) => call[1]?.method === "PUT")
+    expect(JSON.parse(String(saveRequest?.[1]?.body))).toEqual({
+      projectKey: "terrafusion",
+      fileRef,
+      content: "after",
+      modifiedAt: "2026-09-02T00:00:00.000Z",
+    })
   })
 })

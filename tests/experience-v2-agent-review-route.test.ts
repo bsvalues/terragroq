@@ -17,6 +17,7 @@ const seams = vi.hoisted(() => ({
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
   createContextManifest: vi.fn(),
+  createDispatchContext: vi.fn(),
   assessActiveAssignment: vi.fn(),
   deriveReservationClaims: vi.fn(),
 }))
@@ -67,6 +68,8 @@ vi.mock("@/lib/loom/receipts", () => ({
 }))
 vi.mock("@/lib/loom/assignment-context-runtime", () => ({
   createRepositoryAssignmentContextManifest: seams.createContextManifest,
+  createAssignmentDispatchContextPackage: seams.createDispatchContext,
+  AssignmentContextRuntimeError: class AssignmentContextRuntimeError extends Error { code = "ASSIGNMENT_CONTEXT_SOURCE_MISSING" },
 }))
 vi.mock("@/lib/loom/repository-assignment-runtime", () => ({
   assessActiveRepositoryAssignment: seams.assessActiveAssignment,
@@ -92,10 +95,18 @@ const mutationAuthority = {
 }
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
+  const selectedFile = body.mode === "review" || body.mode === "diff-review" ? {
+    repositoryKey: "os-1",
+    fileRef: {
+      projectIdentity: "c:/terrafusion", repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null,
+      observedRevision: "a".repeat(40), path: body.path ?? "src/example.ts",
+    },
+  } : {}
   return new Request("http://williamos.test/api/loom/agent", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: "terrafusion", ...body }),
+    body: JSON.stringify({ projectKey: "terrafusion", ...selectedFile, ...body }),
     signal,
   })
 }
@@ -135,7 +146,7 @@ function configureContextSeams() {
 
 describe("selected-file review route", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.resolveRealWorkspacePath.mockResolvedValue({
       ok: true,
@@ -153,6 +164,7 @@ describe("selected-file review route", () => {
     })
     seams.stat.mockResolvedValue({ isFile: () => true })
     configureContextSeams()
+    seams.createDispatchContext.mockResolvedValue("VERIFIED DISPATCH CONTEXT")
   })
 
   it("spawns an exact path-bound Claude review with only read-only tools", async () => {
@@ -180,6 +192,8 @@ describe("selected-file review route", () => {
       "--session-id", "123e4567-e89b-42d3-a456-426614174000",
       [
         "Review the selected workspace file: src/example.ts",
+        "Repository: bsvalues/terrafusion_os_1.0 (os-1)",
+        `Verified mount: terrafusion:os-1:configured @ ${"a".repeat(40)}`,
         "Focus: Check the cancellation state machine.",
         "Perform a mechanically read-only code review. Inspect this file and only the relevant read-only context.",
         "Report actionable findings first, ordered by severity, with exact file and line references.",
@@ -196,6 +210,23 @@ describe("selected-file review route", () => {
 
     child.emit("close", 0)
     await response.text()
+  })
+
+  it("fails closed before file access when the selected repository revision is stale", async () => {
+    const response = await POST(request({
+      mode: "review",
+      path: "src/example.ts",
+      fileRef: {
+        projectIdentity: "c:/terrafusion", repositoryResourceKey: "os-1",
+        repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null,
+        observedRevision: "b".repeat(40), path: "src/example.ts",
+      },
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "WORKSPACE_FILE_REF_STALE" })
+    expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it.each([".env.local", "keys/id_rsa.bak"])("refuses sensitive review path %s before filesystem access or Claude spawn", async (selectedPath) => {
@@ -237,10 +268,10 @@ describe("selected-file review route", () => {
   })
 
   it.each([
-    ["traversal", { path: "../secrets.txt" }, { ok: false, refusal: "PATH_ESCAPES_WORKSPACE" }, "PATH_ESCAPES_WORKSPACE"],
+    ["traversal", { path: "../secrets.txt" }, { ok: false, refusal: "PATH_ESCAPES_WORKSPACE" }, "WORKSPACE_FILE_REF_REQUIRED"],
     ["symlink escape", { path: "linked/secrets.txt" }, { ok: false, refusal: "PATH_ESCAPES_WORKSPACE" }, "PATH_ESCAPES_WORKSPACE"],
-    ["missing selected file", { path: "" }, { ok: true, relative: "" }, "PATH_INVALID"],
-    ["workspace root", { path: "." }, { ok: true, relative: "." }, "PATH_INVALID"],
+    ["missing selected file", { path: "" }, { ok: true, relative: "" }, "WORKSPACE_FILE_REF_REQUIRED"],
+    ["workspace root", { path: "." }, { ok: true, relative: "." }, "WORKSPACE_FILE_REF_REQUIRED"],
   ])("rejects %s before spawning", async (_label, requestFields, pathResult, error) => {
     seams.resolveRealWorkspacePath.mockResolvedValueOnce(pathResult)
 
@@ -439,12 +470,13 @@ describe("selected-file review route", () => {
       "--verbose",
       "--permission-mode", "acceptEdits",
       "--session-id", "123e4567-e89b-42d3-a456-426614174000",
-      [
-        "Work only on the exact server-authorized selected file: src/example.ts",
-        "Do not edit, create, delete, rename, or move any other path.",
-        "Implement the selected change.",
-      ].join("\n\n"),
     ])
+    expect(child.stdin.end).toHaveBeenCalledWith([
+      "Work only on the exact server-authorized selected file: src/example.ts",
+      "Do not edit, create, delete, rename, or move any other path.",
+      "Implement the selected change.",
+      "VERIFIED DISPATCH CONTEXT",
+    ].join("\n\n"))
     expect(seams.recordLoomStart).toHaveBeenCalledWith({
       userId: "owner-1",
       kind: "agent",
@@ -576,7 +608,7 @@ describe("selected-file review route", () => {
       userId: "owner-1",
       kind: "agent",
       subject: "123e4567-e89b-42d3-a456-426614174000",
-      metadata: {
+      metadata: expect.objectContaining({
         provider: "cloud",
         external: true,
         metered: true,
@@ -584,15 +616,17 @@ describe("selected-file review route", () => {
         mode: "review",
         path: "src/example.ts",
         focus: "Check cancellation.",
-      },
+        repositoryResourceKey: "os-1",
+      }),
     })
 
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       type: "session",
       sessionId: "123e4567-e89b-42d3-a456-426614174000",
       resumed: false,
+      repositoryResourceKey: "os-1",
     })
     expect(events.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
     expect(seams.recordLoomEnd).toHaveBeenCalledWith({
@@ -664,12 +698,13 @@ describe("Claude Builder fork route", () => {
       "--print", "--output-format", "stream-json", "--verbose",
       "--permission-mode", "acceptEdits",
       "--resume", sourceId, "--fork-session",
-      [
-        "Work only on the exact server-authorized selected file: src/example.ts",
-        "Do not edit, create, delete, rename, or move any other path.",
-        "Explore the smaller implementation without changing the source thread.",
-      ].join("\n\n"),
     ])
+    expect(child.stdin.end).toHaveBeenCalledWith([
+      "Work only on the exact server-authorized selected file: src/example.ts",
+      "Do not edit, create, delete, rename, or move any other path.",
+      "Explore the smaller implementation without changing the source thread.",
+      "VERIFIED DISPATCH CONTEXT",
+    ].join("\n\n"))
     expect(seams.recordLoomStart).toHaveBeenCalledTimes(1)
     expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
       subject: expect.stringMatching(/^claude:/),

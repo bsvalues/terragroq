@@ -33,6 +33,7 @@ import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorP
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
+import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -206,6 +207,8 @@ type ReviewerDelegateContext = Readonly<{
   role: "Reviewer"
   assignment: string
   reviewPath: string
+  fileRef: WorkspaceFileRef
+  repositoryKey: string
   sessionId: string
   requiredSessionKey: string
   mode: "review" | "diff-review"
@@ -250,8 +253,8 @@ export type LineObjectBinding =
   | Readonly<{ kind: "space"; worldId: string; revision: number }>
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
-type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
-type CapturedDiffReview = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
+type CapturedDiffImprove = Readonly<{ path: string; fileRef: WorkspaceFileRef; fingerprint: string; worldId: string; transitionEpoch: number }>
+type CapturedDiffReview = Readonly<{ path: string; fileRef: WorkspaceFileRef; fingerprint: string; worldId: string; transitionEpoch: number }>
 type ChangeRefreshWaiter = {
   path: string
   resolve: (result: ChangeRefreshResult) => void
@@ -378,6 +381,8 @@ export function lineObjectBindingFingerprint(binding: LineObjectBinding | null):
 function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | null {
   if (!agent || agent.kind !== "durable-session" || agent.mode !== "review" && agent.mode !== "diff-review"
     || agent.providerLabel !== "Claude" || agent.role !== "Reviewer" || !agent.reviewPath
+    || !agent.fileRef || !agent.repository || agent.fileRef.path !== agent.reviewPath
+    || agent.fileRef.repositoryResourceKey !== agent.repository.resourceKey
     || !CLAUDE_REVIEW_SESSION_KEY.test(agent.id)) return null
   return {
     kind: "reviewer",
@@ -386,6 +391,8 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
     role: "Reviewer",
     assignment: agent.assignment,
     reviewPath: agent.reviewPath,
+    fileRef: agent.fileRef,
+    repositoryKey: agent.repository.resourceKey,
     sessionId: agent.id.slice("Claude:".length),
     requiredSessionKey: agent.id,
     mode: agent.mode,
@@ -652,6 +659,7 @@ export function WorkspaceShell({
   const [fileDelegateEligibilityPending, setFileDelegateEligibilityPending] = useState(false)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
+  const [changeFileRef, setChangeFileRef] = useState<WorkspaceFileRef | null>(null)
   const [changeIntent, setChangeIntent] = useState<"change" | "improve-diff">("change")
   const [capturedDiffImprove, setCapturedDiffImprove] = useState<CapturedDiffImprove | null>(null)
   const [capturedDiffReview, setCapturedDiffReview] = useState<CapturedDiffReview | null>(null)
@@ -678,6 +686,7 @@ export function WorkspaceShell({
   const [liveDiffContext, setLiveDiffContext] = useState<(LiveDiffContext & { worldId: string }) | null>(null)
   const liveDiffContextRef = useRef<(LiveDiffContext & { worldId: string }) | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
+  const [reviewFileRef, setReviewFileRef] = useState<WorkspaceFileRef | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
   const dirtyPathsRef = useRef<Readonly<Record<string, boolean>>>({})
   const [changeRefresh, setChangeRefresh] = useState<ChangeRefresh>({ path: null, key: 0 })
@@ -1046,7 +1055,7 @@ export function WorkspaceShell({
     }] })
   }, [materializeSurfaces])
 
-  const review = useSelectedFileReview({ path: reviewTarget, sessions: agentSessions, onReport: materializeReviewReport })
+  const review = useSelectedFileReview({ path: reviewTarget, fileRef: reviewFileRef, sessions: agentSessions, onReport: materializeReviewReport })
 
   const acceptLineReply = useCallback((reply: LineReply) => {
     // A Line turn can change server-only judgment facts (validation marks, concerns, failures,
@@ -1796,6 +1805,7 @@ export function WorkspaceShell({
     worldId,
     projectKey,
     path: changeTarget,
+    fileRef: changeFileRef,
     dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
     isOperationScopeCurrent: isChangeScopeCurrent,
@@ -1809,10 +1819,12 @@ export function WorkspaceShell({
   const openChange = useCallback(() => {
     if (change.running || review.running) return
     const target = space.selectedPath
+    const fileRef = space.selectedFileRef?.path === target ? space.selectedFileRef : null
     setChangeIntent("change")
     setCapturedDiffImprove(null)
     setCapturedDiffReview(null)
     setChangeTarget(target)
+    setChangeFileRef(fileRef)
     change.reset(target)
     setLineTarget("william")
     setDelegateContext(null)
@@ -1823,15 +1835,17 @@ export function WorkspaceShell({
     setLineTargetPickerOpen(false)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.reset, change.running, review.running, space.selectedPath])
+  }, [change.reset, change.running, review.running, space.selectedFileRef, space.selectedPath])
 
   const openDiffImprove = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
       || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
-      || liveDiffContext.path !== space.selectedPath) return
+      || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
+      || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
       path: liveDiffContext.path,
+      fileRef: space.selectedFileRef,
       fingerprint: liveDiffContext.fingerprint,
       worldId,
       transitionEpoch: transitionEpochRef.current,
@@ -1839,6 +1853,7 @@ export function WorkspaceShell({
     setChangeIntent("improve-diff")
     setCapturedDiffImprove(captured)
     setChangeTarget(captured.path)
+    setChangeFileRef(captured.fileRef)
     change.reset(captured.path)
     setLineTarget("william")
     setDelegateContext(null)
@@ -1849,15 +1864,17 @@ export function WorkspaceShell({
     setLineTargetPickerOpen(false)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
+  }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedFileRef, space.selectedPath, storage, worldId])
 
   const openDiffReview = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
       || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
-      || liveDiffContext.path !== space.selectedPath) return
+      || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
+      || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
       path: liveDiffContext.path,
+      fileRef: space.selectedFileRef,
       fingerprint: liveDiffContext.fingerprint,
       worldId,
       transitionEpoch: transitionEpochRef.current,
@@ -1869,6 +1886,7 @@ export function WorkspaceShell({
         && transitionEpochRef.current === captured.transitionEpoch
         && storageRef.current === "server"
         && current.activeWindowId === "diff" && current.selectedPath === captured.path
+        && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
         && !dirtyPathsRef.current[captured.path]
         && live?.worldId === captured.worldId && live.path === captured.path
         && live.fingerprint === captured.fingerprint
@@ -1878,6 +1896,7 @@ export function WorkspaceShell({
     setAgentWorkReview(true)
     setCapturedDiffImprove(null)
     setReviewTarget(captured.path)
+    setReviewFileRef(captured.fileRef)
     review.reset(captured.path)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1890,6 +1909,7 @@ export function WorkspaceShell({
     void review.startCapturedDiff({
       worldId: captured.worldId,
       path: captured.path,
+      fileRef: captured.fileRef,
       fingerprint: captured.fingerprint,
       isCurrent: reviewIdentityIsCurrent,
       beforeStart: async () => {
@@ -1897,15 +1917,16 @@ export function WorkspaceShell({
         if (!reviewIdentityIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
       },
     })
-  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedPath, storage, worldId])
+  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, review.startCapturedDiff, space.activeWindowId, space.selectedFileRef, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
     const target = space.selectedPath
+    const fileRef = space.selectedFileRef?.path === target ? space.selectedFileRef : null
     if (change.running || review.running) {
       setTransitionMessage("Finish the active Change or Review before reviewing another file.")
       return
     }
-    if (!worldId || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
+    if (!worldId || !fileRef || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
       setTransitionMessage(dirtyPaths[target ?? ""]
         ? "Save the selected file before Review so Claude does not inspect stale disk content."
         : "Review needs an exact durably saved workspace-relative file in the active Space.")
@@ -1916,6 +1937,7 @@ export function WorkspaceShell({
     setCapturedDiffReview(null)
     setAgentWorkReview(true)
     setReviewTarget(target)
+    setReviewFileRef(fileRef)
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1927,15 +1949,17 @@ export function WorkspaceShell({
     setLineOpen(true)
     void review.startCapturedPath({
       path: target,
+      fileRef,
       isStartCurrent: () => worldRef.current === capturedWorldId
         && transitionEpochRef.current === capturedEpoch
         && stateRef.current.selectedPath === target
+        && JSON.stringify(stateRef.current.selectedFileRef) === JSON.stringify(fileRef)
         && !dirtyPathsRef.current[target]
         && !persistenceErrorRef.current,
       isPresentationCurrent: () => worldRef.current === capturedWorldId
         && transitionEpochRef.current === capturedEpoch,
     })
-  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedPath, worldId])
+  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedFileRef, space.selectedPath, worldId])
 
   const openAgentWorkReview = useCallback((sessionKey: string, target: string) => {
     if (change.running || review.running) {
@@ -1946,10 +1970,18 @@ export function WorkspaceShell({
     const capturedEpoch = transitionEpochRef.current
     const descriptor = agentSessions.savedSessions.find((candidate) => lineSessionKey(candidate.provider, candidate.sessionId) === sessionKey)
     if (!capturedWorldId || !descriptor || (descriptor.provider !== "Codex" && descriptor.provider !== "Claude")
-      || descriptor.target?.path !== target || agentSessions.collectionState !== "available"
+      || !project || !descriptor.repository || descriptor.target?.path !== target || agentSessions.collectionState !== "available"
       || agentSessions.selectedSessionKey !== sessionKey || focusedAgentId !== sessionKey) {
       setTransitionMessage("That durable agent no longer has an exact reviewable file target in this Space.")
       return
+    }
+    const fileRef: WorkspaceFileRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: descriptor.repository.resourceKey,
+      repositoryMountKey: descriptor.repository.mountKey,
+      worktreeKey: null,
+      observedRevision: descriptor.repository.observedRevision,
+      path: target,
     }
     const descriptorFingerprint = lineSessionDescriptorFingerprint(descriptor)
     const collectionFingerprint = lineSessionCollectionFingerprint(agentSessions.savedSessions)
@@ -1961,12 +1993,16 @@ export function WorkspaceShell({
         && agentSelectedSessionKeyRef.current === sessionKey
         && focusedAgentIdRef.current === sessionKey
         && exact?.target?.path === target
+        && exact.repository?.resourceKey === fileRef.repositoryResourceKey
+        && exact.repository.mountKey === fileRef.repositoryMountKey
+        && exact.repository.observedRevision === fileRef.observedRevision
         && lineSessionDescriptorFingerprint(exact) === descriptorFingerprint
         && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === collectionFingerprint
     }
     setCapturedDiffReview(null)
     setAgentWorkReview(true)
     setReviewTarget(target)
+    setReviewFileRef(fileRef)
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
@@ -1978,10 +2014,11 @@ export function WorkspaceShell({
     setLineOpen(true)
     void review.startCapturedPath({
       path: target,
+      fileRef,
       isStartCurrent,
       isPresentationCurrent: () => worldRef.current === capturedWorldId && transitionEpochRef.current === capturedEpoch,
     })
-  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.selectedSessionKey, change.running, focusedAgentId, review.reset, review.running, review.startCapturedPath, worldId])
+  }, [agentSessions.collectionState, agentSessions.savedSessions, agentSessions.selectedSessionKey, change.running, focusedAgentId, project, review.reset, review.running, review.startCapturedPath, worldId])
 
   useEffect(() => {
     const summonLine = (event: KeyboardEvent) => {
@@ -2446,6 +2483,7 @@ export function WorkspaceShell({
             && transitionEpochRef.current === captured.transitionEpoch
             && storageRef.current === "server"
             && current.activeWindowId === "diff" && current.selectedPath === captured.path
+            && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
             && !dirtyPathsRef.current[captured.path]
             && live?.worldId === captured.worldId
             && live.path === captured.path
@@ -2497,6 +2535,7 @@ export function WorkspaceShell({
       void review.start(text, {
         worldId: captured.worldId,
         path: captured.path,
+        fileRef: captured.fileRef,
         fingerprint: captured.fingerprint,
         isCurrent: reviewIdentityIsCurrent,
         beforeStart: async () => {
@@ -2769,6 +2808,8 @@ export function WorkspaceShell({
               assignment: reviewerAgentContext.assignment,
               mode: reviewerAgentContext.mode,
               path: reviewerAgentContext.reviewPath,
+              fileRef: reviewerAgentContext.fileRef,
+              repositoryKey: reviewerAgentContext.repositoryKey,
               ...(reviewerAgentContext.diffReview ? {
                 worldId: reviewerAgentContext.diffReview.worldId,
                 expectedDiffFingerprint: reviewerAgentContext.diffReview.fingerprint,
@@ -3516,11 +3557,13 @@ export function WorkspaceShell({
     setLineMode("default")
     setDelegateContext(null)
     setChangeTarget(null)
+    setChangeFileRef(null)
     setChangeIntent("change")
     setCapturedDiffImprove(null)
     setLiveDiffContext(null)
     liveDiffContextRef.current = null
     setReviewTarget(null)
+    setReviewFileRef(null)
     setAgentWorkReview(false)
     change.reset(null)
     review.reset(null)

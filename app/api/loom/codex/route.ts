@@ -14,7 +14,10 @@ import {
   revalidateCodexAssignment,
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
-import { createCodexAssignmentContextManifest } from "@/lib/loom/assignment-context-runtime"
+import {
+  createAssignmentDispatchContextPackage,
+  createCodexAssignmentContextManifest,
+} from "@/lib/loom/assignment-context-runtime"
 import {
   assessActiveRepositoryAssignment,
   deriveRepositoryAssignmentReservationClaims,
@@ -201,7 +204,7 @@ function failureReason(error: unknown): string {
   return allowed.has(code) ? code : "CODEX_UNAVAILABLE"
 }
 
-function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
+function delegatedPrompt(assignment: CodexAssignment, prompt: string, contextPackage: string): string {
   return [
     "Execute one bounded WilliamOS Delegate assignment in the disposable checkout.",
     "Only the exact selected file below is eligible for later promotion into the real checkout.",
@@ -213,6 +216,7 @@ function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
     `Selected file: ${assignment.selectedPath}`,
     `Allowed reservation: ${JSON.stringify(assignment.allowed)}`,
     `Forbidden reservation: ${JSON.stringify(assignment.forbidden)}`,
+    contextPackage,
     "Operator instruction:",
     prompt,
   ].join("\n")
@@ -608,6 +612,11 @@ export async function POST(request: Request) {
             projectBinding: projectBinding.binding,
             isolatedWorkspace: isolated,
           })
+          const dispatchContext = await createAssignmentDispatchContextPackage({
+            manifest: contextManifest,
+            projectBinding: projectBinding.binding,
+            isolatedWorkspace: isolated,
+          })
           const repositoryReservation = exactRepositoryReservation(
             durableThreadId,
             contextManifest,
@@ -697,7 +706,7 @@ export async function POST(request: Request) {
           })
           const turn = await client.runTurn({
             threadId: durableThreadId,
-            prompt: delegatedPrompt(assignment, prompt),
+            prompt: delegatedPrompt(assignment, prompt, dispatchContext),
             turn: {
               approvalPolicy: "never",
               runtimeWorkspaceRoots: [isolated.root],

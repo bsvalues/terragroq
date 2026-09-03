@@ -10,6 +10,15 @@ import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
 const SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
+const REVISION = "a".repeat(40)
+const REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: REVISION, refusal: null } }
+const FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVISION, path: "src/app.ts" } as const
+const SESSION_REPOSITORY = { resourceKey: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: REVISION } as const
+
+function exactFileRef(path = "src/app.ts") { return { ...FILE_REF, path } }
+function exactSessionEvent(event: Record<string, unknown>) {
+  return event.type === "session" ? { repositoryResourceKey: "os-1", repositoryIdentity: REPOSITORY.identity, repositoryMountKey: REPOSITORY.mount.key, observedRevision: REVISION, ...event } : event
+}
 
 function resultEvent(result: string, overrides: Record<string, unknown> = {}) {
   return { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: SESSION_ID, result, ...overrides } }
@@ -29,36 +38,36 @@ afterEach(() => {
 
 function initialSpace() {
   return {
-    ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
-    editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+    ...defaultSpace(), selectedPath: "src/app.ts", selectedFileRef: FILE_REF, activeWindowId: "editor" as const,
+    editor: { openFiles: ["src/app.ts", "src/other.ts"], openFileRefs: [FILE_REF, exactFileRef("src/other.ts")], panes: [{ id: "primary" as const, activePath: "src/app.ts", activeFileRef: FILE_REF, selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
 }
 
 function workspaceResponse() {
-  return Response.json({ worldId: "browser-world", space: spaceToServer(initialSpace()), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "browser", browserStorageKey: "file-review-test" })
+  return Response.json({ worldId: "browser-world", space: spaceToServer(initialSpace()), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion", repositories: [REPOSITORY] }, storage: "browser", browserStorageKey: "file-review-test" })
 }
 
 function stream(...events: readonly Record<string, unknown>[]): Response {
-  return new Response(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`, { headers: { "content-type": "application/x-ndjson" } })
+  return new Response(`${events.map((event) => JSON.stringify(exactSessionEvent(event))).join("\n")}\n`, { headers: { "content-type": "application/x-ndjson" } })
 }
 
 function deferredStream(...events: readonly Record<string, unknown>[]) {
   const encoder = new TextEncoder()
   let controller!: ReadableStreamDefaultController<Uint8Array>
   return {
-    response: new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; events.forEach((event) => value.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))) } })),
-    send(event: Record<string, unknown>) { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) },
+    response: new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; events.forEach((event) => value.enqueue(encoder.encode(`${JSON.stringify(exactSessionEvent(event))}\n`))) } })),
+    send(event: Record<string, unknown>) { controller.enqueue(encoder.encode(`${JSON.stringify(exactSessionEvent(event))}\n`)) },
     close() { controller.close() },
   }
 }
 
 function baseFetch(review: (init: RequestInit) => Promise<Response> | Response) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = String(input).replace("&repositoryKey=os-1", "")
     if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
     if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-    if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-    if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+    if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } }))
+    if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } }))
     if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
     if (url === "/api/loom/agent" && init?.method === "POST") return Promise.resolve(review(init))
     throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -92,7 +101,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-      mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts", fileRef: FILE_REF, repositoryKey: "os-1", provider: "cloud", sessionId: null, resume: false,
     })
   })
 
@@ -128,7 +137,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByText(/Streaming draft must not duplicate/)).toBeNull()
     expect(document.querySelector("img")).toBeNull()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false })
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", fileRef: FILE_REF, repositoryKey: "os-1", provider: "cloud", sessionId: null, resume: false })
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
   })
 
@@ -274,6 +283,8 @@ describe("Experience V2 selected-file Review", () => {
       mode: "review",
       projectKey: "terrafusion",
       path: "src/app.ts",
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       focus: "Why is this unsafe?",
       provider: "cloud",
       sessionId: SESSION_ID,
@@ -309,6 +320,8 @@ describe("Experience V2 selected-file Review", () => {
       provider: "Claude",
       assignment: "Review src/app.ts",
       reviewPath: "src/app.ts",
+      fileRef: FILE_REF,
+      repository: SESSION_REPOSITORY,
       updatedAt: "2026-08-28T12:00:00.000Z",
       completedTurns: [{ ownerPrompt: "Check authorization.", finalResult: "Saved report", completedAt: "2026-08-28T12:00:00.000Z" }],
     }
@@ -331,6 +344,8 @@ describe("Experience V2 selected-file Review", () => {
       mode: "review",
       projectKey: "terrafusion",
       path: "src/app.ts",
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       focus: "Recheck the owner boundary.",
       provider: "cloud",
       sessionId: SESSION_ID,
@@ -354,6 +369,8 @@ describe("Experience V2 selected-file Review", () => {
       provider: "Claude",
       assignment: "Review src/app.ts",
       reviewPath: "src/app.ts",
+      fileRef: FILE_REF,
+      repository: SESSION_REPOSITORY,
       updatedAt: "2026-08-28T12:00:00.000Z",
       completedTurns: [{ ownerPrompt: "Initial review.", finalResult: "Saved report", completedAt: "2026-08-28T12:00:00.000Z" }],
     }
@@ -402,6 +419,8 @@ describe("Experience V2 selected-file Review", () => {
       mode: "review",
       projectKey: "terrafusion",
       path: "src/app.ts",
+      fileRef: FILE_REF,
+      repositoryKey: "os-1",
       focus: "Recheck without changing files.",
       provider: "cloud",
       sessionId: SESSION_ID,
@@ -434,6 +453,7 @@ describe("Experience V2 selected-file Review", () => {
         provider: "Codex",
         assignment: "Implement src/app.ts",
         target: { kind: "file", path: "src/app.ts" },
+        repository: SESSION_REPOSITORY,
         updatedAt: "2026-08-28T12:00:00.000Z",
         completedTurns: [{ ownerPrompt: "Implement it", finalResult: "Implemented it", completedAt: "2026-08-28T12:00:00.000Z" }],
       }],
@@ -458,7 +478,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.getByRole("button", { name: "Stop review" })).toBeTruthy()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-      mode: "review", projectKey: "terrafusion", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts", fileRef: FILE_REF, repositoryKey: "os-1", provider: "cloud", sessionId: null, resume: false,
     })
 
     resolveReview(stream(
@@ -573,7 +593,7 @@ describe("Experience V2 selected-file Review", () => {
       stop,
     }
     function Harness() {
-      const review = useSelectedFileReview({ path: "src/app.ts", sessions, onReport: () => undefined })
+      const review = useSelectedFileReview({ path: "src/app.ts", fileRef: FILE_REF, sessions, onReport: () => undefined })
       return <><button onClick={() => void review.start("")}>Start</button><button onClick={review.stop}>Stop</button></>
     }
     render(<Harness />)
@@ -604,9 +624,9 @@ describe("Experience V2 selected-file Review", () => {
       stop,
     }
     function Harness() {
-      const review = useSelectedFileReview({ path: "src/app.ts", sessions, onReport: () => undefined })
+      const review = useSelectedFileReview({ path: "src/app.ts", fileRef: FILE_REF, sessions, onReport: () => undefined })
       return <>
-        <button onClick={() => void review.startCapturedPath({ path: "src/app.ts", isStartCurrent: () => true, isPresentationCurrent: () => true })}>Review work</button>
+        <button onClick={() => void review.startCapturedPath({ path: "src/app.ts", fileRef: FILE_REF, isStartCurrent: () => true, isPresentationCurrent: () => true })}>Review work</button>
         <button onClick={review.stop}>Stop</button>
       </>
     }
@@ -642,7 +662,7 @@ describe("Experience V2 selected-file Review", () => {
     function Harness() {
       const [path, setPath] = useState("src/app.ts")
       const [report, setReport] = useState("")
-      const review = useSelectedFileReview({ path, sessions, onReport: (_path, text) => setReport(text) })
+      const review = useSelectedFileReview({ path, fileRef: exactFileRef(path), sessions, onReport: (_path, text) => setReport(text) })
       return <><button onClick={() => void review.start("")}>Start</button><button onClick={review.stop}>Stop</button><button onClick={() => setPath("src/other.ts")}>Select other</button><button onClick={() => review.reset(path)}>Open selected</button><output>{review.outcome}</output><pre>{report}</pre></>
     }
     render(<Harness />)
@@ -657,7 +677,7 @@ describe("Experience V2 selected-file Review", () => {
     act(() => turns[0]?.onReviewComplete?.("stale report"))
     expect(screen.queryByText("stale report")).toBeNull()
     act(() => turns[1]?.onReviewComplete?.("new report"))
-    await act(async () => resolvers[1]?.({ schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/other.ts", reviewPath: "src/other.ts", updatedAt: "2026-08-28T12:00:00.000Z" }))
+    await act(async () => resolvers[1]?.({ schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/other.ts", reviewPath: "src/other.ts", fileRef: exactFileRef("src/other.ts"), repository: SESSION_REPOSITORY, updatedAt: "2026-08-28T12:00:00.000Z" }))
     expect(screen.getByText("new report")).toBeTruthy()
   })
 

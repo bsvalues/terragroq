@@ -6,6 +6,7 @@ import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
 import { isIgnoredEntry, isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 import {
   resolveCanonicalWorkspaceProjectBinding,
   type WorkspaceProjectBinding,
@@ -29,6 +30,27 @@ const repositoryProjection = (binding: WorkspaceProjectBinding) => ({
   mountKey: binding.repositoryMountKey,
   observedRevision: binding.observedRevision,
 })
+
+function authoritativeFileRef(binding: WorkspaceProjectBinding, path: string): WorkspaceFileRef | null {
+  if (!binding.observedRevision) return null
+  return {
+    projectIdentity: binding.project.identity,
+    repositoryResourceKey: binding.repositoryKey,
+    repositoryMountKey: binding.repositoryMountKey,
+    worktreeKey: null,
+    observedRevision: binding.observedRevision,
+    path,
+  }
+}
+
+function fileRefMatchesBinding(fileRef: WorkspaceFileRef, binding: WorkspaceProjectBinding): boolean {
+  return binding.observedRevision !== null
+    && fileRef.projectIdentity === binding.project.identity
+    && fileRef.repositoryResourceKey === binding.repositoryKey
+    && fileRef.repositoryMountKey === binding.repositoryMountKey
+    && fileRef.worktreeKey === null
+    && fileRef.observedRevision === binding.observedRevision
+}
 
 /** List a directory, or read a file, from inside the workspace. */
 export async function GET(request: Request) {
@@ -113,16 +135,38 @@ export async function PUT(request: Request) {
 
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
-  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown; projectKey?: unknown; repositoryKey?: unknown }
+  const body = parsed.value as {
+    fileRef?: unknown
+    path?: unknown
+    content?: unknown
+    modifiedAt?: unknown
+    projectKey?: unknown
+    repositoryKey?: unknown
+  }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
-  const projectBinding = body.repositoryKey === undefined
-    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
-    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion", undefined, body.repositoryKey)
+  if (body.fileRef === undefined) return refuse("WORKSPACE_FILE_REF_REQUIRED", 400)
+  let fileRef: WorkspaceFileRef
+  try {
+    fileRef = parseWorkspaceFileRef(body.fileRef)
+  } catch {
+    return refuse("WORKSPACE_FILE_REF_INVALID", 400)
+  }
+  if ((body.path !== undefined && body.path !== fileRef.path)
+    || (body.repositoryKey !== undefined && body.repositoryKey !== fileRef.repositoryResourceKey)) {
+    return refuse("WORKSPACE_FILE_REF_STALE", 409)
+  }
+  const projectBinding = await resolveCanonicalWorkspaceProjectBinding(
+    session.user.id,
+    body.projectKey ?? "terrafusion",
+    undefined,
+    fileRef.repositoryResourceKey,
+  )
   if (!projectBinding.ok) return refuse(projectBinding.error, 503)
   const binding = projectBinding.binding
+  if (!fileRefMatchesBinding(fileRef, binding)) return refuse("WORKSPACE_FILE_REF_STALE", 409)
 
   const result = await writeManualOwnerWorkspaceFile({
-    path: body.path,
+    path: fileRef.path,
     content: body.content,
     modifiedAt: body.modifiedAt,
   }, binding.workspaceRoot)
@@ -133,5 +177,6 @@ export async function PUT(request: Request) {
     ...result,
     project: binding.project,
     repository: repositoryProjection(binding),
+    fileRef: authoritativeFileRef(binding, result.path),
   }, { headers: { "cache-control": "no-store" } })
 }
