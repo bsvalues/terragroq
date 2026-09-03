@@ -205,7 +205,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   const [activeRepositoryKey, setActiveRepositoryKey] = useState<string | null>(initialRepository?.key ?? null)
   const [rootsByRepository, setRootsByRepository] = useState<Record<string, readonly Entry[] | null>>({})
   const [visibleRootCount, setVisibleRootCount] = useState(ROOT_ENTRY_BATCH_SIZE)
-  const [treeError, setTreeError] = useState<string | null>(null)
+  const [treeErrorsByRepository, setTreeErrorsByRepository] = useState<Record<string, string | undefined>>({})
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
   const loadingFiles = useRef(new Set<string>())
   const dirtyBuffers = useRef(new Set<string>())
@@ -215,18 +215,29 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   const activeRepository = repositoryForKey(project, activeRepositoryKey)
   const activeRootsKey = activeRepository?.key ?? "legacy"
   const roots = rootsByRepository[activeRootsKey] ?? null
+  const treeError = treeErrorsByRepository[activeRootsKey] ?? null
   const openFiles = openFilesForSpace(space, project)
+
+  const clearTreeError = useCallback((repositoryKey: string | null) => {
+    const key = repositoryKey ?? "legacy"
+    setTreeErrorsByRepository((current) => current[key] === undefined ? current : { ...current, [key]: undefined })
+  }, [])
+
+  const setTreeError = useCallback((repositoryKey: string | null, message: string) => {
+    const key = repositoryKey ?? "legacy"
+    setTreeErrorsByRepository((current) => current[key] === message ? current : { ...current, [key]: message })
+  }, [])
 
   useEffect(() => {
     setVisibleRootCount(ROOT_ENTRY_BATCH_SIZE)
   }, [activeRootsKey])
 
   const loadRoots = useCallback(async (repositoryKey = activeRepositoryKey) => {
-    setTreeError(null)
+    clearTreeError(repositoryKey)
     const repository = repositoryForKey(project, repositoryKey)
     if (repository && !repository.mount.verified) {
       setRootsByRepository((current) => ({ ...current, [repository.key]: [] }))
-      setTreeError(repository.mount.refusal ?? "WORKSPACE_REPOSITORY_MOUNT_UNAVAILABLE")
+      setTreeError(repository.key, repository.mount.refusal ?? "WORKSPACE_REPOSITORY_MOUNT_UNAVAILABLE")
       return
     }
     try {
@@ -234,18 +245,20 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setRootsByRepository((current) => ({ ...current, [repository?.key ?? "legacy"]: payload.entries ?? [] }))
+      clearTreeError(repository?.key ?? null)
     } catch (error) {
       setRootsByRepository((current) => ({ ...current, [repository?.key ?? "legacy"]: [] }))
-      setTreeError(error instanceof Error ? error.message : "WORKSPACE_UNAVAILABLE")
+      setTreeError(repository?.key ?? null, error instanceof Error ? error.message : "WORKSPACE_UNAVAILABLE")
     }
-  }, [activeRepositoryKey, project, projectKey])
+  }, [activeRepositoryKey, clearTreeError, project, projectKey, setTreeError])
 
   useEffect(() => { void loadRoots(activeRepositoryKey) }, [activeRepositoryKey, loadRoots])
   useEffect(() => {
     if (requestedRepositoryKey && repositoryForKey(project, requestedRepositoryKey)?.mount.verified) {
+      clearTreeError(requestedRepositoryKey)
       setActiveRepositoryKey(requestedRepositoryKey)
     }
-  }, [project, requestedRepositoryKey])
+  }, [clearTreeError, project, requestedRepositoryKey])
 
   useEffect(() => {
     for (const openFile of openFiles) {
@@ -278,11 +291,11 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
         })
         .catch((error) => {
           if ((bufferEpoch.current.get(openFile.key) ?? 0) !== epoch) return
-          setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+          setTreeError(openFile.repositoryKey, error instanceof Error ? error.message : "FILE_UNAVAILABLE")
         })
         .finally(() => loadingFiles.current.delete(openFile.key))
     }
-  }, [buffers, openFiles, project, projectKey])
+  }, [buffers, openFiles, project, projectKey, setTreeError])
 
   useEffect(() => {
     if (!reloadPath || completedReloadKey.current === reloadKey) return
@@ -327,10 +340,10 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       })
       .then((result) => onReloadSettled?.(reloadPath, reloadKey, result))
       .catch((error) => {
-        setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        setTreeError(target?.repositoryKey ?? null, error instanceof Error ? error.message : "FILE_UNAVAILABLE")
         onReloadSettled?.(reloadPath, reloadKey, "failed")
       })
-  }, [buffers, onReloadSettled, openFiles, project, projectKey, reloadKey, reloadPath, space.selectedFileRef])
+  }, [buffers, onReloadSettled, openFiles, project, projectKey, reloadKey, reloadPath, setTreeError, space.selectedFileRef])
 
   const selectedKey = space.selectedFileRef ? canonicalWorkspaceObjectKey(space.selectedFileRef) : space.selectedPath
   const selectedBuffer = selectedKey ? buffers[selectedKey] : null
@@ -386,7 +399,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           error: null,
         } }))
       } catch (error) {
-        setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        setTreeError(repository?.key ?? null, error instanceof Error ? error.message : "FILE_UNAVAILABLE")
         return
       }
     }
@@ -396,7 +409,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       ? { ...pane, activePath: path, activeFileRef: fileRef, selection: null }
       : pane)
     updatePanes(panes, nextOpen.map((open) => open.path), nextOpen.flatMap((open) => open.fileRef ? [open.fileRef] : []), path, targetPaneId, fileRef)
-  }, [activeRepositoryKey, buffers, project, projectKey, space, updatePanes])
+  }, [activeRepositoryKey, buffers, project, projectKey, setTreeError, space, updatePanes])
 
   const save = useCallback(async (key: string) => {
     const buffer = buffers[key]
@@ -488,7 +501,10 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           <div className={styles.repositoryShelfFrame}>
             <RepositoryShelf
               repositories={shelfRepositories}
-              onSelectRepository={(repositoryKey) => setActiveRepositoryKey(repositoryKey)}
+              onSelectRepository={(repositoryKey) => {
+                clearTreeError(repositoryKey)
+                setActiveRepositoryKey(repositoryKey)
+              }}
               onOpenEntry={(repositoryKey, path) => {
                 if (repositoryKey !== activeRepositoryKey) setActiveRepositoryKey(repositoryKey)
                 const entry = rootsByRepository[repositoryKey]?.find((candidate) => candidate.path === path)

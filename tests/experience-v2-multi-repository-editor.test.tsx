@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -106,6 +106,93 @@ describe("Experience V2 multi-repository Source workspace", () => {
       "/api/loom/files?path=&repositoryKey=atlas",
       { cache: "no-store" },
     ))
+  })
+
+  it("keeps an unavailable restored tab from marking the active verified repository unavailable", async () => {
+    const user = userEvent.setup()
+    const unavailableAtlasProject: WorkspaceProject = {
+      ...project,
+      repositories: project.repositories.map((repository) => repository.key === "atlas"
+        ? {
+          ...repository,
+          mount: {
+            ...repository.mount,
+            configured: false,
+            verified: false,
+            branch: null,
+            revision: null,
+            refusal: "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED",
+          },
+        }
+        : repository),
+    }
+    const osRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const atlasRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const space = {
+      ...defaultSpace(),
+      selectedPath: "README.md",
+      selectedFileRef: osRef,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md", "README.md"],
+        openFileRefs: [osRef, atlasRef],
+        panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: osRef, selection: null }],
+      },
+    }
+    let resolveAtlasRead!: () => void
+    const atlasRead = new Promise<void>((resolve) => { resolveAtlasRead = resolve })
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") {
+        return Response.json({ kind: "directory", entries: [{ name: "backend", path: "backend", directory: true }] })
+      }
+      if (url === "/api/loom/files?path=README.md&repositoryKey=os-1") {
+        return Response.json({
+          kind: "file", path: "README.md", content: "OS", modifiedAt: "2026-09-02T00:00:00.000Z",
+          repository: { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: revision },
+        })
+      }
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas") {
+        await atlasRead
+        return Response.json({ error: "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED" }, { status: 409 })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<EditorSurface project={unavailableAtlasProject} projectKey="terrafusion" space={space} onEditorChange={() => undefined} />)
+
+    expect(await screen.findByRole("button", { name: "backend" })).toBeTruthy()
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/loom/files?path=README.md&repositoryKey=atlas",
+      { cache: "no-store" },
+    ))
+    await act(async () => {
+      resolveAtlasRead()
+      await atlasRead
+    })
+    expect(screen.queryByRole("alert")).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: /^Repository Atlas,/i }))
+    expect((await screen.findByRole("alert")).textContent).toContain("WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED")
+
+    await user.click(screen.getByRole("button", { name: /^Repository OS 1\.0,/i }))
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull())
+    expect(screen.getByRole("button", { name: "backend" })).toBeTruthy()
   })
 
   it("persists repository-qualified selection and keeps identical relative paths distinct", async () => {
