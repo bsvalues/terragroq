@@ -133,6 +133,8 @@ describe("S6 — the snapshot holds meaning and refuses chrome", () => {
             minimized: true,
           },
         ],
+        workingSetRepositoryKeys: ["os-1", "atlas"],
+        activeRepositoryKey: "atlas",
         openFiles: ["src/search-ranking.ts", "src/query.ts"],
         panes: [
           { id: "left", filePath: "src/search-ranking.ts" },
@@ -146,6 +148,30 @@ describe("S6 — the snapshot holds meaning and refuses chrome", () => {
     }
 
     expect(validateWorkingWorld(JSON.parse(JSON.stringify(persisted))).space).toEqual(persisted.space)
+  })
+
+  it("refuses malformed persisted repository workspace identity", () => {
+    const world = createWorkingWorld({ intent: "TerraFusion" })
+    const base = {
+      schemaVersion: 1,
+      revision: 1,
+      windows: [],
+      openFiles: [],
+      panes: [],
+      selection: null,
+      activeWindowId: null,
+      activePaneId: null,
+      runningAppUrl: null,
+    }
+
+    expect(() => validateWorkingWorld({
+      ...world,
+      space: { ...base, workingSetRepositoryKeys: ["os-1", "os-1"], activeRepositoryKey: "os-1" },
+    })).toThrow(/SPACE_WORKING_SET_REPOSITORIES_DUPLICATE/)
+    expect(() => validateWorkingWorld({
+      ...world,
+      space: { ...base, workingSetRepositoryKeys: ["../foreign"], activeRepositoryKey: "../foreign" },
+    })).toThrow(/SPACE_REPOSITORY_KEY_INVALID/)
   })
 
   it("round-trips only a bounded path-bound Review Inspector payload", () => {

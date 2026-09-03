@@ -157,6 +157,8 @@ export type WorkspaceSpace = Readonly<{
   editor: Readonly<{
     openFiles: readonly string[]
     openFileRefs?: readonly WorkspaceFileRef[]
+    workingSetRepositoryKeys?: readonly string[]
+    activeRepositoryKey?: string | null
     panes: readonly EditorPane[]
     activePaneId: EditorPane["id"]
   }>
@@ -424,6 +426,12 @@ export function normalizeSpace(
       try { return [parseWorkspaceFileRef(value)] } catch { return [] }
     })
     : undefined
+  const workingSetRepositoryKeys = candidate.workingSetRepositoryKeys === undefined ? undefined
+    : Array.isArray(candidate.workingSetRepositoryKeys)
+      ? candidate.workingSetRepositoryKeys.filter((key): key is string => typeof key === "string")
+      : undefined
+  const activeRepositoryKey = candidate.activeRepositoryKey === undefined ? undefined
+    : typeof candidate.activeRepositoryKey === "string" ? candidate.activeRepositoryKey : null
   const panes: EditorPane[] = rawPanes.flatMap((pane, index) => {
     if (!pane || typeof pane !== "object") return []
     const item = pane as Record<string, unknown>
@@ -495,6 +503,8 @@ export function normalizeSpace(
         ? candidate.openFiles.filter((path): path is string => typeof path === "string")
         : fallback.editor.openFiles,
       ...(openFileRefs !== undefined ? { openFileRefs } : {}),
+      ...(workingSetRepositoryKeys !== undefined ? { workingSetRepositoryKeys } : {}),
+      ...(activeRepositoryKey !== undefined ? { activeRepositoryKey } : {}),
       panes: panes.length > 0 ? panes : fallback.editor.panes,
       activePaneId: activePaneIndex === 1 ? "secondary" : "primary",
     },
@@ -581,6 +591,10 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     })],
     openFiles: space.editor.openFiles,
     ...(space.editor.openFileRefs ? { fileRefs: space.editor.openFileRefs } : {}),
+    ...(space.editor.workingSetRepositoryKeys !== undefined
+      ? { workingSetRepositoryKeys: space.editor.workingSetRepositoryKeys } : {}),
+    ...(space.editor.activeRepositoryKey !== undefined
+      ? { activeRepositoryKey: space.editor.activeRepositoryKey } : {}),
     panes: space.editor.panes.map((pane) => ({
       id: pane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary",
       filePath: pane.activePath,

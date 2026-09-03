@@ -229,6 +229,32 @@
   font-size: 8.5px;
 }
 
+.workingSetControl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid #303a31;
+  background: #111611;
+}
+
+.workingSetControl span { display: grid; gap: 2px; }
+.workingSetControl small { color: #7f8c80; font-size: 9px; }
+.workingSetControl button {
+  min-width: 64px;
+  min-height: 27px;
+  border: 1px solid #596b58;
+  border-radius: 3px;
+  color: #d2ddd1;
+  background: #182018;
+  font: inherit;
+  cursor: pointer;
+}
+.workingSetControl button:hover:not(:disabled),
+.workingSetControl button:focus-visible { border-color: #91a78f; outline: none; }
+.workingSetControl button:disabled { color: #748074; cursor: default; opacity: .72; }
+
 .detailSection + .detailSection { margin-top: 11px; }
 .detailSection h4 { margin: 0 0 5px; color: var(--source-muted); font-size: 9px; font-weight: 570; }
 
