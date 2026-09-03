@@ -133,6 +133,59 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
+  it("allows an authenticated owner to change a Core Seven mount after bootstrap is disabled", async () => {
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "false"
+    const atlasRoot = path.resolve("/repos/terrafusion-atlas")
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://192.168.88.9:3443",
+        "X-Forwarded-Host": "192.168.88.9:3443",
+        "X-Forwarded-Proto": "https",
+      },
+      body: JSON.stringify({
+        operation: "terrafusion-repository-root",
+        repositoryKey: "atlas",
+        repositoryRoot: atlasRoot,
+      }),
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(200)
+    expect(verifyCanonicalTerraFusionCheckoutMock).toHaveBeenCalledWith(
+      normalizeProjectRootForEnv(atlasRoot),
+      "bsvalues/terrafusion-atlas",
+    )
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps full bootstrap disabled when owner mount maintenance remains available", async () => {
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "false"
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "full",
+        databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
+        authSecret: "12345678901234567890123456789012",
+        authUrl: "http://localhost:3000",
+        terraFusionRoot: projectRoot,
+      }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.message).toContain("disabled")
+    expect(verifyCanonicalTerraFusionCheckoutMock).not.toHaveBeenCalled()
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
   it("rejects non-loopback requests", async () => {
     const req = new Request("http://example.com/api/setup/local-config", {
       method: "POST",
