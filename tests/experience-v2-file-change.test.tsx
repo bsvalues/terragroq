@@ -463,7 +463,7 @@ describe("Experience V2 selected-file Change", () => {
     await waitFor(() => expect(fetcher.mock.calls.some(([input, options]) => String(input) === "/api/loom/edit" && options?.method === "POST")).toBe(true))
 
     targetSpace.resolve(serverWorkspaceResponse("world-b", beta, summaries))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     oldEdit.resolve(ndjson(
       { type: "started", file: "src/app.ts" },
       { type: "done", receipt: { success: true } },
@@ -473,6 +473,8 @@ describe("Experience V2 selected-file Change", () => {
     expect(alphaFileReads).toBe(1)
     expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const beta = true\n")
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Enter Alpha" }))
     await waitFor(() => expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=world-a")).toBe(true))
     expect(screen.queryByText("Finish or stop active work before switching Spaces.")).toBeNull()
