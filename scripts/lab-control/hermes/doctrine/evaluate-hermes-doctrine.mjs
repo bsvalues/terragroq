@@ -52,7 +52,15 @@ function isEphemeralListener(item) {
   const port = Number(item?.port)
   const protocol = lower(item?.protocol)
   const owner = lower(item?.owner)
-  if (EPHEMERAL_LISTENER_OWNER.test(owner)) return true
+  // Agent/browser/desktop owners are only ever background sockets: UDP on ephemeral/mDNS ports
+  // (any address — these are discovery/multiplex sockets), or TCP strictly on loopback. A TCP
+  // socket on a non-loopback address is ingress and stays real drift, even when its owner
+  // matches the agent list (P1 review, #1141: never let the name of the process excuse an
+  // externally reachable listener).
+  if (EPHEMERAL_LISTENER_OWNER.test(owner)) {
+    if (protocol === "udp" && (port >= 49152 || port === 5353)) return true
+    if (isLoopbackAddress(normalizeAddress(item?.address))) return true
+  }
   if (OS_OR_VENDOR_LISTENER_OWNER.test(owner)) return true
   // UDP sockets on ephemeral/high ports (mDNS, browser discovery, overlay telemetry) are instance noise.
   if (protocol === "udp" && (port >= 49152 || port === 5353)) return true
