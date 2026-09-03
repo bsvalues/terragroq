@@ -2162,6 +2162,13 @@ export function WorkspaceShell({
       ? boundExecutionSession?.id === selectedAgent.id
         ? { kind: "agent" as const, workOrderId: boundExecutionSession.workOrderId }
         : null
+      : selectedKind === "file" && space.selectedPath
+      ? {
+          kind: "file" as const,
+          label: space.selectedFileRef
+            ? `${space.selectedFileRef.repositoryResourceKey} · ${space.selectedPath}`
+            : space.selectedPath,
+        }
       : { kind: selectedKind, label: selectedLabel }
     if (!councilSelectedContext) {
       setCouncilError("That persisted assignment is no longer bound to this Space.")
@@ -3674,6 +3681,7 @@ export function WorkspaceShell({
       if (!response.ok || payload.worldId !== targetWorldId || !payload.space) throw new Error(payload.error ?? `SPACE_${response.status}`)
       applySpaceEnvelope(payload)
       setTransitionMessage(null)
+      setOverlay(null)
     } catch (error) {
       setTransitionMessage(error instanceof Error ? error.message : "Space re-entry failed. Your current Space is unchanged.")
     } finally {

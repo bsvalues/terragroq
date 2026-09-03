@@ -283,6 +283,11 @@ export function ExternalWorkOrderAdmission({
     if (!next) reset()
   }
 
+  async function handleDeliveryFinalized() {
+    handleOpen(false)
+    await onFinalized?.()
+  }
+
   const handleArtifactAvailability = useCallback((available: boolean) => {
     setArtifactRestoreState(available ? "artifact" : "none")
   }, [])
@@ -389,7 +394,7 @@ export function ExternalWorkOrderAdmission({
 
         {step === "capture" && worldId && persisted && artifactRestoreState !== "none" ? (
           <div className="p-6">
-            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} onFinalized={onFinalized} />
+            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} onFinalized={handleDeliveryFinalized} />
           </div>
         ) : step === "capture" ? (
           <form onSubmit={(event) => void review(event)} className="grid gap-5 p-6">
@@ -494,7 +499,7 @@ export function ExternalWorkOrderAdmission({
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Authority</dt><dd>{result.authority.level} · Codex</dd></div>
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Provenance</dt><dd title={result.provenanceDigest}>{compactDigest(result.provenanceDigest)}</dd></div>
             </dl>
-            <DeliveryAdoption worldId={result.worldId} onFinalized={onFinalized} />
+            <DeliveryAdoption worldId={result.worldId} onFinalized={handleDeliveryFinalized} />
             {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
             <div className="flex justify-end"><button type="button" onClick={() => handleOpen(false)} className="rounded border border-[#687b63] bg-[#1a2419] px-4 py-2 text-xs font-semibold text-[#e5eee1]">Continue in Space</button></div>
           </section>

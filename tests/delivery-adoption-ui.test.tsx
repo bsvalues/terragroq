@@ -364,6 +364,42 @@ describe("prospective delivery adoption UI", () => {
     expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(String(options?.body ?? "{}"))?.mode === "ISSUE")).toBe(false)
   })
 
+  it("closes the external-work dialog after finalization before refreshing the completed Space", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: sealedPaths,
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({
+        status: "FINALIZED",
+        replayed: false,
+        worldId,
+        outcomeKey: "external:outcome",
+        workOrderId: 34,
+        pullRequest: 1117,
+        headSha,
+        mergeSha: "b".repeat(40),
+        paths: sealedPaths,
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<ExternalWorkOrderAdmission worldId={worldId} persisted bound onFinalized={onFinalized} />)
+    await userEvent.click(screen.getByRole("button", { name: "Admit external work" }))
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    await waitFor(() => expect(onFinalized).toHaveBeenCalledOnce())
+    expect(screen.queryByRole("dialog", { name: "Deliver the exact admitted artifact" })).toBeNull()
+  })
+
   it("keeps the sealed delivery actionable and reports a truthful finalization refusal", async () => {
     const adoptionHash = "e".repeat(64)
     const onFinalized = vi.fn(async () => undefined)

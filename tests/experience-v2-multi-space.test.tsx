@@ -152,7 +152,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     await waitFor(() => expect(screen.queryByText("Reasoning")).toBeNull())
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("keeps the initial server Space when removing a stale preference hint throws", async () => {
@@ -249,7 +251,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByText(/Current-Space judgment: Alpha judgment\./)).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     expect(screen.getByText(/Current Space: Beta\./)).toBeTruthy()
     expect(screen.getByText(/Current-Space judgment: Beta judgment\./)).toBeTruthy()
     expect(screen.queryByText(/Alpha judgment/)).toBeNull()
@@ -285,7 +289,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
     await waitFor(() => expect(screen.getByText(/Most recent Space: Alpha\./)).toBeTruthy())
     releaseBeta()
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("does not reorder recency when the current Space save fails", async () => {
@@ -416,12 +422,14 @@ describe("Experience V2 multi-Space re-entry", () => {
     render(<WorkspaceShell />)
     await user.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     await user.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     expect(order.indexOf("PUT:a")).toBeLessThan(order.indexOf("GET:b"))
     expect(window.localStorage.getItem(`williamos:selected-space:${preferenceStorageKey}`)).toBe("b")
 
+    await user.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Enter Alpha" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     expect(order.lastIndexOf("PUT:b")).toBeLessThan(order.lastIndexOf("GET:a"))
   })
 
@@ -439,7 +447,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Enter Alpha" })).toBeTruthy()
     expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
   })
@@ -556,7 +566,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     fireEvent.keyDown(window, { key: "Escape" })
     expect(screen.getByRole("dialog", { name: "Mission Control" })).toBeTruthy()
     resolveB({ ok: true, status: 200, json: async () => envelope("b") })
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("cannot dismiss Mission Control while a deferred Space creation is in flight", async () => {
