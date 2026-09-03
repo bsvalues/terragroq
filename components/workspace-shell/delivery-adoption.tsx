@@ -142,6 +142,30 @@ function isFinalizedDelivery(value: unknown): value is FinalizedDelivery {
     && isHead(value.headSha) && isHead(value.mergeSha) && isStrings(value.paths)
 }
 
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function finalizationMatchesDisplayedSeal(value: FinalizedDelivery, sealed: ArtifactSeal, preview: ArtifactPreview): boolean {
+  const payload = sealed.seal.payload
+  const adoption = isRecord(payload.adoption) ? payload.adoption : null
+  const outcome = adoption && isRecord(adoption.outcome) ? adoption.outcome : null
+  const workOrder = adoption && isRecord(adoption.workOrder) ? adoption.workOrder : null
+  const artifact = adoption && isRecord(adoption.artifact) ? adoption.artifact : null
+  const artifactPaths = artifact && isStrings(artifact.paths) ? artifact.paths : null
+  return adoption?.worldId === value.worldId
+    && outcome?.key === value.outcomeKey
+    && workOrder?.id === value.workOrderId
+    && artifact?.pullRequest === value.pullRequest
+    && artifact?.headSha === value.headSha
+    && artifactPaths !== null && sameStrings(artifactPaths, value.paths)
+    && preview.worldId === value.worldId
+    && preview.pullRequest === value.pullRequest
+    && preview.headSha === value.headSha
+    && sameStrings(preview.paths, value.paths)
+}
+
 function compact(value: string): string {
   return `${value.slice(0, 10)}…${value.slice(-8)}`
 }
@@ -341,6 +365,9 @@ export function DeliveryAdoption({
       const value = await payload(response)
       if (!response.ok || !isFinalizedDelivery(value) || value.worldId !== worldId) {
         throw new Error(explainFailure(value, "WilliamOS could not finalize this merged delivery."))
+      }
+      if (!preview || !finalizationMatchesDisplayedSeal(value, seal, preview)) {
+        throw new Error("WilliamOS returned finalization for a different sealed artifact. This Space was not refreshed.")
       }
       await onFinalized?.()
       setFinalized(true)

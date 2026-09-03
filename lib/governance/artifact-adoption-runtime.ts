@@ -298,12 +298,56 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     return object(result.rows[0].metadata).seal as WilliamOSDeliverySeal
   }
   const restorePersistedSeal = async (userId: string, worldId: string) => {
+    const admission = await options.database.query(
+      `SELECT receipt."resultBinding", receipt."requestBinding",
+          outcome."id" AS "outcomeId", outcome."outcomeKey", work."id" AS "workOrderId"
+        FROM "outcome_queue_mutation_receipt" receipt
+        JOIN "working_world" world ON world."userId"=receipt."userId" AND world."id"=$2
+        JOIN "outcome_queue_item" outcome ON outcome."userId"=receipt."userId"
+          AND outcome."outcomeKey"=receipt."resultBinding"->>'outcomeKey'
+        JOIN "work_order" work ON work."userId"=receipt."userId"
+          AND work."id"=(receipt."resultBinding"->>'workOrderId')::integer
+        WHERE receipt."userId"=$1 AND receipt."operation"='space.external_work_order.admit'
+          AND receipt."resultBinding"->>'worldId'=$2
+          AND world."snapshot"::jsonb#>>'{spine,outcomeKey}'=outcome."outcomeKey"
+          AND (world."snapshot"::jsonb#>>'{spine,workOrderId}')::integer=work."id"
+          AND outcome."activeWorkOrderId"=work."id" AND outcome."lifecycleState"='active' AND work."status"='active'
+        ORDER BY receipt."id" DESC LIMIT 2`,
+      [userId, worldId],
+    )
+    if (admission.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission state is ambiguous")
+    if (admission.rows.length === 0) return null
+    const current = admission.rows[0]
+    const binding = object(current.resultBinding)
+    const request = object(current.requestBinding)
+    const external = object(request.externalWorkOrder)
+    const pullRequest = object(external.pullRequest)
+    const outcomeKey = String(current.outcomeKey ?? "")
+    const outcomeId = Number(current.outcomeId)
+    const workOrderId = Number(current.workOrderId)
+    const admittedPullRequest = Number(pullRequest.number)
+    const admittedHeadSha = String(pullRequest.headSha ?? "")
+    const admittedPaths = exactPaths(binding.reservedPaths)
+    if (binding.worldId !== worldId || binding.outcomeKey !== outcomeKey
+      || Number(binding.workOrderId) !== workOrderId || !Number.isSafeInteger(outcomeId) || outcomeId <= 0
+      || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
+      || !Number.isSafeInteger(admittedPullRequest) || admittedPullRequest <= 0 || !SHA.test(admittedHeadSha)
+      || String(external.repository ?? "").trim().toLowerCase() !== SUPPORTED_REPOSITORY
+      || !same(admittedPaths, exactPaths(external.reservedPaths))) {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
+    }
     const result = await options.database.query(
       `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
         AND "entityType"='williamos_delivery_seal'
-        AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2 ORDER BY "id" DESC LIMIT 1`,
-      [userId, worldId],
+        AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2
+        AND ("metadata"->'seal'->'payload'->'adoption'->'artifact'->>'pullRequest')::integer=$3
+        AND "metadata"->'seal'->'payload'->'adoption'->'artifact'->>'headSha'=$4
+        AND "metadata"->'seal'->'payload'->'adoption'->'outcome'->>'key'=$5
+        AND ("metadata"->'seal'->'payload'->'adoption'->'workOrder'->>'id')::integer=$6
+        ORDER BY "id" DESC LIMIT 2`,
+      [userId, worldId, admittedPullRequest, admittedHeadSha, outcomeKey, workOrderId],
     )
+    if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current admission delivery seal state is ambiguous")
     if (result.rows.length === 0) return null
     const metadata = object(result.rows[0].metadata)
     const adoptionHash = String(metadata.adoptionHash ?? "")
@@ -320,6 +364,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     if (seal.payload.authorityKind !== "prospective_artifact_adoption" || !seal.signature
       || adoption.adoptionHash !== authorization.adoptionHash
       || adoption.owner !== userId || adoption.worldId !== worldId
+      || adoption.outcome.id !== outcomeId || adoption.outcome.key !== outcomeKey
+      || adoption.workOrder.id !== workOrderId
       || hashRecord(adoption.outcome) !== hashRecord(authorization.context.outcome)
       || hashRecord(adoption.workOrder) !== hashRecord(authorization.context.workOrder)
       || adoption.grant.id !== authorization.deliveryGrant.id
@@ -329,6 +375,9 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       || adoption.artifact.pullRequest !== authorization.artifact.pullRequest
       || adoption.artifact.headSha !== authorization.artifact.headSha
       || !same(adoption.artifact.paths, authorization.artifact.paths)
+      || adoption.artifact.pullRequest !== admittedPullRequest
+      || adoption.artifact.headSha !== admittedHeadSha
+      || !same(adoption.artifact.paths, admittedPaths)
       || delivery.repository !== authorization.context.repository
       || delivery.baseSha !== authorization.artifact.baseSha
       || delivery.commitSha !== authorization.artifact.headSha
