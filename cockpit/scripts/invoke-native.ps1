@@ -10,9 +10,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 $cockpitRoot = Split-Path -Parent $PSScriptRoot
-$mingwBin = "C:\msys64\mingw64\bin"
-if (-not (Test-Path -LiteralPath (Join-Path $mingwBin "dlltool.exe") -PathType Leaf)) {
-  throw "The pinned GNU native build requires $mingwBin\dlltool.exe"
+
+# The County package is built both on workstation installations that use MSYS2's conventional path
+# and on GitHub's Windows image, where the same x64 MinGW tools are exposed from C:\mingw64\bin.
+# Accept an explicit source-pinned override first, then the two known layouts, then the current PATH.
+$mingwCandidates = [System.Collections.Generic.List[string]]::new()
+if ($env:WILLIAMOS_MINGW_BIN) {
+  $mingwCandidates.Add($env:WILLIAMOS_MINGW_BIN.Trim())
+}
+$mingwCandidates.Add("C:\msys64\mingw64\bin")
+$mingwCandidates.Add("C:\mingw64\bin")
+$discoveredDlltool = Get-Command dlltool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($discoveredDlltool -and $discoveredDlltool.Source) {
+  $mingwCandidates.Add((Split-Path -Parent $discoveredDlltool.Source))
+}
+
+$mingwBin = $null
+foreach ($candidate in $mingwCandidates) {
+  if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate "dlltool.exe") -PathType Leaf)) {
+    $mingwBin = (Resolve-Path -LiteralPath $candidate).Path
+    break
+  }
+}
+if (-not $mingwBin) {
+  $checked = ($mingwCandidates | Where-Object { $_ } | Select-Object -Unique) -join ", "
+  throw "The pinned GNU native build requires an x64 MinGW dlltool.exe. Checked: $checked"
 }
 
 # Rust invokes dlltool while compiling Windows import libraries, before this package's build.rs can
