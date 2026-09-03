@@ -10,6 +10,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 $cockpitRoot = Split-Path -Parent $PSScriptRoot
+$pinnedToolchain = "1.88.0-x86_64-pc-windows-gnu"
+
+# rust-toolchain.toml intentionally contains only the valid version channel. The host tuple is an
+# installed toolchain selection, not valid TOML channel syntax, so activate it explicitly at this
+# command boundary and let Tauri's child cargo processes inherit the exact same compiler.
+$rustup = Get-Command rustup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $rustup -or -not $rustup.Source) {
+  throw "The pinned Cockpit native build requires rustup.exe."
+}
+& $rustup.Source toolchain install $pinnedToolchain --profile minimal
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$env:RUSTUP_TOOLCHAIN = $pinnedToolchain
+$rustcIdentity = (& rustc -vV) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $rustcIdentity -notmatch "(?m)^host: x86_64-pc-windows-gnu$") {
+  throw "The active Rust compiler is not the pinned x86_64-pc-windows-gnu host toolchain."
+}
 
 # The County package is built both on workstation installations that use MSYS2's conventional path
 # and on GitHub's Windows image, where the same x64 MinGW tools are exposed from C:\mingw64\bin.
@@ -27,18 +43,21 @@ if ($discoveredDlltool -and $discoveredDlltool.Source) {
 
 $mingwBin = $null
 foreach ($candidate in $mingwCandidates) {
-  if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate "dlltool.exe") -PathType Leaf)) {
+  $hasDlltool = $candidate -and (Test-Path -LiteralPath (Join-Path $candidate "dlltool.exe") -PathType Leaf)
+  $hasCompiler = $candidate -and (Test-Path -LiteralPath (Join-Path $candidate "gcc.exe") -PathType Leaf)
+  if ($hasDlltool -and $hasCompiler) {
     $mingwBin = (Resolve-Path -LiteralPath $candidate).Path
     break
   }
 }
 if (-not $mingwBin) {
   $checked = ($mingwCandidates | Where-Object { $_ } | Select-Object -Unique) -join ", "
-  throw "The pinned GNU native build requires an x64 MinGW dlltool.exe. Checked: $checked"
+  throw "The pinned GNU native build requires x64 MinGW gcc.exe and dlltool.exe. Checked: $checked"
 }
 
-# Rust invokes dlltool while compiling Windows import libraries, before this package's build.rs can
-# run. The PATH therefore belongs at the command boundary, inherited by cargo and every dependency.
+# Rust invokes the MinGW linker and dlltool while compiling Windows binaries, before this package's
+# build.rs can run. PATH therefore belongs at the command boundary, inherited by cargo and every
+# dependency.
 $env:PATH = "$mingwBin;$env:PATH"
 
 $manifest = Join-Path $cockpitRoot "src-tauri\Cargo.toml"
