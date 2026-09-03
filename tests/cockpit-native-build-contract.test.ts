@@ -41,9 +41,12 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
     expect(invoke).toMatch(/if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
   })
 
-  it("provides the already-installed MinGW dlltool to cargo and every dependency", () => {
+  it("provides an installed x64 MinGW dlltool to cargo and every dependency", () => {
+    expect(invoke).toContain("WILLIAMOS_MINGW_BIN")
     expect(invoke).toContain('C:\\msys64\\mingw64\\bin')
-    expect(invoke).toContain('Join-Path $mingwBin "dlltool.exe"')
+    expect(invoke).toContain('C:\\mingw64\\bin')
+    expect(invoke).toContain("Get-Command dlltool.exe")
+    expect(invoke).toContain('Join-Path $candidate "dlltool.exe"')
     expect(invoke).toMatch(/\$env:PATH\s*=\s*"\$mingwBin;/)
   })
 
