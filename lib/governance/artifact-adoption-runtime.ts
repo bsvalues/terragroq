@@ -327,13 +327,13 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     const workOrderId = Number(current.workOrderId)
     const admittedPullRequest = Number(pullRequest.number)
     const admittedHeadSha = String(pullRequest.headSha ?? "")
-    const admittedPaths = exactPaths(binding.reservedPaths)
+    const admissionAnchorPaths = exactPaths(binding.reservedPaths)
     if (binding.worldId !== worldId || binding.outcomeKey !== outcomeKey
       || Number(binding.workOrderId) !== workOrderId || !Number.isSafeInteger(outcomeId) || outcomeId <= 0
       || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
       || !Number.isSafeInteger(admittedPullRequest) || admittedPullRequest <= 0 || !SHA.test(admittedHeadSha)
       || String(external.repository ?? "").trim().toLowerCase() !== SUPPORTED_REPOSITORY
-      || !same(admittedPaths, exactPaths(external.reservedPaths))) {
+      || !same(admissionAnchorPaths, exactPaths(external.reservedPaths))) {
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "current Space admission binding is malformed")
     }
     const result = await options.database.query(
@@ -359,6 +359,10 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal is not bound to one exact authorization")
     }
     const authorization = persisted.authorization
+    const authorizationContext = authorization.context as typeof authorization.context & {
+      anchorReservation?: Readonly<{ allowed?: unknown }>
+    }
+    const anchorAllowed = exactPaths(object(authorizationContext.anchorReservation).allowed)
     const adoption = seal.payload.adoption
     const delivery = seal.payload.delivery
     if (seal.payload.authorityKind !== "prospective_artifact_adoption" || !seal.signature
@@ -377,7 +381,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       || !same(adoption.artifact.paths, authorization.artifact.paths)
       || adoption.artifact.pullRequest !== admittedPullRequest
       || adoption.artifact.headSha !== admittedHeadSha
-      || !same(adoption.artifact.paths, admittedPaths)
+      || !same(anchorAllowed, admissionAnchorPaths)
+      || !same(authorization.context.reservation.allowed, authorization.artifact.paths)
       || delivery.repository !== authorization.context.repository
       || delivery.baseSha !== authorization.artifact.baseSha
       || delivery.commitSha !== authorization.artifact.headSha

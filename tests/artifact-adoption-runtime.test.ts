@@ -37,10 +37,10 @@ function authorityRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = target) {
-  const artifactPaths = Array.isArray(row.allowedFiles)
+function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = target, artifactPathSet?: readonly string[]) {
+  const artifactPaths = artifactPathSet ?? (Array.isArray(row.allowedFiles)
     ? row.allowedFiles.filter((value): value is string => typeof value === "string")
-    : paths
+    : paths)
   const events: Array<{ type: string; entity: string; metadata: unknown }> = []
   const grants: Array<Record<string, unknown>> = []
   let expireGrantAtFence = false
@@ -357,6 +357,36 @@ describe("persisted prospective artifact adoption", () => {
       headSha: head,
       adoptionHash: currentSeal.adoptionHash,
       seal: currentSeal.seal,
+    })
+  })
+
+  it("restores a prospective artifact whose exact paths differ from the admission anchor reservation", async () => {
+    const anchorPaths = ["app/anchor.ts"]
+    const prospectivePaths = ["lib/adopted.ts", "tests/adopted.test.ts"]
+    const candidate = harness(authorityRow({
+      allowedFiles: anchorPaths,
+      grantAllowed: anchorPaths,
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: anchorPaths,
+          pullRequest: { number: 1117, headSha: head },
+        },
+      },
+    }), target, prospectivePaths)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    expect(preview.paths).toEqual(prospectivePaths)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:separate-paths", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:separate-paths")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1117,
+      headSha: head,
+      paths: prospectivePaths,
+      adoptionHash: sealed.adoptionHash,
     })
   })
 
