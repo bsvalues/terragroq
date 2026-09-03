@@ -542,16 +542,18 @@ function ownerTurnText(content: string): string {
 }
 
 function restoredConversation(turns: readonly WilliamConversationTurn[] | undefined): readonly WilliamConversationEntry[] {
-  return (turns ?? []).flatMap((turn, index) => {
-    if ((turn.role !== "owner" && turn.role !== "williamos") || typeof turn.content !== "string" || !turn.content.trim()) return []
+  const entries: WilliamConversationEntry[] = []
+  let sequence = 0
+  for (const turn of turns ?? []) {
+    if ((turn.role !== "owner" && turn.role !== "williamos") || typeof turn.content !== "string" || !turn.content.trim()) continue
     const at = typeof turn.at === "string" ? turn.at : new Date(0).toISOString()
-    return [{
-      id: `server-${index}-${at}`,
-      role: turn.role,
-      text: turn.role === "owner" ? ownerTurnText(turn.content) : turn.content.trim(),
-      at,
-    } satisfies WilliamConversationEntry]
-  })
+    const text = turn.role === "owner" ? ownerTurnText(turn.content) : turn.content.trim()
+    const last = entries[entries.length - 1]
+    if (last && last.role === turn.role && last.text === text) continue
+    sequence += 1
+    entries.push({ id: `server-${sequence}-${at}`, role: turn.role, text, at })
+  }
+  return entries
 }
 
 function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject" | "identity">): string {
@@ -963,14 +965,17 @@ export function WorkspaceShell({
   const appendConversation = useCallback((role: WilliamConversationEntry["role"], text: string) => {
     const normalized = text.trim()
     if (!normalized) return
-    messageSequence.current += 1
-    const entry: WilliamConversationEntry = {
-      id: `client-${messageSequence.current}`,
-      role,
-      text: normalized,
-      at: new Date().toISOString(),
-    }
-    setConversation((current) => [...current, entry])
+    setConversation((current) => {
+      const last = current[current.length - 1]
+      if (last && last.role === role && last.text === normalized) return current
+      messageSequence.current += 1
+      return [...current, {
+        id: `client-${messageSequence.current}`,
+        role,
+        text: normalized,
+        at: new Date().toISOString(),
+      }]
+    })
   }, [])
 
   const materializeSurfaces = useCallback((reply: LineReply) => {

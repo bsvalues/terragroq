@@ -440,4 +440,37 @@ describe("projectWorkbenchThreads", () => {
     expect(thread.coverage.missingSources).toEqual(["conversation", "decision:missing"])
     expect(thread.lastActivityAt).toEqual(at("2026-08-14T10:00:00.000Z"))
   })
+
+  it("collapses identical-intent threads into one entry that reports the run count without losing recorded work", () => {
+    const input = baseInput()
+    input.threads.push({
+      id: "thread-alpha-rerun-1",
+      userId: "owner-1",
+      projectId: 7,
+      projectKey: "williamos",
+      projectName: "WilliamOS",
+      title: "Ship the cockpit",
+      rootSourceKind: "goal",
+      rootSourceId: "41b",
+      createdAt: at("2026-08-16T09:00:00.000Z"),
+      updatedAt: at("2026-08-16T09:00:00.000Z"),
+    }, {
+      id: "thread-alpha-rerun-2",
+      userId: "owner-1",
+      projectId: 7,
+      projectKey: "williamos",
+      projectName: "WilliamOS",
+      title: "ship the cockpit ",
+      rootSourceKind: "goal",
+      rootSourceId: "41c",
+      createdAt: at("2026-08-18T11:00:00.000Z"),
+      updatedAt: at("2026-08-18T11:00:00.000Z"),
+    })
+
+    const [thread] = projectWorkbenchThreads(input)
+
+    expect(thread.runCount).toBe(3)
+    expect(thread.createdAt).toEqual(at("2026-08-14T10:00:00.000Z"))
+    expect(thread.lastActivityAt).toEqual(at("2026-08-18T11:00:00.000Z"))
+  })
 })

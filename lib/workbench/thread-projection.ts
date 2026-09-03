@@ -138,6 +138,8 @@ export type Thread = Readonly<{
   lastActivityAt: Date
   coverage: ThreadCoverage
   items: ThreadItem[]
+  /** How many recorded work sessions share this thread's intent (identical title). 1 = a single session. */
+  runCount?: number
 }>
 
 const DEFAULT_TRUTH: ThreadTruth = {
@@ -654,11 +656,27 @@ function projectThread(input: ThreadProjectionInput, thread: ThreadRecordInput):
 }
 
 export function projectWorkbenchThreads(input: ThreadProjectionInput): Thread[] {
-  return input.threads
+  const projected = input.threads
     .filter((thread) => thread.userId === input.userId && thread.projectId === input.projectId)
     .map((thread) => projectThread(input, thread))
     .sort((left, right) => (
       right.lastActivityAt.getTime() - left.lastActivityAt.getTime()
       || left.id.localeCompare(right.id, "en", { numeric: true })
     ))
+  const groups = new Map<string, { representative: Thread; runs: number; createdAt: Date }>()
+  for (const thread of projected) {
+    const key = thread.title.trim().toLowerCase()
+    const existing = groups.get(key)
+    if (!existing) {
+      groups.set(key, { representative: thread, runs: 1, createdAt: thread.createdAt })
+      continue
+    }
+    existing.runs += 1
+    if (thread.createdAt.getTime() < existing.createdAt.getTime()) existing.createdAt = thread.createdAt
+  }
+  return [...groups.values()].map(({ representative, runs, createdAt }) => (
+    runs > 1
+      ? { ...representative, createdAt, runCount: runs }
+      : representative
+  ))
 }
