@@ -2,6 +2,7 @@ import { getAuthReadiness } from "@/lib/auth-readiness"
 import { getProcessStartedAt } from "@/lib/runtime-instance"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { getUserId } from "@/lib/session"
 import { AuthAside } from "@/components/auth-aside"
@@ -12,6 +13,7 @@ export default async function SetupPage() {
   const defaultAuthUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000"
   let defaultTerraFusionRoot = ""
   let terraFusionRootConfigured = false
+  let initialCoreSevenRepositories: readonly WorkspaceRepositoryMountView[] = []
   try {
     const userId = await getUserId()
     if (userId) {
@@ -21,6 +23,7 @@ export default async function SetupPage() {
         if (binding.ok) {
           defaultTerraFusionRoot = binding.binding.configuredWorkspaceRoot
           terraFusionRootConfigured = true
+          initialCoreSevenRepositories = binding.binding.project.repositories ?? []
         }
       }
     }
@@ -39,6 +42,7 @@ export default async function SetupPage() {
             defaultAuthUrl={defaultAuthUrl}
             defaultTerraFusionRoot={defaultTerraFusionRoot}
             initialTerraFusionRootConfigured={terraFusionRootConfigured}
+            initialCoreSevenRepositories={initialCoreSevenRepositories}
             initialProcessStartedAt={initialProcessStartedAt}
           />
         </div>

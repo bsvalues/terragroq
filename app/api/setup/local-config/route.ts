@@ -10,6 +10,7 @@ import { getAuthReadiness } from "@/lib/auth-readiness"
 import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
 import {
   verifyCanonicalTerraFusionCheckout,
   verifyTerraFusionWorkspaceRoot,
@@ -24,14 +25,17 @@ type SetupPayload = {
   authSecret?: unknown
   authUrl?: unknown
   terraFusionRoot?: unknown
+  repositoryKey?: unknown
+  repositoryRoot?: unknown
 }
 
-type SetupOperation = "full" | "terrafusion-root"
+type SetupOperation = "full" | "terrafusion-root" | "terrafusion-repository-root"
 
 const MAX_SETUP_REQUEST_BYTES = 16_000
 
 function localSetupEnabled() {
   if (process.env.LOCAL_SETUP_ENABLED === "false") return false
+  if (process.env.LOCAL_SETUP_ENABLED === "true") return true
   return process.env.NODE_ENV !== "production"
 }
 
@@ -76,7 +80,11 @@ function validateTerraFusionRoot(value: unknown) {
 
 function parseOperation(payload: SetupPayload): SetupOperation {
   const operation = asTrimmedString(payload.operation) || "full"
-  if (operation !== "full" && operation !== "terrafusion-root") {
+  if (
+    operation !== "full"
+    && operation !== "terrafusion-root"
+    && operation !== "terrafusion-repository-root"
+  ) {
     throw new Error("Unsupported setup operation.")
   }
   return operation
@@ -226,6 +234,15 @@ async function writeTerraFusionRoot(terraFusionRoot: string) {
   })
 }
 
+async function writeTerraFusionRepositoryRoot(
+  environmentKey: string,
+  repositoryRoot: string,
+) {
+  await writeManagedLocalEnv(new Map([
+    [environmentKey, `${environmentKey}=${serializeProjectRootEnvValue(repositoryRoot)}`],
+  ]))
+}
+
 export async function POST(req: Request) {
   if (!localSetupEnabled()) {
     return NextResponse.json(
@@ -285,7 +302,17 @@ export async function POST(req: Request) {
     )
   }
 
-  if (operation === "terrafusion-root") {
+  if (operation === "full" && process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Full local bootstrap is disabled in production. Use the authenticated owner mount operations only.",
+      },
+      { status: 403 },
+    )
+  }
+
+  if (operation === "terrafusion-root" || operation === "terrafusion-repository-root") {
     const session = await getSession()
     if (!session?.user) {
       return NextResponse.json(
@@ -316,7 +343,9 @@ export async function POST(req: Request) {
 
     let terraFusionRoot: string
     try {
-      terraFusionRoot = validateTerraFusionRoot(payload.terraFusionRoot)
+      terraFusionRoot = validateTerraFusionRoot(
+        operation === "terrafusion-root" ? payload.terraFusionRoot : payload.repositoryRoot,
+      )
     } catch (error) {
       return NextResponse.json(
         {
@@ -327,7 +356,22 @@ export async function POST(req: Request) {
       )
     }
 
-    const verifiedRoot = await verifyTerraFusionWorkspaceRoot(session.user.id, terraFusionRoot)
+    const repositorySelection = operation === "terrafusion-repository-root"
+      ? resolveWorkspaceRepositorySelection("terrafusion", payload.repositoryKey)
+      : resolveWorkspaceRepositorySelection("terrafusion", "os-1")
+    if (!repositorySelection.ok) {
+      return NextResponse.json(
+        { ok: false, message: `TerraFusion repository selection failed: ${repositorySelection.error}` },
+        { status: 400 },
+      )
+    }
+
+    const verifiedRoot = repositorySelection.repository.key === "os-1"
+      ? await verifyTerraFusionWorkspaceRoot(session.user.id, terraFusionRoot)
+      : await verifyCanonicalTerraFusionCheckout(
+        terraFusionRoot,
+        repositorySelection.repository.identity,
+      )
     if (!verifiedRoot.ok) {
       return NextResponse.json(
         { ok: false, message: `TerraFusion checkout verification failed: ${verifiedRoot.error}` },
@@ -337,7 +381,14 @@ export async function POST(req: Request) {
     terraFusionRoot = verifiedRoot.binding.configuredWorkspaceRoot
 
     try {
-      await writeTerraFusionRoot(terraFusionRoot)
+      if (repositorySelection.repository.key === "os-1") {
+        await writeTerraFusionRoot(terraFusionRoot)
+      } else {
+        await writeTerraFusionRepositoryRoot(
+          repositorySelection.repository.configuredRootEnvironment,
+          terraFusionRoot,
+        )
+      }
     } catch (error) {
       return NextResponse.json(
         {
@@ -352,7 +403,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: "Saved the TerraFusion checkout to .env.local. Restart WilliamOS to connect it.",
+      repositoryKey: repositorySelection.repository.key,
+      message: `Saved the ${repositorySelection.repository.label} checkout to .env.local. Restart WilliamOS to connect it.`,
       restartRequired: true,
     })
   }

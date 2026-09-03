@@ -141,6 +141,8 @@ $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
+$declaredLocalSetupEnabled = Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"
+$localSetupEnabled = if ($declaredLocalSetupEnabled -ieq "true") { "true" } else { "false" }
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
 }
@@ -176,6 +178,8 @@ if ($normalizedOrigin -match '^git@github\.com:(.+)$') {
   $normalizedOrigin = $Matches[1]
 } elseif ($normalizedOrigin -match '^https?://github\.com/(.+)$') {
   $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
+  $normalizedOrigin = $Matches[1]
 } elseif ($normalizedOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
   $normalizedOrigin = $Matches[1]
 }
@@ -185,6 +189,77 @@ if ($normalizedOrigin -ne $canonicalTerraFusionRepository) {
 }
 
 Write-Boot "BOOT_PROJECT_ROOT $resolvedProjectRoot"
+
+# -------------------------------------------------------------------------------------------------
+# Optional Core Seven secondary mounts. Each declaration is either absent (and therefore simply not
+# mounted) or is proven against the server-owned repository identity before Node can observe it.
+# The integrated OS 1.0 checkout above remains the required primary workspace and Preview source.
+# -------------------------------------------------------------------------------------------------
+
+$secondaryRepositoryDeclarations = @(
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_SOVEREIGN_OS_ROOT"; Repository = "bsvalues/terrafusion-os" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_FORGE_ROOT"; Repository = "bsvalues/terrafusion-forge" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_ATLAS_ROOT"; Repository = "bsvalues/terrafusion-atlas" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_DAIS_ROOT"; Repository = "bsvalues/terrafusion-dais" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_DOSSIER_ROOT"; Repository = "bsvalues/terrafusion-dossier" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_GPT_ROOT"; Repository = "bsvalues/terrafusion-gpt" }
+)
+$verifiedSecondaryRepositoryMounts = @()
+
+foreach ($secondary in $secondaryRepositoryDeclarations) {
+  # `.env.local` is the deployment declaration boundary for these mounts. Remove any value inherited
+  # from the scheduled-task process or machine before consulting that file, otherwise an absent key
+  # could leave an unvalidated ambient path visible to Node.
+  Remove-Item -Path "Env:$($secondary.Environment)" -ErrorAction SilentlyContinue
+  $declaredSecondaryRoot = Get-DeclaredEnvValue -File $envFile -Key $secondary.Environment
+  if (-not $declaredSecondaryRoot) {
+    # Secondary repositories are optional at boot. WilliamOS reports an absent mount truthfully;
+    # inventing a path or refusing the required OS 1.0 workspace would both be incorrect.
+    continue
+  }
+
+  if (-not (Test-Path -LiteralPath $declaredSecondaryRoot -PathType Container)) {
+    Deny-Boot "SECONDARY_ROOT_MISSING key=$($secondary.Environment)" "the configured secondary Core Seven root '$declaredSecondaryRoot' for $($secondary.Environment) does not exist."
+  }
+  $resolvedSecondaryRoot = (Resolve-Path -LiteralPath $declaredSecondaryRoot).ProviderPath.TrimEnd('\')
+  if ($resolvedSecondaryRoot -ieq $resolvedAppRoot) {
+    Deny-Boot "SECONDARY_ROOT_IS_APP_ROOT key=$($secondary.Environment)" "the configured secondary Core Seven root for $($secondary.Environment) resolves to the deployed WilliamOS bundle."
+  }
+
+  $secondaryTopLevel = Invoke-GitProbe -Directory $resolvedSecondaryRoot -GitArgs @("rev-parse", "--show-toplevel")
+  if ($secondaryTopLevel.ExitCode -ne 0 -or -not $secondaryTopLevel.Output) {
+    Deny-Boot "SECONDARY_ROOT_NOT_GOVERNED_WORKSPACE key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' is not inside a git work tree."
+  }
+  $normalizedSecondaryTopLevel = ($secondaryTopLevel.Output -replace '/', '\').TrimEnd('\')
+  if ($normalizedSecondaryTopLevel -ine $resolvedSecondaryRoot) {
+    Deny-Boot "SECONDARY_ROOT_NOT_WORKTREE_ROOT key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' is not the exact root of its git work tree (that root is '$normalizedSecondaryTopLevel')."
+  }
+
+  $secondaryOriginRemote = Invoke-GitProbe -Directory $resolvedSecondaryRoot -GitArgs @("remote", "get-url", "origin")
+  if ($secondaryOriginRemote.ExitCode -ne 0 -or -not $secondaryOriginRemote.Output) {
+    Deny-Boot "SECONDARY_ROOT_NO_ORIGIN_REMOTE key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' has no origin remote."
+  }
+  $normalizedSecondaryOrigin = ("$($secondaryOriginRemote.Output)".Trim() -replace '\.git$', '')
+  if ($normalizedSecondaryOrigin -match '^git@github\.com:(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^https?://github\.com/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  }
+  $normalizedSecondaryOrigin = $normalizedSecondaryOrigin.Trim('/').ToLowerInvariant()
+  if ($normalizedSecondaryOrigin -ne $secondary.Repository) {
+    Deny-Boot "SECONDARY_ROOT_REPOSITORY_MISMATCH key=$($secondary.Environment)" "the configured secondary Core Seven root for $($secondary.Environment) is not the canonical repository $($secondary.Repository)."
+  }
+
+  $verifiedSecondaryRepositoryMounts += [pscustomobject]@{
+    Environment = $secondary.Environment
+    ResolvedRoot = $resolvedSecondaryRoot
+  }
+  Write-Boot "BOOT_SECONDARY_ROOT $($secondary.Environment) $resolvedSecondaryRoot"
+}
 
 # Resolve. stdout carries the connection string and is captured into a variable -- never a file, never
 # a log. stderr carries the resolver's redacted diagnostic, which IS recorded because it names the
@@ -241,6 +316,7 @@ Set-Location -LiteralPath $AppRoot
 $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
+$env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.
@@ -259,6 +335,9 @@ if ($declaredWilliamOsRoot) {
 }
 if ($declaredWilliamOsSpaceIdentity) {
   $env:WILLIAMOS_PROJECT_SPACE_IDENTITY = $declaredWilliamOsSpaceIdentity
+}
+foreach ($mount in $verifiedSecondaryRepositoryMounts) {
+  Set-Item -Path "Env:$($mount.Environment)" -Value $mount.ResolvedRoot
 }
 
 # Keep Node as the scheduled task's direct child. Start-Process detached the server from the task:

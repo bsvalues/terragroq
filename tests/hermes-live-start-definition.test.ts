@@ -94,7 +94,8 @@ describe("the cockpit's start script is declared in the repository", () => {
   })
 
   it("only applies the runtime variables it resolves or reads explicitly", () => {
-    const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
+    const code = executableOnly(startText)
+    const assignments = code.match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
     // WILLIAMOS_TERRAFUSION_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
     // reads the declared TerraFusion target root, `.env.local` declared it, and
@@ -105,11 +106,25 @@ describe("the cockpit's start script is declared in the repository", () => {
       "HOSTNAME",
       "PORT",
       "DATABASE_URL",
+      "LOCAL_SETUP_ENABLED",
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
       "WILLIAMOS_PROJECT_SPACE_IDENTITY",
     ]))
+    expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
+  })
+
+  it("carries only an explicit local-setup enablement into the production process", () => {
+    const code = executableOnly(startText)
+    const read = code.indexOf('Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"')
+    const exportFlag = code.indexOf("$env:LOCAL_SETUP_ENABLED = $localSetupEnabled")
+    const serverStart = code.indexOf("& $node $server")
+    expect(read).toBeGreaterThan(-1)
+    expect(code).toMatch(/\$localSetupEnabled\s*=\s*if\s*\(\$declaredLocalSetupEnabled\s+-ieq\s+"true"\)\s*\{\s*"true"\s*\}\s*else\s*\{\s*"false"\s*\}/)
+    expect(exportFlag).toBeGreaterThan(read)
+    expect(exportFlag).toBeLessThan(serverStart)
+    expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 })
 
@@ -184,6 +199,81 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   it("reads one key from .env.local without echoing the file that holds the credential", () => {
     expect(code).not.toMatch(/Write-(Output|Host|Boot)[^\n]*Get-Content[^\n]*\$envFile/)
     expect(code).toMatch(/function Get-DeclaredEnvValue/)
+  })
+})
+
+describe("the cockpit validates optional Core Seven secondary mounts before exporting them", () => {
+  const code = executableOnly(startText)
+  const expected = [
+    ["WILLIAMOS_TERRAFUSION_SOVEREIGN_OS_ROOT", "bsvalues/terrafusion-os"],
+    ["WILLIAMOS_TERRAFUSION_FORGE_ROOT", "bsvalues/terrafusion-forge"],
+    ["WILLIAMOS_TERRAFUSION_ATLAS_ROOT", "bsvalues/terrafusion-atlas"],
+    ["WILLIAMOS_TERRAFUSION_DAIS_ROOT", "bsvalues/terrafusion-dais"],
+    ["WILLIAMOS_TERRAFUSION_DOSSIER_ROOT", "bsvalues/terrafusion-dossier"],
+    ["WILLIAMOS_TERRAFUSION_GPT_ROOT", "bsvalues/terrafusion-gpt"],
+  ] as const
+
+  it("owns the exact six environment-to-repository mappings", () => {
+    for (const [environment, repository] of expected) {
+      expect(code).toContain(`Environment = "${environment}"; Repository = "${repository}"`)
+    }
+    expect(code.match(/Environment = "WILLIAMOS_TERRAFUSION_[A-Z_]+_ROOT"; Repository = "bsvalues\/terrafusion-[a-z-]+"/g))
+      .toHaveLength(6)
+  })
+
+  it("allows an absent optional declaration without fabricating or exporting a mount", () => {
+    const clearInherited = code.indexOf('Remove-Item -Path "Env:$($secondary.Environment)"')
+    const readDeclaration = code.indexOf("Get-DeclaredEnvValue -File $envFile -Key $secondary.Environment")
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    expect(clearInherited).toBeGreaterThan(-1)
+    expect(clearInherited).toBeLessThan(readDeclaration)
+    expect(readDeclaration).toBeLessThan(retain)
+    expect(retain).toBeLessThan(exportMount)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:\$\(\$secondary\.Environment\)"\s+-ErrorAction\s+SilentlyContinue/)
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+\$secondary\.Environment/)
+    expect(code).toMatch(/if \(-not \$declaredSecondaryRoot\)\s*\{\s*continue\s*\}/)
+    expect(code).not.toMatch(/WILLIAMOS_TERRAFUSION_(?:SOVEREIGN_OS|FORGE|ATLAS|DAIS|DOSSIER|GPT)_ROOT\s*=\s*["']/)
+  })
+
+  it("fails closed for every configured-root violation before Node starts", () => {
+    const serverStart = code.indexOf("& $node $server")
+    for (const refusal of [
+      "SECONDARY_ROOT_MISSING",
+      "SECONDARY_ROOT_IS_APP_ROOT",
+      "SECONDARY_ROOT_NOT_GOVERNED_WORKSPACE",
+      "SECONDARY_ROOT_NOT_WORKTREE_ROOT",
+      "SECONDARY_ROOT_NO_ORIGIN_REMOTE",
+      "SECONDARY_ROOT_REPOSITORY_MISMATCH",
+    ]) {
+      const at = code.indexOf(refusal)
+      expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)
+      expect(at, `${refusal} must refuse before the server starts`).toBeLessThan(serverStart)
+    }
+  })
+
+  it("proves exact worktree root and canonical origin before retaining or exporting a mount", () => {
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    const serverStart = code.indexOf("& $node $server")
+    expect(code).toMatch(/\$secondaryTopLevel\s*=\s*Invoke-GitProbe[^\n]*"rev-parse",\s*"--show-toplevel"/)
+    expect(code).toMatch(/\$normalizedSecondaryTopLevel\s+-ine\s+\$resolvedSecondaryRoot/)
+    expect(code).toMatch(/\$secondaryOriginRemote\s*=\s*Invoke-GitProbe[^\n]*"remote",\s*"get-url",\s*"origin"/)
+    expect(code).toMatch(/\$normalizedSecondaryOrigin\s+-ne\s+\$secondary\.Repository/)
+    expect(retain).toBeGreaterThan(code.indexOf("SECONDARY_ROOT_REPOSITORY_MISMATCH"))
+    expect(exportMount).toBeGreaterThan(retain)
+    expect(exportMount).toBeLessThan(serverStart)
+  })
+
+  it("normalizes GitHub's canonical SSH URI for both primary and secondary mounts", () => {
+    const sshUriBranches = code.match(/\^ssh:\/\/git@github\\\.com\(\?:\\:22\)\?\/\(\.\+\)\$/g) ?? []
+    expect(sshUriBranches).toHaveLength(2)
+  })
+
+  it("documents all six optional declarations without changing the required OS 1.0 declaration", () => {
+    const example = fs.readFileSync(path.join(process.cwd(), ".env.example"), "utf8")
+    expect(example).toContain('WILLIAMOS_TERRAFUSION_ROOT="/absolute/path/to/terrafusion_os_1.0"')
+    for (const [environment] of expected) expect(example).toMatch(new RegExp(`^${environment}=`, "m"))
   })
 })
 

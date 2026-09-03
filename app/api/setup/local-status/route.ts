@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { getProcessStartedAt, getRuntimeInstanceId } from "@/lib/runtime-instance"
 import { getSession } from "@/lib/session"
@@ -44,6 +45,7 @@ export async function GET(req: Request) {
   const readiness = await getAuthReadiness({ probeDatabase: true })
   let terraFusionRootConfigured = false
   let terraFusionRootStatus = "UNAUTHENTICATED"
+  let coreSevenRepositories: readonly WorkspaceRepositoryMountView[] = []
   const session = await getSession()
   if (session?.user) {
     const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
@@ -52,6 +54,7 @@ export async function GET(req: Request) {
       const binding = await resolveTerraFusionWorkspaceBinding(session.user.id)
       terraFusionRootConfigured = binding.ok
       terraFusionRootStatus = binding.ok ? "VERIFIED" : binding.error
+      coreSevenRepositories = binding.ok ? binding.binding.project.repositories ?? [] : []
     } else {
       terraFusionRootStatus = owner.failure ?? "OWNER_UNRESOLVED"
     }
@@ -62,6 +65,7 @@ export async function GET(req: Request) {
       readiness,
       terraFusionRootConfigured,
       terraFusionRootStatus,
+      coreSevenRepositories,
       processStartedAt: getProcessStartedAt(),
       runtimeInstanceId: getRuntimeInstanceId(),
       checkedAt: new Date().toISOString(),

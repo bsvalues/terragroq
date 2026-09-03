@@ -34,7 +34,31 @@ describe("GET /api/setup/local-status verified checkout truth", () => {
     seams.getSession.mockResolvedValue({ user: { id: "owner" } })
     seams.resolveOwnerUserId.mockResolvedValue("owner")
     seams.assertOwner.mockReturnValue({ ok: true })
-    seams.resolveBinding.mockResolvedValue({ ok: true, binding: { workspaceRoot: "/repos/terrafusion" } })
+    seams.resolveBinding.mockResolvedValue({
+      ok: true,
+      binding: {
+        workspaceRoot: "/repos/terrafusion",
+        project: {
+          repositories: [{
+            key: "atlas",
+            identity: "bsvalues/terrafusion-atlas",
+            label: "Atlas",
+            role: "suite-source",
+            suite: "atlas",
+            previewSource: false,
+            defaultRepository: false,
+            mount: {
+              key: "terrafusion:atlas:configured",
+              configured: true,
+              verified: true,
+              branch: "main",
+              revision: "a".repeat(40),
+              refusal: null,
+            },
+          }],
+        },
+      },
+    })
   })
 
   it("reports connected only after owner and repository verification", async () => {
@@ -44,6 +68,12 @@ describe("GET /api/setup/local-status verified checkout truth", () => {
     expect(response.status).toBe(200)
     expect(body.terraFusionRootConfigured).toBe(true)
     expect(body.terraFusionRootStatus).toBe("VERIFIED")
+    expect(body.coreSevenRepositories).toEqual([
+      expect.objectContaining({
+        key: "atlas",
+        mount: expect.objectContaining({ configured: true, verified: true }),
+      }),
+    ])
   })
 
   it("does not turn a nonempty but invalid root into a connected claim", async () => {
@@ -53,6 +83,7 @@ describe("GET /api/setup/local-status verified checkout truth", () => {
 
     expect(body.terraFusionRootConfigured).toBe(false)
     expect(body.terraFusionRootStatus).toBe("WORKSPACE_ROOT_PROJECT_MISMATCH")
+    expect(body.coreSevenRepositories).toEqual([])
   })
 
   it("does not expose a connected claim to a non-owner session", async () => {
