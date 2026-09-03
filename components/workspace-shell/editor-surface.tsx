@@ -196,7 +196,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   requestedRepositoryKey?: string | null
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null, selectedFileRef?: WorkspaceFileRef | null) => void
-  onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
+  onSelectedFileDirtyChange?: (path: string, dirty: boolean, fileRef?: WorkspaceFileRef | null) => void
   reloadPath?: string | null
   reloadKey?: number
   onReloadSettled?: (path: string, key: number, result: "refreshed" | "dirty-conflict" | "failed") => void
@@ -336,8 +336,12 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   const selectedBuffer = selectedKey ? buffers[selectedKey] : null
   useEffect(() => {
     if (!space.selectedPath) return
-    onSelectedFileDirtyChange?.(space.selectedPath, Boolean(selectedBuffer && selectedBuffer.content !== selectedBuffer.savedContent))
-  }, [onSelectedFileDirtyChange, selectedBuffer?.content, selectedBuffer?.savedContent, space.selectedPath])
+    onSelectedFileDirtyChange?.(
+      space.selectedPath,
+      Boolean(selectedBuffer && selectedBuffer.content !== selectedBuffer.savedContent),
+      selectedBuffer?.fileRef ?? space.selectedFileRef,
+    )
+  }, [onSelectedFileDirtyChange, selectedBuffer?.content, selectedBuffer?.fileRef, selectedBuffer?.savedContent, space.selectedFileRef, space.selectedPath])
 
   const updatePanes = useCallback((
     panes: readonly EditorPane[],
@@ -559,7 +563,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                             updatePanes(panes, space.editor.openFiles, space.editor.openFileRefs, openedFile.path, pane.id, openedFile.fileRef)
                             if (!buffers[openedFile.key]) {
                               setActiveRepositoryKey(openedFile.repositoryKey)
-                              void openFile(openedFile.path, pane.id)
+                              void openFile(openedFile.path, pane.id, openedFile.repositoryKey)
                             }
                           }}
                         >

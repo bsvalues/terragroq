@@ -139,6 +139,127 @@ describe("Experience V2 multi-repository Source workspace", () => {
     expect(second?.[0].openFileRefs).toHaveLength(2)
   })
 
+  it("reports dirty state with the exact repository-qualified file identity", async () => {
+    const user = userEvent.setup()
+    const osRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const atlasRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const editor = {
+      ...defaultSpace().editor,
+      openFiles: ["README.md", "README.md"],
+      openFileRefs: [osRef, atlasRef],
+      panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: osRef, selection: null }],
+    }
+    const onDirty = vi.fn()
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") return Response.json({ kind: "directory", entries: [] })
+      if (url === "/api/loom/files?path=&repositoryKey=atlas") return Response.json({ kind: "directory", entries: [] })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=os-1") return Response.json({
+        kind: "file", path: "README.md", content: "OS", modifiedAt: "2026-09-02T00:00:00.000Z",
+        repository: { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: revision },
+      })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas") return Response.json({
+        kind: "file", path: "README.md", content: "Atlas", modifiedAt: "2026-09-02T00:00:00.000Z",
+        repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision },
+      })
+      throw new Error(`unexpected request ${url}`)
+    }))
+
+    const osSpace = { ...defaultSpace(), editor, selectedPath: "README.md", selectedFileRef: osRef }
+    const view = render(<EditorSurface project={project} projectKey="terrafusion" space={osSpace} onEditorChange={() => undefined} onSelectedFileDirtyChange={onDirty} />)
+    const source = await screen.findByRole("textbox", { name: "Test source editor" })
+    await user.clear(source)
+    await user.type(source, "OS dirty")
+    await waitFor(() => expect(onDirty).toHaveBeenLastCalledWith("README.md", true, osRef))
+
+    const atlasSpace = {
+      ...osSpace,
+      selectedFileRef: atlasRef,
+      editor: { ...editor, panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: atlasRef, selection: null }] },
+    }
+    view.rerender(<EditorSurface project={project} projectKey="terrafusion" space={atlasSpace} onEditorChange={() => undefined} onSelectedFileDirtyChange={onDirty} />)
+    await waitFor(() => expect(onDirty).toHaveBeenLastCalledWith("README.md", false, atlasRef))
+  })
+
+  it("loads an unloaded tab from that tab's repository instead of the active shelf repository", async () => {
+    const user = userEvent.setup()
+    const osRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "os-1",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const atlasRef = {
+      projectIdentity: project.identity,
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const space = {
+      ...defaultSpace(),
+      selectedPath: "README.md",
+      selectedFileRef: osRef,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md", "README.md"],
+        openFileRefs: [osRef, atlasRef],
+        panes: [{ id: "primary" as const, activePath: "README.md", activeFileRef: osRef, selection: null }],
+      },
+    }
+    let atlasReads = 0
+    let resolveInitialAtlasRead!: (response: Response) => void
+    const initialAtlasRead = new Promise<Response>((resolve) => { resolveInitialAtlasRead = resolve })
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&repositoryKey=os-1") return Response.json({ kind: "directory", entries: [] })
+      if (url === "/api/loom/files?path=&repositoryKey=atlas") return Response.json({ kind: "directory", entries: [] })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=os-1") return Response.json({
+        kind: "file", path: "README.md", content: "OS", modifiedAt: "2026-09-02T00:00:00.000Z",
+        repository: { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: revision },
+      })
+      if (url === "/api/loom/files?path=README.md&repositoryKey=atlas") {
+        atlasReads += 1
+        if (atlasReads === 1) return initialAtlasRead
+        return Response.json({
+          kind: "file", path: "README.md", content: "Atlas", modifiedAt: "2026-09-02T00:00:00.000Z",
+          repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const onEditorChange = vi.fn()
+    render(<EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={onEditorChange} />)
+    expect(await screen.findByDisplayValue("OS")).toBeTruthy()
+    await user.click(screen.getByRole("tab", { name: "Atlas · README.md" }))
+
+    await waitFor(() => expect(atlasReads).toBe(2))
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual(atlasRef)
+    resolveInitialAtlasRead(Response.json({
+      kind: "file", path: "README.md", content: "Atlas stale read", modifiedAt: "2026-09-02T00:00:00.000Z",
+      repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: revision },
+    }))
+  })
+
   it("opens a Working Set search result from its named repository instead of the currently active repository", async () => {
     const user = userEvent.setup()
     const onEditorChange = vi.fn()

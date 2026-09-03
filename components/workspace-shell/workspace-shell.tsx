@@ -39,7 +39,7 @@ import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorP
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
-import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -652,6 +652,32 @@ function spaceMutationBody(
   return projectKey === "williamos" ? { ...value, projectKey } : value
 }
 
+export function workspaceFileDirtyKey(path: string, fileRef?: WorkspaceFileRef | null): string {
+  return fileRef?.path === path ? canonicalWorkspaceObjectKey(fileRef) : path
+}
+
+function workspaceFileIsDirty(
+  dirtyFiles: Readonly<Record<string, boolean>>,
+  path: string | null,
+  fileRef?: WorkspaceFileRef | null,
+): boolean {
+  return Boolean(path && dirtyFiles[workspaceFileDirtyKey(path, fileRef)])
+}
+
+export function applyRestoredWorkspaceSelection(
+  current: WorkspaceSpace,
+  restored: WorkspaceSpace,
+): WorkspaceSpace {
+  return {
+    ...current,
+    revision: restored.revision,
+    activeWindowId: restored.activeWindowId,
+    selectedPath: restored.selectedPath,
+    selectedFileRef: restored.selectedFileRef,
+    editor: restored.editor,
+  }
+}
+
 export function WorkspaceShell({
   initialSummon = null,
   projectKey = "terrafusion",
@@ -874,7 +900,7 @@ export function WorkspaceShell({
       && stateRef.current.revision === binding.worldRevision
       && acknowledgedRevisionRef.current === binding.worldRevision
       && revisionRef.current === binding.worldRevision
-      && !dirtyPathsRef.current[binding.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, binding.path, stateRef.current.selectedFileRef)
       && storageRef.current === "server"
       && !persistencePendingRef.current
       && !persistenceErrorRef.current
@@ -1259,13 +1285,7 @@ export function WorkspaceShell({
     revisionRef.current = restored.revision
     acknowledgedRevisionRef.current = restored.revision
     pendingPersistRef.current = null
-    setSpace((current) => ({
-      ...current,
-      revision: restored.revision,
-      activeWindowId: restored.activeWindowId,
-      selectedPath: restored.selectedPath,
-      editor: restored.editor,
-    }))
+    setSpace((current) => applyRestoredWorkspaceSelection(current, restored))
     if (payload.spine) setSpine(payload.spine)
     setPersistenceError(null)
     setPersistencePending(false)
@@ -1800,9 +1820,10 @@ export function WorkspaceShell({
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [])
 
-  const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean) => {
+  const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean, fileRef?: WorkspaceFileRef | null) => {
+    const key = workspaceFileDirtyKey(path, fileRef)
     setDirtyPaths((current) => {
-      const next = current[path] === dirty ? current : { ...current, [path]: dirty }
+      const next = current[key] === dirty ? current : { ...current, [key]: dirty }
       dirtyPathsRef.current = next
       return next
     })
@@ -1837,7 +1858,7 @@ export function WorkspaceShell({
     projectKey,
     path: changeTarget,
     fileRef: changeFileRef,
-    dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
+    dirty: workspaceFileIsDirty(dirtyPaths, changeTarget, changeFileRef),
     onVerifiedSuccess: refreshVerifiedChange,
     isOperationScopeCurrent: isChangeScopeCurrent,
   })
@@ -1871,7 +1892,7 @@ export function WorkspaceShell({
   const openDiffImprove = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
-      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) || !liveDiffContext || liveDiffContext.worldId !== worldId
       || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
       || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
@@ -1900,7 +1921,7 @@ export function WorkspaceShell({
   const openDiffReview = useCallback(() => {
     if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
       || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
-      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) || !liveDiffContext || liveDiffContext.worldId !== worldId
       || liveDiffContext.path !== space.selectedPath || !space.selectedFileRef
       || space.selectedFileRef.path !== space.selectedPath) return
     const captured = {
@@ -1918,7 +1939,7 @@ export function WorkspaceShell({
         && storageRef.current === "server"
         && current.activeWindowId === "diff" && current.selectedPath === captured.path
         && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
-        && !dirtyPathsRef.current[captured.path]
+        && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
         && live?.worldId === captured.worldId && live.path === captured.path
         && live.fingerprint === captured.fingerprint
         && !persistenceErrorRef.current)
@@ -1957,8 +1978,8 @@ export function WorkspaceShell({
       setTransitionMessage("Finish the active Change or Review before reviewing another file.")
       return
     }
-    if (!worldId || !fileRef || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
-      setTransitionMessage(dirtyPaths[target ?? ""]
+    if (!worldId || !fileRef || !isReviewableWorkspacePath(target) || workspaceFileIsDirty(dirtyPaths, target, fileRef) || persistenceError) {
+      setTransitionMessage(workspaceFileIsDirty(dirtyPaths, target, fileRef)
         ? "Save the selected file before Review so Claude does not inspect stale disk content."
         : "Review needs an exact durably saved workspace-relative file in the active Space.")
       return
@@ -1985,7 +2006,7 @@ export function WorkspaceShell({
         && transitionEpochRef.current === capturedEpoch
         && stateRef.current.selectedPath === target
         && JSON.stringify(stateRef.current.selectedFileRef) === JSON.stringify(fileRef)
-        && !dirtyPathsRef.current[target]
+        && !workspaceFileIsDirty(dirtyPathsRef.current, target, fileRef)
         && !persistenceErrorRef.current,
       isPresentationCurrent: () => worldRef.current === capturedWorldId
         && transitionEpochRef.current === capturedEpoch,
@@ -2239,7 +2260,7 @@ export function WorkspaceShell({
       && !persistenceErrorRef.current
       && current.activeWindowId === "diff"
       && current.selectedPath === context.path
-      && !dirtyPathsRef.current[context.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.path, current.selectedFileRef)
       && live?.worldId === context.clientGuard.worldId
       && live.path === context.path
       && live.fingerprint === context.fingerprint
@@ -2259,7 +2280,7 @@ export function WorkspaceShell({
       && current.activeWindowId === "running-app"
       && current.runningAppUrl === context.clientGuard.runningAppUrl
       && current.selectedPath === context.selectedPath
-      && !dirtyPathsRef.current[context.selectedPath]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.selectedPath, current.selectedFileRef)
       && capturedEvidence?.worldId === context.clientGuard.worldId
       && capturedEvidence.transitionEpoch === context.clientGuard.transitionEpoch
       && capturedEvidence.requestId === context.clientGuard.requestId
@@ -2282,7 +2303,7 @@ export function WorkspaceShell({
       && current.revision === context.revision
       && current.activeWindowId === "editor"
       && current.selectedPath === context.path
-      && !dirtyPathsRef.current[context.path]
+      && !workspaceFileIsDirty(dirtyPathsRef.current, context.path, current.selectedFileRef)
       && current.editor.activePaneId === context.activePaneId
       && pane?.activePath === context.path
       && pane?.selection?.anchor === context.selection.anchor
@@ -2524,7 +2545,7 @@ export function WorkspaceShell({
             && storageRef.current === "server"
             && current.activeWindowId === "diff" && current.selectedPath === captured.path
             && JSON.stringify(current.selectedFileRef) === JSON.stringify(captured.fileRef)
-            && !dirtyPathsRef.current[captured.path]
+            && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
             && live?.worldId === captured.worldId
             && live.path === captured.path
             && live.fingerprint === captured.fingerprint)
@@ -2562,7 +2583,7 @@ export function WorkspaceShell({
           && transitionEpochRef.current === captured.transitionEpoch
           && storageRef.current === "server"
           && current.activeWindowId === "diff" && current.selectedPath === captured.path
-          && !dirtyPathsRef.current[captured.path]
+          && !workspaceFileIsDirty(dirtyPathsRef.current, captured.path, captured.fileRef)
           && (!live || live.worldId === captured.worldId && live.path === captured.path
             && live.fingerprint === captured.fingerprint)
           && !persistenceErrorRef.current)
@@ -3054,7 +3075,7 @@ export function WorkspaceShell({
       && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "space" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
-      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(path && isReviewableWorkspacePath(path) && !workspaceFileIsDirty(dirtyPaths, path, selectedFileRef))
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
       && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
@@ -3131,7 +3152,7 @@ export function WorkspaceShell({
       && selectedFileRef.observedRevision === selectedRepository.mount.revision)
     const baselineReady = selectedKind === "file" && storage === "server" && Boolean(worldId && project)
       && !persistencePending && !persistenceError && acknowledgedRevisionRef.current === space.revision
-      && Boolean(path && isReviewableWorkspacePath(path) && !dirtyPaths[path])
+      && Boolean(path && isReviewableWorkspacePath(path) && !workspaceFileIsDirty(dirtyPaths, path, selectedFileRef))
       && Boolean(spine.outcomeKey && spine.workOrderId !== null)
       && repositorySelectionReady
       && spine.execution !== "idle" && spine.execution !== "complete" && spine.execution !== "blocked"
@@ -3397,7 +3418,7 @@ export function WorkspaceShell({
       || persistencePending || persistenceError
       || acknowledgedRevisionRef.current !== space.revision
       || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
-      || dirtyPaths[space.selectedPath]
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
       ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
@@ -3423,7 +3444,7 @@ export function WorkspaceShell({
       || persistencePending || persistenceError
       || acknowledgedRevisionRef.current !== space.revision
       || !space.selectedPath || !isReviewableWorkspacePath(space.selectedPath)
-      || dirtyPaths[space.selectedPath]
+      || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
       ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
@@ -3438,7 +3459,7 @@ export function WorkspaceShell({
   const diffReviewUnavailableReason = selectedKind !== "diff" ? null
     : storage !== "server" ? "Review requires a server-bound Space with durable persistence."
       : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
-        : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+        : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Review needs the exact live modified patch for the saved selected file."
             : persistencePending ? "Review waits until the current Space is durably saved."
@@ -3447,7 +3468,7 @@ export function WorkspaceShell({
     : storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."
       : persistenceError ? `Challenge is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Challenge waits until the current Space is durably saved."
-          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             || !liveModifiedDiffIdentity(liveDiffContext)
             ? "Challenge needs the exact live modified patch for the saved selected file."
@@ -3456,13 +3477,13 @@ export function WorkspaceShell({
     : storage !== "server" ? "Explain requires a server-bound Space with durable persistence."
       : persistenceError ? `Explain is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Explain waits until the current Space is durably saved."
-          : !worldId || !project || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !project || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             ? "Explain needs an exact durably saved selected source file."
             : null
   const fileReviewUnavailableReason = selectedKind !== "file" ? null
     : change.running || review.running ? "Finish the active Change or Review before reviewing another file."
       : !worldId || !isReviewableWorkspacePath(space.selectedPath) ? "Review needs an exact workspace-relative selected file."
-        : dirtyPaths[space.selectedPath] ? "Save the selected file before Review so Claude does not inspect stale disk content."
+        : workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef) ? "Save the selected file before Review so Claude does not inspect stale disk content."
           : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
             : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", fileDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const
@@ -3478,7 +3499,7 @@ export function WorkspaceShell({
     : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
       : persistenceError ? `Improve is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : persistencePending ? "Improve waits until the current Space is durably saved."
-          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+          : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Improve needs the exact live modified patch for the saved selected file."
             : null
@@ -3953,7 +3974,7 @@ export function WorkspaceShell({
             || stateRef.current.activeWindowId !== "running-app"
             || stateRef.current.runningAppUrl !== requestRunningAppUrl
             || stateRef.current.selectedPath !== requestPath
-            || dirtyPathsRef.current[requestPath]) throw new Error("LINE_CONTEXT_STALE")
+            || workspaceFileIsDirty(dirtyPathsRef.current, requestPath, stateRef.current.selectedFileRef)) throw new Error("LINE_CONTEXT_STALE")
           previewExplainEvidenceRef.current = {
             worldId: requestWorldId,
             transitionEpoch: requestEpoch,
@@ -4045,7 +4066,7 @@ export function WorkspaceShell({
       const identity = liveModifiedDiffIdentity(live)
       if (!worldId || !identity || live?.worldId !== worldId || identity.path !== space.selectedPath
         || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
-        || dirtyPathsRef.current[identity.path]) {
+        || workspaceFileIsDirty(dirtyPathsRef.current, identity.path, stateRef.current.selectedFileRef)) {
         setTransitionMessage("Challenge needs the exact live modified patch for the durably saved selected file.")
         return
       }
@@ -4063,7 +4084,7 @@ export function WorkspaceShell({
       const selectedPath = space.selectedPath
       const activePane = space.editor.panes.find((pane) => pane.id === space.editor.activePaneId) ?? null
       if (!worldId || !project || storageRef.current !== "server" || persistencePendingRef.current
-        || persistenceErrorRef.current || !selectedPath || dirtyPathsRef.current[selectedPath]
+        || persistenceErrorRef.current || !selectedPath || workspaceFileIsDirty(dirtyPathsRef.current, selectedPath, stateRef.current.selectedFileRef)
         || space.activeWindowId !== "editor" || !activePane || activePane.activePath !== selectedPath
         || !activePane.selection) {
         setTransitionMessage("Ask needs the exact durably saved selected file in a server-bound Space.")

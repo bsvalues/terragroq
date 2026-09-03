@@ -56,7 +56,7 @@ describe("Experience V2 exact diff Challenge", () => {
     expect(barrier).toBeGreaterThan(firstGuard)
     expect(secondGuard).toBeGreaterThan(barrier)
     expect(post).toBeGreaterThan(secondGuard)
-    expect(source).toContain('dirtyPathsRef.current[context.path]')
+    expect(source).toContain('workspaceFileIsDirty(dirtyPathsRef.current, context.path, current.selectedFileRef)')
     expect(source).toContain('live.fingerprint === context.fingerprint')
   })
 
