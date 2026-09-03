@@ -273,6 +273,22 @@ function configuredDeliveryVerificationKeys(): Readonly<Record<string, KeyObject
   return keys
 }
 
+function mergedExternalAdmittedPullRequestIsValid(value: unknown): boolean {
+  // A Space may be admitted before its delivery artifact exists. In that case the later prospective
+  // adoption authorization and signed seal carry the immutable PR/head binding. If an admission did
+  // record a target, keep requiring a complete immutable identity rather than accepting partial data.
+  if (value === undefined) return true
+  try {
+    const pullRequest = record(value)
+    return Object.keys(pullRequest).sort().join("\0") === "headSha\0number"
+      && typeof pullRequest.number === "number" && Number.isSafeInteger(pullRequest.number)
+      && pullRequest.number > 0 && typeof pullRequest.headSha === "string"
+      && SHA.test(pullRequest.headSha)
+  } catch {
+    return false
+  }
+}
+
 if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalOutcomeVersionIsExact = mergedExternalOutcomeVersionIsExact
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalActiveAuthorityIsFresh = mergedExternalActiveAuthorityIsFresh
@@ -283,6 +299,7 @@ if (process.env.NODE_ENV === "test") {
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact = mergedExternalSpaceRevisionIsExact
   ;(globalThis as Record<string, unknown>).__williamosConfiguredDeliveryVerificationKeys = configuredDeliveryVerificationKeys
   ;(globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryPathsAreExact = mergedExternalDeliveryPathsAreExact
+  ;(globalThis as Record<string, unknown>).__williamosMergedExternalAdmittedPullRequestIsValid = mergedExternalAdmittedPullRequestIsValid
 }
 
 function canonicalRepository(value: unknown): string {
@@ -456,7 +473,6 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
   const binding = record(row.resultBinding)
   const requestBinding = record(row.requestBinding)
   const external = record(requestBinding.externalWorkOrder)
-  const externalPullRequest = record(external.pullRequest)
   const sealMetadata = record(row.sealMetadata)
   const seal = sealMetadata.seal as WilliamOSDeliverySeal
   const verificationKeys = configuredDeliveryVerificationKeys()
@@ -487,8 +503,7 @@ async function loadMergedExternalContext(userId: string, worldId: string): Promi
     && adoption.workOrder.id === Number(row.workOrderId)
     && spine.outcomeKey === row.outcomeKey
     && spine.workOrderId === Number(row.workOrderId)
-    && Number.isSafeInteger(Number(externalPullRequest.number)) && Number(externalPullRequest.number) > 0
-    && SHA.test(String(externalPullRequest.headSha))
+    && mergedExternalAdmittedPullRequestIsValid(external.pullRequest)
     && mergedExternalDeliveryPathsAreExact({ anchorPaths, artifactPaths, reservationPaths, deliveryPaths })
     && canonicalRepository(seal.payload.delivery.repository) === repository
     && seal.payload.delivery.commitSha === artifact.headSha
