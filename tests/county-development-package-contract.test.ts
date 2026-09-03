@@ -106,6 +106,9 @@ describe("County Development package contract", () => {
     expect(builder).not.toContain('Copy-Tree $PostgresRoot (Join-Path $stageRoot "runtime\\postgres")')
 
     expect(acceptance).toContain("REAL_SOURCE_PINNED_TERRAFUSION_WORKSPACE_OPENED")
+    expect(acceptance).toContain("rootFileButton")
+    expect(acceptance).toContain('aria-label$=" entries"')
+    expect(acceptance).toContain("workspaceTreeFromRootFile")
     expect(acceptance).toContain("EDIT_UNDO_REDO_VERIFIED")
     expect(acceptance).toContain("REAL_FILE_EDIT_SAVED")
     expect(acceptance).toContain("SECOND_REAL_FILE_OPENED")
@@ -113,6 +116,7 @@ describe("County Development package contract", () => {
     expect(acceptance).toContain("BOUNDED_PROJECT_OPERATION_EXECUTED")
     expect(acceptance).toContain("DEGRADED_DEVELOPER_PREVIEW_FIXTURE_INTERACTIVE")
     expect(acceptance).toContain("LOCAL_ASSISTANT_RESPONDED")
+    expect(acceptance).toContain("assert.match(responseText, /COUNTY_LOCAL_OK/)")
     expect(acceptance).toContain("OWNER_SURFACE_CLOSED")
     expect(acceptance).toContain("OWNER_SURFACE_REOPENED")
     expect(acceptance).toContain("SPACE_FILES_SPLIT_PREVIEW_AND_CONVERSATION_RESTORED")
