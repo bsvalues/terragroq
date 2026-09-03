@@ -1,4 +1,5 @@
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
@@ -31,7 +32,7 @@ export type ToolRunTranscript = Readonly<{
 type ToolRunEnvelope = Readonly<{ schemaVersion: 1; runs: readonly ToolRunTranscript[] }>
 type ToolRunStorage = Pick<Storage, "getItem" | "setItem">
 type ToolRunCleanupStorage = Pick<Storage, "removeItem"> & Partial<Pick<Storage, "length" | "key">>
-export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | null }>
+export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | "TOOL_RUN_HISTORY_UNSAFE" | null }>
 export type ToolRunHistoryVerdict = Readonly<{ ok: boolean; runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_NOT_SAVED" | null }>
 
 function record(value: unknown, error: string): Record<string, unknown> {
@@ -58,6 +59,39 @@ function iso(value: unknown, error: string): string {
 
 function bytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
+}
+
+function sanitizedLines(lines: readonly ToolOutputLine[]): readonly ToolOutputLine[] {
+  const unsafeChannels = new Set<ToolOutputLine["channel"]>()
+  for (const channel of ["stdout", "stderr", "meta"] as const) {
+    const text = lines.filter((line) => line.channel === channel).map((line) => line.text).join("")
+    const detector = createToolOutputRedactor()
+    if (detector.push(text) + detector.end() !== text) unsafeChannels.add(channel)
+  }
+  if (unsafeChannels.size === 0) return lines
+
+  const redactors = new Map<ToolOutputLine["channel"], ReturnType<typeof createToolOutputRedactor>>()
+  const sanitized: ToolOutputLine[] = []
+  const append = (channel: ToolOutputLine["channel"], output: string) => {
+    for (let offset = 0; offset < output.length; offset += 16_384) {
+      sanitized.push({ channel, text: output.slice(offset, offset + 16_384) })
+    }
+  }
+  for (const line of lines) {
+    if (!unsafeChannels.has(line.channel)) {
+      sanitized.push(line)
+      continue
+    }
+    const redactor = redactors.get(line.channel) ?? createToolOutputRedactor()
+    redactors.set(line.channel, redactor)
+    const output = redactor.push(line.text)
+    if (output) append(line.channel, output)
+  }
+  for (const [channel, redactor] of redactors) {
+    const output = redactor.end()
+    if (output) append(channel, output)
+  }
+  return sanitized
 }
 
 export function toolRunHistoryStorageKey(scope: string): string {
@@ -148,7 +182,7 @@ function validateToolRunTranscriptShape(raw: unknown, enforceByteLimit: boolean)
     startedAt: iso(run.startedAt, "TOOL_RUN_STARTED_AT_INVALID"),
     endedAt: iso(run.endedAt, "TOOL_RUN_ENDED_AT_INVALID"),
     outcome: { status: outcome.status, code: outcome.code as number | null, reason: outcome.reason as string | null },
-    lines,
+    lines: sanitizedLines(lines),
   }
   if (Date.parse(transcript.endedAt) < Date.parse(transcript.startedAt)) throw new Error("TOOL_RUN_TIME_INVALID")
   if (enforceByteLimit && bytes(transcript) > MAX_TOOL_RUN_TRANSCRIPT_BYTES) throw new Error("TOOL_RUN_TRANSCRIPT_TOO_LARGE")
@@ -191,7 +225,20 @@ export function loadToolRunHistory(storage: ToolRunStorage, scope: string): Tool
   const raw = storage.getItem(key)
   if (raw === null) return { runs: [], error: null }
   try {
-    return { runs: validateEnvelope(JSON.parse(raw)).runs, error: null }
+    const parsed = JSON.parse(raw)
+    const envelope = validateEnvelope(parsed)
+    const parsedRuns = (parsed as { runs: Array<{ lines: unknown }> }).runs
+    const unsafeOutputRewritten = envelope.runs.some((run, index) => (
+      JSON.stringify(run.lines) !== JSON.stringify(parsedRuns[index]?.lines)
+    ))
+    if (unsafeOutputRewritten) {
+      try {
+        storage.setItem(key, JSON.stringify(envelope))
+      } catch {
+        return { runs: [], error: "TOOL_RUN_HISTORY_UNSAFE" }
+      }
+    }
+    return { runs: envelope.runs, error: null }
   } catch {
     return { runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" }
   }
