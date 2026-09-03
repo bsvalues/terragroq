@@ -83,7 +83,7 @@ jobs:
         shell: pwsh
         run: |
           pnpm --dir cockpit native:test
-          pnpm --dir cockpit tauri:build -- --bundles nsis
+          pnpm --dir cockpit tauri:build
 
       - name: Install portable PostgreSQL build source
         shell: pwsh
