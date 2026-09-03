@@ -34,7 +34,7 @@ The generated Windows x64 bundle contains:
 - the pinned Ollama Windows runtime;
 - the County Development native Cockpit;
 - the WilliamOS schema bootstrap;
-- user-token install/start/stop/status/uninstall tooling;
+- user-token preflight/install/start/stop/status/verify/rollback/uninstall tooling;
 - a source-revision and SHA-256 manifest.
 
 Model weights are emitted as a separate `WilliamOS-County-Models` artifact so the application package can be reviewed and updated without repeatedly moving several gigabytes. Extract the model artifact beside the application bundle before first installation, or pass its `models` directory to the management script.
@@ -56,6 +56,12 @@ The launcher:
 
 No Windows service, scheduled task, firewall rule, Docker engine, WSL distribution, or machine-wide environment variable is created.
 
+## Verified update and rollback
+
+Before replacing an existing installation from a newer extracted package, the manager stops only the processes it owns, verifies the installed manifest, and creates one previous-version rollback slot under the user data directory. The slot contains the previous program payload, its exact source identity, and the matching non-secret deployment configuration. Secrets, PostgreSQL data, models, Spaces, files, and other user state remain in their normal data locations and are never copied into the program snapshot.
+
+A failed update automatically attempts to restore and restart that verified previous version. `-Action Rollback` performs the same restoration explicitly. Rollback changes program/configuration identity only; it is not a database point-in-time restore. A package that cannot verify its hashes, source identity, required runtime, local models, or County boundary fails closed.
+
 ## TerraFusion developer preview
 
 County Development binds its Preview surface to the canonical local TerraFusion preview origin `http://127.0.0.1:3102/`. Start the real preview from the verified TerraFusion checkout with:
@@ -64,28 +70,37 @@ County Development binds its Preview surface to the canonical local TerraFusion 
 pnpm run dev:preview
 ```
 
-WilliamOS admits that runtime only after it is reachable, frameable, and identifies itself as TerraFusion. The County package does not silently start a simulated preview or treat a health response as the product experience. A different County-approved loopback origin may be supplied during installation with `-PreviewUrl`; non-loopback preview targets are refused.
+WilliamOS admits that runtime only after it is reachable, frameable, and identifies itself as TerraFusion. The County package does not silently start a simulated preview or treat a health response as the product experience. A different County-approved loopback origin may be supplied during installation with `-PreviewUrl`; URLs with a non-loopback host, credentials, or query parameters are refused.
 
 ## Commands
 
 ```powershell
+# Verify package hashes and workstation prerequisites without installing
+.\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Preflight
+
 # Start or install from the extracted package
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Launch
 
-# Install with an alternate approved loopback TerraFusion preview
+# Install/update with an alternate approved loopback TerraFusion preview
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Install `
   -PreviewUrl http://127.0.0.1:3102/
 
-# Current evidence
+# Current process/health evidence
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Status
+
+# Fail unless installed files, exact source identity, checkout, models, and boundary are healthy
+.\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Verify
+
+# Restore the verified previous program/configuration version and re-verify it
+.\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Rollback
 
 # Stop only processes started by this package
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Stop
 
-# Remove program files but preserve user data
+# Remove program files but preserve user data and the rollback slot
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Uninstall
 
-# Remove program files and local WilliamOS data
+# Remove program files and all local WilliamOS data, including rollback
 .\deploy\county-development\Manage-WilliamOSCountyDevelopment.ps1 -Action Uninstall -PurgeData
 ```
 
