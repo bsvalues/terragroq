@@ -401,7 +401,7 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({ ...base, authorizationMetadata: { ...base.authorizationMetadata, previewDigest: "0".repeat(64) } })).toBe(false)
   })
 
-  it("loads an exact delivery subset without conflating it with the full anchor reservation", () => {
+  it("keeps an exact prospective adoption distinct from the historical implementation anchor", () => {
     const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryPathsAreExact as (input: Record<string, unknown>) => boolean
     const anchorPaths = [
       "app/api/environment/space/route.ts",
@@ -414,7 +414,12 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({ ...base, artifactPaths: [anchorPaths[1], ...artifactPaths] })).toBe(false)
     expect(exact({ ...base, reservationPaths: anchorPaths })).toBe(false)
     expect(exact({ ...base, deliveryPaths: anchorPaths })).toBe(false)
-    expect(exact({ ...base, anchorPaths: [artifactPaths[0]] })).toBe(false)
+    expect(exact({ ...base, anchorPaths: [` ${anchorPaths[0]}`, ...anchorPaths.slice(1)] })).toBe(false)
+    const deliveryOnlyPaths = [...artifactPaths, "lib/governance/git-delivery.ts"].sort()
+    expect(exact({
+      anchorPaths, artifactPaths: deliveryOnlyPaths,
+      reservationPaths: deliveryOnlyPaths, deliveryPaths: deliveryOnlyPaths,
+    })).toBe(true)
     const directoryArtifactPaths = ["app/api/environment/space/route.ts", "tests/experience-v2-space-route.test.ts"]
     expect(exact({
       anchorPaths: ["app/**", "tests/**"], artifactPaths: directoryArtifactPaths,
@@ -423,7 +428,7 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({
       anchorPaths: ["app/**", "tests/**"], artifactPaths: ["testosterone/escape.ts"],
       reservationPaths: ["testosterone/escape.ts"], deliveryPaths: ["testosterone/escape.ts"],
-    })).toBe(false)
+    })).toBe(true)
   })
 
   it("loads historical Ed25519 verification keys from the configured public-key ring", () => {
