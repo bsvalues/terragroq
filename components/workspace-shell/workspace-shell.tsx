@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, Layers3, TerminalSquare, Users, X } from "lucide-react"
+import { Activity, AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, Layers3, TerminalSquare, Users, X } from "lucide-react"
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
@@ -29,6 +29,7 @@ import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorI
 import { encodeExecutionAssignmentInspectorPayload, EXECUTION_ASSIGNMENT_INSPECTOR_KIND, executionAssignmentInspectorIdentity, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { agentSessionInspectorId, agentSessionInspectorIdFromIdentity, agentSessionInspectorIdentity, AGENT_SESSION_INSPECTOR_PERSISTED_SUBJECT_PREFIX, AGENT_SESSION_INSPECTOR_SURFACE_KIND, encodeAgentSessionInspectorPayload, isRestorableAgentSessionInspector, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { SystemTruthSurface } from "./system-truth-surface"
 import { PreviewComposition, type PendingSuiteChange } from "./preview-composition"
 import { RepositoryMapSurface, type RepositoryRelationship } from "./repository-map-surface"
 import type { RepositoryShelfRepository } from "./repository-shelf"
@@ -51,7 +52,7 @@ type LineReply = Readonly<{
 
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number; keepalive: boolean }>
 type SpaceStorage = "server" | "browser"
-type EnvironmentOverlay = "council" | "mission-control" | "repository-map" | "change-set" | "preview-composition" | null
+type EnvironmentOverlay = "council" | "mission-control" | "repository-map" | "change-set" | "preview-composition" | "system" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
 type DurableLineSnapshot = Awaited<ReturnType<typeof durableLineSnapshot>>
@@ -294,11 +295,11 @@ type ChangeRefreshWaiter = {
 }
 
 function spaceContinueUnavailableMessage(state: AgentSessionCollectionState): string {
-  if (state === "corrupt") return "Saved durable sessions are corrupt, so Continue cannot verify an exact session."
-  if (state === "oversized") return "Saved durable sessions exceed the safe storage limit, so Continue cannot verify an exact session."
-  if (state === "partial") return "Saved durable-session collection integrity is partial, so Continue cannot verify an exact session."
-  if (state === "unavailable") return "Durable-session storage is unavailable, so Continue cannot verify an exact session."
-  return "No durable session exists in this Space; use Delegate."
+  if (state === "corrupt") return "The saved session records are unreadable, so Continue cannot verify one. Start fresh with Delegate."
+  if (state === "oversized") return "The saved session records are too large to read safely, so Continue cannot verify one. Start fresh with Delegate."
+  if (state === "partial") return "Some saved session records are incomplete, so Continue cannot verify one. Start fresh with Delegate."
+  if (state === "unavailable") return "Session storage is not available, so Continue cannot verify a saved session."
+  return "No saved session exists in this Space yet. Start one with Delegate."
 }
 
 const windowName: Record<WindowId, string> = {
@@ -1995,7 +1996,7 @@ export function WorkspaceShell({
     if (!worldId || !fileRef || !isReviewableWorkspacePath(target) || workspaceFileIsDirty(dirtyPaths, target, fileRef) || persistenceError) {
       setTransitionMessage(workspaceFileIsDirty(dirtyPaths, target, fileRef)
         ? "Save the selected file before Review so Claude does not inspect stale disk content."
-        : "Review needs an exact durably saved workspace-relative file in the active Space.")
+        : "Review needs a workspace-relative file that is saved and unchanged in the active Space.")
       return
     }
     const capturedWorldId = worldId
@@ -3432,7 +3433,7 @@ export function WorkspaceShell({
   const spaceContinueCandidate = readOnlySpaceContinue ? rawSpaceContinueCandidate : null
   const continueAction = spaceContinueCandidate ? "Continue" : "Continue unavailable"
   const continueUnavailableMessage = nonReadOnlySpaceContinue
-    ? "This saved session is mutation-capable or not verifiably read-only, so Space Continue did not resume it."
+    ? "This saved session can edit files, so Continue (which is read-only) will not resume it."
     : spaceContinueUnavailableMessage(agentSessions.collectionState)
   const spaceDelegateBaselineUnavailableReason = selectedKind !== "space" ? null
     : storage !== "server" || !worldId || !project
@@ -3442,7 +3443,7 @@ export function WorkspaceShell({
       || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
-      ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
+      ? "Delegate needs one selected file, saved and unchanged, inside an active Work Order."
       : null
   const spaceDelegateProofMatches = (["codex", "claude"] as const).some((actor) => {
     const proof = spaceDelegateEligibility[actor]
@@ -3456,9 +3457,9 @@ export function WorkspaceShell({
   })
   const spaceDelegateUnavailableReason = spaceDelegateBaselineUnavailableReason
     ?? (spaceDelegateEligibilityPending
-      ? "Delegate is checking exact-path authority for Codex and Claude."
+      ? "Delegate is checking whether Codex or Claude is allowed to edit this exact file."
       : !spaceDelegateProofMatches
-        ? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude."
+        ? "Delegate needs current approval from the server for Codex or Claude to edit this file."
         : null)
   const fileDelegateBaselineUnavailableReason = selectedKind !== "file" ? null
     : storage !== "server" || !worldId || !project
@@ -3468,38 +3469,38 @@ export function WorkspaceShell({
       || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
       || !spine.outcomeKey || spine.workOrderId === null
       || spine.execution === "idle" || spine.execution === "complete" || spine.execution === "blocked"
-      ? "Delegate needs one clean durably saved selected file in a server-bound active Work Order."
+      ? "Delegate needs one selected file, saved and unchanged, inside an active Work Order."
       : null
   const fileDelegateProofAvailable = Boolean(fileDelegateEligibility.codex || fileDelegateEligibility.claude)
   const fileDelegateUnavailableReason = fileDelegateBaselineUnavailableReason
     ?? (fileDelegateEligibilityPending
-      ? "Delegate is checking exact-path authority for Codex and Claude."
+      ? "Delegate is checking whether Codex or Claude is allowed to edit this exact file."
       : !fileDelegateProofAvailable
-        ? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude."
+        ? "Delegate needs current approval from the server for Codex or Claude to edit this file."
         : null)
   const diffReviewUnavailableReason = selectedKind !== "diff" ? null
-    : storage !== "server" ? "Review requires a server-bound Space with durable persistence."
+    : storage !== "server" ? "Review needs a Space that saves its state to the server."
       : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
         : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Review needs the exact live modified patch for the saved selected file."
-            : persistencePending ? "Review waits until the current Space is durably saved."
+            : persistencePending ? "Review waits until the current Space is saved to the server."
               : null
   const diffChallengeUnavailableReason = selectedKind !== "diff" ? null
-    : storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."
+    : storage !== "server" ? "Challenge needs a Space that saves its state to the server."
       : persistenceError ? `Challenge is unavailable because Space persistence is refusing writes (${persistenceError}).`
-        : persistencePending ? "Challenge waits until the current Space is durably saved."
+        : persistencePending ? "Challenge waits until the current Space is saved to the server."
           : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             || !liveModifiedDiffIdentity(liveDiffContext)
             ? "Challenge needs the exact live modified patch for the saved selected file."
             : null
   const previewExplainUnavailableReason = selectedKind !== "preview" ? null
-    : storage !== "server" ? "Explain requires a server-bound Space with durable persistence."
+    : storage !== "server" ? "Explain needs a Space that saves its state to the server."
       : persistenceError ? `Explain is unavailable because Space persistence is refusing writes (${persistenceError}).`
-        : persistencePending ? "Explain waits until the current Space is durably saved."
+        : persistencePending ? "Explain waits until the current Space is saved to the server."
           : !worldId || !project || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
-            ? "Explain needs an exact durably saved selected source file."
+            ? "Explain needs a selected source file that is saved and unchanged."
             : null
   const fileReviewUnavailableReason = selectedKind !== "file" ? null
     : change.running || review.running ? "Finish the active Change or Review before reviewing another file."
@@ -3517,9 +3518,9 @@ export function WorkspaceShell({
     : selectedKind === "agent" ? ["Inspect", "Ask William", "Talk", "Redirect", "Council", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, spaceDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", "Council"] as const
   const improveUnavailableReason = selectedKind !== "diff" ? null
-    : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
+    : storage !== "server" ? "Improve needs a Space that saves its state to the server."
       : persistenceError ? `Improve is unavailable because Space persistence is refusing writes (${persistenceError}).`
-        : persistencePending ? "Improve waits until the current Space is durably saved."
+        : persistencePending ? "Improve waits until the current Space is saved to the server."
           : !worldId || !space.selectedPath || workspaceFileIsDirty(dirtyPaths, space.selectedPath, space.selectedFileRef)
             || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
             ? "Improve needs the exact live modified patch for the saved selected file."
@@ -4090,7 +4091,7 @@ export function WorkspaceShell({
       if (!worldId || !identity || live?.worldId !== worldId || identity.path !== space.selectedPath
         || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
         || workspaceFileIsDirty(dirtyPathsRef.current, identity.path, stateRef.current.selectedFileRef)) {
-        setTransitionMessage("Challenge needs the exact live modified patch for the durably saved selected file.")
+        setTransitionMessage("Challenge needs the current modified changes for the saved, unchanged selected file.")
         return
       }
       const context: DiffChallengeLineContext = {
@@ -4110,7 +4111,7 @@ export function WorkspaceShell({
         || persistenceErrorRef.current || !selectedPath || workspaceFileIsDirty(dirtyPathsRef.current, selectedPath, stateRef.current.selectedFileRef)
         || space.activeWindowId !== "editor" || !activePane || activePane.activePath !== selectedPath
         || !activePane.selection) {
-        setTransitionMessage("Ask needs the exact durably saved selected file in a server-bound Space.")
+        setTransitionMessage("Ask needs a selected file that is saved and unchanged in a server-backed Space.")
         return
       }
       const context: FileAskLineContext = {
@@ -4143,7 +4144,7 @@ export function WorkspaceShell({
           || agentActiveTurnsRef.current.length !== 0
           || !space.runningAppUrl || space.activeWindowId !== "running-app"
           || space.windows["running-app"].minimized) {
-          setTransitionMessage("Delegate needs the exact active durably saved Developer Preview.")
+          setTransitionMessage("Delegate needs the active Developer Preview, saved to the server.")
           return
         }
         if (!agentSessions.selectSession(null)) return
@@ -4172,7 +4173,7 @@ export function WorkspaceShell({
         if (spaceDelegateUnavailableReason || (!proofs.codex && !proofs.claude)
           || !worldId || !project || !path || !outcomeKey || workOrderId === null) {
           setTransitionMessage(spaceDelegateUnavailableReason
-            ?? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")
+            ?? "Delegate needs current approval from the server for Codex or Claude to edit this file.")
           return
         }
         if (!agentSessions.selectSession(null)) return
@@ -4195,7 +4196,7 @@ export function WorkspaceShell({
         if (fileDelegateUnavailableReason || !worldId || !project || !path || !outcomeKey
           || workOrderId === null || (!proofs.codex && !proofs.claude)) {
           setTransitionMessage(fileDelegateUnavailableReason
-            ?? "Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")
+            ?? "Delegate needs current approval from the server for Codex or Claude to edit this file.")
           return
         }
         if (!agentSessions.selectSession(null)) return
@@ -4562,6 +4563,7 @@ export function WorkspaceShell({
           </button>
         ))}
         <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
+        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("system")} aria-label="Open System" title="System"><Activity size={15} /></button>
         {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => setOverlay("repository-map")} aria-label="Open Repository Map" title="Repository Map"><GitFork size={15} /></button> : null}
         {repositoryViews.length > 1 ? <button type="button" className={spatial.dockButton} onClick={() => void openRepositoryDeliverySurface("change-set")} aria-label="Open Change Set" title="Cross-repository Change Set"><GitPullRequest size={15} /></button> : null}
         <button type="button" className={spatial.dockButton} onClick={() => void openCouncilHistory()} aria-label="Open Brain Council" title="Brain Council"><Users size={15} /></button>
@@ -4631,6 +4633,7 @@ export function WorkspaceShell({
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} busy={councilBusy} error={councilError} onDismiss={dismissCouncil} onAdvisoryAction={(action) => void handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={dismissCouncil}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={dismissCouncil} onSelect={selectCouncilHistory} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
+      {overlay === "system" ? <div className={spatial.councilHost}><SystemTruthSurface onDismiss={() => setOverlay(null)} /></div> : null}
       {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} onRemoveSpace={removeMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
       {overlay === "repository-map" ? <div className={spatial.councilHost}><RepositoryMapSurface repositories={repositoryViews} relationships={repositoryRelationships} onDismiss={() => setOverlay(null)} onSelectRepository={(repositoryKey) => {
         setRepositoryFocusKey(repositoryKey)

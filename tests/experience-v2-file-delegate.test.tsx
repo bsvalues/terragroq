@@ -128,7 +128,7 @@ describe("Experience V2 exact selected-file Delegate", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    await waitFor(() => expect(unavailable.title).toBe("Delegate requires a current server-derived exact-path authority proof for Codex or Claude."))
+    await waitFor(() => expect(unavailable.title).toBe("Delegate needs current approval from the server for Codex or Claude to edit this file."))
     expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
     expect(agentRequests).toEqual([])
   })

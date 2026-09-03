@@ -366,7 +366,7 @@ describe("Experience V2 current Changes Review", () => {
   })
 
   it.each([
-    ["browser-only Space", { storage: "browser" as const, diffState: "modified" as const }, "server-bound"],
+    ["browser-only Space", { storage: "browser" as const, diffState: "modified" as const }, "saves its state to the server"],
     ["clean selected file", { storage: "server" as const, diffState: "clean" as const }, "exact live modified patch"],
     ["oversize patch", { storage: "server" as const, diffState: "oversize" as const }, "exact live modified patch"],
     ["unavailable Git truth", { storage: "server" as const, diffState: "error" as const }, "exact live modified patch"],
