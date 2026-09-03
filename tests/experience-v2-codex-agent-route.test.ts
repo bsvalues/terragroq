@@ -153,7 +153,10 @@ describe("durable Codex delegate route", () => {
       binding: {
         projectId: 1,
         projectKey: "terrafusion",
+        repositoryKey: "os-1",
         repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryMountKey: "terrafusion:os-1:configured",
+        observedRevision: "a".repeat(40),
         project: { identity: "c:/work/terrafusion_os_1.0", name: "TerraFusion OS" },
         workspaceRoot: process.cwd(),
         configuredWorkspaceRoot: process.cwd(),
@@ -181,7 +184,10 @@ describe("durable Codex delegate route", () => {
       worldRevision: 7,
       projectId: 1,
       projectKey: "terrafusion",
+      repositoryResourceKey: "os-1",
       repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      repositoryMountKey: "terrafusion:os-1:configured",
+      observedRevision: "a".repeat(40),
       outcomeKey: "OUTCOME-1",
       workOrderId: 41,
       grantId: 9,
@@ -215,7 +221,10 @@ describe("durable Codex delegate route", () => {
         reservationVersion: "f".repeat(64),
         projectId: 1,
         projectKey: "terrafusion",
+        repositoryResourceKey: "os-1",
         repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryMountKey: "terrafusion:os-1:configured",
+        observedRevision: "a".repeat(40),
         spaceIdentity: "c:/work/terrafusion_os_1.0",
       },
       assignmentHash: ASSIGNMENT_HASH,
@@ -325,7 +334,10 @@ describe("durable Codex delegate route", () => {
       projectBinding: {
         projectId: 1,
         projectKey: "terrafusion",
+        repositoryResourceKey: "os-1",
         repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryMountKey: "terrafusion:os-1:configured",
+        observedRevision: "a".repeat(40),
         spaceIdentity: "c:/work/terrafusion_os_1.0",
       },
     })
@@ -424,6 +436,7 @@ describe("durable Codex delegate route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/next.ts",
       task: "Continue Work Order 41 in src/next.ts.",
+      repositoryKey: "os-1",
     })
 
     const output = await events(await POST(request({ prompt: "Implement the selected change." })))
@@ -441,6 +454,7 @@ describe("durable Codex delegate route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/next.ts",
       task: "Continue Work Order 41 in src/next.ts.",
+      repositoryKey: "os-1",
     })
     expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
   })
@@ -450,9 +464,10 @@ describe("durable Codex delegate route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/selected.ts",
       task: "Server-derived continuation task.",
+      repositoryKey: "os-1",
     })
 
-    const output = await events(await POST(request({ automatic: true })))
+    const output = await events(await POST(request({ automatic: true, repositoryKey: "os-1" })))
 
     expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
     expect(seams.readCodexContinuation).toHaveBeenCalledWith(
@@ -475,6 +490,7 @@ describe("durable Codex delegate route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/selected.ts",
       task: "x".repeat(32_001),
+      repositoryKey: "os-1",
     })
 
     const response = await POST(request({ automatic: true }))

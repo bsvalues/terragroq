@@ -24,7 +24,11 @@ import {
   type RepositoryAssignmentReservationClaims,
 } from "@/lib/loom/repository-assignment-runtime"
 import type { AssignmentReservationSet } from "@/lib/loom/repository-reservations"
-import { prepareCodexContinuation, readCodexContinuation } from "@/lib/loom/codex-continuation"
+import {
+  prepareCodexContinuation,
+  readCodexContinuation,
+  type CodexContinuationRepositoryIdentity,
+} from "@/lib/loom/codex-continuation"
 import {
   acquireCodexContinuationClaim,
   codexContinuationDependenciesForProjectRoot,
@@ -88,6 +92,17 @@ function sameResolvedRepository(left: WorkspaceProjectBinding, right: WorkspaceP
     && left.observedRevision === right.observedRevision
     && left.workspaceRoot === right.workspaceRoot
     && left.project.identity === right.project.identity
+}
+
+function continuationRepositoryMatches(
+  repository: CodexContinuationRepositoryIdentity,
+  binding: WorkspaceProjectBinding,
+): boolean {
+  return repository.projectIdentity === binding.project.identity
+    && repository.repositoryResourceKey === binding.repositoryKey
+    && repository.repositoryIdentity === binding.repositoryIdentity
+    && repository.repositoryMountKey === binding.repositoryMountKey
+    && repository.observedRevision === binding.observedRevision
 }
 
 function sameRepositoryAuthority(left: SpaceMutationAuthority, right: SpaceMutationAuthority): boolean {
@@ -261,7 +276,12 @@ export async function POST(request: Request) {
     observedRevision: projectBinding.binding.observedRevision,
     spaceIdentity: projectBinding.binding.project.identity,
   }
-  const continuationDependencies = codexContinuationDependenciesForProjectRoot(projectRoot)
+  const continuationDependencies = codexContinuationDependenciesForProjectRoot(
+    projectRoot,
+    async (repository) => continuationRepositoryMatches(repository, projectBinding.binding)
+      ? projectRoot
+      : null,
+  )
   const worldId = typeof body.worldId === "string" ? body.worldId.trim() : ""
   if (!worldId || worldId.length > 200 || worldId.includes("\0")) {
     return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })
@@ -384,7 +404,8 @@ export async function POST(request: Request) {
       throw error
     }
     if (continuation.status !== "NEXT_ASSIGNMENT"
-      || continuation.selectedPath !== assignment.selectedPath) {
+      || continuation.selectedPath !== assignment.selectedPath
+      || continuation.repositoryKey !== projectBinding.binding.repositoryKey) {
       await releaseClaim()
       return Response.json(
         { error: "CODEX_CONTINUATION_NOT_PENDING" },

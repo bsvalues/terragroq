@@ -179,7 +179,7 @@ export type RunAgentTurnInput = Readonly<{
   automatic?: boolean
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
-  onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
+  onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }>) => void | Promise<void>
 }>
 
 export type RunPreviewDiagnosticInput = Readonly<{
@@ -1015,7 +1015,7 @@ export function useExperienceAgentSessions({
     sourceSessionId?: string
     exactContinuation?: boolean
     automatic?: boolean
-    onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
+    onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }>) => void | Promise<void>
   }) => {
     if (projectKey !== "williamos" && projectKey !== "terrafusion") {
       throw new Error("AGENT_PROJECT_REQUIRED")
@@ -1448,8 +1448,9 @@ export function useExperienceAgentSessions({
           if (status === "NEXT_ASSIGNMENT") {
             const selectedPath = canonicalWorkspaceFilePath(event.selectedPath)
             const task = boundedText(event.task, 20_000)
-            if (!selectedPath || !task) { malformed = true; return }
-            input.onContinuation?.({ status, selectedPath, task })
+            const repository = resolveWorkspaceRepositorySelection(projectKey, event.repositoryKey)
+            if (!selectedPath || !task || !repository.ok) { malformed = true; return }
+            input.onContinuation?.({ status, selectedPath, task, repositoryKey: repository.repository.key })
           } else if (["ASSIGNMENT_IN_FLIGHT", "WORK_ORDER_PATHS_COMPLETE", "SPACE_PERSISTENCE_BUSY", "CONTINUATION_BLOCKED"].includes(status)) {
             input.onContinuation?.({ status })
           } else {
@@ -1620,7 +1621,7 @@ export function useExperienceAgentSessions({
     let current = input
     let completed: DurableAgentSession | null = null
     for (let transition = 0; transition < 64; transition += 1) {
-      const transitionResult: { current: Readonly<{ status: string; selectedPath?: string; task?: string }> | null } = { current: null }
+      const transitionResult: { current: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }> | null } = { current: null }
       completed = await executeTurn({
         ...current,
         mode: "delegate",
@@ -1635,16 +1636,14 @@ export function useExperienceAgentSessions({
           return completed
         }
       }
-      if (!next || next.status !== "NEXT_ASSIGNMENT" || !next.selectedPath || !next.task) return completed
+      if (!next || next.status !== "NEXT_ASSIGNMENT" || !next.selectedPath || !next.task || !next.repositoryKey) return completed
       current = {
         provider: "Codex",
         role: "Builder",
         assignment: next.selectedPath,
         prompt: next.task,
         target: { kind: "file", path: next.selectedPath },
-        ...(current.repositoryKey ?? completed.repository?.resourceKey
-          ? { repositoryKey: current.repositoryKey ?? completed.repository!.resourceKey }
-          : {}),
+        repositoryKey: next.repositoryKey,
         automatic: true,
         onEvent: input.onEvent,
         onPresentation: input.onPresentation,
@@ -1694,7 +1693,8 @@ export function useExperienceAgentSessions({
       if (cancelled || continuation.status !== "NEXT_ASSIGNMENT") return
       const selectedPath = canonicalWorkspaceFilePath(continuation.selectedPath)
       const task = boundedText(continuation.task, 20_000)
-      if (!selectedPath || !task) return
+      const repository = resolveWorkspaceRepositorySelection(projectKey, continuation.repositoryKey)
+      if (!selectedPath || !task || !repository.ok) return settleReadFailure()
       try {
         await runAgentTurn({
           provider: "Codex",
@@ -1702,6 +1702,7 @@ export function useExperienceAgentSessions({
           assignment: selectedPath,
           prompt: task,
           target: { kind: "file", path: selectedPath },
+          repositoryKey: repository.repository.key,
           automatic: true,
           onContinuation: onAutoContinuation,
         })

@@ -21,12 +21,14 @@ const WORLD_SCOPE = "terrafusion"
 const ASSIGNMENT_HASH = "a".repeat(64)
 const REVIEW_REVISION = "b".repeat(40)
 const REVIEW_REPOSITORY = { resourceKey: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: REVIEW_REVISION } as const
+const ATLAS_REPOSITORY = { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: REVIEW_REVISION } as const
 const REVIEW_FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVIEW_REVISION, path: "src/app.ts" } as const
 const WORKSPACE_REPOSITORY = { key: "os-1", identity: REVIEW_REPOSITORY.identity, label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: REVIEW_REPOSITORY.mountKey, configured: true, verified: true, branch: "main", revision: REVIEW_REVISION, refusal: null } }
 const WORKSPACE_DIFF_IDENTITY = { repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } } as const
 const reviewFileRef = (path = "src/app.ts") => ({ ...REVIEW_FILE_REF, path })
 const reviewInput = { fileRef: REVIEW_FILE_REF, repositoryKey: "os-1" } as const
 const reviewSessionFrame = { repositoryResourceKey: "os-1", repositoryIdentity: REVIEW_REPOSITORY.identity, repositoryMountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
+const atlasSessionFrame = { repositoryResourceKey: "atlas", repositoryIdentity: ATLAS_REPOSITORY.identity, repositoryMountKey: ATLAS_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
 const DELEGATE_SPINE = {
   ...EMPTY_SPINE,
   outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
@@ -126,10 +128,11 @@ describe("Experience V2 real agent sessions", () => {
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue the bound Work Order in src/other.ts.",
+          repositoryKey: "atlas",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-restored-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-restored-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...atlasSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Restored continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -145,7 +148,10 @@ describe("Experience V2 real agent sessions", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(onAutoContinuation).toHaveBeenCalledWith({ status: "WORK_ORDER_PATHS_COMPLETE" })
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1&projectKey=terrafusion")
-    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({
+      automatic: true,
+      repositoryKey: "atlas",
+    })
   })
 
   it("starts a restored automatic assignment as a fresh session even when an older saved session matches its path", async () => {
@@ -170,10 +176,11 @@ describe("Experience V2 real agent sessions", () => {
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue the current Work Order in src/other.ts.",
+          repositoryKey: "os-1",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-fresh-other", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-fresh-other", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Fresh automatic continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -204,10 +211,11 @@ describe("Experience V2 real agent sessions", () => {
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue after a transient read failure.",
+          repositoryKey: "os-1",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-retried-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-retried-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Retried continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -232,7 +240,7 @@ describe("Experience V2 real agent sessions", () => {
         return continuationResponse
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-strict-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-strict-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Strict continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -247,6 +255,7 @@ describe("Experience V2 real agent sessions", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/other.ts",
       task: "Continue the bound Work Order in src/other.ts.",
+      repositoryKey: "os-1",
     })))
 
     await waitFor(() => expect(expose!.savedSessions).toEqual([
@@ -258,13 +267,13 @@ describe("Experience V2 real agent sessions", () => {
   it("continues a server-derived Codex assignment without another owner action", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-slice-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue the bound Work Order in src/other.ts." },
+        { type: "session", sessionId: "codex-slice-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue the bound Work Order in src/other.ts.", repositoryKey: "os-1" },
         { type: "result", text: "First slice complete." },
         { type: "done", code: 0, reason: null },
       ))
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-slice-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "session", sessionId: "codex-slice-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64), ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Second slice complete." },
         { type: "done", code: 0, reason: null },
@@ -288,6 +297,7 @@ describe("Experience V2 real agent sessions", () => {
       worldId: "world-1",
       projectKey: "terrafusion",
       automatic: true,
+      repositoryKey: "os-1",
       sessionId: null,
       resume: false,
     })
@@ -302,13 +312,13 @@ describe("Experience V2 real agent sessions", () => {
     const selectionVisible = new Promise<void>((resolve) => { releaseSelection = resolve })
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-visible-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+        { type: "session", sessionId: "codex-visible-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly.", repositoryKey: "os-1" },
         { type: "result", text: "First slice complete." },
         { type: "done", code: 0, reason: null },
       ))
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-visible-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "session", sessionId: "codex-visible-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64), ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Second slice complete." },
         { type: "done", code: 0, reason: null },
@@ -341,8 +351,8 @@ describe("Experience V2 real agent sessions", () => {
 
   it("preserves the completed slice when visible Space synchronization blocks continuation", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(ndjson(
-      { type: "session", sessionId: "codex-sync-blocked", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-      { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+      { type: "session", sessionId: "codex-sync-blocked", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+      { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly.", repositoryKey: "os-1" },
       { type: "result", text: "The first slice is durably complete." },
       { type: "done", code: 0, reason: null },
     ))

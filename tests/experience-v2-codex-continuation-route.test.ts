@@ -31,7 +31,9 @@ describe("Codex continuation restoration route", () => {
     seams.resolveProjectBinding.mockResolvedValue({
       ok: true,
       binding: {
-        workspaceRoot: "C:/physical/terrafusion", projectId: 7, projectName: "TerraFusion",
+        workspaceRoot: "C:/physical/terrafusion", projectId: 7, projectKey: "terrafusion", projectName: "TerraFusion",
+        repositoryKey: "atlas", repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryMountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40),
         project: { identity: "c:/terrafusion" },
       },
     })
@@ -47,6 +49,7 @@ describe("Codex continuation restoration route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/next.ts",
       task: "Continue the bound Work Order in src/next.ts.",
+      repositoryKey: "atlas",
     })
 
     const response = await GET(new Request("http://williamos.test/api/loom/codex/continuation?worldId=world-1&projectKey=terrafusion"))
@@ -56,14 +59,30 @@ describe("Codex continuation restoration route", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/next.ts",
       task: "Continue the bound Work Order in src/next.ts.",
+      repositoryKey: "atlas",
     })
-    expect(seams.dependenciesForProjectRoot).toHaveBeenCalledWith("C:/physical/terrafusion")
+    expect(seams.dependenciesForProjectRoot).toHaveBeenCalledWith("C:/physical/terrafusion", expect.any(Function))
     expect(seams.resolveProjectBinding).toHaveBeenCalledWith("owner-1", "terrafusion")
     expect(seams.readCodexContinuation).toHaveBeenCalledWith(
       "owner-1",
       "world-1",
       { verified: "physical-terrafusion" },
     )
+    const resolveRepositoryRoot = seams.dependenciesForProjectRoot.mock.calls[0][1]
+    await expect(resolveRepositoryRoot({
+      projectIdentity: "c:/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    })).resolves.toBe("C:/physical/terrafusion")
+    await expect(resolveRepositoryRoot({
+      projectIdentity: "c:/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "f".repeat(40),
+    })).resolves.toBeNull()
   })
 
   it("does not expose continuation state without an authenticated owner session", async () => {
