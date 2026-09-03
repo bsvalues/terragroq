@@ -25,6 +25,14 @@ function processOwner(process) {
   return lower(process.owner || process.userName || "unknown")
 }
 
+// Per-user service instances carry a per-logon-session hex suffix (aarsvc_500a02) that changes
+// every boot. The comparator treats the service CLASS, so anything derived from a service name
+// (monitoring identity included) must strip the suffix too — otherwise a reboot reports the same
+// monitor as one missing + one unexpected component.
+function serviceClassName(name) {
+  return lower(name).replace(/_[0-9a-f]{5,6}$/, "")
+}
+
 function normalizeDocker(container) {
   const publishedPorts = []
   for (const [containerPort, bindings] of Object.entries(container.NetworkSettings?.Ports ?? {})) {
@@ -134,7 +142,9 @@ export function normalizeHermesRawObservation(raw, { longLivedSeconds = 900 } = 
   const monitoringComponents = [
     ...services
       .filter((service) => monitorPattern.test(`${service.name} ${service.displayName}`))
-      .map((service) => ({ id: `service:${service.name}`, kind: "service", reference: service.name })),
+      // Identity uses the service CLASS (session suffix stripped), matching the comparator —
+      // a rebooted _500a02 -> _600b03 monitor must not read as missing+unexpected (#1141 P1).
+      .map((service) => ({ id: `service:${serviceClassName(service.name)}`, kind: "service", reference: serviceClassName(service.name) })),
     ...scheduledTasks
       .filter((task) => monitorPattern.test(task.path))
       .map((task) => ({ id: `task:${task.path}`, kind: "scheduled-task", reference: task.path })),

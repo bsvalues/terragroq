@@ -134,6 +134,31 @@ describe("HERMES appliance doctrine comparator (stable-vs-ephemeral, #1034/#1035
     expect(evaluate(obs).driftCount).toBe(0)
   })
 
+  it("#1141 P1: an agent-named TCP listener on a NON-loopback address is ingress drift, never noise", () => {
+    for (const [protocol, address, port, owner] of [
+      ["tcp", "0.0.0.0", 4444, "c:\\users\\bs\\appdata\\local\\openai\\codex\\bin\\codex.exe"],
+      ["tcp", "192.168.88.9", 4444, "c:\\program files\\microsoft\\edge\\application\\msedge.exe"],
+    ] as const) {
+      const obs = baseObservation({
+        listeners: [...baseObservation().inventory.listeners, listener(protocol, address, port, owner)],
+      })
+      const result = evaluate(obs)
+      expect(result.code, `${protocol} ${address}:${port} ${owner}`).toBe("HERMES_DOCTRINE_DRIFT")
+    }
+  })
+
+  it("#1141 P1: agent UDP sockets on high/mDNS ports stay ephemeral on any address (Tailscale/mDNS churn)", () => {
+    const obs = baseObservation({
+      listeners: [
+        ...baseObservation().inventory.listeners,
+        listener("udp", "192.168.88.9", 51932, "c:\\program files\\tailscale\\tailscale.exe"),
+        listener("udp", "0.0.0.0", 5353, "c:\\program files\\microsoft\\edge\\application\\msedge.exe"),
+      ],
+    })
+    expect(evaluate(obs).driftCount).toBe(0)
+  })
+
+
   it("strips the per-logon service suffix and treats service state as volatile", () => {
     const declared = baseObservation().inventory.services[0]
     const obs = baseObservation({
@@ -242,6 +267,15 @@ describe("HERMES raw-observation normalizer (#1034 defects)", () => {
     const obs = normalizeHermesRawObservation(raw)
     expect(obs.inventory.listeners).toHaveLength(1)
     expect(obs.inventory.dockerResidents.map((item) => item.name)).toEqual(["williamos-hermes-inference-proxy"])
+  })
+
+  it("#1141 P1: monitoring component identity strips the per-session service suffix like the comparator", () => {
+    const svc = (name) => ({ name, displayName: "Hermes Monitor", startMode: "auto", state: "running", startName: "users", pathName: "C:\\bin\\svc.exe" })
+    const envelope = (name) => rawEnvelope({ services: [svc(name)], scheduledTaskXml: [], tcpListeners: [], udpEndpoints: [], processes: [], dockerInspect: [] })
+    const a = normalizeHermesRawObservation(envelope("williamos-hermes-https_500a02"))
+    const b = normalizeHermesRawObservation(envelope("williamos-hermes-https_600b03"))
+    expect(a.inventory.monitoringComponents).toEqual(b.inventory.monitoringComponents)
+    expect(a.inventory.monitoringComponents[0].id).toBe("service:williamos-hermes-https")
   })
 
   it("refuses a long-lived runtime process with an unobserved owner", () => {
