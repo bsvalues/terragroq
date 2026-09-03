@@ -20,6 +20,16 @@ const OS1_REPOSITORY = {
   mountKey: "terrafusion:os-1:configured",
   observedRevision: OS1_REVISION,
 } as const
+const WORKSPACE_REPOSITORY = {
+  key: OS1_REPOSITORY.resourceKey,
+  identity: OS1_REPOSITORY.identity,
+  label: "OS 1.0",
+  role: "integrated-runtime" as const,
+  suite: null,
+  previewSource: true,
+  defaultRepository: true,
+  mount: { key: OS1_REPOSITORY.mountKey, configured: true, verified: true, branch: "main", revision: OS1_REVISION, refusal: null },
+}
 
 function reviewerFileBinding(path: string) {
   return {
@@ -52,17 +62,19 @@ vi.mock("next/dynamic", () => ({
 }))
 
 function workspaceResponse(storage: "browser" | "server" = "browser") {
+  const binding = reviewerFileBinding("src/app.ts")
   const space = {
     ...defaultSpace(),
     selectedPath: "src/app.ts",
+    selectedFileRef: binding.fileRef,
     activeWindowId: workspaceActiveWindowId,
-    editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+    editor: { openFiles: ["src/app.ts"], openFileRefs: [binding.fileRef], panes: [{ id: "primary" as const, activePath: "src/app.ts", activeFileRef: binding.fileRef, selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
   return Response.json({
     worldId: "browser-world",
     space: spaceToServer(space),
     spine: EMPTY_SPINE,
-    project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+    project: { identity: "c:/repos/terrafusion", name: "TerraFusion", repositories: [WORKSPACE_REPOSITORY] },
     storage,
     ...(storage === "browser" ? { browserStorageKey: "line-target-test" } : {}),
   })
@@ -70,15 +82,15 @@ function workspaceResponse(storage: "browser" | "server" = "browser") {
 
 function fetcher(storage: "browser" | "server" = "browser") {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = String(input).replace("&repositoryKey=os-1", "")
     if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse(storage))
     if (url === "/api/environment/space" && init?.method === "PUT") {
       const body = JSON.parse(String(init.body))
       return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-08-30T12:00:00.000Z" }))
     }
     if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-    if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n" }))
-    if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json(liveDiff))
+    if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", repository: { key: OS1_REPOSITORY.resourceKey, identity: OS1_REPOSITORY.identity, mountKey: OS1_REPOSITORY.mountKey, observedRevision: OS1_REVISION } }))
+    if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...liveDiff, repository: { key: OS1_REPOSITORY.resourceKey, identity: OS1_REPOSITORY.identity, mountKey: OS1_REPOSITORY.mountKey, observedRevision: OS1_REVISION } }))
     throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
   })
 }

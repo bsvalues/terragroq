@@ -9,6 +9,9 @@ import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
+const REVISION = "d".repeat(40)
+const REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: REVISION, refusal: null } }
+
 const browser = vi.hoisted(() => ({
   diff: null as null | { path: string; state: string; status: string; fingerprint: string; diff: string },
 }))
@@ -69,14 +72,17 @@ describe("Experience V2 exact diff Challenge", () => {
     const identity = { path: pathName, state: "modified", status: " M src/exact.ts", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-a" }
     browser.diff = { path: pathName, state: "modified", status: identity.status, fingerprint: JSON.stringify(identity), diff: "-old\n+new" }
     const baseSpace = defaultSpace()
+    const fileRef = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: REPOSITORY.key, repositoryMountKey: REPOSITORY.mount.key, worktreeKey: null, observedRevision: REVISION, path: pathName } as const
     const space = {
       ...baseSpace,
       selectedPath: pathName,
+      selectedFileRef: fileRef,
       activeWindowId: "diff" as const,
       editor: {
         ...baseSpace.editor,
         openFiles: [pathName],
-        panes: [{ id: "primary" as const, activePath: pathName, selection: { anchor: 0, head: 0 } }],
+        openFileRefs: [fileRef],
+        panes: [{ id: "primary" as const, activePath: pathName, activeFileRef: fileRef, selection: { anchor: 0, head: 0 } }],
       },
     }
     let resolveLine!: (response: Response) => void
@@ -87,7 +93,7 @@ describe("Experience V2 exact diff Challenge", () => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "world-a", space: spaceToServer(space), spine: EMPTY_SPINE,
-        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server",
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion", repositories: [REPOSITORY] }, storage: "server",
       }))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         spacePuts += 1
@@ -95,7 +101,7 @@ describe("Experience V2 exact diff Challenge", () => {
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-01T18:00:00.000Z" }))
       }
       if (url.includes("/api/loom/diff") && !init?.method) {
-        return Promise.resolve(Response.json(browser.diff))
+        return Promise.resolve(Response.json({ ...browser.diff, repository: { key: REPOSITORY.key, identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } }))
       }
       if (url === "/api/environment/line" && init?.method === "POST") {
         signalLine()

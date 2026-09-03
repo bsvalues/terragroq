@@ -32,6 +32,14 @@ function project(projectKey: "terrafusion" | "williamos" = "terrafusion") {
   return { identity: projectKey === "williamos" ? "c:/repos/williamos" : "c:/repos/terrafusion", name: projectKey === "williamos" ? "WilliamOS" : "TerraFusion", repositories: [repository(projectKey)] }
 }
 
+function diffResponse(payload: Record<string, unknown>, projectKey: "terrafusion" | "williamos" = "terrafusion") {
+  const repo = repository(projectKey)
+  return Response.json({
+    ...payload,
+    repository: { key: repo.key, identity: repo.identity, mountKey: repo.mount.key, observedRevision: REVISION },
+  })
+}
+
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
     return <textarea aria-label="Source content" value={props.value} onChange={(event) => props.onChange(event.target.value)} />
@@ -170,7 +178,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n", "src/app.ts", "williamos"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }, "williamos"))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         editBodies.push(JSON.parse(String(init.body)))
         return Promise.resolve(ndjson(
@@ -206,7 +214,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile(diffReads > 1 ? "export const improved = true\n" : "export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(diffResponse({
           path: "src/app.ts",
           state: "modified",
           fingerprint: diffReads === 1 ? "exact-live-diff" : "refreshed-diff",
@@ -259,7 +267,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "clean", fingerprint: "clean", untracked: false, diff: "", status: "",
       }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -281,7 +289,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "browser-diff", untracked: false,
         diff: "-before\n+browser", status: " M src/app.ts",
       }))
@@ -311,7 +319,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "server-diff", untracked: false,
         diff: "-before\n+server", status: " M src/app.ts",
       }))
@@ -343,7 +351,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "captured-diff", untracked: false,
         diff: "-before\n+current", status: " M src/app.ts",
       }))
@@ -375,7 +383,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(diffResponse({
           path: "src/app.ts", state: "modified", fingerprint: `fingerprint-${diffReads}`,
           untracked: false, diff: `-before\n+version-${diffReads}`, status: " M src/app.ts",
         }))
@@ -428,11 +436,11 @@ describe("Experience V2 selected-file Change", () => {
         return Promise.resolve(selectedFile("export const alpha = true\n"))
       }
       if (url === "/api/loom/files?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(selectedFile("export const beta = true\n", "src/beta.ts"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "alpha-live", untracked: false,
         diff: "-before\n+alpha", status: " M src/app.ts",
       }))
-      if (url === "/api/loom/diff?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/beta.ts", state: "clean", fingerprint: "beta-clean", untracked: false, diff: "", status: "",
       }))
       if (url === "/api/loom/edit" && init?.method === "POST") return oldEdit.promise
@@ -485,7 +493,7 @@ describe("Experience V2 selected-file Change", () => {
         if (diffReads < 3) {
           return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
         }
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+        return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -508,7 +516,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -541,7 +549,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -589,7 +597,7 @@ describe("Experience V2 selected-file Change", () => {
     expect(minimize.disabled).toBe(true)
     expect(minimize.title).toBe("Changes cannot be minimized while Change is active")
     fireEvent.click(minimize)
-    resolveDiff(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+    resolveDiff(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
 
     expect(await screen.findByText("Change applied; source and diff refreshed.")).toBeTruthy()
     expect(screen.getByText("+after", { exact: false })).toBeTruthy()
@@ -608,7 +616,7 @@ describe("Experience V2 selected-file Change", () => {
         return fileReads === 1 ? Promise.resolve(selectedFile("export const before = true\n")) : reload.promise
       }
       if (url === "/api/loom/files" && init?.method === "PUT") return saved.promise
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -647,7 +655,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: fileReads > 1 ? "-before\n+after" : "-before\n+before" }))
+        return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: fileReads > 1 ? "-before\n+after" : "-before\n+before" }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -680,7 +688,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return new Promise<Response>((_resolve, reject) => requestSignal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
@@ -705,7 +713,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", reason: "REFUSED", receipt: { success: false } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -725,7 +733,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(new Response("not json\n", { headers: { "content-type": "application/x-ndjson" } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -744,7 +752,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -771,7 +779,7 @@ describe("Experience V2 selected-file Change", () => {
         fileReads += 1
         return fileReads === 1 ? originalRead.promise : Promise.resolve(selectedFile("export const verified = true\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+verified" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+verified" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -794,7 +802,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -817,7 +825,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -844,8 +852,8 @@ describe("Experience V2 selected-file Change", () => {
       ] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const app = true\\n"))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(selectedFile("export const other = true\\n", "src/other.ts"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { path: string; task: string }
         posted.push(body)
@@ -892,7 +900,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const refreshed = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+refreshed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+refreshed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(editStream.response)
@@ -918,7 +926,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -944,7 +952,7 @@ describe("Experience V2 selected-file Change", () => {
         fileReads += 1
         return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const changed = true\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -971,7 +979,7 @@ describe("Experience V2 selected-file Change", () => {
         fileReads += 1
         return fileReads === 1 ? Promise.resolve(selectedFile("export const before = true\n")) : reloadRead.promise
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -1001,7 +1009,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        if (diffReads === 1) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+before" }))
+        if (diffReads === 1) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+before" }))
         if (diffReads === 2) return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
         return Promise.resolve(Response.json({ error: "MANUAL_REFUSED" }, { status: 500 }))
       }
@@ -1033,7 +1041,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        if (diffReads < 3) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "-before\\n+before" : "-before\\n+proven" }))
+        if (diffReads < 3) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "-before\\n+before" : "-before\\n+proven" }))
         return Promise.resolve(Response.json({ error: "UNJOINED_REFRESH" }, { status: 500 }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
@@ -1062,7 +1070,7 @@ describe("Experience V2 selected-file Change", () => {
         fileReads += 1
         return fileReads === 1 ? originalRead.promise : Promise.resolve(selectedFile("export const verified = true\\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+verified" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+verified" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -1089,7 +1097,7 @@ describe("Experience V2 selected-file Change", () => {
         fileReads += 1
         return Promise.resolve(fileReads === 1 ? selectedFile("export const before = true\n") : Response.json({ error: "READ_REFUSED" }, { status: 500 }))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -1109,7 +1117,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson(
         { type: "started", file: "src/app.ts" },
         { type: "done", receipt: { success: true } },

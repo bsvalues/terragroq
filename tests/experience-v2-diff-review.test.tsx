@@ -25,6 +25,7 @@ const COMPLETED_AT = "2026-08-30T09:00:00.000Z"
 const REVISION = "d".repeat(40)
 const REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: REVISION, refusal: null } }
 const FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVISION, path: PATH } as const
+const DIFF_REPOSITORY_IDENTITY = { repository: { key: REPOSITORY.key, identity: REPOSITORY.identity, mountKey: REPOSITORY.mount.key, observedRevision: REVISION } } as const
 
 const diffReviewBinding = {
   worldId: WORLD_ID,
@@ -125,9 +126,10 @@ function workspaceFetch({
     }
     if (url === `/api/loom/diff?path=${encodeURIComponent(PATH)}` && !init?.method) {
       if (diffState === "error") return Promise.resolve(Response.json({ error: "GIT_UNAVAILABLE" }, { status: 503 }))
-      if (diffState === "oversize") return Promise.resolve(Response.json({ path: PATH, state: "oversize", fingerprint: FINGERPRINT, diff: "", status: " M src/app.ts", reason: "PATCH_TOO_LARGE" }))
-      if (diffState === "clean") return Promise.resolve(Response.json({ path: PATH, state: "clean", fingerprint: FINGERPRINT, diff: "", status: "", untracked: false }))
+      if (diffState === "oversize") return Promise.resolve(Response.json({ ...DIFF_REPOSITORY_IDENTITY, path: PATH, state: "oversize", fingerprint: FINGERPRINT, diff: "", status: " M src/app.ts", reason: "PATCH_TOO_LARGE" }))
+      if (diffState === "clean") return Promise.resolve(Response.json({ ...DIFF_REPOSITORY_IDENTITY, path: PATH, state: "clean", fingerprint: FINGERPRINT, diff: "", status: "", untracked: false }))
       return Promise.resolve(Response.json({
+        ...DIFF_REPOSITORY_IDENTITY,
         path: PATH,
         state: "modified",
         fingerprint: FINGERPRINT,

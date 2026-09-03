@@ -79,6 +79,11 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
   onRunningChange?: (running: Readonly<{ kind: "tests" | "terminal"; operationId: string }> | null) => void
   onLiveDiffContextChange?: (context: LiveDiffContext | null) => void
 }) {
+  const repositoryContextKey = repositoryContext === undefined
+    ? "legacy"
+    : repositoryContext === null
+      ? "unavailable"
+      : `${repositoryContext.projectKey}\u0000${repositoryContext.repositoryKey}\u0000${repositoryContext.repositoryIdentity}\u0000${repositoryContext.repositoryMountKey}\u0000${repositoryContext.observedRevision}`
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
   const [diffSnapshot, setDiffSnapshot] = useState(false)
@@ -140,9 +145,10 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
     const query = params.size > 0 ? `?${params.toString()}` : ""
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
+    const exactRepositoryContext = repositoryContextRef.current
     try {
-      if (repositoryContext === null) throw new Error("REPOSITORY_CONTEXT_UNAVAILABLE")
-      if (repositoryContext && (repositoryContext.projectKey !== projectKey || repositoryContext.repositoryKey !== repositoryKey)) {
+      if (exactRepositoryContext === null) throw new Error("REPOSITORY_CONTEXT_UNAVAILABLE")
+      if (exactRepositoryContext && (exactRepositoryContext.projectKey !== projectKey || exactRepositoryContext.repositoryKey !== repositoryKey)) {
         throw new Error("DIFF_REPOSITORY_CONTEXT_MISMATCH")
       }
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
@@ -159,7 +165,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
       }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
       if (diffRequestEpoch.current !== epoch || abort.signal.aborted) return "aborted"
-      if (repositoryContext && !repositoryIdentityMatches(repositoryContext, {
+      if (exactRepositoryContext && !repositoryIdentityMatches(exactRepositoryContext, {
         repositoryKey: payload.repository?.key,
         repositoryIdentity: payload.repository?.identity,
         repositoryMountKey: payload.repository?.mountKey,
@@ -203,7 +209,7 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
-  }, [projectKey, repositoryContext, repositoryKey, selectedPath])
+  }, [projectKey, repositoryContextKey, repositoryKey, selectedPath])
 
   useEffect(() => {
     if (kind !== "diff") return

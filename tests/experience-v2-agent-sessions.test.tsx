@@ -23,6 +23,7 @@ const REVIEW_REVISION = "b".repeat(40)
 const REVIEW_REPOSITORY = { resourceKey: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: REVIEW_REVISION } as const
 const REVIEW_FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVIEW_REVISION, path: "src/app.ts" } as const
 const WORKSPACE_REPOSITORY = { key: "os-1", identity: REVIEW_REPOSITORY.identity, label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: REVIEW_REPOSITORY.mountKey, configured: true, verified: true, branch: "main", revision: REVIEW_REVISION, refusal: null } }
+const WORKSPACE_DIFF_IDENTITY = { repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } } as const
 const reviewFileRef = (path = "src/app.ts") => ({ ...REVIEW_FILE_REF, path })
 const reviewInput = { fileRef: REVIEW_FILE_REF, repositoryKey: "os-1" } as const
 const reviewSessionFrame = { repositoryResourceKey: "os-1", repositoryIdentity: REVIEW_REPOSITORY.identity, repositoryMountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
@@ -74,6 +75,13 @@ function exactDelegateEligibility(url: string, eligibleActor: "codex" | "claude"
     actor: eligibleActor, selectedPath: "src/app.ts",
     ...(params.get("repositoryKey") ? reviewSessionFrame : {}),
   } : { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
+}
+
+function exactWorkspaceFileResponse(payload: Record<string, unknown>): Response {
+  return Response.json({
+    ...payload,
+    repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION },
+  })
 }
 
 async function openWilliamConversation() {
@@ -1065,10 +1073,10 @@ describe("Experience V2 real agent sessions", () => {
       }
       const eligibility = exactDelegateEligibility(rawUrl)
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if ((url === "/api/loom/codex" || url === "/api/loom/agent") && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { mode?: string; provider?: string }
         const lane = url === "/api/loom/codex" ? "Codex" : body.mode === "review" ? "Review" : "Local"
@@ -1753,21 +1761,21 @@ describe("Experience V2 real agent sessions", () => {
   it("requires a fresh provider choice and cancels stale Delegate intent when selection changes", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "delta", text: "Working from src/app.ts." },
         { type: "result", text: "Completed the captured assignment." },
         { type: "done", code: 0, reason: null },
@@ -1830,7 +1838,7 @@ describe("Experience V2 real agent sessions", () => {
       cancel() { cancelled = true },
     }))
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1839,8 +1847,8 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(agentResponse)
@@ -1893,32 +1901,32 @@ describe("Experience V2 real agent sessions", () => {
     let sourceReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(exactWorkspaceFileResponse({
           kind: "file", path: "src/app.ts",
           content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n",
           modifiedAt: sourceReads === 1 ? "2026-08-28T12:00:00.000Z" : "2026-08-28T12:01:00.000Z",
         }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({
         kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z",
       }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "result", text: "Updated src/app.ts." },
         { type: "done", code: 0, reason: null },
       ))
@@ -1948,7 +1956,7 @@ describe("Experience V2 real agent sessions", () => {
 
   it("shows a truthful Local inference refusal in the open Line", async () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1957,7 +1965,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         return Promise.resolve(Response.json({ error: "LOCAL_MODEL_UNAVAILABLE" }, { status: 503 }))
       }
@@ -1985,7 +1993,7 @@ describe("Experience V2 real agent sessions", () => {
       cancel() { cancelled = true },
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1994,7 +2002,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(response)
@@ -2042,26 +2050,26 @@ describe("Experience V2 real agent sessions", () => {
     let sourceReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -2094,30 +2102,30 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
           { type: "result", text: "The repository mutation committed." },
           { type: "done", code: 0, reason: null },
         ))
@@ -2133,7 +2141,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText("The repository mutation committed.")).toBeTruthy()
@@ -2158,26 +2166,26 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url, "claude")
+      const eligibility = exactDelegateEligibility(String(input), "claude")
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: delegationStarted ? "+export const version = 2" : "" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: delegationStarted ? "+export const version = 2" : "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority, ...reviewSessionFrame },
           { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Claude committed the exact file." } },
           { type: "done", code: 0, reason: null },
         ))
@@ -2193,7 +2201,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText("Claude committed the exact file.")).toBeTruthy()
@@ -2212,30 +2220,30 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
           { type: "result", text: "The repository mutation committed." },
           { type: "done", code: 0, reason: null },
         ))
@@ -2253,7 +2261,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText(expected)).toBeTruthy()
@@ -2279,12 +2287,12 @@ describe("Experience V2 real agent sessions", () => {
       }],
     }))
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -2322,12 +2330,12 @@ describe("Experience V2 real agent sessions", () => {
     }
     const localId = "223e4567-e89b-42d3-a456-426614174000"
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") return Promise.resolve(ndjson(
         { type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
         { type: "result", text: "Canonical local result." },
@@ -2370,12 +2378,12 @@ describe("Experience V2 real agent sessions", () => {
       ],
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
@@ -2407,18 +2415,18 @@ describe("Experience V2 real agent sessions", () => {
       sessions: [{ schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/old.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] }],
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
@@ -3140,7 +3148,7 @@ describe("Experience V2 real agent sessions", () => {
     }) as typeof setInterval)
     vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null,
@@ -3153,7 +3161,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-31T22:00:00Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
@@ -3200,7 +3208,7 @@ describe("Experience V2 real agent sessions", () => {
     }) as unknown as typeof setInterval)
     vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         spaces: [{ worldId: "server-world", name: "Experience V2", updatedAt: "2026-09-01T19:00:00.000Z", space: spaceToServer(space) }],
@@ -3285,7 +3293,7 @@ describe("Experience V2 real agent sessions", () => {
     }
     const space = defaultSpace(1440, 900, "server-world", "Experience V2")
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
