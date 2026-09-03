@@ -106,12 +106,25 @@ describe("the cockpit's start script is declared in the repository", () => {
       "HOSTNAME",
       "PORT",
       "DATABASE_URL",
+      "LOCAL_SETUP_ENABLED",
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
       "WILLIAMOS_PROJECT_SPACE_IDENTITY",
     ]))
     expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
+  })
+
+  it("carries only an explicit local-setup enablement into the production process", () => {
+    const code = executableOnly(startText)
+    const read = code.indexOf('Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"')
+    const exportFlag = code.indexOf("$env:LOCAL_SETUP_ENABLED = $localSetupEnabled")
+    const serverStart = code.indexOf("& $node $server")
+    expect(read).toBeGreaterThan(-1)
+    expect(code).toMatch(/\$localSetupEnabled\s*=\s*if\s*\(\$declaredLocalSetupEnabled\s+-ieq\s+"true"\)\s*\{\s*"true"\s*\}\s*else\s*\{\s*"false"\s*\}/)
+    expect(exportFlag).toBeGreaterThan(read)
+    expect(exportFlag).toBeLessThan(serverStart)
+    expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 })
 
@@ -250,6 +263,11 @@ describe("the cockpit validates optional Core Seven secondary mounts before expo
     expect(retain).toBeGreaterThan(code.indexOf("SECONDARY_ROOT_REPOSITORY_MISMATCH"))
     expect(exportMount).toBeGreaterThan(retain)
     expect(exportMount).toBeLessThan(serverStart)
+  })
+
+  it("normalizes GitHub's canonical SSH URI for both primary and secondary mounts", () => {
+    const sshUriBranches = code.match(/\^ssh:\/\/git@github\\\.com\(\?:\\:22\)\?\/\(\.\+\)\$/g) ?? []
+    expect(sshUriBranches).toHaveLength(2)
   })
 
   it("documents all six optional declarations without changing the required OS 1.0 declaration", () => {

@@ -35,6 +35,7 @@ const MAX_SETUP_REQUEST_BYTES = 16_000
 
 function localSetupEnabled() {
   if (process.env.LOCAL_SETUP_ENABLED === "false") return false
+  if (process.env.LOCAL_SETUP_ENABLED === "true") return true
   return process.env.NODE_ENV !== "production"
 }
 

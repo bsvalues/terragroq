@@ -267,6 +267,35 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
+  it("allows an explicitly enabled owner mount change in the production HERMES process", async () => {
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    const atlasRoot = path.resolve("/repos/terrafusion-atlas")
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://192.168.88.9:3443",
+        "X-Forwarded-Host": "192.168.88.9:3443",
+        "X-Forwarded-Proto": "https",
+      },
+      body: JSON.stringify({
+        operation: "terrafusion-repository-root",
+        repositoryKey: "atlas",
+        repositoryRoot: atlasRoot,
+      }),
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(200)
+    expect(verifyCanonicalTerraFusionCheckoutMock).toHaveBeenCalledWith(
+      normalizeProjectRootForEnv(atlasRoot),
+      "bsvalues/terrafusion-atlas",
+    )
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+  })
+
   it("refuses a secondary checkout whose origin does not match the selected catalog identity", async () => {
     verifyCanonicalTerraFusionCheckoutMock.mockResolvedValueOnce({
       ok: false,

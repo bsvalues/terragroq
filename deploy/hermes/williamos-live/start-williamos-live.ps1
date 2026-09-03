@@ -141,6 +141,8 @@ $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
+$declaredLocalSetupEnabled = Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"
+$localSetupEnabled = if ($declaredLocalSetupEnabled -ieq "true") { "true" } else { "false" }
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
 }
@@ -175,6 +177,8 @@ $normalizedOrigin = ("$($originRemote.Output)".Trim() -replace '\.git$', '')
 if ($normalizedOrigin -match '^git@github\.com:(.+)$') {
   $normalizedOrigin = $Matches[1]
 } elseif ($normalizedOrigin -match '^https?://github\.com/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
   $normalizedOrigin = $Matches[1]
 } elseif ($normalizedOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
   $normalizedOrigin = $Matches[1]
@@ -239,6 +243,8 @@ foreach ($secondary in $secondaryRepositoryDeclarations) {
   if ($normalizedSecondaryOrigin -match '^git@github\.com:(.+)$') {
     $normalizedSecondaryOrigin = $Matches[1]
   } elseif ($normalizedSecondaryOrigin -match '^https?://github\.com/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
     $normalizedSecondaryOrigin = $Matches[1]
   } elseif ($normalizedSecondaryOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
     $normalizedSecondaryOrigin = $Matches[1]
@@ -310,6 +316,7 @@ Set-Location -LiteralPath $AppRoot
 $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
+$env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.
