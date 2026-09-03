@@ -689,6 +689,7 @@ export function WorkspaceShell({
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [persistenceError, setPersistenceError] = useState<string | null>(null)
+  const [deliveryRefreshError, setDeliveryRefreshError] = useState<string | null>(null)
   const [persistencePending, setPersistencePending] = useState(false)
   const [lineOpen, setLineOpen] = useState(Boolean(initialSummon))
   const [lineInput, setLineInput] = useState("")
@@ -728,6 +729,7 @@ export function WorkspaceShell({
   const automaticSpaceContinueSessionKeyRef = useRef<string | null>(null)
   const automaticSpaceContinueOperationIdRef = useRef<string | null>(null)
   const automaticSpaceContinueBaselineTurnIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const deliveryRefreshRequestRef = useRef(0)
   const spaceDelegateEligibilityRequestRef = useRef(0)
   const spaceDelegateEligibilityRef = useRef<Readonly<Partial<Record<"codex" | "claude", SpaceDelegateEligibility>>>>({})
   const fileDelegateEligibilityRequestRef = useRef(0)
@@ -2162,6 +2164,13 @@ export function WorkspaceShell({
       ? boundExecutionSession?.id === selectedAgent.id
         ? { kind: "agent" as const, workOrderId: boundExecutionSession.workOrderId }
         : null
+      : selectedKind === "file" && space.selectedPath
+      ? {
+          kind: "file" as const,
+          label: space.selectedFileRef
+            ? `${space.selectedFileRef.repositoryResourceKey} · ${space.selectedPath}`
+            : space.selectedPath,
+        }
       : { kind: selectedKind, label: selectedLabel }
     if (!councilSelectedContext) {
       setCouncilError("That persisted assignment is no longer bound to this Space.")
@@ -3583,6 +3592,7 @@ export function WorkspaceShell({
     setExecutionSession(null)
     setSpace(restored)
     setPersistenceError(null)
+    setDeliveryRefreshError(null)
     setPersistencePending(false)
     setStorage(storageRef.current)
     setSpaceSummaries((known) => payload.collectionAvailable === false
@@ -3674,6 +3684,7 @@ export function WorkspaceShell({
       if (!response.ok || payload.worldId !== targetWorldId || !payload.space) throw new Error(payload.error ?? `SPACE_${response.status}`)
       applySpaceEnvelope(payload)
       setTransitionMessage(null)
+      setOverlay(null)
     } catch (error) {
       setTransitionMessage(error instanceof Error ? error.message : "Space re-entry failed. Your current Space is unchanged.")
     } finally {
@@ -4441,6 +4452,7 @@ export function WorkspaceShell({
           }
         }} />
         {assignmentRefreshMessage ? <span className={spatial.assignmentRefresh} role="status">{assignmentRefreshMessage}</span> : null}
+        {deliveryRefreshError ? <span className={spatial.assignmentRefresh} role="alert">{deliveryRefreshError}</span> : null}
         </div>
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
       </header>
@@ -4454,6 +4466,7 @@ export function WorkspaceShell({
             bound={Boolean(spine.outcomeKey) && spine.workOrderId !== null}
             className={`${spatial.action} ${spatial.primaryAction}`}
             onAdmitted={async (admission) => {
+              setDeliveryRefreshError(null)
               if (worldRef.current !== admission.worldId) return
               const response = await fetch(spaceEndpoint(projectKey, admission.worldId), { cache: "no-store" })
               const payload = await response.json() as SpaceEnvelope & { error?: string }
@@ -4464,15 +4477,34 @@ export function WorkspaceShell({
               applySpaceEnvelope(payload)
             }}
             onFinalized={async () => {
+              setDeliveryRefreshError(null)
               const activeWorldId = worldRef.current
               if (!activeWorldId) throw new Error("WORLD_NOT_FOUND")
-              const response = await fetch(spaceEndpoint(projectKey, activeWorldId), { cache: "no-store" })
-              const payload = await response.json() as SpaceEnvelope & { error?: string }
-              if (!response.ok || payload.worldId !== activeWorldId || !payload.space) {
-                throw new Error(payload.error ?? `SPACE_${response.status}`)
+              const refreshRequestId = deliveryRefreshRequestRef.current + 1
+              deliveryRefreshRequestRef.current = refreshRequestId
+              const refreshEpoch = transitionEpochRef.current
+              const refreshRevision = revisionRef.current
+              const refreshSpace = stateRef.current
+              const refreshIsCurrent = () => deliveryRefreshRequestRef.current === refreshRequestId
+                && worldRef.current === activeWorldId
+                && transitionEpochRef.current === refreshEpoch
+                && revisionRef.current === refreshRevision
+                && stateRef.current === refreshSpace
+              try {
+                const response = await fetch(spaceEndpoint(projectKey, activeWorldId), { cache: "no-store" })
+                const payload = await response.json() as SpaceEnvelope & { error?: string }
+                if (!refreshIsCurrent()) return
+                if (!response.ok || payload.worldId !== activeWorldId || !payload.space) {
+                  throw new Error(payload.error ?? `SPACE_${response.status}`)
+                }
+                applySpaceEnvelope(payload)
+              } catch (cause) {
+                if (!refreshIsCurrent()) return
+                throw cause
               }
-              if (worldRef.current !== activeWorldId) return
-              applySpaceEnvelope(payload)
+            }}
+            onFinalizationRefreshError={(message) => {
+              setDeliveryRefreshError(`Delivery finalized, but Space refresh failed · ${message}`)
             }}
           /> : null}
           {selectedActions.map((action) => (

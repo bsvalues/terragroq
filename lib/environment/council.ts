@@ -208,7 +208,10 @@ async function inferJson<T>(
 
 function activePaneFile(world: WorkingWorldSnapshot): string | null {
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
-  return world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  const path = world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  if (!path) return null
+  const fileRef = world.space?.selection?.fileRef ?? activePane?.fileRef
+  return fileRef ? `${fileRef.repositoryResourceKey} · ${path}` : path
 }
 
 function activeWindow(world: WorkingWorldSnapshot) {

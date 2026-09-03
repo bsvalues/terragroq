@@ -221,6 +221,40 @@ describe("POST /api/environment/council", () => {
     expect(firstInferenceBody.messages[1].content).toContain("Execution: validating")
   })
 
+  it("accepts the exact repository-qualified file selected in the persisted Space", async () => {
+    const fileRef = {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "src/App.tsx",
+    }
+    harness.loadOwnedWorkingWorld.mockResolvedValue({
+      ...ownedWorld,
+      space: {
+        ...ownedWorld.space,
+        selection: { ...ownedWorld.space.selection, fileRef },
+        panes: [{ ...ownedWorld.space.panes[0], fileRef }],
+      },
+    })
+    vi.stubGlobal("fetch", successfulInference())
+
+    const response = await POST(request({
+      worldId: WORLD_ID,
+      question: "Council this repository-qualified file.",
+      selectedContext: { kind: "file", label: "atlas · src/App.tsx" },
+    }))
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload.session.context).toEqual({
+      spaceName: "TerraFusion Server Space",
+      kind: "file",
+      label: "atlas · src/App.tsx",
+    })
+  })
+
   it("grounds a selected persisted worker entirely from the exact owned Space assignment", async () => {
     harness.loadOwnedWorkingWorld.mockResolvedValue({
       ...ownedWorld,
