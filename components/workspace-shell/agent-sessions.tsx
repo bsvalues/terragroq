@@ -120,6 +120,7 @@ export type ExperienceAgentSession = Readonly<{
   diffReview?: AgentSessionDiffReview
   forkedFrom?: string
   preview?: AgentSessionPreview
+  updatedAt?: string
   lastResult?: string
   presentation?: string
 }>
@@ -692,6 +693,7 @@ function projectSessions(
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
+      updatedAt: descriptor.updatedAt,
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
       ...(active ? { presentation: active.presentation } : {}),
     })
@@ -719,6 +721,7 @@ function projectSessions(
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
+      updatedAt: descriptor.updatedAt,
       presentation: turn.presentation,
     })
   })
@@ -1817,6 +1820,33 @@ export function AgentSessionStrip({
   className?: string
 }) {
   if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
+  const identityGroups = new Map<string, ExperienceAgentSession[]>()
+  for (const session of sessions) {
+    const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
+    identityGroups.set(key, [...(identityGroups.get(key) ?? []), session])
+  }
+  const duplicatePositions = new Map<ExperienceAgentSession, Readonly<{ index: number; total: number }>>()
+  for (const group of identityGroups.values()) {
+    if (group.length < 2) continue
+    const ordered = [...group].sort((left, right) => {
+      const leftIdentity = `${left.updatedAt ?? ""}\u0000${left.id}`
+      const rightIdentity = `${right.updatedAt ?? ""}\u0000${right.id}`
+      return leftIdentity.localeCompare(rightIdentity)
+    })
+    ordered.forEach((session, index) => duplicatePositions.set(session, { index, total: ordered.length }))
+  }
+  const disambiguator = (session: ExperienceAgentSession): string | null => {
+    const position = duplicatePositions.get(session)
+    if (!position) return null
+    const ordinal = `${position.index + 1} of ${position.total}`
+    if (session.updatedAt) {
+      const parsed = new Date(session.updatedAt)
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${parsed.toISOString().replace("T", " ").slice(0, 16)}Z · ${ordinal}`
+      }
+    }
+    return `session ${ordinal}`
+  }
   return (
     <nav
       className={className ?? "flex items-center justify-center gap-2"}
@@ -1845,13 +1875,20 @@ export function AgentSessionStrip({
           Stop
         </button>
       ) : null}
-      {sessions.map((session) => (
-        <button
+      {sessions.map((session) => {
+        const identityDisambiguator = disambiguator(session)
+        const assignmentLabel = identityDisambiguator
+          ? `${session.assignment} · ${identityDisambiguator}`
+          : session.assignment
+        const accessibleAssignmentLabel = duplicatePositions.get(session)?.index === 0
+          ? session.assignment
+          : assignmentLabel
+        return <button
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
           aria-label={session.kind === "durable-session"
-            ? `${session.role} · ${session.providerLabel} · ${session.assignment}`
+            ? `${session.role} · ${session.providerLabel} · ${accessibleAssignmentLabel}`
             : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
@@ -1867,10 +1904,10 @@ export function AgentSessionStrip({
             {session.assignment ? (
               <span
                 data-agent-session-level="assignment"
-                title={session.assignment}
+                title={assignmentLabel}
                 className="block truncate text-[9.5px] text-[#c7d0c3]"
               >
-                {session.assignment}
+                {assignmentLabel}
               </span>
             ) : null}
             <small
@@ -1882,7 +1919,7 @@ export function AgentSessionStrip({
             </small>
           </span>
         </button>
-      ))}
+      })}
     </nav>
   )
 }

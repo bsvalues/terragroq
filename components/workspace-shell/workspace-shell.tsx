@@ -1388,13 +1388,21 @@ export function WorkspaceShell({
     }
     let cancelled = false
     let latestRead = 0
+    let inFlightController: AbortController | null = null
     const executionWorldId = worldId
     const executionWorkOrderId = spine.workOrderId
     const executionEpoch = transitionEpochRef.current
     const readExecution = async () => {
+      if (cancelled || inFlightController && !inFlightController.signal.aborted) return
       const readId = ++latestRead
+      const controller = new AbortController()
+      inFlightController = controller
+      const timeout = setTimeout(() => controller.abort(), 12_000)
       try {
-        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, { cache: "no-store" })
+        const response = await fetch(`/api/environment/execution?worldId=${encodeURIComponent(executionWorldId)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        })
         if (!response.ok) {
           if (!cancelled && readId === latestRead && worldRef.current === executionWorldId && transitionEpochRef.current === executionEpoch) {
             if (response.status === 409) {
@@ -1443,12 +1451,16 @@ export function WorkspaceShell({
               : null,
           }))
         }
+      } finally {
+        clearTimeout(timeout)
+        if (inFlightController === controller) inFlightController = null
       }
     }
     void readExecution()
     const timer = setInterval(() => void readExecution(), 4000)
     return () => {
       cancelled = true
+      inFlightController?.abort()
       clearInterval(timer)
     }
   }, [hydrated, spine.outcomeKey, spine.workOrderId, storage, worldId])
@@ -4409,7 +4421,6 @@ export function WorkspaceShell({
         </div>
         <div className={spatial.agentPresence}>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
-          if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
           if (agent.kind === "world-worker") {
             setFocusedAgentId(agent.id)
             setDelegateContext(null)
@@ -4417,6 +4428,7 @@ export function WorkspaceShell({
             materializeExecutionAssignment(agent.id)
             return
           }
+          if (!agentSessions.selectSession(agent.id)) return
           const running = agentSessions.activeSessionIds.includes(agent.id)
           if (running && agent.kind === "durable-session") {
             setFocusedAgentId(agent.id)
