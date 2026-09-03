@@ -1820,23 +1820,31 @@ export function AgentSessionStrip({
   className?: string
 }) {
   if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
-  const duplicateIdentityCounts = new Map<string, number>()
+  const identityGroups = new Map<string, ExperienceAgentSession[]>()
   for (const session of sessions) {
     const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
-    duplicateIdentityCounts.set(key, (duplicateIdentityCounts.get(key) ?? 0) + 1)
+    identityGroups.set(key, [...(identityGroups.get(key) ?? []), session])
+  }
+  const duplicateLabels = new Map<ExperienceAgentSession, string>()
+  for (const group of identityGroups.values()) {
+    if (group.length < 2) continue
+    const ordered = [...group].sort((left, right) => {
+      const leftIdentity = `${left.updatedAt ?? ""}\u0000${left.id}`
+      const rightIdentity = `${right.updatedAt ?? ""}\u0000${right.id}`
+      return leftIdentity.localeCompare(rightIdentity)
+    })
+    ordered.forEach((session, index) => duplicateLabels.set(session, `${index + 1} of ${ordered.length}`))
   }
   const disambiguator = (session: ExperienceAgentSession): string | null => {
-    const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
-    if ((duplicateIdentityCounts.get(key) ?? 0) < 2) return null
-    const exactId = session.id.split(":").at(-1) ?? session.id
-    const stableSuffix = exactId.slice(-8)
+    const ordinal = duplicateLabels.get(session)
+    if (!ordinal) return null
     if (session.updatedAt) {
       const parsed = new Date(session.updatedAt)
       if (!Number.isNaN(parsed.getTime())) {
-        return `${parsed.toISOString().replace("T", " ").slice(0, 16)}Z · ${stableSuffix}`
+        return `${parsed.toISOString().replace("T", " ").slice(0, 16)}Z · ${ordinal}`
       }
     }
-    return `session ${stableSuffix}`
+    return `session ${ordinal}`
   }
   return (
     <nav
