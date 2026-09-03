@@ -50,8 +50,13 @@ function harness(row = authorityRow()) {
       return { rows: grant ? [grant] : [] }
     }
     if (sql.includes("entityType\"='williamos_delivery_seal'")) {
-      const sealed = events.find((event) => event.type === "EVIDENCE_RECORDED")
-      return { rows: sealed ? [{ metadata: sealed.metadata }] : [] }
+      const matching = events.filter((event) => {
+        if (event.type !== "EVIDENCE_RECORDED") return false
+        const metadata = event.metadata as Record<string, any>
+        if (sql.includes("metadata\"->>'adoptionHash'=$2")) return metadata.adoptionHash === values?.[1]
+        return metadata.seal?.payload?.adoption?.worldId === values?.[1]
+      }).reverse()
+      return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ metadata: event.metadata })) }
     }
     if (sql.includes("FROM \"governance_event\"") && sql.includes("ARTIFACT_ADOPTION_AUTHORIZED")) {
       const match = events.find((event) => event.type === "ARTIFACT_ADOPTION_AUTHORIZED")
@@ -238,13 +243,59 @@ describe("persisted prospective artifact adoption", () => {
       seal: sealed.seal,
       sealBlock: sealed.sealBlock,
     })
-    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(7)
+    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(6)
 
     const replayed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
     expect(replayed.seal).toEqual(sealed.seal)
     expect(events.filter((event) => event.type === "ARTIFACT_ADOPTION_VALIDATED")).toHaveLength(2)
     expect(events.filter((event) => event.type === "ARTIFACT_ADOPTION_REVIEWED")).toHaveLength(2)
     expect(events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
+  })
+
+  it("restores a persisted seal after merge without re-entering the open-PR issuance path", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:restore-merged", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:restore-merged")
+    const inspectedBeforeRestore = candidate.lifecycle.inspectPullRequest.mock.calls.length
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      worldId: "space-1",
+      pullRequest: 1117,
+      headSha: head,
+      paths,
+      adoptionHash: sealed.adoptionHash,
+      seal: sealed.seal,
+      sealBlock: sealed.sealBlock,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).toHaveBeenCalledTimes(inspectedBeforeRestore)
+    expect(candidate.events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
+  })
+
+  it("restores only the latest exact adoption when a Space has historical delivery seals", async () => {
+    const candidate = harness()
+    candidate.events.push({
+      type: "EVIDENCE_RECORDED",
+      entity: "williamos_delivery_seal",
+      metadata: {
+        adoptionHash: "9".repeat(64),
+        authorizationEventId: 91,
+        seal: { payload: { adoption: { worldId: "space-1" } }, signature: "historical" },
+      },
+    })
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:latest-space-seal", preview.previewDigest)
+    const latest = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:latest-space-seal")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      adoptionHash: latest.adoptionHash,
+      seal: latest.seal,
+    })
+    expect(candidate.events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(2)
   })
 
   it("permits a legitimate non-expiring Space grant to authorize and issue", async () => {

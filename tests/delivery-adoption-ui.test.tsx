@@ -257,6 +257,81 @@ describe("prospective delivery adoption UI", () => {
     expect(screen.queryByRole("button", { name: /authorize|issue seal/i })).toBeNull()
   })
 
+  it("finalizes the restored sealed delivery with the exact WilliamOS request and refreshes the Space", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: ["app/a.ts", "lib/b.ts"],
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({
+        status: "FINALIZED",
+        replayed: false,
+        worldId,
+        outcomeKey: "external:outcome",
+        workOrderId: 34,
+        pullRequest: 1117,
+        headSha,
+        mergeSha: "b".repeat(40),
+        paths: ["app/a.ts", "lib/b.ts"],
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} onFinalized={onFinalized} />)
+    expect(await screen.findByText(/Publish this complete block in PR #1117's description/)).toBeTruthy()
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/environment/space")
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY",
+      worldId,
+      projectKey: "williamos",
+    })
+    await waitFor(() => expect(onFinalized).toHaveBeenCalledOnce())
+    expect(await screen.findByText("Merged delivery finalized and Space refreshed.")).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(String(options?.body ?? "{}"))?.mode === "ISSUE")).toBe(false)
+  })
+
+  it("keeps the sealed delivery actionable and reports a truthful finalization refusal", async () => {
+    const adoptionHash = "e".repeat(64)
+    const onFinalized = vi.fn(async () => undefined)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: ["app/a.ts", "lib/b.ts"],
+        previewDigest,
+        adoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({ error: "MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE" }, 409))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} onFinalized={onFinalized} />)
+    await userEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+
+    expect((await screen.findByRole("alert")).textContent).toBe("The persisted Space authority no longer matches this sealed delivery. WilliamOS did not finalize it.")
+    expect(onFinalized).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Finalize merged delivery" })).toBeTruthy()
+  })
+
   it("restores an admitted artifact when the dialog reopens after a page reload", async () => {
     const adoptionHash = "f".repeat(64)
     const fetchMock = vi.fn().mockResolvedValueOnce(response({

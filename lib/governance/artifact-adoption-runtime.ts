@@ -287,6 +287,66 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     const row = result.rows[0]
     return row ? { eventId: Number(row.id), authorization: object(row.metadata) as unknown as ArtifactAdoptionAuthorization } : null
   }
+  const loadPersistedSeal = async (userId: string, adoptionHash: string) => {
+    const result = await options.database.query(
+      `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
+        AND "entityType"='williamos_delivery_seal' AND "metadata"->>'adoptionHash'=$2 ORDER BY "id" DESC LIMIT 2`,
+      [userId, adoptionHash],
+    )
+    if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "prospective delivery seal state is ambiguous")
+    if (!result.rows[0]) return null
+    return object(result.rows[0].metadata).seal as WilliamOSDeliverySeal
+  }
+  const restorePersistedSeal = async (userId: string, worldId: string) => {
+    const result = await options.database.query(
+      `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
+        AND "entityType"='williamos_delivery_seal'
+        AND "metadata"->'seal'->'payload'->'adoption'->>'worldId'=$2 ORDER BY "id" DESC LIMIT 1`,
+      [userId, worldId],
+    )
+    if (result.rows.length === 0) return null
+    const metadata = object(result.rows[0].metadata)
+    const adoptionHash = String(metadata.adoptionHash ?? "")
+    const authorizationEventId = Number(metadata.authorizationEventId)
+    const seal = await loadPersistedSeal(userId, adoptionHash)
+    const persisted = await loadAuthorization(userId, adoptionHash)
+    if (!seal || hashRecord(seal) !== hashRecord(metadata.seal)
+      || !persisted || persisted.eventId !== authorizationEventId || seal.payload.version !== "williamos-delivery-seal.v2") {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal is not bound to one exact authorization")
+    }
+    const authorization = persisted.authorization
+    const adoption = seal.payload.adoption
+    const delivery = seal.payload.delivery
+    if (seal.payload.authorityKind !== "prospective_artifact_adoption" || !seal.signature
+      || adoption.adoptionHash !== authorization.adoptionHash
+      || adoption.owner !== userId || adoption.worldId !== worldId
+      || hashRecord(adoption.outcome) !== hashRecord(authorization.context.outcome)
+      || hashRecord(adoption.workOrder) !== hashRecord(authorization.context.workOrder)
+      || adoption.grant.id !== authorization.deliveryGrant.id
+      || adoption.grant.ref !== authorization.deliveryGrant.ref
+      || adoption.grant.version !== authorization.deliveryGrant.version
+      || hashRecord(adoption.reservation) !== hashRecord(authorization.context.reservation)
+      || adoption.artifact.pullRequest !== authorization.artifact.pullRequest
+      || adoption.artifact.headSha !== authorization.artifact.headSha
+      || !same(adoption.artifact.paths, authorization.artifact.paths)
+      || delivery.repository !== authorization.context.repository
+      || delivery.baseSha !== authorization.artifact.baseSha
+      || delivery.commitSha !== authorization.artifact.headSha
+      || !same(delivery.paths, authorization.artifact.paths)) {
+      fail("DELIVERY_SEAL_EVIDENCE_INVALID", "persisted prospective delivery seal no longer matches its exact authorization")
+    }
+    return {
+      status: "SEALED" as const,
+      worldId,
+      pullRequest: authorization.artifact.pullRequest,
+      headSha: authorization.artifact.headSha,
+      paths: authorization.artifact.paths,
+      previewDigest: authorization.previewDigest,
+      adoptionHash: authorization.adoptionHash,
+      seal,
+      sealBlock: sealBlock(seal),
+    }
+  }
   const findAuthorization = async (userId: string, worldId: string, idempotencyKey: string, previewDigest?: string) => {
     const result = await options.database.query(
       `SELECT "id", "metadata" FROM "governance_event" WHERE "userId"=$1
@@ -475,17 +535,7 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       if (hashRecord(left) !== hashRecord(right)) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "validation and review evidence bindings disagree")
       return { validationEventId: Number(row.validationEventId), reviewEventId: Number(row.reviewEventId), evidence: left }
     },
-    loadSeal: async (userId, adoptionHash) => {
-      const result = await options.database.query(
-        `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1 AND "eventType"='EVIDENCE_RECORDED'
-          AND "entityType"='williamos_delivery_seal' AND "metadata"->>'adoptionHash'=$2 ORDER BY "id" DESC LIMIT 2`,
-        [userId, adoptionHash],
-      )
-      if (result.rows.length > 1) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "prospective delivery seal state is ambiguous")
-      if (!result.rows[0]) return null
-      const metadata = object(result.rows[0].metadata)
-      return metadata.seal as WilliamOSDeliverySeal
-    },
+    loadSeal: loadPersistedSeal,
     inspectDelivery: options.inspectDelivery,
     signingKey: options.signingKey,
     recordSeal: async (userId, authorizationEventId, validationEventId, reviewEventId, seal) => {
@@ -497,6 +547,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     preview: async (userId: string, worldId: string, requestedTarget?: ArtifactAdoptionTarget) => {
       let target = requestedTarget
       if (!target) {
+        const restoredSeal = await restorePersistedSeal(userId, worldId)
+        if (restoredSeal) return restoredSeal
         const existing = await options.database.query(
           `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1
             AND "eventType"='ARTIFACT_ADOPTION_AUTHORIZED' AND "entityType"='williamos_artifact_adoption_authorization'

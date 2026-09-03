@@ -4095,6 +4095,17 @@ export function WorkspaceShell({
               if (worldRef.current !== admission.worldId) return
               applySpaceEnvelope(payload)
             }}
+            onFinalized={async () => {
+              const activeWorldId = worldRef.current
+              if (!activeWorldId) throw new Error("WORLD_NOT_FOUND")
+              const response = await fetch(spaceEndpoint(projectKey, activeWorldId), { cache: "no-store" })
+              const payload = await response.json() as SpaceEnvelope & { error?: string }
+              if (!response.ok || payload.worldId !== activeWorldId || !payload.space) {
+                throw new Error(payload.error ?? `SPACE_${response.status}`)
+              }
+              if (worldRef.current !== activeWorldId) return
+              applySpaceEnvelope(payload)
+            }}
           /> : null}
           {selectedActions.map((action) => (
             <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Delegate unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} aria-describedby={action === "Continue unavailable" ? "space-continue-unavailable" : action === "Delegate unavailable" && selectedKind === "space" ? "space-delegate-unavailable" : undefined} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? selectedKind === "file" ? fileReviewUnavailableReason ?? undefined : diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Delegate unavailable" ? selectedKind === "file" ? fileDelegateUnavailableReason ?? undefined : spaceDelegateUnavailableReason ?? undefined : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
