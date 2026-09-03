@@ -232,6 +232,7 @@ export async function GET(request: Request) {
       projectKey,
       undefined,
       repositoryKey,
+      { includeRepositoryCatalog: false },
     )
     return { repositoryKey, result }
   }))

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 
 import {
   normalizeRepositoryIdentity,
@@ -136,6 +138,50 @@ describe("TerraFusion workspace Project binding", () => {
         workspaceRoot: expect.stringMatching(/repos[\\/]terrafusion-atlas$/),
       }),
     })
+  })
+
+  it("resolves one repository operation without rebuilding the full Core Seven catalog", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const rows = [{
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "suite-source",
+    }]
+    let projectReads = 0
+    let remoteReads = 0
+    const seams: WorkspaceProjectBindingDependencies = {
+      ...dependencies(rows),
+      loadProjectRows: async () => {
+        projectReads += 1
+        return rows
+      },
+      readGitRemoteOrigin: async () => {
+        remoteReads += 1
+        return "git@github.com:bsvalues/terrafusion-atlas.git"
+      },
+    }
+
+    const result = await resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      seams,
+      "atlas",
+    )
+
+    expect(result.ok).toBe(true)
+    expect(projectReads).toBe(1)
+    expect(remoteReads).toBe(1)
+  })
+
+  it("does not truncate the persisted repository estate at an arbitrary row count", async () => {
+    const source = await readFile(path.join(process.cwd(), "lib/projects/workspace-project-binding.ts"), "utf8")
+    const loader = source.slice(source.indexOf("async loadProjectRows"), source.indexOf("readGitRemoteOrigin,"))
+
+    expect(loader).not.toMatch(/\.limit\(\d+\)/)
   })
 
   it("projects all Core Seven repositories with independent mount truth into the Space Project", async () => {

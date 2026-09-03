@@ -83,6 +83,10 @@ export type WorkspaceProjectBindingDependencies = Readonly<{
   realpath: (workspaceRoot: string) => Promise<string>
 }>
 
+export type WorkspaceProjectBindingOptions = Readonly<{
+  includeRepositoryCatalog?: boolean
+}>
+
 export function normalizeRepositoryIdentity(value: string): string | null {
   const raw = value.trim()
   if (!raw) return null
@@ -173,7 +177,6 @@ const workspaceProjectBindingDependencies: WorkspaceProjectBindingDependencies =
         eq(projectResource.type, "repo"),
       ))
       .where(and(eq(project.userId, userId), eq(project.key, projectKey)))
-      .limit(16)
   },
   readGitRemoteOrigin,
   readGitTopLevel,
@@ -426,10 +429,12 @@ export async function resolveTerraFusionWorkspaceBinding(
   userId: string,
   dependencies: WorkspaceProjectBindingDependencies = workspaceProjectBindingDependencies,
   repositoryKey?: unknown,
+  options: WorkspaceProjectBindingOptions = {},
 ): Promise<WorkspaceProjectBindingResult> {
   const selection = resolveWorkspaceRepositorySelection(TERRAFUSION_PROJECT_KEY, repositoryKey)
   if (!selection.ok) return selection
   const definition = selection.repository
+  const includeRepositoryCatalog = options.includeRepositoryCatalog ?? repositoryKey === undefined
   const configuredRoot = process.env[definition.configuredRootEnvironment]?.trim()
   if (!configuredRoot) {
     return {
@@ -462,10 +467,10 @@ export async function resolveTerraFusionWorkspaceBinding(
   } catch {
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }
-  const projectBinding = {
-    ...workspaceProjectFromRoot(configuredSpaceIdentity, projectName),
-    repositories: await buildTerraFusionRepositoryCatalog(userId, dependencies),
-  }
+  const baseProject = workspaceProjectFromRoot(configuredSpaceIdentity, projectName)
+  const projectBinding = includeRepositoryCatalog
+    ? { ...baseProject, repositories: await buildTerraFusionRepositoryCatalog(userId, dependencies) }
+    : baseProject
   return {
     ok: true,
     binding: {
@@ -555,11 +560,14 @@ export async function resolveCanonicalWorkspaceProjectBinding(
   projectKey: unknown,
   dependencies?: WorkspaceProjectBindingDependencies,
   repositoryKey?: unknown,
+  options?: WorkspaceProjectBindingOptions,
 ): Promise<WorkspaceProjectBindingResult> {
   const selection = resolveWorkspaceRepositorySelection(projectKey, repositoryKey)
   if (!selection.ok) return selection
   if (projectKey === WILLIAMOS_PROJECT_KEY) return resolveWilliamOsWorkspaceBinding(userId, dependencies)
-  return resolveTerraFusionWorkspaceBinding(userId, dependencies, selection.repository.key)
+  return resolveTerraFusionWorkspaceBinding(userId, dependencies, selection.repository.key, {
+    includeRepositoryCatalog: options?.includeRepositoryCatalog ?? repositoryKey === undefined,
+  })
 }
 
 /**

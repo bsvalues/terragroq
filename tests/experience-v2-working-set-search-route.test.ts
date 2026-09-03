@@ -119,8 +119,8 @@ describe("Experience V2 Working Set search route", () => {
 
     expect(response.status).toBe(200)
     expect(seams.resolveBinding.mock.calls).toEqual([
-      ["owner-a", "terrafusion", undefined, "os-1"],
-      ["owner-a", "terrafusion", undefined, "atlas"],
+      ["owner-a", "terrafusion", undefined, "os-1", { includeRepositoryCatalog: false }],
+      ["owner-a", "terrafusion", undefined, "atlas", { includeRepositoryCatalog: false }],
     ])
     expect(seams.spawn).toHaveBeenCalledTimes(2)
     for (const [file, args, options] of seams.spawn.mock.calls) {
