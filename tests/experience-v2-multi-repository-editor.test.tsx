@@ -277,6 +277,18 @@ describe("Experience V2 multi-repository Source workspace", () => {
       observedRevision: resolvedRevision,
       path: "README.md",
     }))
+    const persistedEditor = onEditorChange.mock.calls.at(-1)?.[0]
+    expect(persistedEditor.openFiles).toEqual(["README.md"])
+    expect(persistedEditor.openFileRefs).toEqual([{
+      projectIdentity: hydratedProject.identity,
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:configured",
+      worktreeKey: null,
+      observedRevision: resolvedRevision,
+      path: "README.md",
+    }])
+    expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "Close README.md" })).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(2)
   })
 

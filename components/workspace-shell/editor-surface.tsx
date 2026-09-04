@@ -532,9 +532,11 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       }
     }
     const resolvedRepositoryKey = fileRef?.repositoryResourceKey ?? repository?.key ?? null
-    const nextOpen = currentOpen.some((open) => open.key === resolvedKey)
-      ? currentOpen
-      : [...currentOpen, { key: resolvedKey, path, fileRef, repositoryKey: resolvedRepositoryKey }]
+    const resolvedOpen = { key: resolvedKey, path, fileRef, repositoryKey: resolvedRepositoryKey }
+    const qualifiedOpen = currentOpen.filter((open) => !(open.path === path && open.fileRef === null))
+    const nextOpen = qualifiedOpen.some((open) => open.key === resolvedKey)
+      ? qualifiedOpen
+      : [...qualifiedOpen, resolvedOpen]
     const panes = space.editor.panes.map((pane) => pane.id === targetPaneId
       ? { ...pane, activePath: path, activeFileRef: fileRef, selection: null }
       : pane)
