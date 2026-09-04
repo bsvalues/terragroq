@@ -157,7 +157,7 @@ class MemoryStore implements SpaceWorkingWorldStore {
         try { return JSON.parse(candidate.snapshot).resources.includes(`williamos-workspace-root:v1:${projectIdentity}`) }
         catch { return false }
       })
-      if (projectRows.length >= 12) { resolve("limit"); return }
+      if (projectRows.length >= 64) { resolve("limit"); return }
       await this.insertOwned(row)
       resolve("created")
     }).catch(reject)
@@ -304,19 +304,19 @@ describe("server-owned Space persistence", () => {
     expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["exact"])
   })
 
-  it("transactionally refuses the thirteenth project Space under concurrent creation", async () => {
+  it("keeps a substantial project history and transactionally bounds concurrent creation", async () => {
     const store = new MemoryStore()
     const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 63; index += 1) {
       await createOwnedProjectSpace({ userId: "owner-a", project, name: `Space ${index}`, newWorldId: () => `world-${index}` }, store)
     }
     const outcomes = await Promise.allSettled([
-      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space eleven", newWorldId: () => "world-11" }, store),
-      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space twelve", newWorldId: () => "world-12" }, store),
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space 63", newWorldId: () => "world-63" }, store),
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space 64", newWorldId: () => "world-64" }, store),
     ])
     expect(outcomes.filter((item) => item.status === "fulfilled")).toHaveLength(1)
     expect(outcomes.filter((item) => item.status === "rejected").map((item) => (item as PromiseRejectedResult).reason.message)).toEqual(["SPACE_LIMIT_REACHED"])
-    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store))).toHaveLength(12)
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store))).toHaveLength(64)
   })
   it("derives separate opaque browser fallback namespaces per user and project", () => {
     const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")
