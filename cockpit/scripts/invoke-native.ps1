@@ -93,52 +93,6 @@ if ($windresBin -ne $mingwBin) {
 $env:WILLIAMOS_MINGW_BIN = $mingwBin
 $env:WILLIAMOS_WINDRES_BIN = $windresBin
 
-# Ground-truth diagnostics for the embed-resource windres spawn failures on GitHub's Windows image:
-# embed-resource launches a bare "windres" through std::process, which only succeeds when PATH
-# search finds a runnable windres.exe. Report exactly what was resolved and whether each spawn
-# surface can start it, then continue — the cargo build below carries the final verdict.
-Write-Host "WINDRES_DIAG resolved=$windresBin mingw=$mingwBin"
-where.exe windres 2>&1 | ForEach-Object { Write-Host "WINDRES_DIAG where: $_" }
-try {
-  $size = (Get-Item -LiteralPath (Join-Path $windresBin "windres.exe")).Length
-  Write-Host "WINDRES_DIAG file-size: $size"
-} catch {
-  Write-Host "WINDRES_DIAG file-size: MISSING $_"
-}
-foreach ($name in @("windres", "windres.exe")) {
-  try {
-    $probe = Start-Process -FilePath $name -ArgumentList "--version" -NoNewWindow -Wait -PassThru `
-      -RedirectStandardOutput "$env:TEMP\windres-diag-out.txt" -RedirectStandardError "$env:TEMP\windres-diag-err.txt"
-    $head = (Get-Content "$env:TEMP\windres-diag-out.txt" -TotalCount 1 -ErrorAction SilentlyContinue) -join ""
-    Write-Host "WINDRES_DIAG ps-spawn $name exit=$($probe.ExitCode) head=$head"
-  } catch {
-    Write-Host "WINDRES_DIAG ps-spawn $name failed: $_"
-  }
-}
-Set-Content -LiteralPath "$env:TEMP\windres-diag-spawn.rs" -Value @'
-use std::process::{Command, Stdio};
-fn main() {
-    for name in ["windres", "windres.exe"] {
-        let r = Command::new(name)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map(|mut c| c.kill());
-        match r {
-            Ok(_) => println!("WINDRES_DIAG rust-spawn-ok {name}"),
-            Err(e) => println!("WINDRES_DIAG rust-spawn-fail {name}: {e} os={:?}", e.raw_os_error()),
-        }
-    }
-}
-'@
-& rustc "$env:TEMP\windres-diag-spawn.rs" -o "$env:TEMP\windres-diag-spawn.exe" 2>$null
-if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "$env:TEMP\windres-diag-spawn.exe" -PathType Leaf)) {
-  & "$env:TEMP\windres-diag-spawn.exe"
-} else {
-  Write-Host "WINDRES_DIAG rust-spawn: compile failed ($LASTEXITCODE)"
-}
-
 $manifest = Join-Path $cockpitRoot "src-tauri\Cargo.toml"
 # Staging reads the exact loader from Cargo's lockfile-pinned registry source. A fresh checkout has no
 # registry source yet, so populate it before staging instead of requiring an undocumented manual
