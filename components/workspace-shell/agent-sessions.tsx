@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
+import type { ContractReservation, EnvironmentReservation } from "@/lib/loom/repository-reservations"
 import type { CanonicalWorkspaceProjectKey } from "@/lib/projects/workspace-project-binding"
 import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
 import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
@@ -48,6 +49,11 @@ export type AgentSessionRepository = Readonly<{
   observedRevision: string
 }>
 
+export type AgentSessionReservationClaims = Readonly<{
+  contracts: readonly ContractReservation[]
+  environments: readonly EnvironmentReservation[]
+}>
+
 export type AgentSessionFileAuthorityProof = Readonly<{
   worldId: string
   worldRevision: number
@@ -82,6 +88,7 @@ export type DurableAgentSession = Readonly<{
   assignment: string
   repository?: AgentSessionRepository
   contextManifest?: AssignmentContextManifest
+  reservationClaims?: AgentSessionReservationClaims
   target?: AgentSessionFileTarget
   fileRef?: WorkspaceFileRef
   reviewPath?: string
@@ -114,6 +121,7 @@ export type ExperienceAgentSession = Readonly<{
   mode: "delegate" | "review" | "diff-review" | "preview"
   repository?: AgentSessionRepository
   contextManifest?: AssignmentContextManifest
+  reservationClaims?: AgentSessionReservationClaims
   target?: AgentSessionFileTarget
   fileRef?: WorkspaceFileRef
   reviewPath?: string
@@ -397,6 +405,39 @@ function parseSessionRepository(value: unknown): AgentSessionRepository | null {
   }
 }
 
+const RESERVATION_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/
+
+export function parseAgentSessionReservationClaims(value: unknown): AgentSessionReservationClaims | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (Object.keys(candidate).sort().join("|") !== "contracts|environments"
+    || !Array.isArray(candidate.contracts) || !Array.isArray(candidate.environments)) return null
+  const contracts: ContractReservation[] = []
+  for (const value of candidate.contracts) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null
+    const claim = value as Record<string, unknown>
+    if (Object.keys(claim).sort().join("|") !== "contractIdentity|revisionIdentity|role"
+      || typeof claim.contractIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.contractIdentity)
+      || typeof claim.revisionIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.revisionIdentity)
+      || claim.role !== "producer" && claim.role !== "consumer") return null
+    contracts.push({
+      contractIdentity: claim.contractIdentity,
+      revisionIdentity: claim.revisionIdentity,
+      role: claim.role,
+    })
+  }
+  const environments: EnvironmentReservation[] = []
+  for (const value of candidate.environments) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null
+    const claim = value as Record<string, unknown>
+    if (Object.keys(claim).sort().join("|") !== "access|environmentIdentity"
+      || typeof claim.environmentIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.environmentIdentity)
+      || claim.access !== "exclusive" && claim.access !== "shared-read") return null
+    environments.push({ environmentIdentity: claim.environmentIdentity, access: claim.access })
+  }
+  return { contracts, environments }
+}
+
 function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
@@ -430,6 +471,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const repository = candidate.repository === undefined ? undefined : parseSessionRepository(candidate.repository)
   const contextManifest = candidate.contextManifest === undefined ? undefined
     : parseAssignmentContextManifestView(candidate.contextManifest)
+  const reservationClaims = candidate.reservationClaims === undefined ? undefined
+    : parseAgentSessionReservationClaims(candidate.reservationClaims)
   const assignmentId = candidate.assignmentId === undefined ? undefined : boundedText(candidate.assignmentId, 300)
   const isClaudeReviewer = candidate.provider === "Claude" && role === "Reviewer"
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
@@ -437,6 +480,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.repository !== undefined && !repository)
     || (candidate.contextManifest !== undefined && !contextManifest)
+    || (candidate.reservationClaims !== undefined && !reservationClaims)
     || (candidate.assignmentId !== undefined && !assignmentId)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
     || (candidate.fileRef !== undefined && !fileRef)
@@ -459,6 +503,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
       || contextManifest.checkout.repositoryMountKey !== repository.mountKey
       || contextManifest.checkout.baseRevision !== repository.observedRevision
       || !contextManifest.mutationPosture.target.writablePaths.includes(target.path))
+    || reservationClaims && (!contextManifest || !target || role !== "Builder"
+      || candidate.provider !== "Codex" && candidate.provider !== "Claude")
     || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined || preview !== undefined)) return null
   return {
     schemaVersion: 1,
@@ -469,6 +515,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     assignment,
     ...(repository ? { repository } : {}),
     ...(contextManifest ? { contextManifest } : {}),
+    ...(reservationClaims ? { reservationClaims } : {}),
     ...(target ? { target } : {}),
     ...(fileRef ? { fileRef } : {}),
     ...(reviewPath ? { reviewPath } : {}),
@@ -687,6 +734,7 @@ function projectSessions(
       mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.repository ? { repository: descriptor.repository } : {}),
       ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
+      ...(descriptor.reservationClaims ? { reservationClaims: descriptor.reservationClaims } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
@@ -715,6 +763,7 @@ function projectSessions(
       mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.repository ? { repository: descriptor.repository } : {}),
       ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
+      ...(descriptor.reservationClaims ? { reservationClaims: descriptor.reservationClaims } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
@@ -1358,6 +1407,8 @@ export function useExperienceAgentSessions({
             || Boolean(effectiveRepositoryKey && repository?.resourceKey !== effectiveRepositoryKey)
           const contextManifest = event.contextManifest === undefined ? undefined
             : parseAssignmentContextManifestView(event.contextManifest)
+          const reservationClaims = event.reservationClaims === undefined ? undefined
+            : parseAgentSessionReservationClaims(event.reservationClaims)
           const serverAssignmentId = event.assignmentId === undefined
             ? event.sessionId as string
             : boundedText(event.assignmentId, 300)
@@ -1371,6 +1422,10 @@ export function useExperienceAgentSessions({
               || contextManifest.checkout.repositoryMountKey !== repository.mountKey
               || contextManifest.checkout.baseRevision !== repository.observedRevision
               || !contextManifest.mutationPosture.target.writablePaths.includes(capturedTarget.path)))
+          const reservationClaimsInvalid = event.reservationClaims !== undefined && !reservationClaims
+            || Boolean(reservationClaims && (!contextManifest || !capturedTarget
+              || role !== "Builder" || input.provider !== "Codex" && input.provider !== "Claude"))
+            || Boolean(contextManifest && capturedTarget && !reservationClaims)
           const previewWorldId = previewMode ? boundedText(event.worldId, 200) : null
           const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
             ? event.evidenceFingerprint : null
@@ -1397,7 +1452,8 @@ export function useExperienceAgentSessions({
             ))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || repositoryBindingInvalid || contextManifestInvalid || invalidPreviewBinding || invalidDiffReviewBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || repositoryBindingInvalid || contextManifestInvalid
+            || reservationClaimsInvalid || invalidPreviewBinding || invalidDiffReviewBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -1412,6 +1468,7 @@ export function useExperienceAgentSessions({
             assignment,
             ...(repository ? { repository } : {}),
             ...(contextManifest ? { contextManifest } : {}),
+            ...(reservationClaims ? { reservationClaims } : {}),
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
             ...(requestedFileRef ? { fileRef: requestedFileRef } : {}),
             ...(mode === "review" || diffReviewMode ? { reviewPath: reviewPath! } : {}),

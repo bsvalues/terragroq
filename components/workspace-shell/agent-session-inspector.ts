@@ -1,4 +1,8 @@
-import type { DurableAgentSession } from "./agent-sessions"
+import {
+  parseAgentSessionReservationClaims,
+  type AgentSessionReservationClaims,
+  type DurableAgentSession,
+} from "./agent-sessions"
 import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
 import { parseAssignmentContextManifestView } from "./assignment-context-view"
 
@@ -23,6 +27,7 @@ export type AgentSessionInspectorSnapshot = Readonly<{
   provider: "Codex" | "Claude" | "Local"
   assignment: string
   contextManifest: AssignmentContextManifest | null
+  reservationClaims: AgentSessionReservationClaims | null
   verificationAtCapture: "verified" | "saved-resume-unverified"
   capturedAt: string
   mode: "delegate" | "review" | "diff-review" | "preview" | "conversation" | "fork"
@@ -103,10 +108,10 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return null
   const row = decoded as Record<string, unknown>
   const expectedKeys = ["schemaVersion", "kind", "sessionKey", "sessionId", "role", "provider", "assignment", "verificationAtCapture", "capturedAt", "mode", "target", "forkedFrom", "updatedAt", "turns"]
-  const validKeys = exactKeys(row, expectedKeys)
-    || exactKeys(row, [...expectedKeys, "contextManifest"])
-    || exactKeys(row, [...expectedKeys, "assignmentId"])
-    || exactKeys(row, [...expectedKeys, "assignmentId", "contextManifest"])
+  const optionalKeys = ["assignmentId", "contextManifest", "reservationClaims"]
+  const rowKeys = Object.keys(row)
+  const validKeys = expectedKeys.every((key) => rowKeys.includes(key))
+    && rowKeys.every((key) => expectedKeys.includes(key) || optionalKeys.includes(key))
   if (!validKeys
     || row.schemaVersion !== 1 || row.kind !== AGENT_SESSION_INSPECTOR_PAYLOAD_KIND
     || !providers.has(row.provider as string) || !validSessionId(row.provider, row.sessionId)
@@ -122,10 +127,16 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
   const contextManifest = row.contextManifest === undefined || row.contextManifest === null
     ? null
     : parseAssignmentContextManifestView(row.contextManifest)
+  const reservationClaims = row.reservationClaims === undefined || row.reservationClaims === null
+    ? null
+    : parseAgentSessionReservationClaims(row.reservationClaims)
   if (row.contextManifest !== undefined && row.contextManifest !== null && !contextManifest
+    || row.reservationClaims !== undefined && row.reservationClaims !== null && !reservationClaims
     || contextManifest && (contextManifest.assignment.assignmentId !== assignmentId
       || target?.kind !== "file"
-      || !contextManifest.mutationPosture.target.writablePaths.includes(target.path))) return null
+      || !contextManifest.mutationPosture.target.writablePaths.includes(target.path))
+    || reservationClaims && (!contextManifest || target?.kind !== "file" || row.role !== "Builder"
+      || row.provider !== "Codex" && row.provider !== "Claude")) return null
   const turns: { ownerPrompt: string; finalResult: string; completedAt: string }[] = []
   for (const value of row.turns) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null
@@ -144,6 +155,7 @@ export function parseAgentSessionInspectorPayload(value: unknown): AgentSessionI
     provider: row.provider as AgentSessionInspectorSnapshot["provider"],
     assignment: row.assignment as string,
     contextManifest,
+    reservationClaims,
     verificationAtCapture: row.verificationAtCapture as AgentSessionInspectorSnapshot["verificationAtCapture"],
     capturedAt: row.capturedAt as string,
     mode: row.mode as AgentSessionInspectorSnapshot["mode"],
@@ -180,6 +192,7 @@ export function encodeAgentSessionInspectorPayload(
     provider: descriptor.provider,
     assignment: descriptor.assignment,
     contextManifest: descriptor.contextManifest ?? null,
+    reservationClaims: descriptor.reservationClaims ?? null,
     verificationAtCapture: truth === "live" ? "verified" : "saved-resume-unverified",
     capturedAt,
     mode: sessionMode(descriptor),

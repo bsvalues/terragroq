@@ -1323,6 +1323,10 @@ export async function POST(request: Request) {
             assignmentId: mutationAssignmentId,
             assignmentHash: mutationAssignmentHash,
             contextManifest: mutationContextManifest,
+            reservationClaims: {
+              contracts: [...mutationReservation!.contracts],
+              environments: [...mutationReservation!.environments],
+            },
             ...(mutationAuthority.repositoryResourceKey ? {
               repositoryResourceKey: mutationAuthority.repositoryResourceKey,
               repositoryIdentity: mutationAuthority.repositoryIdentity,
@@ -1426,6 +1430,10 @@ export async function POST(request: Request) {
             repositoryMountKey: mutationAuthority!.repositoryMountKey,
             observedRevision: mutationAuthority!.observedRevision,
             contextManifest: mutationContextManifest,
+            reservationClaims: {
+              contracts: [...mutationReservation!.contracts],
+              environments: [...mutationReservation!.environments],
+            },
           })
         }
         if (previewMode) {

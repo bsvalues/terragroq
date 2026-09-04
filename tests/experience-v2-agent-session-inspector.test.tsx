@@ -73,6 +73,10 @@ const codex: DurableAgentSession = {
     observedRevision: "b".repeat(40),
   },
   contextManifest,
+  reservationClaims: {
+    contracts: [{ contractIdentity: "workspace-shell-v2", revisionIdentity: "2.0.0", role: "producer" }],
+    environments: [{ environmentIdentity: "preview:williamos", access: "shared-read" }],
+  },
   target: { kind: "file", path: "components/workspace-shell/workspace-shell.tsx" },
   updatedAt: "2026-09-01T18:01:00.000Z",
   completedTurns: turns,
@@ -116,6 +120,7 @@ describe("durable agent session Inspector", () => {
       provider: "Codex",
       assignment: "Build the selected WilliamOS slice",
       contextManifest,
+      reservationClaims: codex.reservationClaims!,
       verificationAtCapture: "verified",
       capturedAt: "2026-09-01T18:05:00.000Z",
       mode: "delegate",
@@ -134,6 +139,10 @@ describe("durable agent session Inspector", () => {
     expect(within(article).getByText("Verified at snapshot time 2026-09-01T18:05:00.000Z · current runtime liveness unverified")).toBeTruthy()
     expect(within(article).getByRole("group", { name: "Context loaded for bsvalues/terragroq" })).toBeTruthy()
     expect(within(article).getByText("Context evidence · does not grant authority.")).toBeTruthy()
+    const reservations = within(article).getByRole("group", { name: "Execution reservations" })
+    expect(within(reservations).getByText("workspace-shell-v2")).toBeTruthy()
+    expect(within(reservations).getByText("preview:williamos")).toBeTruthy()
+    expect(within(reservations).getByText("Recorded collision-control evidence · does not grant authority.")).toBeTruthy()
     const first = within(article).getByRole("region", { name: "Completed turn 1" })
     const second = within(article).getByRole("region", { name: "Completed turn 2" })
     expect(first.textContent).toContain("First owner request")
@@ -160,6 +169,17 @@ describe("durable agent session Inspector", () => {
       contextManifest: {
         ...contextManifest,
         targetRepository: { ...contextManifest.targetRepository, repositoryKey: "atlas" },
+      },
+    }, "live", "2026-09-01T18:05:00.000Z")
+    expect(parseAgentSessionInspectorPayload(payload)).toBeNull()
+  })
+
+  it("fails closed when persisted execution reservation evidence is malformed", () => {
+    const payload = encodeAgentSessionInspectorPayload("Codex:codex-inspector-1", {
+      ...codex,
+      reservationClaims: {
+        contracts: [{ contractIdentity: "workspace-shell-v2", revisionIdentity: "2.0.0", role: "writer" as never }],
+        environments: [],
       },
     }, "live", "2026-09-01T18:05:00.000Z")
     expect(parseAgentSessionInspectorPayload(payload)).toBeNull()
@@ -234,6 +254,7 @@ describe("durable agent session Inspector", () => {
       ...codex,
       sessionId: "codex-oversized-inspector",
       contextManifest: undefined,
+      reservationClaims: undefined,
       completedTurns: [{ ownerPrompt: "Owner", finalResult: "x".repeat(200_000), completedAt: "2026-09-01T18:04:00.000Z" }],
     }
     window.localStorage.setItem(storageKey, JSON.stringify({
@@ -281,7 +302,7 @@ describe("durable agent session Inspector", () => {
       selectedSessionKey: "Codex:codex-inspector-1",
       sessions: [codex, claude, local],
     }))
-    const oldCodex = { ...codex, role: "Earlier Builder", updatedAt: "2026-09-01T17:59:00.000Z" }
+    const oldCodex = { ...codex, role: "Earlier Builder", reservationClaims: undefined, updatedAt: "2026-09-01T17:59:00.000Z" }
     const oldPayload = encodeAgentSessionInspectorPayload("Codex:codex-inspector-1", oldCodex, "live", "2026-09-01T17:59:30.000Z")
     const baseSpace = spaceToServer(defaultSpace(1440, 900, worldId, "Experience V2"))
     let persistedSpace = {

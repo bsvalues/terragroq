@@ -15,6 +15,7 @@ import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
+import { createAssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
@@ -29,6 +30,42 @@ const reviewFileRef = (path = "src/app.ts") => ({ ...REVIEW_FILE_REF, path })
 const reviewInput = { fileRef: REVIEW_FILE_REF, repositoryKey: "os-1" } as const
 const reviewSessionFrame = { repositoryResourceKey: "os-1", repositoryIdentity: REVIEW_REPOSITORY.identity, repositoryMountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
 const atlasSessionFrame = { repositoryResourceKey: "atlas", repositoryIdentity: ATLAS_REPOSITORY.identity, repositoryMountKey: ATLAS_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
+const RESERVATION_CLAIMS = {
+  contracts: [{ contractIdentity: "workspace-shell-v2", revisionIdentity: "2.0.0", role: "producer" as const }],
+  environments: [{ environmentIdentity: "preview:terrafusion:3102", access: "shared-read" as const }],
+}
+const RESERVATION_CONTEXT = createAssignmentContextManifest({
+  assignment: {
+    assignmentId: "codex-reservations",
+    worldId: "world-1",
+    workOrderId: 1122,
+    assignmentHash: ASSIGNMENT_HASH,
+    createdAt: "2026-09-04T00:00:00.000Z",
+  },
+  project: { id: 2, key: "terrafusion", name: "TerraFusion" },
+  targetRepository: {
+    repositoryResourceId: 10,
+    repositoryKey: "os-1",
+    repositoryIdentity: REVIEW_REPOSITORY.identity,
+    role: "integrated-runtime",
+  },
+  checkout: {
+    repositoryMountKey: REVIEW_REPOSITORY.mountKey,
+    nodeIdentity: "omen",
+    worktreeKey: "codex-reservations",
+    baseRevision: REVIEW_REVISION,
+  },
+  mutationPosture: { writablePaths: ["src/app.ts"], referenceRepositories: [] },
+  sources: [{
+    kind: "instruction",
+    repositoryResourceId: 10,
+    repositoryKey: "os-1",
+    repositoryIdentity: REVIEW_REPOSITORY.identity,
+    revisionIdentity: REVIEW_REVISION,
+    path: "AGENTS.md",
+    blobHash: "c".repeat(64),
+  }],
+})
 const DELEGATE_SPINE = {
   ...EMPTY_SPINE,
   outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
@@ -3514,6 +3551,78 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Claude:${sessionId}`,
       sessions: [{ sessionId, role: "Builder", provider: "Claude", assignment: "Change src/app.ts" }],
     })
+  })
+
+  it("persists and restores exact server-recorded execution reservation claims", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      {
+        type: "session",
+        sessionId: "codex-reservations",
+        assignmentId: "codex-reservations",
+        provider: "Codex",
+        mode: "delegate",
+        resumed: false,
+        selectedPath: "src/app.ts",
+        assignmentHash: ASSIGNMENT_HASH,
+        ...reviewSessionFrame,
+        contextManifest: RESERVATION_CONTEXT,
+        reservationClaims: RESERVATION_CLAIMS,
+      },
+      { type: "result", text: "Recorded exact reservation evidence." },
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change the captured file.",
+        target: { kind: "file", path: "src/app.ts" },
+        repositoryKey: "os-1",
+      })
+    })
+
+    expect(expose!.sessions[0]).toMatchObject({ reservationClaims: RESERVATION_CLAIMS })
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions[0].reservationClaims).toEqual(RESERVATION_CLAIMS)
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({
+      truth: "resume-unverified",
+      reservationClaims: RESERVATION_CLAIMS,
+    }))
+  })
+
+  it("rejects malformed or non-mutating session-authored reservation claims", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      {
+        type: "session",
+        sessionId: "codex-reservations",
+        assignmentId: "codex-reservations",
+        provider: "Codex",
+        mode: "delegate",
+        resumed: false,
+        selectedPath: "src/app.ts",
+        assignmentHash: ASSIGNMENT_HASH,
+        ...reviewSessionFrame,
+        contextManifest: RESERVATION_CONTEXT,
+        reservationClaims: { contracts: RESERVATION_CLAIMS.contracts },
+      },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(expose!.runAgentTurn({
+      provider: "Codex",
+      role: "Builder",
+      assignment: "src/app.ts",
+      prompt: "Change the captured file.",
+      target: { kind: "file", path: "src/app.ts" },
+      repositoryKey: "os-1",
+    })).rejects.toThrow("AGENT_STREAM_INVALID")
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
   })
 
   it("persists and restores only the exact server-bound file target earned by a successful Codex Builder session", async () => {

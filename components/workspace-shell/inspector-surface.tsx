@@ -8,6 +8,7 @@ import { parsePreviewInspectorPayload } from "./types"
 import type { AgentSessionDiffReview } from "./agent-sessions"
 import { AGENT_SESSION_INSPECTOR_SURFACE_KIND, parseAgentSessionInspectorPayload } from "./agent-session-inspector"
 import { ContextLoadedPanel } from "./context-loaded-panel"
+import { ExecutionReservationsPanel } from "./execution-reservations-panel"
 
 export type InspectorSurface = Readonly<{
   id: string
@@ -214,6 +215,9 @@ function DurableAgentSessionInspector({ payload }: { payload: unknown }) {
       {snapshot.contextManifest
         ? <ContextLoadedPanel manifest={snapshot.contextManifest} initiallyOpen />
         : <p>Context receipt unavailable · legacy or non-mutating session.</p>}
+      {snapshot.reservationClaims
+        ? <ExecutionReservationsPanel claims={snapshot.reservationClaims} initiallyOpen />
+        : snapshot.contextManifest ? <p>Execution reservation receipt unavailable · legacy session.</p> : null}
       <h3>Canonical completed turns · {snapshot.turns.length}</h3>
       {snapshot.turns.length > 0 ? snapshot.turns.map((turn, index) => (
         <section key={`${turn.completedAt}:${index}`} aria-label={`Completed turn ${index + 1}`}>
