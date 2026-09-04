@@ -18,6 +18,25 @@ function redirectResponse(location: string, url = "http://tf.test:5000/") {
   return response
 }
 
+function compositionHeader(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url")
+}
+
+const runtimeComposition = {
+  schemaVersion: 1,
+  runtime: {
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+    revision: "9".repeat(40),
+    instance: "disposable-preview-99417",
+  },
+  consumedArtifacts: [{
+    suite: "atlas",
+    repositoryIdentity: "bsvalues/terrafusion-atlas",
+    artifactIdentity: "atlas-feature-projection-v1@sha256:running",
+    sourceRevision: "a".repeat(40),
+  }],
+} as const
+
 describe("running workspace app admission", () => {
   it("uses the configured WilliamOS identity rather than client-controlled forwarding headers", () => {
     expect(williamOsOrigin("https://williamos.example/auth", "http://internal:3000/api/environment/space"))
@@ -85,12 +104,50 @@ describe("running workspace app admission", () => {
       identity: "TerraFusion",
       reachable: true,
       frameable: true,
+      composition: null,
       checkedAt: "2026-08-30T02:00:00.000Z",
       limitations: { dom: "unavailable", console: "unavailable", network: "unavailable" },
       fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
     expect(JSON.stringify(evidence)).not.toContain("secret-build-marker")
     expect(JSON.stringify(evidence)).not.toContain("must-not-escape")
+  })
+
+  it("returns exact runtime composition only from a valid admitted attestation", async () => {
+    const fetcher = vi.fn(async () => htmlResponse("<main>ready</main>", { headers: {
+      "x-williamos-workspace-app": "terrafusion",
+      "x-williamos-preview-composition": compositionHeader(runtimeComposition),
+    } })) as unknown as typeof fetch
+
+    const evidence = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", fetcher)
+
+    expect(evidence).toMatchObject({ status: "attached", composition: runtimeComposition })
+  })
+
+  it.each([
+    ["malformed", "not_base64url!"],
+    ["wrong runtime repository", compositionHeader({ ...runtimeComposition, runtime: { ...runtimeComposition.runtime, repositoryIdentity: "bsvalues/terrafusion-os" } })],
+    ["unknown suite repository", compositionHeader({ ...runtimeComposition, consumedArtifacts: [{ ...runtimeComposition.consumedArtifacts[0], repositoryIdentity: "bsvalues/other" }] })],
+    ["oversized", "a".repeat(8 * 1024 + 1)],
+  ])("keeps Preview attached but rejects a %s composition attestation", async (_label, header) => {
+    const fetcher = vi.fn(async () => htmlResponse("<main>ready</main>", { headers: {
+      "x-williamos-workspace-app": "terrafusion",
+      "x-williamos-preview-composition": header,
+    } })) as unknown as typeof fetch
+
+    const evidence = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", fetcher)
+
+    expect(evidence).toMatchObject({ status: "attached", composition: null })
+  })
+
+  it("binds runtime composition into the Preview evidence fingerprint", async () => {
+    const withoutComposition = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", vi.fn(async () => htmlResponse()) as unknown as typeof fetch)
+    const withComposition = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", vi.fn(async () => htmlResponse("<main>ready</main>", { headers: {
+      "x-williamos-workspace-app": "terrafusion",
+      "x-williamos-preview-composition": compositionHeader(runtimeComposition),
+    } })) as unknown as typeof fetch)
+
+    expect(withComposition.fingerprint).not.toBe(withoutComposition.fingerprint)
   })
 
   it.each([
@@ -139,6 +196,23 @@ describe("running workspace app admission", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(fetcher).toHaveBeenNthCalledWith(2, new URL("http://tf.test:5000/ready"), expect.objectContaining({ redirect: "manual" }))
     expect(evidence).toMatchObject({ status: "attached", admittedUrl: "http://tf.test:5000/ready" })
+  })
+
+  it("admits the exact final same-origin URL so runtime evidence can match the framed Preview", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      return url.endsWith("/start")
+        ? redirectResponse("/ready", url)
+        : htmlResponse("<main>ready</main>", { headers: {
+          "x-williamos-workspace-app": "terrafusion",
+          "x-williamos-preview-composition": compositionHeader(runtimeComposition),
+        } }, url)
+    }) as unknown as typeof fetch
+
+    await expect(admitWorkspaceApp("http://tf.test:5000/start", "https://williamos.test", fetcher)).resolves.toEqual({
+      ok: true,
+      url: "http://tf.test:5000/ready",
+    })
   })
 
   it("never follows a cross-origin redirect", async () => {

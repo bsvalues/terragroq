@@ -18,8 +18,10 @@ describe("Experience V2 Core Seven shell integration", () => {
 
   it("does not claim running composition from an attached URL alone", () => {
     const source = shell()
-    expect(source).toContain('space.runningAppUrl ? "unverified" : "unavailable"')
-    expect(source).toContain("consumedArtifacts={[]}")
+    expect(source).toContain('previewRuntime ? "running" : space.runningAppUrl ? "unverified" : "unavailable"')
+    expect(source).toContain("previewCompositionEvidence.evidence.admittedUrl === space.runningAppUrl")
+    expect(source).toContain("attestedPreviewComposition?.consumedArtifacts")
+    expect(source).toContain("artifact.repositoryIdentity === repository.identity && artifact.sourceRevision === unit.git.revision")
     expect(source).not.toContain('state="running" runtime={null}')
   })
 })

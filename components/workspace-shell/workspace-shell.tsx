@@ -763,6 +763,7 @@ export function WorkspaceShell({
   const [changeSetProjection, setChangeSetProjection] = useState<CrossRepositoryChangeSetProjection | null>(null)
   const [changeSetBusy, setChangeSetBusy] = useState(false)
   const [changeSetError, setChangeSetError] = useState<string | null>(null)
+  const [previewCompositionEvidence, setPreviewCompositionEvidence] = useState<PreviewInspectorPayload | null>(null)
   const [repositoryFocusKey, setRepositoryFocusKey] = useState<string | null>(null)
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
@@ -1685,6 +1686,7 @@ export function WorkspaceShell({
       return
     }
     const requestWorldId = worldRef.current
+    const requestProjectIdentity = projectRef.current?.identity ?? null
     const requestEpoch = transitionEpochRef.current
     const requestId = changeSetRequestRef.current + 1
     changeSetRequestRef.current = requestId
@@ -1692,6 +1694,31 @@ export function WorkspaceShell({
       setChangeSetProjection(null)
       setChangeSetError("Change Set evidence needs an open persistent server Space.")
       return
+    }
+    if (target === "preview-composition") {
+      const previewRequestId = previewEvidenceRequestRef.current + 1
+      previewEvidenceRequestRef.current = previewRequestId
+      setPreviewCompositionEvidence(null)
+      void (async () => {
+        try {
+          const response = await fetch("/api/environment/preview", { cache: "no-store" })
+          const body = await response.json() as unknown
+          const evidence = body && typeof body === "object" ? (body as Record<string, unknown>).evidence : null
+          const payload = response.ok ? parsePreviewInspectorPayload({ evidence, snapshot: "live" }) : null
+          if (!payload) throw new Error("PREVIEW_EVIDENCE_UNAVAILABLE")
+          if (previewEvidenceRequestRef.current !== previewRequestId
+            || worldRef.current !== requestWorldId
+            || projectRef.current?.identity !== requestProjectIdentity
+            || transitionEpochRef.current !== requestEpoch
+            || payload.evidence.admittedUrl !== stateRef.current.runningAppUrl) return
+          setPreviewCompositionEvidence(payload)
+        } catch {
+          if (previewEvidenceRequestRef.current === previewRequestId
+            && worldRef.current === requestWorldId
+            && projectRef.current?.identity === requestProjectIdentity
+            && transitionEpochRef.current === requestEpoch) setPreviewCompositionEvidence(null)
+        }
+      })()
     }
     setChangeSetBusy(true)
     try {
@@ -4388,9 +4415,15 @@ export function WorkspaceShell({
         role: repository.role,
       })))
     : null
+  const attestedPreviewComposition = previewCompositionEvidence?.evidence.status === "attached"
+    && previewCompositionEvidence.evidence.admittedUrl === space.runningAppUrl
+    ? previewCompositionEvidence.evidence.composition
+    : null
   const pendingSuiteChanges: readonly PendingSuiteChange[] = (changeSetProjection?.units ?? []).flatMap((unit) => {
     const repository = project?.repositories?.find((candidate) => candidate.key === unit.repository.key)
     if (repository?.role !== "suite-source" || !repository.suite || !unit.git.revision) return []
+    if (attestedPreviewComposition?.consumedArtifacts.some((artifact) =>
+      artifact.repositoryIdentity === repository.identity && artifact.sourceRevision === unit.git.revision)) return []
     return [{
       suite: repository.label,
       repositoryKey: repository.key,
@@ -4403,6 +4436,17 @@ export function WorkspaceShell({
   const sovereignContext = sovereignRepository?.mount.verified && sovereignRepository.mount.revision
     ? { repositoryName: sovereignRepository.label, revision: sovereignRepository.mount.revision }
     : null
+  const previewRuntime = attestedPreviewComposition ? {
+    repositoryName: attestedPreviewComposition.runtime.repositoryIdentity,
+    revision: attestedPreviewComposition.runtime.revision,
+    instance: attestedPreviewComposition.runtime.instance,
+  } : null
+  const consumedPreviewArtifacts = (attestedPreviewComposition?.consumedArtifacts ?? []).map((artifact) => ({
+    suite: project?.repositories?.find((repository) => repository.key === artifact.suite)?.label ?? artifact.suite,
+    repositoryKey: artifact.suite,
+    artifactIdentity: artifact.artifactIdentity,
+    sourceRevision: artifact.sourceRevision,
+  }))
   const developerToolRepositoryContext = deriveDeveloperToolRepositoryContext(projectKey, project, space)
   const toolRunBaseHistoryScope = storage === "server" && worldId
     ? `server:${worldId}`
@@ -4649,9 +4693,9 @@ export function WorkspaceShell({
         activate("editor")
       }} /> : <section className={spatial.utilitySurface} aria-label="Cross-repository Change Set"><header className={spatial.utilityMeta}><span>Change Set</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{changeSetBusy ? "Loading persisted delivery evidence…" : "Change Set unavailable"}</strong><p className={spatial.muted}>{changeSetError ?? "No repository-qualified delivery is recorded for this Space."}</p></div></section>}</div> : null}
       {overlay === "preview-composition" ? <div className={spatial.councilHost}><PreviewComposition
-        state={space.runningAppUrl ? "unverified" : "unavailable"}
-        runtime={null}
-        consumedArtifacts={[]}
+        state={previewRuntime ? "running" : space.runningAppUrl ? "unverified" : "unavailable"}
+        runtime={previewRuntime}
+        consumedArtifacts={consumedPreviewArtifacts}
         pendingSuiteChanges={pendingSuiteChanges}
         sovereignContext={sovereignContext}
         onDismiss={() => setOverlay(null)}

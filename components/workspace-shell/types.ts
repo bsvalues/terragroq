@@ -20,6 +20,20 @@ export type PreviewEvidenceSnapshot = Readonly<{
   identity: "TerraFusion" | "unverified"
   reachable: boolean
   frameable: boolean
+  composition: Readonly<{
+    schemaVersion: 1
+    runtime: Readonly<{
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0"
+      revision: string
+      instance: string
+    }>
+    consumedArtifacts: readonly Readonly<{
+      suite: "forge" | "atlas" | "dais" | "dossier" | "gpt"
+      repositoryIdentity: string
+      artifactIdentity: string
+      sourceRevision: string
+    }>[]
+  }> | null
   checkedAt: string
   limitations: Readonly<{ dom: "unavailable"; console: "unavailable"; network: "unavailable" }>
   fingerprint: string
@@ -94,6 +108,47 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
     && typeof evidence.fingerprint === "string" && /^[a-f0-9]{64}$/.test(evidence.fingerprint)
   if (!common) return null
 
+  let composition: PreviewEvidenceSnapshot["composition"] = null
+  if (evidence.composition !== null && evidence.composition !== undefined) {
+    if (!evidence.composition || typeof evidence.composition !== "object") return null
+    const rawComposition = evidence.composition as Record<string, unknown>
+    const runtime = rawComposition.runtime
+    const artifacts = rawComposition.consumedArtifacts
+    if (rawComposition.schemaVersion !== 1 || !runtime || typeof runtime !== "object" || !Array.isArray(artifacts)) return null
+    const rawRuntime = runtime as Record<string, unknown>
+    if (rawRuntime.repositoryIdentity !== "bsvalues/terrafusion_os_1.0"
+      || typeof rawRuntime.revision !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rawRuntime.revision)
+      || typeof rawRuntime.instance !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/.test(rawRuntime.instance)
+      || artifacts.length > 5) return null
+    const seen = new Set<string>()
+    const parsedArtifacts: NonNullable<PreviewEvidenceSnapshot["composition"]>["consumedArtifacts"][number][] = []
+    for (const value of artifacts) {
+      if (!value || typeof value !== "object") return null
+      const artifact = value as Record<string, unknown>
+      if (typeof artifact.suite !== "string" || !["forge", "atlas", "dais", "dossier", "gpt"].includes(artifact.suite)
+        || artifact.repositoryIdentity !== `bsvalues/terrafusion-${artifact.suite}`
+        || typeof artifact.artifactIdentity !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,199}$/.test(artifact.artifactIdentity)
+        || typeof artifact.sourceRevision !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(artifact.sourceRevision)
+        || seen.has(artifact.suite)) return null
+      seen.add(artifact.suite)
+      parsedArtifacts.push({
+        suite: artifact.suite as "forge" | "atlas" | "dais" | "dossier" | "gpt",
+        repositoryIdentity: artifact.repositoryIdentity,
+        artifactIdentity: artifact.artifactIdentity,
+        sourceRevision: artifact.sourceRevision,
+      })
+    }
+    composition = {
+      schemaVersion: 1,
+      runtime: {
+        repositoryIdentity: rawRuntime.repositoryIdentity,
+        revision: rawRuntime.revision,
+        instance: rawRuntime.instance,
+      },
+      consumedArtifacts: parsedArtifacts,
+    }
+  }
+
   const attached = evidence.status === "attached" && reason === null && configuredUrl !== null
     && admittedUrl !== null && origin !== null && evidence.identity === "TerraFusion"
     && evidence.reachable === true && evidence.frameable === true
@@ -117,6 +172,7 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
       identity: evidence.identity,
       reachable: evidence.reachable,
       frameable: evidence.frameable,
+      composition,
       checkedAt,
       limitations: { dom: "unavailable", console: "unavailable", network: "unavailable" },
       fingerprint: evidence.fingerprint,
