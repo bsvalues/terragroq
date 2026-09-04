@@ -718,6 +718,10 @@ export async function POST(request: Request) {
             selectedPath: assignment.selectedPath,
             assignmentHash: assignment.assignmentHash,
             contextManifest,
+            reservationClaims: {
+              contracts: [...repositoryReservation.contracts],
+              environments: [...repositoryReservation.environments],
+            },
             ...(repositoryAuthority ? {
               repositoryResourceKey: repositoryAuthority.repositoryResourceKey,
               repositoryIdentity: repositoryAuthority.repositoryIdentity,

@@ -405,6 +405,10 @@ describe("durable Codex delegate route", () => {
         type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false,
         selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
         contextManifest: CONTEXT_MANIFEST,
+        reservationClaims: {
+          contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+          environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+        },
       },
       { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
       { type: "result", text: "Implemented the selected change." },
@@ -594,6 +598,10 @@ describe("durable Codex delegate route", () => {
       type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: true,
       selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
       contextManifest: CONTEXT_MANIFEST,
+      reservationClaims: {
+        contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+        environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+      },
     })
   })
 

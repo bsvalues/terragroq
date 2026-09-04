@@ -448,6 +448,10 @@ describe("selected-file review route", () => {
   it("binds a mutation-capable cloud builder to the exact persisted Space selection", async () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
+    seams.deriveReservationClaims.mockResolvedValue({
+      contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+      environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+    })
 
     const response = await POST(request({
       provider: "cloud",
@@ -490,7 +494,11 @@ describe("selected-file review route", () => {
         assignmentId: "123e4567-e89b-42d3-a456-426614174000",
         repositoryResourceKey: "os-1",
         contextManifest: expect.objectContaining({ authorityEffect: "none" }),
-        reservation: expect.objectContaining({ allowed: ["src/example.ts"], contracts: [], environments: [] }),
+        reservation: expect.objectContaining({
+          allowed: ["src/example.ts"],
+          contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+          environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+        }),
       }),
     })
     expect(seams.assessActiveAssignment).toHaveBeenCalledTimes(1)
@@ -504,6 +512,10 @@ describe("selected-file review route", () => {
       assignmentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       repositoryResourceKey: "os-1",
       contextManifest: expect.objectContaining({ authorityEffect: "none" }),
+      reservationClaims: {
+        contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "producer" }],
+        environments: [{ environmentIdentity: "worktree:delegate-1", access: "exclusive" }],
+      },
     })
     expect(seams.createIsolated).toHaveBeenCalledWith(expect.objectContaining({
       projectRoot: process.cwd(), selectedPath: "src/example.ts", initialContent: "before",
@@ -717,6 +729,10 @@ describe("Claude Builder fork route", () => {
   it("derives a distinct child from Claude's canonical init frame before exposing or recording it", async () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
+    seams.deriveReservationClaims.mockResolvedValue({
+      contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "consumer" }],
+      environments: [{ environmentIdentity: "integration:core-seven", access: "shared-read" }],
+    })
     const response = await POST(request({
       mode: "fork",
       provider: "cloud",
@@ -752,6 +768,10 @@ describe("Claude Builder fork route", () => {
         provider: "cloud", external: true, metered: true, resumed: false,
         mode: "agent", worldId: "world-a", path: "src/example.ts", forkedFrom: sourceId,
         assignmentVersion: "loom-claude-assignment.v1",
+        reservation: expect.objectContaining({
+          contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "consumer" }],
+          environments: [{ environmentIdentity: "integration:core-seven", access: "shared-read" }],
+        }),
       }),
     }))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({
@@ -765,6 +785,10 @@ describe("Claude Builder fork route", () => {
       assignmentId: expect.stringMatching(/^claude:/),
       repositoryResourceKey: "os-1",
       contextManifest: expect.objectContaining({ authorityEffect: "none" }),
+      reservationClaims: {
+        contracts: [{ contractIdentity: "source-edit-v1", revisionIdentity: "1.0.0", role: "consumer" }],
+        environments: [{ environmentIdentity: "integration:core-seven", access: "shared-read" }],
+      },
     })
     expect(events[1]).toEqual({ type: "event", event: { type: "system", subtype: "init", session_id: childId } })
     expect(events.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
