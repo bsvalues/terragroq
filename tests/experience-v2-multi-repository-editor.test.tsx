@@ -69,6 +69,64 @@ afterEach(() => {
 })
 
 describe("Experience V2 multi-repository Source workspace", () => {
+  it("keeps one repository-qualified tab when the legacy tree reopens the same file", async () => {
+    const user = userEvent.setup()
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&projectKey=williamos") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&projectKey=williamos") {
+        return Response.json({
+          kind: "file",
+          path: "README.md",
+          content: "WilliamOS",
+          modifiedAt: "2026-09-04T00:00:00.000Z",
+          repository: {
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mountKey: "williamos:configured",
+            observedRevision: revision,
+          },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const legacyProject: WorkspaceProject = {
+      identity: "c:/hermeslab/williamos-source",
+      name: "WilliamOS",
+      repositories: [],
+    }
+    function ControlledEditor() {
+      const [space, setSpace] = useState<WorkspaceSpace>(defaultSpace())
+      return (
+        <EditorSurface
+          project={legacyProject}
+          projectKey="williamos"
+          space={space}
+          onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+          }}
+        />
+      )
+    }
+
+    render(<ControlledEditor />)
+    const treeFile = await screen.findByRole("button", { name: "README.md" })
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1))
+
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1))
+    expect(screen.getAllByRole("button", { name: "Close README.md" })).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(1)
+  })
+
   it("keeps the repository shelf compact and progressively reveals a large active root", async () => {
     const user = userEvent.setup()
     const entries = Array.from({ length: 40 }, (_, index) => ({

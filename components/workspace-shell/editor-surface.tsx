@@ -496,7 +496,12 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   ) => {
     const repository = repositoryForKey(project, targetRepositoryKey)
     const requestedFileRef = repository && project ? workspaceFileRef(project, repository, path) : null
-    const key = requestedFileRef ? canonicalWorkspaceObjectKey(requestedFileRef) : path
+    const currentOpen = openFilesForSpace(space, project)
+    const existingOpen = currentOpen.find((open) => open.path === path
+      && (targetRepositoryKey === null || open.repositoryKey === targetRepositoryKey))
+    const key = existingOpen?.key
+      ?? (requestedFileRef ? canonicalWorkspaceObjectKey(requestedFileRef) : path)
+    let resolvedKey = key
     let fileRef = buffers[key]?.fileRef ?? requestedFileRef
     if (!buffers[key]) {
       try {
@@ -508,7 +513,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
         fileRef = project && (repository || payload.repository)
           ? responseWorkspaceFileRef(project, repository, path, payload)
           : null
-        const resolvedKey = fileRef ? canonicalWorkspaceObjectKey(fileRef) : key
+        resolvedKey = fileRef ? canonicalWorkspaceObjectKey(fileRef) : key
         setBuffers((current) => (bufferEpoch.current.get(key) ?? 0) !== epoch ? current : ({ ...current, [resolvedKey]: {
           key: resolvedKey,
           path: payload.path,
@@ -525,8 +530,10 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
         return
       }
     }
-    const currentOpen = openFilesForSpace(space, project)
-    const nextOpen = currentOpen.some((open) => open.key === key) ? currentOpen : [...currentOpen, { key, path, fileRef, repositoryKey: repository?.key ?? null }]
+    const resolvedRepositoryKey = fileRef?.repositoryResourceKey ?? repository?.key ?? null
+    const nextOpen = currentOpen.some((open) => open.key === resolvedKey)
+      ? currentOpen
+      : [...currentOpen, { key: resolvedKey, path, fileRef, repositoryKey: resolvedRepositoryKey }]
     const panes = space.editor.panes.map((pane) => pane.id === targetPaneId
       ? { ...pane, activePath: path, activeFileRef: fileRef, selection: null }
       : pane)
@@ -537,7 +544,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       path,
       targetPaneId,
       fileRef,
-      repository?.key ?? activeRepositoryKey,
+      resolvedRepositoryKey ?? activeRepositoryKey,
     )
   }, [activeRepositoryKey, buffers, project, projectKey, setTreeError, space, updatePanes])
 
