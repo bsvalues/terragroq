@@ -205,7 +205,7 @@ describe("Experience V2 Space route", () => {
     expect(await response.json()).toEqual({ error: "SPACE_PERSISTENCE_UNAVAILABLE" })
   })
 
-  it("returns a typed conflict when the bounded project collection already has twelve Spaces", async () => {
+  it("returns a typed conflict when the bounded project collection is full", async () => {
     seams.create.mockRejectedValueOnce(new Error("SPACE_LIMIT_REACHED"))
     const response = await POST(new Request("http://localhost/api/environment/space", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Thirteen" }),

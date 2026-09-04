@@ -38,6 +38,14 @@ export type FileBuffer = Readonly<{
 }>
 
 type OpenFile = Readonly<{ key: string; path: string; fileRef: WorkspaceFileRef | null; repositoryKey: string | null }>
+type StaleFileRecovery = Readonly<{
+  staleKey: string
+  path: string
+  repositoryKey: string | null
+  fileRef: WorkspaceFileRef
+  content: string
+  modifiedAt: string
+}>
 
 function repositoryForKey(project: WorkspaceProject | undefined, key: string | null | undefined): WorkspaceRepositoryMountView | null {
   return project?.repositories?.find((repository) => repository.key === key) ?? null
@@ -215,6 +223,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
   const [visibleRootCount, setVisibleRootCount] = useState(ROOT_ENTRY_BATCH_SIZE)
   const [treeErrorsByRepository, setTreeErrorsByRepository] = useState<Record<string, string | undefined>>({})
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
+  const [staleFileRecoveries, setStaleFileRecoveries] = useState<Record<string, StaleFileRecovery>>({})
   const loadingFiles = useRef(new Set<string>())
   const dirtyBuffers = useRef(new Set<string>())
   const completedReloadKey = useRef(-1)
@@ -297,6 +306,14 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
             : openFile.fileRef
           if (openFile.fileRef && responseFileRef
             && responseFileRef.observedRevision !== openFile.fileRef.observedRevision) {
+            setStaleFileRecoveries((current) => ({ ...current, [openFile.key]: {
+              staleKey: openFile.key,
+              path: payload.path,
+              repositoryKey: openFile.repositoryKey,
+              fileRef: responseFileRef,
+              content: payload.content,
+              modifiedAt: payload.modifiedAt,
+            } }))
             throw new Error("WORKSPACE_FILE_REF_STALE")
           }
           setBuffers((current) => (bufferEpoch.current.get(openFile.key) ?? 0) !== epoch ? current : ({ ...current, [openFile.key]: {
@@ -344,6 +361,14 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           : target?.fileRef ?? null
         if (target?.fileRef && responseFileRef
           && responseFileRef.observedRevision !== target.fileRef.observedRevision) {
+          setStaleFileRecoveries((existing) => ({ ...existing, [targetKey]: {
+            staleKey: targetKey,
+            path: payload.path,
+            repositoryKey: target.repositoryKey,
+            fileRef: responseFileRef,
+            content: payload.content,
+            modifiedAt: payload.modifiedAt,
+          } }))
           throw new Error("WORKSPACE_FILE_REF_STALE")
         }
         if (bufferEpoch.current.get(targetKey) !== epoch || dirtyBuffers.current.has(targetKey)) return "dirty-conflict" as const
@@ -369,6 +394,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
 
   const selectedKey = space.selectedFileRef ? canonicalWorkspaceObjectKey(space.selectedFileRef) : space.selectedPath
   const selectedBuffer = selectedKey ? buffers[selectedKey] : null
+
   useEffect(() => {
     if (!space.selectedPath) return
     onSelectedFileDirtyChange?.(
@@ -396,6 +422,42 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       activeRepositoryKey: activeRepositoryOverride,
     }, selectedPath, selectedFileRef)
   }, [activeRepositoryKey, onEditorChange, space.editor, space.selectedFileRef, space.selectedPath])
+
+  const reopenStaleFile = useCallback((recovery: StaleFileRecovery) => {
+    const currentKey = canonicalWorkspaceObjectKey(recovery.fileRef)
+    bufferEpoch.current.set(recovery.staleKey, (bufferEpoch.current.get(recovery.staleKey) ?? 0) + 1)
+    setBuffers((current) => ({ ...current, [currentKey]: {
+      key: currentKey,
+      path: recovery.path,
+      fileRef: recovery.fileRef,
+      repositoryKey: recovery.repositoryKey,
+      content: recovery.content,
+      savedContent: recovery.content,
+      modifiedAt: recovery.modifiedAt,
+      saving: false,
+      error: null,
+    } }))
+    const replaceRef = (fileRef: WorkspaceFileRef | null | undefined) => fileRef
+      && canonicalWorkspaceObjectKey(fileRef) === recovery.staleKey ? recovery.fileRef : fileRef
+    const panes = space.editor.panes.map((pane) => ({ ...pane, activeFileRef: replaceRef(pane.activeFileRef) }))
+    const selectedFileRef = replaceRef(space.selectedFileRef) ?? null
+    const openFileRefs = space.editor.openFileRefs?.map((fileRef) => replaceRef(fileRef) as WorkspaceFileRef)
+    setStaleFileRecoveries((current) => {
+      const next = { ...current }
+      delete next[recovery.staleKey]
+      return next
+    })
+    clearTreeError(recovery.repositoryKey)
+    updatePanes(
+      panes,
+      space.editor.openFiles,
+      openFileRefs,
+      space.selectedPath,
+      space.editor.activePaneId,
+      selectedFileRef,
+      recovery.repositoryKey,
+    )
+  }, [clearTreeError, space, updatePanes])
 
   const persistRepositoryState = useCallback((workingSetRepositoryKeys: readonly string[], activeKey: string | null) => {
     onEditorChange({ ...space.editor, workingSetRepositoryKeys, activeRepositoryKey: activeKey }, space.selectedPath, space.selectedFileRef)
@@ -639,6 +701,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
           {space.editor.panes.map((pane) => {
             const paneKey = pane.activeFileRef ? canonicalWorkspaceObjectKey(pane.activeFileRef) : pane.activePath
             const buffer = paneKey ? buffers[paneKey] : null
+            const staleRecovery = paneKey ? staleFileRecoveries[paneKey] : null
             return (
               <div
                 key={pane.id}
@@ -722,7 +785,15 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                     </>
                   ) : (
                     <div className={styles.emptyEditor}>
-                      <span>{roots === null ? "Mounting workspace…" : "Open a file"}</span>
+                      {staleRecovery ? (
+                        <div className={styles.staleFileRecovery} role="alert">
+                          <strong>Saved file revision changed</strong>
+                          <span>{staleRecovery.path} is still selected, but its saved revision is not the current verified checkout.</span>
+                          <button type="button" onClick={() => reopenStaleFile(staleRecovery)}>
+                            Reopen current revision
+                          </button>
+                        </div>
+                      ) : <span>{roots === null ? "Mounting workspace…" : "Open a file"}</span>}
                     </div>
                   )}
                 </div>
