@@ -111,6 +111,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
       "WILLIAMOS_PROJECT_SPACE_IDENTITY",
+      "WILLIAMOS_WORKSPACE_APP_URL",
     ]))
     expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
   })
@@ -149,6 +150,13 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
     expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("exports the declared Preview endpoint so a supervised restart preserves the real application", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_WORKSPACE_APP_URL\s*=\s*\$declaredWorkspaceAppUrl/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code.indexOf("$env:WILLIAMOS_WORKSPACE_APP_URL")).toBeLessThan(code.indexOf("& $node $server"))
   })
 
   it("does not carry a written-down workspace path of its own", () => {
@@ -394,14 +402,57 @@ describe("the deploy places what the start script needs and can be undone", () =
 
   it("captures every loose file and directory it can overwrite in the rollback", () => {
     const code = executableOnly(deployText)
-    for (const file of ["server.js", "package.json", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
+    for (const file of ["server.js", "package.json", "pnpm-lock.yaml", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
       expect(code).toContain(file)
     }
     for (const directory of ['".next"', '"public"', '"lib\\fabric"', '"node_modules"']) {
       expect(code).toContain(directory)
     }
     expect(code).toMatch(/if \(\$WithDependencies\) \{ \$rollbackDirectories \+= "node_modules" \}/)
+    expect(code).toMatch(/\$wasPresent\s+-and\s+\$directory\s+-ne\s+"node_modules"/)
     expect(code).toContain("restore-hermes-runtime.ps1")
+  })
+
+  it("stages a portable locked dependency tree before production mutation and swaps it by rename", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toMatch(/pnpm-lock\.yaml/)
+    expect(deploy).toMatch(/install --prod --offline --ignore-workspace --frozen-lockfile --config\.node-linker=hoisted/)
+    expect(deploy).toMatch(/Get-ChildItem[^\n]*\$stagedModules[^\n]*ReparsePoint/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$rollbackModules/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$stagedModules -Destination \$runtimeModules/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$dependencyStageRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).not.toMatch(/robocopy[^\n]*standalone[^\n]*node_modules/)
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+4[\s\S]*Move-Item -LiteralPath \(Join-Path \$RollbackRoot "node_modules"\) -Destination \$runtimeModules/)
+    expect(restore).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackModules[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(restore).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$heldModules/)
+    expect(restore).toMatch(/catch \{[\s\S]*Move-Item -LiteralPath \$heldModules -Destination \$runtimeModules[\s\S]*throw/)
+    expect(restore).not.toContain("install --prod --offline")
+    expect(deploy.indexOf("install --prod --offline")).toBeLessThan(deploy.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("refuses a default deploy when the runtime lock cannot prove the retained dependency graph", () => {
+    const code = executableOnly(deployText)
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    const missingLockIndex = code.indexOf("runtime has no pnpm-lock.yaml")
+    const mismatchIndex = code.indexOf("source and runtime lockfiles differ")
+    expect(code).toMatch(/Get-FileHash -LiteralPath \$lockSource[\s\S]*Get-FileHash -LiteralPath \$runtimeLock/)
+    expect(missingLockIndex).toBeGreaterThan(-1)
+    expect(mismatchIndex).toBeGreaterThan(-1)
+    expect(missingLockIndex).toBeLessThan(stopIndex)
+    expect(mismatchIndex).toBeLessThan(stopIndex)
+  })
+
+  it("bounds every robocopy retry instead of hanging a failed deployment", () => {
+    for (const code of [executableOnly(deployText), executableOnly(restoreText)]) {
+      const copies = code.split(/\r?\n/).filter((line) => line.trimStart().startsWith("$null = robocopy "))
+      expect(copies.length).toBeGreaterThan(0)
+      for (const copy of copies) {
+        expect(copy).toContain("/R:2")
+        expect(copy).toContain("/W:1")
+      }
+    }
   })
 
   it("records absent rollback inputs so restore can remove files introduced by deploy", () => {

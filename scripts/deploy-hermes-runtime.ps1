@@ -8,16 +8,18 @@
   could see. The steps are not complicated; they just have to be the same steps every time, and the
   last one has to be a check rather than an assumption.
 
-  The runtime directory is FLAT: pnpm's symlinked node_modules was resolved into real directories when
-  it was first built, because copying symlink farms across Windows hosts does not survive. So the
-  dependency tree is left alone unless -WithDependencies is passed. Copying the standalone tree over
-  it fails loudly on every package, having already half-applied itself.
+  The runtime dependency tree is left alone unless -WithDependencies is passed. In that mode pnpm
+  first materializes a portable, hoisted production graph from the exact lockfile in a disposable
+  same-volume stage. The stopped runtime then receives that already-proven tree by an atomic rename.
+  Robocopy must not flatten pnpm's links: doing so changes Node's resolution ancestry and hides
+  transitive packages.
 
   What actually changes between deploys is the compiled application: .next, server.js and the static
   assets. That is what this copies.
 
 .PARAMETER WithDependencies
-  Also replace node_modules. Needed only when the lockfile changed; expect it to be slow.
+  Replace production node_modules from an exact, prevalidated lockfile stage. Needed only when the
+  lockfile changed.
 
 .PARAMETER VerifyOnly
   Run the health checks against whatever is currently deployed and change nothing.
@@ -276,19 +278,86 @@ if ($expectedSha) {
 $envPath = Join-Path $Runtime ".env.local"
 $envGuard = $null
 if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).Hash }
+$lockSource = Join-Path $Source "pnpm-lock.yaml"
+$runtimeLock = Join-Path $Runtime "pnpm-lock.yaml"
+if (-not (Test-Path -LiteralPath $lockSource -PathType Leaf)) {
+  throw "Missing production lockfile: $lockSource"
+}
+
+function Get-PhysicalVolumeIdentity {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+  $volumes = @(Get-Volume -FilePath $resolved -ErrorAction Stop)
+  if ($volumes.Count -ne 1 -or -not $volumes[0].UniqueId) {
+    throw "Cannot prove the physical volume identity for '$resolved'"
+  }
+  return [string]$volumes[0].UniqueId
+}
+if (-not $WithDependencies) {
+  if (-not (Test-Path -LiteralPath $runtimeLock -PathType Leaf)) {
+    throw "The runtime has no pnpm-lock.yaml. Refusing to copy a new package manifest over an unproven dependency graph; rerun with -WithDependencies."
+  }
+  $sourceLockHash = (Get-FileHash -LiteralPath $lockSource -Algorithm SHA256).Hash
+  $runtimeLockHash = (Get-FileHash -LiteralPath $runtimeLock -Algorithm SHA256).Hash
+  if ($sourceLockHash -ne $runtimeLockHash) {
+    throw "The source and runtime lockfiles differ. Refusing to pair the new package manifest with the old dependency graph; rerun with -WithDependencies."
+  }
+}
+if ($WithDependencies -and $SkipRollbackCapture -and (Test-Path -LiteralPath (Join-Path $Runtime "node_modules") -PathType Container)) {
+  throw "SkipRollbackCapture is only valid for an empty runtime; existing node_modules must be captured before replacement."
+}
+
+# Build and prove the replacement dependency tree before touching production. The stage shares the
+# runtime's parent volume so both the outgoing and incoming trees can be renamed without flattening
+# pnpm links or exposing a half-installed graph. Hoisted mode deliberately produces a link-free tree.
+$dependencyStageRoot = $null
+$stagedModules = $null
+if ($WithDependencies) {
+  $dependencyStageRoot = Join-Path (Split-Path -Parent $Runtime) (".williamos-dependencies-{0}" -f [guid]::NewGuid().ToString("N"))
+  $null = New-Item -ItemType Directory -Path $dependencyStageRoot
+  Copy-Item -LiteralPath (Join-Path $standalone "package.json") -Destination (Join-Path $dependencyStageRoot "package.json")
+  Copy-Item -LiteralPath $lockSource -Destination (Join-Path $dependencyStageRoot "pnpm-lock.yaml")
+  $pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+  if (-not $pnpm) { $pnpm = Get-Command pnpm -ErrorAction Stop }
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    & $pnpm.Source --dir $dependencyStageRoot install --prod --offline --ignore-workspace --frozen-lockfile --config.node-linker=hoisted
+    $installExit = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+  if ($installExit -ne 0) {
+    Remove-Item -LiteralPath $dependencyStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw "pnpm failed to stage the locked production dependency tree (exit $installExit)"
+  }
+  $stagedModules = Join-Path $dependencyStageRoot "node_modules"
+  $stagedLinks = @(Get-ChildItem -LiteralPath $stagedModules -Force -Recurse -Attributes ReparsePoint -ErrorAction SilentlyContinue)
+  if ($stagedLinks.Count -ne 0) {
+    Remove-Item -LiteralPath $dependencyStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw "The staged dependency tree contains reparse points and is not portable"
+  }
+  if ((Get-PhysicalVolumeIdentity -Path $dependencyStageRoot) -ne (Get-PhysicalVolumeIdentity -Path $Runtime)) {
+    Remove-Item -LiteralPath $dependencyStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw "The dependency stage and runtime are on different physical volumes; refusing a non-atomic dependency replacement"
+  }
+}
 
 # ROLLBACK CAPTURE, before anything is overwritten. `robocopy /MIR` below is destructive and this
 # script used to say, accurately, that "the previous build is not automatically restored" -- which
 # left the only recovery from a bad deploy as "rebuild the previous commit", requiring the previous
 # commit to still be known and buildable. Every runtime path this script can mutate is copied aside
 # first, so recovery is a copy back. `.env.local` is excluded because deployment never writes it and
-# its hash is guarded below; node_modules is captured exactly when -WithDependencies will replace it.
+# its hash is guarded below. node_modules is recorded in the manifest but moved only after the
+# supervised processes stop, preserving the exact outgoing graph at its original relative identity.
+$rollbackRoot = $null
 if (-not $SkipRollbackCapture) {
   $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
   $rollbackFiles = @(
     "server.js",
     "package.json",
+    "pnpm-lock.yaml",
     "lib\generated\build-provenance.json",
     "scripts\hermes-https-proxy.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
@@ -298,7 +367,7 @@ if (-not $SkipRollbackCapture) {
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 3
+    version = 4
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
@@ -308,9 +377,9 @@ if (-not $SkipRollbackCapture) {
     $existing = Join-Path $Runtime $directory
     $wasPresent = Test-Path -LiteralPath $existing -PathType Container
     $rollbackManifest.directories += [ordered]@{ path = $directory; wasPresent = $wasPresent }
-    if ($wasPresent) {
+    if ($wasPresent -and $directory -ne "node_modules") {
       $rollbackDirectory = Join-Path $rollbackRoot $directory
-      $null = robocopy $existing $rollbackDirectory /MIR /NFL /NDL /NJH /NJS /NP
+      $null = robocopy $existing $rollbackDirectory /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
       if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying $directory (exit $LASTEXITCODE)" }
     }
   }
@@ -343,6 +412,11 @@ if (-not $SkipRollbackCapture) {
   Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -Port $portLiteral -HttpsPort $httpsPortLiteral"
 }
 
+if ($WithDependencies -and $rollbackRoot -and (Get-PhysicalVolumeIdentity -Path $rollbackRoot) -ne (Get-PhysicalVolumeIdentity -Path $Runtime)) {
+  Remove-Item -LiteralPath $dependencyStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+  throw "The rollback capture and runtime are on different physical volumes; refusing a dependency transfer that cannot be renamed exactly"
+}
+
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
@@ -353,6 +427,23 @@ Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandPath (Join-Path $Runti
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $Runtime "scripts\hermes-https-proxy.mjs")
 Start-Sleep -Seconds 2
 
+if ($WithDependencies) {
+  $runtimeModules = Join-Path $Runtime "node_modules"
+  $rollbackModules = if ($rollbackRoot) { Join-Path $rollbackRoot "node_modules" } else { $null }
+  if (Test-Path -LiteralPath $runtimeModules -PathType Container) {
+    Move-Item -LiteralPath $runtimeModules -Destination $rollbackModules
+  }
+  try {
+    Move-Item -LiteralPath $stagedModules -Destination $runtimeModules
+  } catch {
+    if ($rollbackModules -and (Test-Path -LiteralPath $rollbackModules -PathType Container) -and -not (Test-Path -LiteralPath $runtimeModules)) {
+      Move-Item -LiteralPath $rollbackModules -Destination $runtimeModules
+    }
+    throw
+  }
+  Remove-Item -LiteralPath $dependencyStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # The task action points at ProgramData, so deploying only the bundle leaves boot semantics on an
 # older hand-placed generation. Install the repository-owned definition before restart; the exact
 # displaced bytes are part of the rollback manifest above.
@@ -361,7 +452,7 @@ Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
-$null = robocopy (Join-Path $standalone ".next") (Join-Path $Runtime ".next") /MIR /NFL /NDL /NJH /NJS /NP
+$null = robocopy (Join-Path $standalone ".next") (Join-Path $Runtime ".next") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next (exit $LASTEXITCODE)" }
 
 foreach ($file in @("server.js", "package.json")) {
@@ -387,21 +478,19 @@ $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget
 Copy-Item $httpsProxySource $httpsProxyTarget -Force
 
 # Static assets and public/ live outside the standalone tree by design.
-$null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /NFL /NDL /NJH /NJS /NP
+$null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next\static (exit $LASTEXITCODE)" }
 if (Test-Path (Join-Path $Source "public")) {
-  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /MIR /NFL /NDL /NJH /NJS /NP
+  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying public (exit $LASTEXITCODE)" }
 } elseif (Test-Path -LiteralPath (Join-Path $Runtime "public") -PathType Container) {
-  # The target was captured in rollback manifest v3 above. A generation with no public tree must not
+  # The target was captured in the rollback manifest above. A generation with no public tree must not
   # keep serving the previous generation's assets.
   Remove-Item -LiteralPath (Join-Path $Runtime "public") -Recurse -Force
 }
 
 if ($WithDependencies) {
-  # /MIR would delete .env.local and anything else living beside it, so this targets node_modules only.
-  $null = robocopy (Join-Path $standalone "node_modules") (Join-Path $Runtime "node_modules") /MIR /NFL /NDL /NJH /NJS /NP
-  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying node_modules (exit $LASTEXITCODE)" }
+  Copy-Item -LiteralPath $lockSource -Destination (Join-Path $Runtime "pnpm-lock.yaml") -Force
 }
 
 # Boot-time resolution tooling. The start script
@@ -423,7 +512,7 @@ $null = New-Item -ItemType Directory -Path $fabricTarget -Force
 # modules cannot survive as runnable stale bytes. Non-module runtime files are left untouched.
 Get-ChildItem -LiteralPath $fabricTarget -Filter "*.mjs" -File -Recurse -ErrorAction SilentlyContinue |
   Remove-Item -Force
-$null = robocopy $fabricSource $fabricTarget "*.mjs" /E /NFL /NDL /NJH /NJS /NP
+$null = robocopy $fabricSource $fabricTarget "*.mjs" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"

@@ -140,6 +140,7 @@ function Deny-Boot {
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
+$declaredWorkspaceAppUrl = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_WORKSPACE_APP_URL"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
 $declaredLocalSetupEnabled = Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"
 $localSetupEnabled = if ($declaredLocalSetupEnabled -ieq "true") { "true" } else { "false" }
@@ -335,6 +336,14 @@ if ($declaredWilliamOsRoot) {
 }
 if ($declaredWilliamOsSpaceIdentity) {
   $env:WILLIAMOS_PROJECT_SPACE_IDENTITY = $declaredWilliamOsSpaceIdentity
+}
+# Preview admission remains server-owned and fail-closed. The launcher only carries the explicitly
+# declared endpoint into the Node process; without this export, a valid .env.local declaration is
+# invisible to the standalone runtime and the real Preview disappears after every supervised restart.
+if ($declaredWorkspaceAppUrl) {
+  $env:WILLIAMOS_WORKSPACE_APP_URL = $declaredWorkspaceAppUrl
+} else {
+  Remove-Item -Path "Env:WILLIAMOS_WORKSPACE_APP_URL" -ErrorAction SilentlyContinue
 }
 foreach ($mount in $verifiedSecondaryRepositoryMounts) {
   Set-Item -Path "Env:$($mount.Environment)" -Value $mount.ResolvedRoot
