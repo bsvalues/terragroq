@@ -112,6 +112,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "WILLIAMOS_PROJECT_ROOT",
       "WILLIAMOS_PROJECT_SPACE_IDENTITY",
       "WILLIAMOS_WORKSPACE_APP_URL",
+      "NODE_EXTRA_CA_CERTS",
     ]))
     expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
   })
@@ -157,6 +158,17 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).toMatch(/\$env:WILLIAMOS_WORKSPACE_APP_URL\s*=\s*\$declaredWorkspaceAppUrl/)
     expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:WILLIAMOS_WORKSPACE_APP_URL"/)
     expect(code.indexOf("$env:WILLIAMOS_WORKSPACE_APP_URL")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("adds only the existing Preview CA to Node trust for an HTTPS application", () => {
+    expect(code).toMatch(/\[string\]\$WorkspaceAppCaPath\s*=\s*"C:\\ProgramData\\WilliamOS\\williamos-preview-root-ca\.pem"/)
+    expect(code).toMatch(/\$declaredWorkspaceAppUrl\s+-match\s+'\^https:\/\/'/)
+    expect(code).toMatch(/Test-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\s+-PathType\s+Leaf/)
+    expect(code).toContain("WORKSPACE_APP_CA_MISSING")
+    expect(code).toMatch(/\$env:NODE_EXTRA_CA_CERTS\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\)\.ProviderPath/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:NODE_EXTRA_CA_CERTS"/)
+    expect(code.indexOf("$env:NODE_EXTRA_CA_CERTS")).toBeLessThan(code.indexOf("& $node $server"))
+    expect(code).not.toMatch(/NODE_TLS_REJECT_UNAUTHORIZED/)
   })
 
   it("does not carry a written-down workspace path of its own", () => {
