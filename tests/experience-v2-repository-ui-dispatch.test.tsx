@@ -201,12 +201,16 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
       "Codex:codex-atlas-parallel", "Codex:codex-forge-parallel",
     ]))
     const concurrentCards = screen.getAllByRole("button", { name: "Builder · Codex · Implement shared contract" })
-    const atlasCard = concurrentCards.find((card) => card.getAttribute("aria-description") === "Repository Atlas")!
-    const forgeCard = concurrentCards.find((card) => card.getAttribute("aria-description") === "Repository Forge")!
+    const atlasCard = concurrentCards.find((card) => card.getAttribute("title")?.startsWith("Atlas ·"))!
+    const forgeCard = concurrentCards.find((card) => card.getAttribute("title")?.startsWith("Forge ·"))!
     expect(atlasCard.getAttribute("title")).toBe("Atlas · Builder · Codex · Implement shared contract")
     expect(forgeCard.getAttribute("title")).toBe("Forge · Builder · Codex · Implement shared contract")
-    expect(atlasCard.getAttribute("aria-description")).toBe("Repository Atlas")
-    expect(forgeCard.getAttribute("aria-description")).toBe("Repository Forge")
+    const atlasDescriptionId = atlasCard.getAttribute("aria-describedby")
+    const forgeDescriptionId = forgeCard.getAttribute("aria-describedby")
+    expect(atlasDescriptionId).toBeTruthy()
+    expect(forgeDescriptionId).toBeTruthy()
+    expect(document.getElementById(atlasDescriptionId!)?.textContent).toBe("Atlas")
+    expect(document.getElementById(forgeDescriptionId!)?.textContent).toBe("Forge")
     expect(within(atlasCard).getByText("Atlas")).toBeTruthy()
     expect(within(forgeCard).getByText("Forge")).toBeTruthy()
     expect(atlasCard.textContent).not.toMatch(/1 of 2|2 of 2/)
