@@ -8,6 +8,7 @@ const toolchain = fs.readFileSync(path.join(cockpit, "rust-toolchain.toml"), "ut
 const packageJson = JSON.parse(fs.readFileSync(path.join(cockpit, "package.json"), "utf8"))
 const stage = fs.readFileSync(path.join(cockpit, "scripts", "stage-webview2-loader.ps1"), "utf8")
 const invoke = fs.readFileSync(path.join(cockpit, "scripts", "invoke-native.ps1"), "utf8")
+const buildScript = fs.readFileSync(path.join(cockpit, "src-tauri", "build.rs"), "utf8")
 const cargoLock = fs.readFileSync(path.join(cockpit, "src-tauri", "Cargo.lock"), "utf8")
 
 describe("the reproducible WilliamOS Cockpit native build", () => {
@@ -61,10 +62,25 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
     expect(invoke).toContain('Get-Command windres.exe');
     expect(invoke).toContain('Join-Path $candidate "windres.exe"');
     expect(invoke).toContain("requires windres.exe for resource compilation");
+    expect(invoke).toContain('WILLIAMOS_WINDRES_BIN = $windresBin');
+    expect(invoke).toContain('WILLIAMOS_MINGW_BIN = $mingwBin');
     const windresIndex = invoke.indexOf("windres.exe");
     const fetchIndex = invoke.indexOf("cargo fetch");
     expect(windresIndex).toBeGreaterThan(-1);
     expect(windresIndex).toBeLessThan(fetchIndex);
+  });
+
+  it("keeps the cockpit build script from destroying the inherited tool PATH", () => {
+    // The build script previously REPLACED PATH with a single hardcoded MinGW directory plus
+    // System32 whenever that directory existed. On GitHub's windows-2022 image the directory
+    // exists without windres, so the replacement hid the resolved windres.exe and the resource
+    // compiler aborted with NotAttempted("windres"). The build script must prepend resolved tool
+    // directories onto the inherited PATH instead of replacing it.
+    expect(buildScript).toContain('var_os("WILLIAMOS_WINDRES_BIN")');
+    expect(buildScript).toContain('var_os("WILLIAMOS_MINGW_BIN")');
+    expect(buildScript).toContain('split_paths');
+    expect(buildScript).toContain('set_var("PATH", joined)');
+    expect(buildScript).not.toContain('let paths = [');
   });
 
   it("takes the x64 loader only from the exact crate version pinned in Cargo.lock", () => {

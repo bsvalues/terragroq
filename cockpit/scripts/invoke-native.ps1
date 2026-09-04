@@ -87,6 +87,11 @@ if (-not $windresBin) {
 if ($windresBin -ne $mingwBin) {
   $env:PATH = "$windresBin;$env:PATH"
 }
+# The cockpit build script prepends these onto the inherited PATH before Tauri compiles the
+# application resource; pin the exact resolved directories so the build script never has to
+# guess the MinGW layout again.
+$env:WILLIAMOS_MINGW_BIN = $mingwBin
+$env:WILLIAMOS_WINDRES_BIN = $windresBin
 
 # Ground-truth diagnostics for the embed-resource windres spawn failures on GitHub's Windows image:
 # embed-resource launches a bare "windres" through std::process, which only succeeds when PATH
@@ -121,7 +126,7 @@ fn main() {
             .spawn()
             .map(|mut c| c.kill());
         match r {
-            Ok(()) => println!("WINDRES_DIAG rust-spawn-ok {name}"),
+            Ok(_) => println!("WINDRES_DIAG rust-spawn-ok {name}"),
             Err(e) => println!("WINDRES_DIAG rust-spawn-fail {name}: {e} os={:?}", e.raw_os_error()),
         }
     }
