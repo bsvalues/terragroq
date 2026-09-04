@@ -504,7 +504,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
       ?? (requestedFileRef ? canonicalWorkspaceObjectKey(requestedFileRef) : path)
     let resolvedKey = key
     let fileRef = buffers[key]?.fileRef ?? requestedFileRef
-    if (!buffers[key]) {
+    if (!buffers[key] || (project && !fileRef)) {
       try {
         const epoch = bufferEpoch.current.get(key) ?? 0
         const response = await fetch(fileEndpoint(path, projectKey, repository?.key ?? null), { cache: "no-store" })
