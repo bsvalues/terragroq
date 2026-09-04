@@ -35,19 +35,40 @@ const attached = {
   identity: "TerraFusion" as const,
   reachable: true,
   frameable: true,
+  composition: null,
   checkedAt: "2026-08-30T03:00:00.000Z",
   limitations: { dom: "unavailable" as const, console: "unavailable" as const, network: "unavailable" as const },
   fingerprint: "a".repeat(64),
 }
 
+const attachedWithComposition = {
+  ...attached,
+  composition: {
+    schemaVersion: 1 as const,
+    runtime: {
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0" as const,
+      revision: "9".repeat(40),
+      instance: "disposable-preview-99417",
+    },
+    consumedArtifacts: [{
+      suite: "atlas" as const,
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      artifactIdentity: "atlas-feature-projection-v1@sha256:running",
+      sourceRevision: "a".repeat(40),
+    }],
+  },
+}
+
 function installFetch(
   previewEvidence: () => typeof attached | { [key: string]: unknown },
   currentSpace: () => typeof previewSpace = () => previewSpace,
+  workspaceProject: typeof project | Record<string, unknown> = project,
+  changeSet?: Record<string, unknown>,
 ) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === "/api/environment/space" && !init?.method) return Response.json({
-      worldId: "world-a", name: "TerraFusion", space: currentSpace(), project, storage: "server",
+      worldId: "world-a", name: "TerraFusion", space: currentSpace(), project: workspaceProject, storage: "server",
       spine: EMPTY_SPINE,
       judgment: { recommendation: "Keep building.", rationale: "Grounded.", basis: [], confidence: 0.8, generatedAt: "2026-08-30T03:00:00.000Z", basisFingerprint: "b".repeat(64), provenance: { provider: "test", model: "test" } },
     })
@@ -56,6 +77,7 @@ function installFetch(
       return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-08-30T03:00:01.000Z" })
     }
     if (url === "/api/environment/preview") return Response.json({ evidence: previewEvidence() })
+    if (url === "/api/environment/change-set?worldId=world-a" && changeSet) return Response.json(changeSet)
     if (url === "/api/environment/line" && init?.method === "POST") return Response.json({
       worldId: "world-a", say: "The admitted Preview is reachable; DOM, console, and network evidence are unavailable.",
       surfaces: [], spine: EMPTY_SPINE,
@@ -129,6 +151,75 @@ describe("Experience V2 Preview evidence interaction", () => {
     })?.evidence.reason).toBe("URL_INVALID")
     expect(parsePreviewInspectorPayload({ evidence: { ...attached, status: "unavailable" }, snapshot: "saved" })).toBeNull()
     expect(parsePreviewInspectorPayload({ evidence: attached, snapshot: "saved", padding: "x".repeat(9_000) })).toBeNull()
+  })
+
+  it("renders running composition only from evidence for the exact active Preview URL", async () => {
+    const fetchStub = installFetch(() => attachedWithComposition)
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Preview composition" }))
+
+    expect(await screen.findByText("Preview actually running")).toBeTruthy()
+    expect(screen.getByText("disposable-preview-99417")).toBeTruthy()
+    expect(screen.getByText("9".repeat(40))).toBeTruthy()
+    expect(screen.getByText("atlas-feature-projection-v1@sha256:running")).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/preview")).toBe(true)
+  })
+
+  it("keeps composition unverified when attested evidence names another Preview URL", async () => {
+    vi.stubGlobal("fetch", installFetch(() => ({
+      ...attachedWithComposition,
+      admittedUrl: "http://tf.test:5000/other",
+      fingerprint: "d".repeat(64),
+    })))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Preview composition" }))
+
+    expect(await screen.findByText("Composition unverified")).toBeTruthy()
+    expect(screen.getByText("No runtime identity is attached.")).toBeTruthy()
+  })
+
+  it("does not also label an exactly attested suite revision as pending outside the runtime", async () => {
+    const projectWithAtlas = {
+      ...project,
+      repositories: [{
+        key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime",
+        suite: null, previewSource: true, defaultRepository: true,
+        mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: "9".repeat(40), refusal: null },
+      }, {
+        key: "atlas", identity: "bsvalues/terrafusion-atlas", label: "Atlas", role: "suite-source",
+        suite: "atlas", previewSource: false, defaultRepository: false,
+        mount: { key: "terrafusion:atlas:configured", configured: true, verified: true, branch: "main", revision: "a".repeat(40), refusal: null },
+      }],
+    }
+    const changeSet = {
+      version: "williamos-cross-repository-change-set.v1",
+      worldId: "world-a",
+      project: { id: 1, key: "terrafusion", name: "TerraFusion" },
+      outcome: { key: "ATLAS", title: "Atlas integration" },
+      units: [{
+        id: "work-order:7:atlas",
+        workOrder: { id: 7, ref: "WO-ATLAS-7", title: "Produce projection", status: "active", result: null },
+        repository: { key: "atlas", identity: "bsvalues/terrafusion-atlas" },
+        git: { branch: "codex/atlas", revision: "a".repeat(40), pullRequest: 1200, paths: ["src/projection.ts"] },
+        validation: { state: "passed", headSha: "a".repeat(40) },
+        review: { state: "approved", headSha: "a".repeat(40) },
+        delivery: { state: "sealed", headSha: "a".repeat(40) },
+        limitations: [],
+      }],
+      dependencies: [],
+      limitations: [],
+    }
+    vi.stubGlobal("fetch", installFetch(() => attachedWithComposition, () => previewSpace, projectWithAtlas, changeSet))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Preview composition" }))
+
+    expect(await screen.findByText("Preview actually running")).toBeTruthy()
+    expect(await screen.findByText("No pending suite change is recorded.")).toBeTruthy()
+    expect(screen.queryByText("Delivery sealed · not running")).toBeNull()
   })
 
   it("opens exact evidence, restores the bounded saved snapshot, and refreshes it", async () => {
