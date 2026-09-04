@@ -620,7 +620,8 @@ describe("Experience V2 multi-repository Source workspace", () => {
     }))
   })
 
-  it("refuses to pair restored file bytes with a stale persisted revision identity", async () => {
+  it("refuses stale restored bytes and explicitly rebinds only after the owner reopens the current revision", async () => {
+    const user = userEvent.setup()
     const staleRef = {
       projectIdentity: project.identity,
       repositoryResourceKey: "atlas",
@@ -650,10 +651,25 @@ describe("Experience V2 multi-repository Source workspace", () => {
       throw new Error(`unexpected request ${url}`)
     }))
 
-    render(<EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={() => undefined} />)
+    const onEditorChange = vi.fn()
+    function ControlledEditor() {
+      const [currentSpace, setCurrentSpace] = useState<WorkspaceSpace>(space)
+      return <EditorSurface project={project} projectKey="terrafusion" space={currentSpace} onEditorChange={(editor, selectedPath, selectedFileRef) => {
+        onEditorChange(editor, selectedPath, selectedFileRef)
+        setCurrentSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+      }} />
+    }
+    render(<ControlledEditor />)
 
     expect(await screen.findByText("WORKSPACE_FILE_REF_STALE")).toBeTruthy()
     expect(screen.queryByText("new bytes")).toBeNull()
+    expect(screen.getByText("Saved file revision changed")).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: "Reopen current revision" }))
+
+    expect(await screen.findByDisplayValue("new bytes")).toBeTruthy()
+    expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual({ ...staleRef, observedRevision: "3".repeat(40) })
+    expect(screen.queryByText("WORKSPACE_FILE_REF_STALE")).toBeNull()
   })
 
   it("saves with the exact repository mount and revision identity used to open the tab", async () => {
