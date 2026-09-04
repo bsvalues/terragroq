@@ -50,6 +50,35 @@ describe("Workbench outcome execution authorization", () => {
       .toThrow("WORKBENCH_EXECUTION_IDEMPOTENCY_KEY_INVALID")
   })
 
+  it("carries the Project's declared repository through instead of a literal (#1015)", () => {
+    // EXECUTION_REPOSITORY_BINDING_NOT_PROPAGATED: this module already resolved the sole
+    // `primary-repo` resource and then returned the constant `bsvalues/terragroq`, so a project whose
+    // implementation lives elsewhere -- LocalOps, in bsvalues/terrafusion_os_1.0 -- could never be
+    // executed. The repository is canonical state; it is reported, not assumed.
+    const terrafusion = {
+      ...snapshot,
+      resources: [{ ...snapshot.resources[0], canonicalIdentity: "bsvalues/terrafusion_os_1.0" }],
+    }
+    const assessment = assessWorkbenchOutcomeExecution(input, terrafusion)
+    // It must clear every repository gate; whether the rest of this fixture is eligible is a
+    // separate question this case deliberately does not assert.
+    expect(assessment.reason).not.toBe("REPOSITORY_UNAVAILABLE")
+    expect(assessment.reason).not.toBe("REPOSITORY_AMBIGUOUS")
+    expect(assessment.reason).not.toBe("REPOSITORY_EXECUTION_TARGET_UNAVAILABLE")
+    if (assessment.eligible) {
+      expect(assessment.repository).toBe("bsvalues/terrafusion_os_1.0")
+      // Assessment and work contract must never disagree about where work happens.
+      expect(assessment.workContract.repository).toBe("bsvalues/terrafusion_os_1.0")
+    }
+  })
+
+  it("keeps the assessment and the work contract on the same repository", () => {
+    const assessment = assessWorkbenchOutcomeExecution(input, snapshot)
+    expect(assessment.eligible).toBe(true)
+    if (!assessment.eligible) return
+    expect(assessment.workContract.repository).toBe(assessment.repository)
+  })
+
   it("authorizes one exact tenant Project Thread outcome rooted in the sole WilliamOS primary repo", () => {
     expect(assessWorkbenchOutcomeExecution(input, snapshot)).toEqual({
       eligible: true,
@@ -176,7 +205,10 @@ describe("Workbench outcome execution authorization", () => {
       ...snapshot.resources,
       { ...snapshot.resources[0], canonicalIdentity: "bsvalues/other" },
     ] }, "REPOSITORY_AMBIGUOUS"],
-    ["TerraFusion repo", { resources: [{ ...snapshot.resources[0], canonicalIdentity: "bsvalues/terrafusion_os_1.0" }] }, "REPOSITORY_UNAVAILABLE"],
+    // TerraFusion is no longer refused here: the repository comes from the Project graph, and
+    // bsvalues/terrafusion_os_1.0 is a provisioned execution target. What still fails closed is a
+    // repository nobody has provisioned a checkout and delivery path for.
+    ["unprovisioned repo", { resources: [{ ...snapshot.resources[0], canonicalIdentity: "bsvalues/not-provisioned" }] }, "REPOSITORY_EXECUTION_TARGET_UNAVAILABLE"],
     ["wrong repo relation", { resources: [{ ...snapshot.resources[0], relationship: "secondary" }] }, "REPOSITORY_UNAVAILABLE"],
   ] as const)("fails closed for %s", (_label, override, reason) => {
     expect(assessWorkbenchOutcomeExecution(input, { ...snapshot, ...override })).toEqual({
