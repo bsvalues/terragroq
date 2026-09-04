@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  AgentSessionStrip,
   useExperienceAgentSessions,
   type ProviderNeutralAgentSessionController,
 } from "@/components/workspace-shell/agent-sessions"
@@ -48,7 +49,7 @@ function Harness() {
     worldId: "world-1",
     projectKey: "terrafusion",
   })
-  return null
+  return <AgentSessionStrip sessions={controller.sessions} />
 }
 
 function ndjson(...events: readonly Record<string, unknown>[]): Response {
@@ -138,6 +139,23 @@ afterEach(() => {
 })
 
 describe("Experience V2 repository-qualified browser dispatch", () => {
+  it("does not fabricate a repository identity for an unbound session", () => {
+    render(<AgentSessionStrip sessions={[{
+      id: "Codex:project-only",
+      role: "Builder",
+      providerLabel: "Codex",
+      assignment: "Project-only task",
+      status: "working",
+      evidence: "live agent stream",
+      truth: "live",
+      kind: "durable-session",
+      mode: "delegate",
+    }]} />)
+
+    expect(screen.getByRole("button", { name: "Builder · Codex · Project-only task" })).toBeTruthy()
+    expect(screen.queryByText("WilliamOS · Builder · Codex")).toBeNull()
+  })
+
   it("keeps two repository-qualified writer sessions live concurrently", async () => {
     const encoder = new TextEncoder()
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
@@ -152,7 +170,7 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
     let atlas!: Promise<unknown>
     act(() => {
       atlas = controller!.runAgentTurn({
-        provider: "Codex", role: "Builder", assignment: "Atlas file", prompt: "Build Atlas.",
+        provider: "Codex", role: "Builder", assignment: "Implement shared contract", prompt: "Build Atlas.",
         target: { kind: "file", path: "src/atlas.ts" }, repositoryKey: "atlas",
       })
     })
@@ -167,7 +185,7 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
     let forge!: Promise<unknown>
     act(() => {
       forge = controller!.runAgentTurn({
-        provider: "Codex", role: "Builder", assignment: "Forge file", prompt: "Build Forge.",
+        provider: "Codex", role: "Builder", assignment: "Implement shared contract", prompt: "Build Forge.",
         target: { kind: "file", path: "src/forge.ts" }, repositoryKey: "forge",
       })
     })
@@ -182,6 +200,17 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
     await waitFor(() => expect(controller!.activeSessionIds).toEqual([
       "Codex:codex-atlas-parallel", "Codex:codex-forge-parallel",
     ]))
+    const concurrentCards = screen.getAllByRole("button", { name: "Builder · Codex · Implement shared contract" })
+    const atlasCard = concurrentCards.find((card) => card.getAttribute("aria-description") === "Repository Atlas")!
+    const forgeCard = concurrentCards.find((card) => card.getAttribute("aria-description") === "Repository Forge")!
+    expect(atlasCard.getAttribute("title")).toBe("Atlas · Builder · Codex · Implement shared contract")
+    expect(forgeCard.getAttribute("title")).toBe("Forge · Builder · Codex · Implement shared contract")
+    expect(atlasCard.getAttribute("aria-description")).toBe("Repository Atlas")
+    expect(forgeCard.getAttribute("aria-description")).toBe("Repository Forge")
+    expect(within(atlasCard).getByText("Atlas")).toBeTruthy()
+    expect(within(forgeCard).getByText("Forge")).toBeTruthy()
+    expect(atlasCard.textContent).not.toMatch(/1 of 2|2 of 2/)
+    expect(forgeCard.textContent).not.toMatch(/1 of 2|2 of 2/)
 
     act(() => {
       streams.get("forge")!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Forge done." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
@@ -240,6 +269,9 @@ describe("Experience V2 repository-qualified browser dispatch", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<Harness />)
     await waitFor(() => expect(controller!.savedSessions).toHaveLength(1))
+    const restoredAtlasCard = screen.getByRole("button", { name: "Builder · Codex · src/atlas.ts" })
+    expect(restoredAtlasCard.getAttribute("title")).toBe("Atlas · Builder · Codex · src/atlas.ts")
+    expect(within(restoredAtlasCard).getByText("Atlas")).toBeTruthy()
 
     await act(async () => {
       await controller!.continueSession({
