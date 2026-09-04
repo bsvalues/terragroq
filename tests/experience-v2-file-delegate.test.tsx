@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -105,6 +106,53 @@ describe("Experience V2 exact selected-file Delegate", () => {
     const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!)).join("\n")
     expect(stored).toContain('"provider":"Claude"')
     expect(stored).toContain('"target":{"kind":"file","path":"src/app.ts"}')
+  })
+
+  it("returns object actions to the exact file after inspecting a persisted assignment", async () => {
+    const user = userEvent.setup()
+    const executionSession = {
+      id: "world-worker:world-a:1122:space-owner",
+      worldId: "world-a",
+      workOrderId: 1122,
+      assignee: "space-owner",
+      agent: "codex",
+      role: "Executor",
+      providerLabel: "codex",
+      assignment: "Prove the W2 agent workspace",
+      status: "implementing",
+      evidence: "No persisted execution evidence yet",
+      observedAt: "2026-09-04T09:02:26.470Z",
+    }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace(), spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-04T09:03:00.000Z" })
+      }
+      if (url.startsWith("/api/environment/execution?")) return Response.json({
+        worldId: "world-a", ...BOUND_SPINE, session: executionSession,
+      })
+      if (url.startsWith("/api/loom/codex/continuation")) return Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" })
+      if (url.startsWith("/api/loom/agent?")) return Response.json({ eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Response.json({ judgment: null })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    await user.click(await screen.findByRole("button", { name: /Executor · codex · Prove the W2 agent workspace/i }))
+    expect(screen.getByText("Selected agent session")).toBeTruthy()
+
+    const selectFile = screen.getByRole("button", { name: "Select other file" })
+    selectFile.focus()
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Selected file")).toBeTruthy()
+    expect(screen.getByText("· src/other.ts")).toBeTruthy()
   })
 
   it("keeps File Delegate unavailable when neither actor has exact current authority", async () => {

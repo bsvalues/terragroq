@@ -4577,7 +4577,10 @@ export function WorkspaceShell({
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
         <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={Boolean(sourceMinimizeDisabledReason)} minimizeDisabledReason={sourceMinimizeDisabledReason}>
-          <EditorSurface key={worldId ?? "unhydrated"} project={project ?? undefined} projectName={project?.name ?? "Project"} projectKey={projectKey} requestedRepositoryKey={repositoryFocusKey} space={space} onEditorChange={(editor, selectedPath, selectedFileRef) => setSpace((current) => ({ ...current, editor, selectedPath, ...(selectedFileRef !== undefined ? { selectedFileRef } : {}) }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
+          <EditorSurface key={worldId ?? "unhydrated"} project={project ?? undefined} projectName={project?.name ?? "Project"} projectKey={projectKey} requestedRepositoryKey={repositoryFocusKey} space={space} onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            setFocusedAgentId(null)
+            setSpace((current) => ({ ...current, activeWindowId: "editor", editor, selectedPath, ...(selectedFileRef !== undefined ? { selectedFileRef } : {}) }))
+          }} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
           <div className={spatial.previewHost}>
