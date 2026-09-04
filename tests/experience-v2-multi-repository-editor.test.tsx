@@ -69,6 +69,229 @@ afterEach(() => {
 })
 
 describe("Experience V2 multi-repository Source workspace", () => {
+  it("keeps one repository-qualified tab when the legacy tree reopens the same file", async () => {
+    const user = userEvent.setup()
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&projectKey=williamos") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&projectKey=williamos") {
+        return Response.json({
+          kind: "file",
+          path: "README.md",
+          content: "WilliamOS",
+          modifiedAt: "2026-09-04T00:00:00.000Z",
+          repository: {
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mountKey: "williamos:configured",
+            observedRevision: revision,
+          },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const legacyProject: WorkspaceProject = {
+      identity: "c:/hermeslab/williamos-source",
+      name: "WilliamOS",
+      repositories: [],
+    }
+    function ControlledEditor() {
+      const [space, setSpace] = useState<WorkspaceSpace>(defaultSpace())
+      return (
+        <EditorSurface
+          project={legacyProject}
+          projectKey="williamos"
+          space={space}
+          onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+          }}
+        />
+      )
+    }
+
+    render(<ControlledEditor />)
+    const treeFile = await screen.findByRole("button", { name: "README.md" })
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1))
+
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1))
+    expect(screen.getAllByRole("button", { name: "Close README.md" })).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(2)
+  })
+
+  it("resolves an unknown legacy repository before matching an identical restored path", async () => {
+    const user = userEvent.setup()
+    const restoredRef = {
+      projectIdentity: "c:/hermeslab/williamos-source",
+      repositoryResourceKey: "historical-source",
+      repositoryMountKey: "historical-source:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const resolvedRevision = "2".repeat(40)
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&projectKey=williamos") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&projectKey=williamos") {
+        return Response.json({
+          kind: "file",
+          path: "README.md",
+          content: "Current WilliamOS",
+          modifiedAt: "2026-09-04T00:00:00.000Z",
+          repository: {
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mountKey: "williamos:configured",
+            observedRevision: resolvedRevision,
+          },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const legacyProject: WorkspaceProject = {
+      identity: "c:/hermeslab/williamos-source",
+      name: "WilliamOS",
+      repositories: [],
+    }
+    const initialSpace: WorkspaceSpace = {
+      ...defaultSpace(),
+      selectedPath: null,
+      selectedFileRef: null,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md"],
+        openFileRefs: [restoredRef],
+      },
+    }
+    const onEditorChange = vi.fn()
+    function ControlledEditor() {
+      const [space, setSpace] = useState<WorkspaceSpace>(initialSpace)
+      return (
+        <EditorSurface
+          project={legacyProject}
+          projectKey="williamos"
+          space={space}
+          onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            onEditorChange(editor, selectedPath, selectedFileRef)
+            setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+          }}
+        />
+      )
+    }
+
+    render(<ControlledEditor />)
+    const treeFile = await screen.findByRole("button", { name: "README.md" })
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual({
+      ...restoredRef,
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:configured",
+      observedRevision: resolvedRevision,
+    }))
+    expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(2)
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes("path=README.md"))).toBe(true)
+  })
+
+  it("resolves a cached identity-less file after project context hydrates", async () => {
+    const user = userEvent.setup()
+    const resolvedRevision = "3".repeat(40)
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&projectKey=williamos") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&projectKey=williamos") {
+        return Response.json({
+          kind: "file",
+          path: "README.md",
+          content: "WilliamOS",
+          modifiedAt: "2026-09-04T00:00:00.000Z",
+          repository: {
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mountKey: "williamos:configured",
+            observedRevision: resolvedRevision,
+          },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const hydratedProject: WorkspaceProject = {
+      identity: "c:/hermeslab/williamos-source",
+      name: "WilliamOS",
+      repositories: [],
+    }
+    const onEditorChange = vi.fn()
+    function ControlledEditor() {
+      const [projectContext, setProjectContext] = useState<WorkspaceProject | undefined>(undefined)
+      const [space, setSpace] = useState<WorkspaceSpace>(defaultSpace())
+      return (
+        <>
+          <button type="button" onClick={() => setProjectContext(hydratedProject)}>Hydrate project</button>
+          <EditorSurface
+            project={projectContext}
+            projectName="WilliamOS"
+            projectKey="williamos"
+            space={space}
+            onEditorChange={(editor, selectedPath, selectedFileRef) => {
+              onEditorChange(editor, selectedPath, selectedFileRef)
+              setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+            }}
+          />
+        </>
+      )
+    }
+
+    render(<ControlledEditor />)
+    const treeFile = await screen.findByRole("button", { name: "README.md" })
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[2]).toBeNull())
+
+    await user.click(screen.getByRole("button", { name: "Hydrate project" }))
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual({
+      projectIdentity: hydratedProject.identity,
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:configured",
+      worktreeKey: null,
+      observedRevision: resolvedRevision,
+      path: "README.md",
+    }))
+    const persistedEditor = onEditorChange.mock.calls.at(-1)?.[0]
+    expect(persistedEditor.openFiles).toEqual(["README.md"])
+    expect(persistedEditor.openFileRefs).toEqual([{
+      projectIdentity: hydratedProject.identity,
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:configured",
+      worktreeKey: null,
+      observedRevision: resolvedRevision,
+      path: "README.md",
+    }])
+    expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "Close README.md" })).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(2)
+  })
+
   it("keeps the repository shelf compact and progressively reveals a large active root", async () => {
     const user = userEvent.setup()
     const entries = Array.from({ length: 40 }, (_, index) => ({
