@@ -1820,9 +1820,21 @@ export function AgentSessionStrip({
   className?: string
 }) {
   if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
+  const repositoryLabel = (repository: AgentSessionRepository | undefined): string | null => {
+    if (!repository) return null
+    if (repository.resourceKey === "os-1") return "OS 1.0"
+    if (repository.resourceKey === "sovereign-os") return "Sovereign OS"
+    if (repository.resourceKey === "gpt") return "GPT"
+    if (repository.resourceKey === "williamos") return "WilliamOS"
+    return repository.resourceKey
+      .split("-")
+      .filter(Boolean)
+      .map((segment) => `${segment[0]?.toUpperCase() ?? ""}${segment.slice(1)}`)
+      .join(" ")
+  }
   const identityGroups = new Map<string, ExperienceAgentSession[]>()
   for (const session of sessions) {
-    const key = `${session.kind}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
+    const key = `${session.kind}\u0000${session.repository?.resourceKey ?? ""}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
     identityGroups.set(key, [...(identityGroups.get(key) ?? []), session])
   }
   const duplicatePositions = new Map<ExperienceAgentSession, Readonly<{ index: number; total: number }>>()
@@ -1876,6 +1888,9 @@ export function AgentSessionStrip({
         </button>
       ) : null}
       {sessions.map((session) => {
+        const sessionRepositoryLabel = repositoryLabel(session.repository)
+        const identityLabel = `${session.role} · ${session.providerLabel}`
+        const repositoryQualifiedIdentity = [sessionRepositoryLabel, identityLabel].filter(Boolean).join(" · ")
         const identityDisambiguator = disambiguator(session)
         const assignmentLabel = identityDisambiguator
           ? `${session.assignment} · ${identityDisambiguator}`
@@ -1887,9 +1902,11 @@ export function AgentSessionStrip({
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
+          aria-description={sessionRepositoryLabel ? `Repository ${sessionRepositoryLabel}` : undefined}
           aria-label={session.kind === "durable-session"
-            ? `${session.role} · ${session.providerLabel} · ${accessibleAssignmentLabel}`
-            : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
+            ? `${identityLabel} · ${accessibleAssignmentLabel}`
+            : `${identityLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
+          title={`${repositoryQualifiedIdentity} · ${assignmentLabel}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
@@ -1898,8 +1915,13 @@ export function AgentSessionStrip({
             {session.role.slice(0, 1).toUpperCase()}
           </span>
           <span className="grid min-w-0 flex-1 gap-px">
+            {sessionRepositoryLabel ? (
+              <small data-agent-session-level="repository" className="truncate text-[9px] font-semibold uppercase tracking-[0.08em] text-[#a8c7a1]">
+                {sessionRepositoryLabel}
+              </small>
+            ) : null}
             <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
-              {session.role} · {session.providerLabel}
+              {identityLabel}
             </strong>
             {session.assignment ? (
               <span
