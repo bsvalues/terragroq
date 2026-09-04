@@ -497,8 +497,9 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
     const repository = repositoryForKey(project, targetRepositoryKey)
     const requestedFileRef = repository && project ? workspaceFileRef(project, repository, path) : null
     const currentOpen = openFilesForSpace(space, project)
-    const existingOpen = currentOpen.find((open) => open.path === path
-      && (targetRepositoryKey === null || open.repositoryKey === targetRepositoryKey))
+    const existingOpen = targetRepositoryKey === null
+      ? null
+      : currentOpen.find((open) => open.path === path && open.repositoryKey === targetRepositoryKey)
     const key = existingOpen?.key
       ?? (requestedFileRef ? canonicalWorkspaceObjectKey(requestedFileRef) : path)
     let resolvedKey = key

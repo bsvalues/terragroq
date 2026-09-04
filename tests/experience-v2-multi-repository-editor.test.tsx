@@ -124,7 +124,87 @@ describe("Experience V2 multi-repository Source workspace", () => {
 
     await waitFor(() => expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(1))
     expect(screen.getAllByRole("button", { name: "Close README.md" })).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).includes("path=README.md"))).toHaveLength(2)
+  })
+
+  it("resolves an unknown legacy repository before matching an identical restored path", async () => {
+    const user = userEvent.setup()
+    const restoredRef = {
+      projectIdentity: "c:/hermeslab/williamos-source",
+      repositoryResourceKey: "historical-source",
+      repositoryMountKey: "historical-source:configured",
+      worktreeKey: null,
+      observedRevision: revision,
+      path: "README.md",
+    }
+    const resolvedRevision = "2".repeat(40)
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/loom/files?path=&projectKey=williamos") {
+        return Response.json({ kind: "directory", entries: [{ name: "README.md", path: "README.md", directory: false }] })
+      }
+      if (url === "/api/loom/files?path=README.md&projectKey=williamos") {
+        return Response.json({
+          kind: "file",
+          path: "README.md",
+          content: "Current WilliamOS",
+          modifiedAt: "2026-09-04T00:00:00.000Z",
+          repository: {
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mountKey: "williamos:configured",
+            observedRevision: resolvedRevision,
+          },
+        })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const legacyProject: WorkspaceProject = {
+      identity: "c:/hermeslab/williamos-source",
+      name: "WilliamOS",
+      repositories: [],
+    }
+    const initialSpace: WorkspaceSpace = {
+      ...defaultSpace(),
+      selectedPath: null,
+      selectedFileRef: null,
+      editor: {
+        ...defaultSpace().editor,
+        openFiles: ["README.md"],
+        openFileRefs: [restoredRef],
+      },
+    }
+    const onEditorChange = vi.fn()
+    function ControlledEditor() {
+      const [space, setSpace] = useState<WorkspaceSpace>(initialSpace)
+      return (
+        <EditorSurface
+          project={legacyProject}
+          projectKey="williamos"
+          space={space}
+          onEditorChange={(editor, selectedPath, selectedFileRef) => {
+            onEditorChange(editor, selectedPath, selectedFileRef)
+            setSpace((current) => ({ ...current, editor, selectedPath, selectedFileRef: selectedFileRef ?? null }))
+          }}
+        />
+      )
+    }
+
+    render(<ControlledEditor />)
+    const treeFile = await screen.findByRole("button", { name: "README.md" })
+    treeFile.focus()
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(onEditorChange.mock.calls.at(-1)?.[2]).toEqual({
+      ...restoredRef,
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:configured",
+      observedRevision: resolvedRevision,
+    }))
+    expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(2)
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes("path=README.md"))).toBe(true)
   })
 
   it("keeps the repository shelf compact and progressively reveals a large active root", async () => {
