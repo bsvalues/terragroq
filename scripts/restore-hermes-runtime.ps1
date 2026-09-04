@@ -117,8 +117,19 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   throw "Rollback is incomplete: $manifestPath is missing"
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.version -ne 3 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+$manifestVersion = [int]$manifest.version
+if ($manifestVersion -notin @(3, 4) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
+}
+
+function Get-PhysicalVolumeIdentity {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+  $volumes = @(Get-Volume -FilePath $resolved -ErrorAction Stop)
+  if ($volumes.Count -ne 1 -or -not $volumes[0].UniqueId) {
+    throw "Cannot prove the physical volume identity for '$resolved'"
+  }
+  return [string]$volumes[0].UniqueId
 }
 $expectedRollbackFiles = @(
   "server.js",
@@ -127,6 +138,7 @@ $expectedRollbackFiles = @(
   "scripts\hermes-https-proxy.mjs",
   "scripts\fabric\resolve-authority-registry-url.mjs"
 )
+if ($manifestVersion -ge 4) { $expectedRollbackFiles += "pnpm-lock.yaml" }
 $manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
   throw "Rollback manifest does not name the exact runtime file set"
@@ -159,6 +171,18 @@ if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartR
 }
 Assert-LauncherMutationAccess -TargetPath $LiveStartTarget -WillBePresent ([bool]$manifest.liveStart.wasPresent)
 
+$v4ModuleEntry = @()
+if ($manifestVersion -ge 4 -and [bool]$manifest.withDependencies) {
+  $v4ModuleEntry = @($manifest.directories | Where-Object { $_.path -eq "node_modules" })
+  if ($v4ModuleEntry.Count -ne 1) { throw "Rollback manifest has no unique node_modules transfer record" }
+  if ([bool]$v4ModuleEntry[0].wasPresent) {
+    $rollbackModules = Join-Path $RollbackRoot "node_modules"
+    if ((Get-PhysicalVolumeIdentity -Path $rollbackModules) -ne (Get-PhysicalVolumeIdentity -Path $Runtime)) {
+      throw "The rollback dependency tree and runtime are on different physical volumes; refusing to remove or replace the running graph"
+    }
+  }
+}
+
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
@@ -167,10 +191,11 @@ Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $
 Start-Sleep -Seconds 2
 
 foreach ($entry in $manifest.directories) {
+  if ($manifestVersion -ge 4 -and $entry.path -eq "node_modules") { continue }
   $source = Join-Path $RollbackRoot $entry.path
   $target = Join-Path $Runtime $entry.path
   if ($entry.wasPresent) {
-    $null = robocopy $source $target /MIR /NFL /NDL /NJH /NJS /NP
+    $null = robocopy $source $target /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { throw "rollback failed copying $($entry.path) (exit $LASTEXITCODE)" }
   } elseif (Test-Path -LiteralPath $target) {
     Remove-Item -LiteralPath $target -Recurse -Force
@@ -185,6 +210,26 @@ foreach ($entry in $manifest.files) {
     Copy-Item -LiteralPath $source -Destination $target -Force
   } elseif (Test-Path -LiteralPath $target) {
     Remove-Item -LiteralPath $target -Force
+  }
+}
+if ($manifestVersion -ge 4 -and [bool]$manifest.withDependencies) {
+  $runtimeModules = Join-Path $Runtime "node_modules"
+  $heldModules = Join-Path (Split-Path -Parent $Runtime) (".williamos-rollback-current-{0}" -f [guid]::NewGuid().ToString("N"))
+  if (Test-Path -LiteralPath $runtimeModules -PathType Container) {
+    Move-Item -LiteralPath $runtimeModules -Destination $heldModules
+  }
+  try {
+    if ([bool]$v4ModuleEntry[0].wasPresent) {
+      Move-Item -LiteralPath (Join-Path $RollbackRoot "node_modules") -Destination $runtimeModules
+    }
+  } catch {
+    if ((Test-Path -LiteralPath $heldModules -PathType Container) -and -not (Test-Path -LiteralPath $runtimeModules)) {
+      Move-Item -LiteralPath $heldModules -Destination $runtimeModules
+    }
+    throw
+  }
+  if (Test-Path -LiteralPath $heldModules -PathType Container) {
+    Remove-Item -LiteralPath $heldModules -Recurse -Force
   }
 }
 if ($manifest.liveStart.wasPresent) {
