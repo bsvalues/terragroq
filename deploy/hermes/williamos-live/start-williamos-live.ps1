@@ -70,6 +70,9 @@ param(
   [int]$Port = 3100,
   [string]$BindHost = "127.0.0.1",
   [string]$FabricRoot,
+  # Existing HERMES trust root for the disposable Preview TLS endpoint. Node reads this only at
+  # process start through NODE_EXTRA_CA_CERTS; it is never a certificate-verification bypass.
+  [string]$WorkspaceAppCaPath = "C:\ProgramData\WilliamOS\williamos-preview-root-ca.pem",
   # The TerraFusion workspace the cockpit edits. Declared in .env.local; this legacy-named switch overrides it when a
   # deployment needs to say so explicitly. Never defaulted to a literal here -- see the header.
   [string]$ProjectRoot
@@ -344,6 +347,19 @@ if ($declaredWorkspaceAppUrl) {
   $env:WILLIAMOS_WORKSPACE_APP_URL = $declaredWorkspaceAppUrl
 } else {
   Remove-Item -Path "Env:WILLIAMOS_WORKSPACE_APP_URL" -ErrorAction SilentlyContinue
+}
+# Server-side Preview admission fetches the configured application before any browser can frame it.
+# HERMES serves that disposable runtime with the already-provisioned local Preview CA. Windows trusts
+# it, but Node does not consult the Windows certificate store, so explicitly add that one CA to Node's
+# normal trust set. Never disable TLS verification, and never allow an inherited CA path to survive
+# when the configured Preview is not HTTPS.
+if ($declaredWorkspaceAppUrl -match '^https://') {
+  if (-not (Test-Path -LiteralPath $WorkspaceAppCaPath -PathType Leaf)) {
+    Deny-Boot "WORKSPACE_APP_CA_MISSING" "the HTTPS Preview trust root '$WorkspaceAppCaPath' is missing. WilliamOS cannot truthfully admit the configured Preview without verifying its certificate."
+  }
+  $env:NODE_EXTRA_CA_CERTS = (Resolve-Path -LiteralPath $WorkspaceAppCaPath).ProviderPath
+} else {
+  Remove-Item -Path "Env:NODE_EXTRA_CA_CERTS" -ErrorAction SilentlyContinue
 }
 foreach ($mount in $verifiedSecondaryRepositoryMounts) {
   Set-Item -Path "Env:$($mount.Environment)" -Value $mount.ResolvedRoot
