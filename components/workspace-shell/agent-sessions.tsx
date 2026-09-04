@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
@@ -1819,6 +1819,7 @@ export function AgentSessionStrip({
   onSelect?: (session: ExperienceAgentSession) => void
   className?: string
 }) {
+  const stripIdentity = useId().replaceAll(":", "")
   if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
   const repositoryLabel = (repository: AgentSessionRepository | undefined): string | null => {
     if (!repository) return null
@@ -1889,6 +1890,9 @@ export function AgentSessionStrip({
       ) : null}
       {sessions.map((session) => {
         const sessionRepositoryLabel = repositoryLabel(session.repository)
+        const repositoryDescriptionId = sessionRepositoryLabel
+          ? `agent-session-repository-${stripIdentity}-${encodeURIComponent(session.id)}`
+          : undefined
         const identityLabel = `${session.role} · ${session.providerLabel}`
         const repositoryQualifiedIdentity = [sessionRepositoryLabel, identityLabel].filter(Boolean).join(" · ")
         const identityDisambiguator = disambiguator(session)
@@ -1902,7 +1906,7 @@ export function AgentSessionStrip({
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
-          aria-description={sessionRepositoryLabel ? `Repository ${sessionRepositoryLabel}` : undefined}
+          aria-describedby={repositoryDescriptionId}
           aria-label={session.kind === "durable-session"
             ? `${identityLabel} · ${accessibleAssignmentLabel}`
             : `${identityLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
@@ -1916,7 +1920,7 @@ export function AgentSessionStrip({
           </span>
           <span className="grid min-w-0 flex-1 gap-px">
             {sessionRepositoryLabel ? (
-              <small data-agent-session-level="repository" className="truncate text-[9px] font-semibold uppercase tracking-[0.08em] text-[#a8c7a1]">
+              <small id={repositoryDescriptionId} data-agent-session-level="repository" className="truncate text-[9px] font-semibold uppercase tracking-[0.08em] text-[#a8c7a1]">
                 {sessionRepositoryLabel}
               </small>
             ) : null}
