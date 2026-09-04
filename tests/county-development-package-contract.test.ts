@@ -19,9 +19,14 @@ describe("County Development package contract", () => {
       startupPath: "/device-bootstrap",
     })
     expect(JSON.stringify(county)).not.toContain("192.168.88.9")
-    expect(countyTauri.identifier).toBe("com.williamos.cockpit.county-development")
-    expect(countyTauri.app.security.capabilities).toEqual(["county-development-cockpit"])
-    expect(countyTauri.app.security.csp).toContain("navigate-to http://127.0.0.1:3200")
+    expect(countyTauri.identifier).toBe("com.williamos.cockpit.county-development");
+    expect(countyTauri.app.security.capabilities).toEqual(["county-development-cockpit"]);
+    expect(countyTauri.app.security.csp).toContain("navigate-to http://127.0.0.1:3200");
+    // tauri-cli merges this overlay into tauri.conf.json with an RFC 7386 merge patch. The base
+    // config pins {"type":"downloadBootstrapper","silent":true}, so the overlay must null out
+    // "silent" — a bare {"type":"skip"} survives the merge as {"type":"skip","silent":true},
+    // which is invalid under the webviewInstallMode oneOf schema and aborts the native build.
+    expect(countyTauri.bundle.windows.webviewInstallMode).toEqual({ type: "skip", silent: null });
     expect(countyCapability).toMatchObject({
       identifier: "county-development-cockpit",
       windows: ["main"],

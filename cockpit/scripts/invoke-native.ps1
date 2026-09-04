@@ -60,6 +60,34 @@ if (-not $mingwBin) {
 # dependency.
 $env:PATH = "$mingwBin;$env:PATH"
 
+# tauri-winres compiles the native icon/version resource through embed-resource, which launches a
+# bare "windres" from PATH on the GNU target. The MinGW directory selected above ships gcc and
+# dlltool but not always windres (GitHub's Windows image splits the two), so resolve windres from
+# the known MinGW layouts independently and add its directory to PATH for cargo and every build
+# script. Fail fast with the exact missing tool instead of the embed-resource NotAttempted panic.
+$windresCandidates = [System.Collections.Generic.List[string]]::new()
+$windresCandidates.Add($mingwBin)
+$windresCandidates.Add("C:\msys64\mingw64\bin")
+$windresCandidates.Add("C:\mingw64\bin")
+$discoveredWindres = Get-Command windres.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($discoveredWindres -and $discoveredWindres.Source) {
+  $windresCandidates.Add((Split-Path -Parent $discoveredWindres.Source))
+}
+$windresBin = $null
+foreach ($candidate in $windresCandidates | Where-Object { $_ } | Select-Object -Unique) {
+  if (Test-Path -LiteralPath (Join-Path $candidate "windres.exe") -PathType Leaf) {
+    $windresBin = (Resolve-Path -LiteralPath $candidate).Path
+    break
+  }
+}
+if (-not $windresBin) {
+  $checkedWindres = ($windresCandidates | Where-Object { $_ } | Select-Object -Unique) -join ", "
+  throw "The pinned GNU native build requires windres.exe for resource compilation. Checked: $checkedWindres"
+}
+if ($windresBin -ne $mingwBin) {
+  $env:PATH = "$windresBin;$env:PATH"
+}
+
 $manifest = Join-Path $cockpitRoot "src-tauri\Cargo.toml"
 # Staging reads the exact loader from Cargo's lockfile-pinned registry source. A fresh checkout has no
 # registry source yet, so populate it before staging instead of requiring an undocumented manual

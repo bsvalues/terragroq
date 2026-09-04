@@ -47,14 +47,25 @@ describe("the reproducible WilliamOS Cockpit native build", () => {
   })
 
   it("provides an installed x64 MinGW compiler and dlltool to every child process", () => {
-    expect(invoke).toContain("WILLIAMOS_MINGW_BIN")
-    expect(invoke).toContain('C:\\msys64\\mingw64\\bin')
-    expect(invoke).toContain('C:\\mingw64\\bin')
-    expect(invoke).toContain("Get-Command dlltool.exe")
-    expect(invoke).toContain('Join-Path $candidate "dlltool.exe"')
-    expect(invoke).toContain('Join-Path $candidate "gcc.exe"')
-    expect(invoke).toMatch(/\$env:PATH\s*=\s*"\$mingwBin;/)
-  })
+    expect(invoke).toContain("WILLIAMOS_MINGW_BIN");
+    expect(invoke).toContain('C:\\msys64\\mingw64\\bin');
+    expect(invoke).toContain('C:\\mingw64\\bin');
+    expect(invoke).toContain("Get-Command dlltool.exe");
+    expect(invoke).toContain('Join-Path $candidate "dlltool.exe"');
+    expect(invoke).toContain('Join-Path $candidate "gcc.exe"');
+    expect(invoke).toMatch(/\$env:PATH\s*=\s*"\$mingwBin;/);
+  });
+
+  it("resolves windres for GNU resource compilation before invoking cargo", () => {
+    expect(invoke).toContain("windres.exe");
+    expect(invoke).toContain('Get-Command windres.exe');
+    expect(invoke).toContain('Join-Path $candidate "windres.exe"');
+    expect(invoke).toContain("requires windres.exe for resource compilation");
+    const windresIndex = invoke.indexOf("windres.exe");
+    const fetchIndex = invoke.indexOf("cargo fetch");
+    expect(windresIndex).toBeGreaterThan(-1);
+    expect(windresIndex).toBeLessThan(fetchIndex);
+  });
 
   it("takes the x64 loader only from the exact crate version pinned in Cargo.lock", () => {
     expect(cargoLock).toMatch(/name = "webview2-com-sys"\r?\nversion = "0\.38\.2"/)
