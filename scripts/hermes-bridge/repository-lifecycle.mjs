@@ -1176,6 +1176,7 @@ export function createRepositoryLifecycle(options) {
         String(review.state).toUpperCase() === "APPROVED"
           || String(review.state).toUpperCase() === "COMMENTED")
     const rateLimitedCodeRabbitContexts = new Set()
+    const skippedReviewContexts = new Set()
     if (checks.some((check) => /coderabbit/i.test(checkName(check)))) {
       const statusResult = await run("gh", ["api", `repos/${repository}/commits/${pr.headRefOid}/status`])
       const status = parseJson(statusResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
@@ -1186,6 +1187,14 @@ export function createRepositoryLifecycle(options) {
             && String(entry?.description ?? "").trim().toLowerCase() === "review rate limited") {
             rateLimitedCodeRabbitContexts.add(context.toLowerCase())
           }
+          // A SUCCESS commit status whose own description states no review occurred is not
+          // independent-review evidence. The status API is the authoritative source for the
+          // review integration's own description of what it did.
+          if (/coderabbit/i.test(context)
+            && /\breview skipped\b|\bskipped\b.*\breview\b|no review performed|review unavailable/i
+              .test(String(entry?.description ?? ""))) {
+            skippedReviewContexts.add(context.toLowerCase())
+          }
         }
       }
     }
@@ -1194,7 +1203,8 @@ export function createRepositoryLifecycle(options) {
       || (hasExactHeadCodexCleanReview && unresolved === 0 && codexReviewFindings.length === 0)
     const hasCodeRabbitReview = checks.some((check) =>
       /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
-        && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
+        && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
+        && !skippedReviewContexts.has(checkName(check).toLowerCase()))
     const effectiveCheckState = (check) => {
       const rateLimited = rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase())
       if (rateLimited) return hasExactHeadReview ? "SUCCESS" : "PENDING"
