@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
 
@@ -6,12 +7,15 @@ import { DEVICE_AUTH_HEADER, validateDeviceMutationOrigin } from "@/lib/device-a
 import {
   DEVICE_HEADER,
   HERMES_HTTPS_HOST,
+  HERMES_HTTPS_LISTEN_HOSTS,
   HERMES_HTTPS_ORIGIN,
+  HERMES_HTTPS_OVERLAY_HOST,
   HERMES_HTTPS_PORT,
   HERMES_UPSTREAM_ORIGIN,
   buildDownstreamHeaders,
   buildTlsServerOptions,
   buildUpstreamHeaders,
+  createHermesHttpsProxy,
   verifiedDeviceName,
 } from "@/scripts/hermes-https-proxy.mjs"
 
@@ -41,11 +45,27 @@ async function parseRawRequestHeaders(requestText: string) {
 }
 
 describe("HERMES HTTPS proxy boundary", () => {
-  it("is fixed to the approved HERMES listener and loopback-only upstream", () => {
-    expect(HERMES_HTTPS_ORIGIN).toBe("https://192.168.88.9:3443")
+  it("keeps williamos.lan as the canonical origin and never the raw overlay IP", () => {
+    expect(HERMES_HTTPS_ORIGIN).toBe("https://williamos.lan:3443")
+    expect(HERMES_HTTPS_ORIGIN).not.toContain(HERMES_HTTPS_OVERLAY_HOST)
     expect(HERMES_HTTPS_HOST).toBe("192.168.88.9")
     expect(HERMES_HTTPS_PORT).toBe(3443)
     expect(HERMES_UPSTREAM_ORIGIN).toBe("http://127.0.0.1:3100")
+  })
+
+  it("declares exactly the LAN and overlay listener addresses, no wildcard bind", () => {
+    expect(HERMES_HTTPS_LISTEN_HOSTS).toEqual(["192.168.88.9", "100.97.194.84"])
+    expect(HERMES_HTTPS_LISTEN_HOSTS).not.toContain("0.0.0.0")
+    expect(Object.isFrozen(HERMES_HTTPS_LISTEN_HOSTS)).toBe(true)
+  })
+
+  it("builds every listener from the same TLS options and proxy handler factory", () => {
+    const source = fs.readFileSync(new URL("../scripts/hermes-https-proxy.mjs", import.meta.url), "utf8")
+    const mainBody = source.slice(source.indexOf("async function main"))
+    const instances = mainBody.match(/createHermesHttpsProxy\(tlsMaterial\)/g) ?? []
+    expect(instances.length).toBe(1) // single factory call inside the per-host map
+    expect(mainBody).toContain("HERMES_HTTPS_LISTEN_HOSTS.map")
+    expect(mainBody).not.toMatch(/server\.listen\(HERMES_HTTPS_PORT,\s*server/)
   })
 
   it("removes hop-by-hop headers and records the exact HTTPS forwarding boundary", () => {
