@@ -1338,6 +1338,44 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("does not treat a successful CodeRabbit status that reports a skipped review as evidence", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SUCCESS" },
+          { context: "Vercel", state: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "success", description: "Review skipped: manual review required for this OSS repository" }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false, checksGreen: true,
+    })
+  })
+
+  it("still accepts a successful CodeRabbit check whose status reports a completed review", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "CodeRabbit", state: "SUCCESS" },
+          { context: "Vercel", state: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api repos/bsvalues/terragroq/commits/": () => ({ code: 0, stdout: JSON.stringify({
+        statuses: [{ context: "CodeRabbit", state: "success", description: "Review completed" }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: true, checksGreen: true,
+    })
+  })
+
   it("does not treat a skipped CodeRabbit check as review evidence", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
