@@ -2,7 +2,7 @@
 
 This package is a thin Windows Tauri shell for the authenticated WilliamOS UI at the exact HERMES origin in `cockpit.config.json`. The remote UI owns sign-in, device enrollment, device-session establishment, and every governed operation.
 
-The accepted origin is the TLS proxy at `https://192.168.88.9:3443`, which forwards only to the HERMES-local Next.js listener at `127.0.0.1:3100`. The issuing certificate must be trusted by the device before installation proof.
+The accepted origin is the TLS proxy at `https://williamos.lan:3443`, which forwards only to the HERMES-local Next.js listener at `127.0.0.1:3100`. The issuing certificate must be trusted by the device before installation proof.
 
 The native surface is intentionally limited to four commands:
 

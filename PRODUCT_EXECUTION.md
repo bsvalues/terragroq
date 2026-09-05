@@ -45,10 +45,13 @@ The purpose is a WilliamOS interface the owner can actually use.
 
 The owner-facing WilliamOS product has two client installations:
 
-- **HERMES installation:** the running anchor. HERMES hosts the authoritative WilliamOS service at
-  `https://192.168.88.9:3443` and a local native WilliamOS Cockpit connected to that origin.
+- **HERMES installation:** the running anchor. HERMES hosts the authoritative WilliamOS service,
+  reachable by every owner-facing client at the canonical origin `https://williamos.lan:3443`
+  (the HERMES-local listener bind is a service-side detail), plus a local native WilliamOS Cockpit
+  connected to that same canonical origin.
 - **OMEN installation:** the second owner-facing WilliamOS client and the active UI/UX development
-  cockpit. It consumes the same HERMES origin; OMEN does not replace HERMES as the running anchor.
+  cockpit. It consumes the same canonical HERMES origin on-LAN and off-LAN (the name resolves to
+  the Tailscale overlay route when remote); OMEN does not replace HERMES as the running anchor.
 
 This is one product with two installed client surfaces, not two competing control planes. HERMES is
 the service, persistence, and runtime authority unless a later explicit owner decision changes that
