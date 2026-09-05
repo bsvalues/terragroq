@@ -534,6 +534,34 @@ export async function resolveWilliamOsWorkspaceBinding(
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }
 
+  let branch: string | null = null
+  if (dependencies.readGitBranch) {
+    try {
+      branch = (await dependencies.readGitBranch(checkout.binding.workspaceRoot)).trim() || null
+    } catch {
+      // A detached checkout still has an exact verified revision.
+    }
+  }
+  const repository: WorkspaceRepositoryMountView = {
+    ...(row.repositoryResourceId ? { repositoryResourceId: row.repositoryResourceId } : {}),
+    key: definition.key,
+    identity: definition.identity,
+    label: definition.label,
+    role: definition.role,
+    suite: definition.suite,
+    previewSource: definition.previewSource,
+    defaultRepository: definition.defaultRepository,
+    mount: {
+      key: definition.mountKey,
+      configured: true,
+      verified: revision.revision !== null,
+      branch,
+      revision: revision.revision,
+      refusal: revision.revision === null ? "WORKSPACE_REVISION_UNAVAILABLE" : null,
+    },
+  }
+  const project = workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName)
+
   return {
     ok: true,
     binding: {
@@ -550,7 +578,7 @@ export async function resolveWilliamOsWorkspaceBinding(
       observedRevision: revision.revision,
       ...checkout.binding,
       workspaceAppUrl: null,
-      project: workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName),
+      project: { ...project, repositories: [repository] },
     },
   }
 }
