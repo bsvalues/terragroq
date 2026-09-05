@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "@/components/ui/sonner"
+import { DeploymentProfileBanner } from "@/components/deployment/deployment-profile-banner"
+import { getDeploymentStatus } from "@/lib/deployment/profile"
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,9 +30,12 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const deployment = getDeploymentStatus()
+
   return (
     <html lang="en" className="bg-background">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <DeploymentProfileBanner status={deployment} />
         {children}
         <Toaster theme="dark" />
       </body>

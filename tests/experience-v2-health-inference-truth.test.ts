@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const harness = vi.hoisted(() => ({
   getAuthReadiness: vi.fn(),
@@ -7,11 +7,11 @@ const harness = vi.hoisted(() => ({
 vi.mock("@/lib/auth-readiness", () => ({ getAuthReadiness: harness.getAuthReadiness }))
 vi.mock("@/lib/build-provenance", () => ({ getBuildProvenance: () => ({ commit: "test" }) }))
 vi.mock("@/lib/ai/config", () => ({
-  CHAT_MODEL: "missing-default",
+  CHAT_MODEL: "missing-default:latest",
   EMBEDDING_DIMENSIONS: 1024,
   INFERENCE_BASE_URL: "http://127.0.0.1:11434/v1",
   RUNTIME: {
-    chatModel: "missing-default",
+    chatModel: "missing-default:latest",
     embeddingModel: "nomic-embed-text:latest",
     inferenceBaseUrl: "http://127.0.0.1:11434/v1",
     gateway: "williamos-openai-compatible",
@@ -20,7 +20,53 @@ vi.mock("@/lib/ai/config", () => ({
 
 import { GET } from "@/app/api/health/route"
 
+const deploymentEnvKeys = [
+  "WILLIAMOS_DEPLOYMENT_PROFILE",
+  "WILLIAMOS_DEPLOYMENT_ID",
+  "WILLIAMOS_OWNER_EMAIL",
+  "BETTER_AUTH_URL",
+  "DATABASE_URL",
+  "WILLIAMOS_AI_BASE_URL",
+  "WILLIAMOS_AI_MODEL",
+  "WILLIAMOS_EMBEDDING_MODEL",
+  "WILLIAMOS_WORKSPACE_APP_URL",
+  "ANTHROPIC_API_KEY",
+  "GROQ_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "AI_GATEWAY_API_KEY",
+  "VERCEL_AI_GATEWAY_API_KEY",
+] as const
+const originalDeploymentEnv = new Map(
+  deploymentEnvKeys.map((key) => [key, process.env[key]] as const),
+)
+
+function restoreDeploymentEnv() {
+  for (const key of deploymentEnvKeys) {
+    const original = originalDeploymentEnv.get(key)
+    if (original === undefined) delete process.env[key]
+    else process.env[key] = original
+  }
+}
+
+function configureCounty() {
+  Object.assign(process.env, {
+    WILLIAMOS_DEPLOYMENT_PROFILE: "county-development",
+    WILLIAMOS_DEPLOYMENT_ID: "benton-county-development-test",
+    WILLIAMOS_OWNER_EMAIL: "owner@example.gov",
+    BETTER_AUTH_URL: "http://127.0.0.1:3200",
+    DATABASE_URL: "postgresql://user:secret@127.0.0.1:15434/williamos?sslmode=disable",
+    WILLIAMOS_AI_BASE_URL: "http://127.0.0.1:11434/v1",
+    WILLIAMOS_AI_MODEL: "missing-default:latest",
+    WILLIAMOS_EMBEDDING_MODEL: "nomic-embed-text:latest",
+  })
+  for (const key of deploymentEnvKeys.filter((key) => key.endsWith("API_KEY"))) {
+    delete process.env[key]
+  }
+}
+
 beforeEach(() => {
+  restoreDeploymentEnv()
   harness.getAuthReadiness.mockReset().mockResolvedValue({
     ready: true,
     databaseReady: true,
@@ -28,6 +74,11 @@ beforeEach(() => {
     checks: { databaseConnectivity: { ok: true } },
     issues: [],
   })
+  vi.unstubAllGlobals()
+})
+
+afterEach(() => {
+  restoreDeploymentEnv()
   vi.unstubAllGlobals()
 })
 
@@ -41,7 +92,12 @@ describe("GET /api/health inference truth", () => {
     const response = await GET()
     const body = await response.json()
 
-    expect(body.checks.runtime).toMatchObject({ ok: true, chatModel: "qwen2.5:7b-instruct" })
+    expect(body.checks.runtime).toMatchObject({
+      ok: true,
+      chatModel: "qwen2.5:7b-instruct",
+      embeddingModel: "nomic-embed-text:latest",
+      embeddingResolvedModel: "nomic-embed-text:latest",
+    })
   })
 
   it("marks runtime unavailable instead of advertising the configured model as executable", async () => {
@@ -50,6 +106,51 @@ describe("GET /api/health inference truth", () => {
     const response = await GET()
     const body = await response.json()
 
-    expect(body.checks.runtime).toMatchObject({ ok: false, chatModel: null, detail: "LOCAL_INFERENCE_UNAVAILABLE" })
+    expect(body.checks.runtime).toMatchObject({
+      ok: false,
+      chatModel: null,
+      embeddingResolvedModel: null,
+      detail: "LOCAL_INFERENCE_UNAVAILABLE",
+    })
+  })
+
+  it("degrades County Development when Ollama falls back to a different installed model", async () => {
+    configureCounty()
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ models: [
+      { name: "nomic-embed-text:latest", size: 274_302_450 },
+      { name: "qwen2.5:7b-instruct", size: 4_683_087_332 },
+    ] })))
+
+    const response = await GET()
+    const body = await response.json()
+
+    expect(response.status).toBe(503)
+    expect(body.deployment).toMatchObject({ profile: "county-development", valid: true })
+    expect(body.checks.runtime).toMatchObject({
+      ok: false,
+      chatModel: "qwen2.5:7b-instruct",
+      embeddingResolvedModel: "nomic-embed-text:latest",
+      detail: "Configured County model missing-default:latest is not installed.",
+    })
+  })
+
+  it("degrades County Development when the exact embedding model is missing", async () => {
+    configureCounty()
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ models: [
+      { name: "missing-default:latest", size: 1_500_000_000 },
+      { name: "other-embed:latest", size: 274_302_450 },
+    ] })))
+
+    const response = await GET()
+    const body = await response.json()
+
+    expect(response.status).toBe(503)
+    expect(body.checks.runtime).toMatchObject({
+      ok: false,
+      chatModel: "missing-default:latest",
+      embeddingModel: "nomic-embed-text:latest",
+      embeddingResolvedModel: null,
+      detail: "Configured County embedding model nomic-embed-text:latest is not installed.",
+    })
   })
 })
