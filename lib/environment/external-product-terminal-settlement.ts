@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm"
 import { db } from "@/lib/db"
 import {
   authorityGrant,
+  decision,
   eventLog,
   evidenceRecord,
   governanceEvent,
@@ -125,9 +126,11 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       fail("PRODUCT_TERMINAL_CONTEXT_STALE")
     }
     const workOrderId = Number(binding.workOrderId)
+    const approvalDecisionId = Number(binding.approvalDecisionId)
     const implementationGrantId = Number(binding.implementationGrantId)
     const queueGrantId = Number(binding.queueGrantId)
     if (!Number.isSafeInteger(workOrderId) || workOrderId <= 0
+      || !Number.isSafeInteger(approvalDecisionId) || approvalDecisionId <= 0
       || !Number.isSafeInteger(implementationGrantId) || implementationGrantId <= 0
       || !Number.isSafeInteger(queueGrantId) || queueGrantId <= 0) {
       fail("PRODUCT_TERMINAL_CONTEXT_STALE")
@@ -143,6 +146,9 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       )).limit(1).for("update")
     const workRows = await transaction.select().from(workOrder).where(and(
         eq(workOrder.userId, input.userId), eq(workOrder.id, workOrderId),
+      )).limit(1).for("update")
+    const decisionRows = await transaction.select().from(decision).where(and(
+        eq(decision.userId, input.userId), eq(decision.id, approvalDecisionId),
       )).limit(1).for("update")
     const grantRows = await transaction.select().from(authorityGrant).where(and(
         eq(authorityGrant.userId, input.userId), eq(authorityGrant.workOrderId, workOrderId),
@@ -165,11 +171,12 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
     const world = validateWorkingWorld(JSON.parse(persistedWorld.snapshot))
     const outcome = outcomeRows[0]
     const work = workRows[0]
+    const approval = decisionRows[0]
     const persistedProject = projectRows[0]
     const resource = resourceRows[0]
     const implementationGrant = grantRows.find((grant) => grant.id === implementationGrantId)
     const queueGrant = grantRows.find((grant) => grant.id === queueGrantId)
-    if (!outcome || !work || !persistedProject || !resource || !implementationGrant || !queueGrant
+    if (!outcome || !work || !approval || !persistedProject || !resource || !implementationGrant || !queueGrant
       || world.spine.projectId !== input.projectId
       || world.spine.threadId !== binding.threadId
       || world.spine.outcomeKey !== EXPECTED_OUTCOME_KEY
@@ -177,6 +184,7 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       || outcome.activeWorkOrderId !== workOrderId
       || outcome.goalId !== Number(binding.goalId)
       || outcome.goalRef !== binding.goalRef
+      || outcome.approvalDecisionId !== approvalDecisionId
       || !exactStrings(outcome.acceptedContractIds, [ADMISSION_CONTRACT])
       || outcome.approvalState !== "approved" || outcome.approvedBy !== input.userId
       || outcome.authorityLevel !== "A2_WRITE_OWN"
@@ -192,7 +200,12 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       ))
       || outcome.acquisitionKey !== binding.acquisitionKey
       || work.ref !== binding.workOrderRef || work.status === "aborted"
+      || work.linkedDecisionId !== approvalDecisionId
       || work.authorityGrantId !== implementationGrantId
+      || approval.ref !== binding.decisionRef
+      || approval.status !== "accepted" || approval.locked !== true
+      || approval.decision !== "APPROVE" || approval.authority !== "binding"
+      || approval.owner !== input.userId || approval.scope !== EXPECTED_OUTCOME_KEY
       || implementationGrant.ref !== binding.implementationGrantRef
       || implementationGrant.grantedTo !== "codex"
       || queueGrant.ref !== binding.queueGrantRef
@@ -307,7 +320,8 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       updatedAt: at,
       version: outcome.version + 1,
     }).where(and(eq(outcomeQueueItem.userId, input.userId), eq(outcomeQueueItem.id, outcome.id)))
-    await transaction.update(authorityGrant).set({
+    const activeGrants = grantRows.filter((grant) => grant.status === "active" && grant.revokedAt === null)
+    const revokedGrants = await transaction.update(authorityGrant).set({
       status: "revoked",
       revokedAt: at,
       revokedBy: input.userId,
@@ -316,7 +330,48 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       eq(authorityGrant.userId, input.userId),
       eq(authorityGrant.workOrderId, workOrderId),
       eq(authorityGrant.status, "active"),
-    ))
+    )).returning()
+    if (revokedGrants.length !== activeGrants.length
+      || activeGrants.some((grant) => !revokedGrants.some((candidate) => candidate.id === grant.id))) {
+      fail("PRODUCT_TERMINAL_CONTEXT_STALE")
+    }
+    for (const grant of activeGrants) {
+      const revoked = revokedGrants.find((candidate) => candidate.id === grant.id)
+      if (!revoked || revoked.status !== "revoked" || revoked.revokedAt?.getTime() !== at.getTime()) {
+        fail("PRODUCT_TERMINAL_CONTEXT_STALE")
+      }
+      await transaction.insert(governanceEvent).values({
+        userId: input.userId,
+        eventType: "AUTHORITY_REVOKED",
+        entityType: "authority_grant",
+        entityId: String(grant.id),
+        actor: "williamos",
+        reason: "External product terminal proven.",
+        beforeHash: grant.contentHash,
+        afterHash: hashRecord({
+          status: "revoked",
+          revokedAt: at.toISOString(),
+          revokedBy: input.userId,
+          revokeReason: "EXTERNAL_PRODUCT_TERMINAL_PROVEN",
+        }),
+        metadata: {
+          grantRef: grant.ref,
+          outcomeKey: EXPECTED_OUTCOME_KEY,
+          workOrderId,
+          evidenceHash,
+        },
+        createdAt: at,
+      })
+      await transaction.insert(eventLog).values({
+        userId: input.userId,
+        type: "authority.revoked",
+        register: "authority",
+        refId: grant.id,
+        summary: `${grant.ref ?? `#${grant.id}`}: REVOKED — external product terminal proven`,
+        metadata: { outcomeKey: EXPECTED_OUTCOME_KEY, workOrderId, evidenceHash },
+        createdAt: at,
+      })
+    }
 
     const completedWorld = withExecution(world, {
       execution: "complete",

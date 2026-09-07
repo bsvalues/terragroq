@@ -73,9 +73,13 @@ async function seedGraph(pool: Pool, options: { revoked?: boolean; maxVersion?: 
   await pool.query(`INSERT INTO goal (id,"userId",ref,command,lane,mode,risk,authority,verdict,status,"acceptedContractIds")
     VALUES (1,'owner','GOAL-WACO','Finish WACO','external-work-order','implement','R1','A2_WRITE_OWN',
       'requires_approval','converted',ARRAY['space-external-work-order-admission.v2'])`)
+  await pool.query(`INSERT INTO decision
+    (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,locked)
+    VALUES (301,'owner','EXT-WO-DEC-WACO','Admit WACO','APPROVE','accepted','binding','owner',$1,
+      ARRAY['external-provenance-digest:${provenanceDigest}'],true)`, [outcomeKey])
   await pool.query(`INSERT INTO work_order
-    (id,"userId",ref,title,status,"authorityLevel","authorityGranted","authorityGrantId",agent,evidence)
-    VALUES (101,'owner','WO-WACO','WACO 2026','active','A2_WRITE_OWN','A2_WRITE_OWN',201,'codex',ARRAY[]::text[])`)
+    (id,"userId",ref,title,status,"authorityLevel","authorityGranted","authorityGrantId",agent,evidence,"linkedDecisionId")
+    VALUES (101,'owner','WO-WACO','WACO 2026','active','A2_WRITE_OWN','A2_WRITE_OWN',201,'codex',ARRAY[]::text[],301)`)
   await pool.query(`INSERT INTO authority_grant
     (id,"userId",ref,"workOrderId","grantedBy","grantedTo","authorityLevel",scope,"allowedActions","blockedActions",status,"revokedAt")
     VALUES
@@ -84,11 +88,11 @@ async function seedGraph(pool: Pool, options: { revoked?: boolean; maxVersion?: 
     [options.revoked ? "revoked" : "active", options.revoked ? new Date("2026-09-06T00:00:00Z") : null, outcomeKey])
   const leaseToken = hashRecord({ provenanceDigest, worldId: "world-waco", workOrderId: 101 })
   await pool.query(`INSERT INTO outcome_queue_item
-    (id,"userId","outcomeKey","goalId","goalRef",title,"acceptedContractIds","approvalState","approvedBy",
+    (id,"userId","outcomeKey","goalId","goalRef",title,"acceptedContractIds","approvalState","approvedBy","approvalDecisionId",
      "authorityState","authorityLevel","authorityGrantRef","authoritySubject","authorityAction","lifecycleState",
      "activeWorkOrderId","executionBinding","leaseHolder","leaseToken","leaseExpiresAt","fencingToken",version,"acquisitionKey")
     VALUES (76,'owner',$1,1,'GOAL-WACO','WACO 2026',ARRAY['space-external-work-order-admission.v2'],
-      'approved','owner','matched','A2_WRITE_OWN','GRANT-QUEUE','operator','outcome:execute','active',101,$2,
+      'approved','owner',301,'matched','A2_WRITE_OWN','GRANT-QUEUE','operator','outcome:execute','active',101,$2,
       'space:world-waco',$3,now() - interval '1 day',1,$4,$5)`, [
     outcomeKey, `space-external:${provenanceDigest}`, leaseToken,
     options.maxVersion ? 2147483647 : 1, `external:${provenanceDigest}`,
@@ -119,6 +123,7 @@ async function seedGraph(pool: Pool, options: { revoked?: boolean; maxVersion?: 
       goalId: 1, goalRef: "GOAL-WACO", outcomeId: 76, outcomeKey, workOrderId: 101,
       workOrderRef: "WO-WACO", source: "other",
       externalRef: "WO-TERRAFUSION-WACO-PARALLEL-EXECUTION-001", repository,
+      approvalDecisionId: 301, decisionRef: "EXT-WO-DEC-WACO",
       queueGrantId: 202, queueGrantRef: "GRANT-QUEUE",
       implementationGrantId: 201, implementationGrantRef: "GRANT-IMPLEMENTATION",
       acquisitionKey: `external:${provenanceDigest}`, provenanceDigest,
@@ -175,11 +180,13 @@ runDatabase("external product terminal real PostgreSQL settlement", { timeout: 9
         .resolves.toMatchObject({ replayed: true })
       const terminal = await fixture.query(`SELECT outcome."lifecycleState",outcome."terminalResult",work.status,
         (SELECT count(*)::int FROM evidence_record) evidence_count,
+        (SELECT count(*)::int FROM governance_event WHERE "eventType"='AUTHORITY_REVOKED') authority_events,
+        (SELECT count(*)::int FROM event_log WHERE type='authority.revoked') authority_log_entries,
         (SELECT count(*)::int FROM outcome_queue_mutation_receipt WHERE operation='space.external_product_terminal.finalize') receipt_count
         FROM outcome_queue_item outcome JOIN work_order work ON work.id=outcome."activeWorkOrderId" WHERE outcome.id=76`)
       expect(terminal.rows).toEqual([{
         lifecycleState: "completed", terminalResult: "COMPLETE", status: "closed",
-        evidence_count: 1, receipt_count: 1,
+        evidence_count: 1, authority_events: 1, authority_log_entries: 1, receipt_count: 1,
       }])
       proof = protectedProof("b".repeat(40))
       await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
@@ -217,6 +224,10 @@ runDatabase("external product terminal real PostgreSQL settlement", { timeout: 9
       const { finalizeExternalProductTerminalOutcome } = await import(
         "@/lib/environment/external-product-terminal-settlement"
       )
+      await fixture.query(`UPDATE decision SET status='rejected' WHERE id=301`)
+      await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
+        .rejects.toThrow("PRODUCT_TERMINAL_CONTEXT_STALE")
+      await fixture.query(`UPDATE decision SET status='accepted' WHERE id=301`)
       await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
         .rejects.toThrow("PRODUCT_TERMINAL_AUTHORITY_REVOKED")
       const unchanged = await fixture.query(`SELECT
