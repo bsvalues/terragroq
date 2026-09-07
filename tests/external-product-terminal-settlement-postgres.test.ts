@@ -76,7 +76,7 @@ async function seedGraph(pool: Pool, options: { revoked?: boolean; maxVersion?: 
   await pool.query(`INSERT INTO decision
     (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,locked)
     VALUES (301,'owner','EXT-WO-DEC-WACO','Admit WACO','APPROVE','accepted','binding','owner',$1,
-      ARRAY['external-provenance-digest:${provenanceDigest}'],true)`, [outcomeKey])
+      ARRAY['owner-message:authorized','external-provenance-digest:${provenanceDigest}'],true)`, [outcomeKey])
   await pool.query(`INSERT INTO work_order
     (id,"userId",ref,title,status,"authorityLevel","authorityGranted","authorityGrantId",agent,evidence,"linkedDecisionId")
     VALUES (101,'owner','WO-WACO','WACO 2026','active','A2_WRITE_OWN','A2_WRITE_OWN',201,'codex',ARRAY[]::text[],301)`)
@@ -116,6 +116,7 @@ async function seedGraph(pool: Pool, options: { revoked?: boolean; maxVersion?: 
       provenanceDigest,
       externalWorkOrder: {
         source: "other", externalRef: "WO-TERRAFUSION-WACO-PARALLEL-EXECUTION-001", repository,
+        authorityEvidence: ["owner-message:authorized"],
       },
     },
     {
@@ -228,6 +229,12 @@ runDatabase("external product terminal real PostgreSQL settlement", { timeout: 9
       await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
         .rejects.toThrow("PRODUCT_TERMINAL_CONTEXT_STALE")
       await fixture.query(`UPDATE decision SET status='accepted' WHERE id=301`)
+      await fixture.query(`UPDATE decision SET evidence=ARRAY[]::text[] WHERE id=301`)
+      await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
+        .rejects.toThrow("PRODUCT_TERMINAL_CONTEXT_STALE")
+      await fixture.query(`UPDATE decision SET evidence=ARRAY['owner-message:authorized',$1] WHERE id=301`, [
+        `external-provenance-digest:${provenanceDigest}`,
+      ])
       await expect(finalizeExternalProductTerminalOutcome({ userId: "owner", worldId: "world-waco" }))
         .rejects.toThrow("PRODUCT_TERMINAL_AUTHORITY_REVOKED")
       const unchanged = await fixture.query(`SELECT

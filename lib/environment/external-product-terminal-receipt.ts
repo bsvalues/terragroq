@@ -206,9 +206,16 @@ const protectedLoaderDependencies: ProtectedProductTerminalLoaderDependencies = 
     const remote = (await gitText(workspaceRoot, ["remote", "get-url", "origin"])).trim()
     if (normalizeRepositoryIdentity(remote) !== repository) invalid("PRODUCT_TERMINAL_PROVENANCE_INVALID")
     await gitText(workspaceRoot, ["fetch", "--no-tags", "--prune", "origin", "main"])
-    const commit = (await gitText(workspaceRoot, ["rev-parse", "refs/remotes/origin/main"])).trim()
-    if (!SHA40.test(commit)) invalid("PRODUCT_TERMINAL_PROVENANCE_INVALID")
-    return commit
+    const protectedTip = (await gitText(workspaceRoot, ["rev-parse", "refs/remotes/origin/main"])).trim()
+    if (!SHA40.test(protectedTip)) invalid("PRODUCT_TERMINAL_PROVENANCE_INVALID")
+    // Bind the proof to the immutable commit that published the catalog, not to the moving
+    // protected-main tip. An unrelated later merge must not turn the same receipt into drift.
+    const publicationCommit = (await gitText(workspaceRoot, [
+      "log", "-1", "--format=%H", protectedTip, "--", PRODUCT_TERMINAL_CATALOG_PATH,
+    ])).trim()
+    if (!SHA40.test(publicationCommit)) invalid("PRODUCT_TERMINAL_PROVENANCE_INVALID")
+    await gitText(workspaceRoot, ["merge-base", "--is-ancestor", publicationCommit, protectedTip])
+    return publicationCommit
   },
   readBlob: gitBlob,
 }

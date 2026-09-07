@@ -125,6 +125,11 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       || binding.projectId !== input.projectId) {
       fail("PRODUCT_TERMINAL_CONTEXT_STALE")
     }
+    const admissionAuthorityEvidence = Array.isArray(packet.authorityEvidence)
+      && packet.authorityEvidence.every((entry) => typeof entry === "string")
+      ? packet.authorityEvidence as string[]
+      : null
+    if (!admissionAuthorityEvidence) fail("PRODUCT_TERMINAL_CONTEXT_STALE")
     const workOrderId = Number(binding.workOrderId)
     const approvalDecisionId = Number(binding.approvalDecisionId)
     const implementationGrantId = Number(binding.implementationGrantId)
@@ -206,6 +211,10 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
       || approval.status !== "accepted" || approval.locked !== true
       || approval.decision !== "APPROVE" || approval.authority !== "binding"
       || approval.owner !== input.userId || approval.scope !== EXPECTED_OUTCOME_KEY
+      || !exactStrings(approval.evidence, [
+        ...admissionAuthorityEvidence,
+        `external-provenance-digest:${WACO_PRODUCT_TERMINAL_BINDING.provenanceDigest}`,
+      ])
       || implementationGrant.ref !== binding.implementationGrantRef
       || implementationGrant.grantedTo !== "codex"
       || queueGrant.ref !== binding.queueGrantRef
