@@ -41,7 +41,18 @@ function Invoke-CockpitProbe {
     $arguments = @('-sS', '-o', 'NUL', '-D', '-', '--max-time', '30', '--ssl-revoke-best-effort',
                    '--resolve', "williamos.lan:3443:$Address", $endpoint)
     if ($WithCertificate) { $arguments = @('--cert', $certRef) + $arguments }
-    $response = @(& $curl @arguments 2>&1 | ForEach-Object { $_.ToString() })
+    # Windows PowerShell 5.1 turns native stderr into NativeCommandError records. An unreachable LAN
+    # address is the expected OffLan control, so Stop would terminate the verifier before it can
+    # inspect the exit/status evidence or reach the overlay assertions. Capture the native stream
+    # under Continue, restore the caller's preference, and classify the result below.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $response = @(& $curl @arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $curlExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
 
     # A request that fails outright produces no HTTP status line at all. Reaching into .Matches
     # unguarded turns that into a confusing property-not-found exception several lines away from the
@@ -58,7 +69,7 @@ function Invoke-CockpitProbe {
         Status    = Get-FirstCapture -Lines $response -Pattern '^HTTP/\S+\s+(\d{3})'
         Location  = Get-FirstCapture -Lines $response -Pattern '^location:\s*(.+)$'
         HasCookie = [bool](@($response | Select-String -Pattern '^set-cookie:\s*__Secure-better-auth\.session_token=').Count)
-        Error     = Get-FirstCapture -Lines $response -Pattern '^(curl: .+)$'
+        Error     = if ($curlExit -eq 0) { '' } else { Get-FirstCapture -Lines $response -Pattern '^(?:curl\.exe\s*:\s*)?(curl: .+)$' }
     }
 }
 

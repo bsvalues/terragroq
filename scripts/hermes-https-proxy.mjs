@@ -196,6 +196,61 @@ export function createHermesHttpsProxy({ pfx, passphrase, clientCa }) {
   })
 }
 
+/**
+ * Start the required LAN listener and independently maintain the optional overlay listener.
+ *
+ * Tailscale can be absent for a few seconds during boot or reconnect with an address transition.
+ * That is a degraded remote-access state, not permission to take down the LAN cockpit. The overlay
+ * therefore retries with a fresh server while the required LAN bind still fails closed.
+ */
+export async function startHermesHttpsListeners({
+  tlsMaterial,
+  createServer = createHermesHttpsProxy,
+  scheduleRetry = (callback, delay) => setTimeout(callback, delay),
+  retryMs = 5_000,
+  writeOut = (message) => process.stdout.write(message),
+  writeErr = (message) => process.stderr.write(message),
+} = {}) {
+  if (!tlsMaterial) throw new Error("TLS_MATERIAL_REQUIRED")
+
+  const startListener = (host, { required }) => new Promise((resolve, reject) => {
+    const attempt = () => {
+      const server = createServer(tlsMaterial)
+      let listening = false
+      let retryScheduled = false
+      server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"))
+      server.on("listening", () => {
+        listening = true
+        writeOut(`HERMES_HTTPS_LISTENER_READY|HOST=${host}|PORT=${HERMES_HTTPS_PORT}\n`)
+        resolve(server)
+      })
+      server.on("error", (error) => {
+        const code = String(error?.code ?? error?.message ?? "UNKNOWN").split("|")[0]
+        if (required && !listening) {
+          reject(new Error(`REQUIRED_LISTENER_FAILED:${host}:${code}`))
+          return
+        }
+        if (required) {
+          writeErr(`HERMES_HTTPS_REQUIRED_LISTENER_LOST|HOST=${host}|CODE=${code}\n`)
+          return
+        }
+        writeErr(`HERMES_HTTPS_OVERLAY_DEGRADED|HOST=${host}|CODE=${code}|RETRY_MS=${retryMs}\n`)
+        if (!retryScheduled) {
+          retryScheduled = true
+          scheduleRetry(attempt, retryMs)
+        }
+      })
+      server.listen(HERMES_HTTPS_PORT, host)
+    }
+    attempt()
+  })
+
+  const lanServer = await startListener(HERMES_HTTPS_HOST, { required: true })
+  void startListener(HERMES_HTTPS_OVERLAY_HOST, { required: false })
+  writeOut(`HERMES_HTTPS_READY|ORIGIN=${HERMES_HTTPS_ORIGIN}|UPSTREAM=${HERMES_UPSTREAM_ORIGIN}|REQUIRED_LISTEN=${HERMES_HTTPS_HOST}\n`)
+  return { lanServer }
+}
+
 async function main() {
   const pfx = fs.readFileSync(TLS_PFX_PATH)
   const passphrase = fs.readFileSync(TLS_PASSPHRASE_PATH, "utf8").trim()
@@ -205,23 +260,7 @@ async function main() {
   try { clientCa = fs.readFileSync(TLS_CLIENT_CA_PATH) } catch { clientCa = null }
   if (passphrase.length < 32 || /[\r\n\0]/.test(passphrase)) throw new Error("TLS_PASSPHRASE_INVALID")
   const tlsMaterial = { pfx, passphrase, clientCa }
-  // Two explicit listeners on the two intended HERMES addresses (LAN + Tailscale overlay),
-  // each its own HTTPS server instance built from the same TLS options and the same proxy
-  // request handler. No 0.0.0.0 bind; the owner-facing origin remains williamos.lan.
-  const servers = HERMES_HTTPS_LISTEN_HOSTS.map((host) => {
-    const server = createHermesHttpsProxy(tlsMaterial)
-    server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"))
-    return { host, server }
-  })
-  let readyCount = 0
-  for (const { host, server } of servers) {
-    server.listen(HERMES_HTTPS_PORT, host, () => {
-      readyCount += 1
-      if (readyCount === servers.length) {
-        process.stdout.write(`HERMES_HTTPS_READY|ORIGIN=${HERMES_HTTPS_ORIGIN}|UPSTREAM=${HERMES_UPSTREAM_ORIGIN}|LISTEN=${HERMES_HTTPS_LISTEN_HOSTS.join(",")}\n`)
-      }
-    })
-  }
+  await startHermesHttpsListeners({ tlsMaterial })
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href

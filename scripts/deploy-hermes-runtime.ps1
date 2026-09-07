@@ -43,6 +43,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$HermesLanAddress = "192.168.88.9"
+$HermesOverlayAddress = "100.97.194.84"
 
 # These are product identity, not deployment knobs. The HTTPS proxy's host allow-list, forwarded
 # origin, device-auth boundary, native Cockpit capability, and HERMES certificates all name this
@@ -104,17 +106,62 @@ function Get-RunningSha {
 }
 
 function Test-HttpsCockpit {
-  param([int]$Port, [int]$TimeoutSeconds = 60)
+  param([int]$Port, [int]$TimeoutSeconds = 60, [switch]$CanonicalOverlay)
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
     try {
-      $response = Invoke-WebRequest -Uri "https://192.168.88.9:$Port/api/health" -UseBasicParsing -TimeoutSec 10
-      if ($response.StatusCode -eq 200) { return $true }
+      if ($CanonicalOverlay) {
+        $curl = "$env:SystemRoot\System32\curl.exe"
+        & $curl --fail --silent --show-error --ssl-revoke-best-effort --max-time 10 `
+          --resolve "williamos.lan:${Port}:$HermesOverlayAddress" "https://williamos.lan:$Port/api/health" | Out-Null
+        if ($LASTEXITCODE -eq 0) { return $true }
+      } else {
+        $response = Invoke-WebRequest -Uri "https://${HermesLanAddress}:$Port/api/health" -UseBasicParsing -TimeoutSec 10
+        if ($response.StatusCode -eq 200) { return $true }
+      }
     } catch {
-      Start-Sleep -Seconds 3
     }
+    Start-Sleep -Seconds 3
   }
   return $false
+}
+
+function Get-LegacyCockpitRelayState {
+  $rows = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() })
+  $listenPattern = "^\s*$([regex]::Escape($HermesOverlayAddress))\s+$HttpsPort\s+(\S+)\s+(\d+)\s*$"
+  $matches = @($rows | Select-String -Pattern $listenPattern)
+  if ($matches.Count -gt 1) { throw "Multiple legacy relay records claim ${HermesOverlayAddress}:$HttpsPort" }
+  if ($matches.Count -eq 0) { return [pscustomobject]@{ wasPresent = $false } }
+  $targetAddress = $matches[0].Matches[0].Groups[1].Value
+  $targetPort = [int]$matches[0].Matches[0].Groups[2].Value
+  if ($targetAddress -ne $HermesLanAddress -or $targetPort -ne $HttpsPort) {
+    throw "${HermesOverlayAddress}:$HttpsPort is reserved by an unrelated portproxy target ${targetAddress}:$targetPort"
+  }
+  return [pscustomobject]@{ wasPresent = $true }
+}
+
+function Remove-LegacyCockpitRelay {
+  netsh interface portproxy delete v4tov4 listenaddress=$HermesOverlayAddress listenport=$HttpsPort 2>&1 | Out-Null
+  $state = Get-LegacyCockpitRelayState
+  if ($state.wasPresent) { throw "Legacy cockpit relay still owns ${HermesOverlayAddress}:$HttpsPort after deletion" }
+  Write-Output "retired exact legacy cockpit relay ${HermesOverlayAddress}:$HttpsPort -> ${HermesLanAddress}:$HttpsPort"
+}
+
+function Assert-OverlayFirewallRule {
+  $ruleName = "WilliamOS cockpit over Tailscale"
+  $rules = @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
+  if ($rules.Count -ne 1) { throw "The exact HERMES overlay firewall rule '$ruleName' is missing or ambiguous" }
+  $rule = $rules[0]
+  $portFilters = @($rule | Get-NetFirewallPortFilter)
+  $addressFilters = @($rule | Get-NetFirewallAddressFilter)
+  if (-not $rule.Enabled -or [string]$rule.Direction -ne "Inbound" -or [string]$rule.Action -ne "Allow" `
+    -or [string]$rule.Profile -ne "Private" -or $portFilters.Count -ne 1 -or $addressFilters.Count -ne 1 `
+    -or [string]$portFilters[0].Protocol -notin @("TCP", "6") `
+    -or [string]$portFilters[0].LocalPort -ne [string]$HttpsPort `
+    -or @($addressFilters[0].LocalAddress).Count -ne 1 `
+    -or [string]@($addressFilters[0].LocalAddress)[0] -ne $HermesOverlayAddress) {
+    throw "The HERMES overlay firewall rule '$ruleName' is not exactly scoped to inbound Private TCP ${HermesOverlayAddress}:$HttpsPort"
+  }
 }
 
 function Stop-ExpectedListener {
@@ -197,6 +244,7 @@ function Assert-LiveLauncherWritable {
 # Validate the external task binding before verification, rollback capture, task control, or file
 # mutation. A custom target is supported only when the supervised task actually invokes it.
 Assert-LiveTaskUsesLauncher
+Assert-OverlayFirewallRule
 
 if ($VerifyOnly) {
   if (-not (Test-Cockpit -Port $Port)) {
@@ -204,7 +252,11 @@ if ($VerifyOnly) {
     exit 1
   }
   if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
-    Write-Error "unhealthy: the canonical HTTPS origin did not answer on port $HttpsPort"
+    Write-Error "unhealthy: the HERMES LAN HTTPS listener did not answer on port $HttpsPort"
+    exit 1
+  }
+  if (-not (Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay)) {
+    Write-Error "unhealthy: the canonical williamos.lan origin did not answer over the HERMES overlay"
     exit 1
   }
   $runningSha = Get-RunningSha -Port $Port
@@ -213,7 +265,8 @@ if ($VerifyOnly) {
     Write-Error "provenance mismatch: running '$runningSha', loose runtime '$looseSha'"
     exit 1
   }
-  Write-Output "healthy: HTTP $Port and HTTPS $HttpsPort answer; running and loose provenance agree at $runningSha"
+  Write-Output "healthy on HERMES: HTTP $Port, LAN HTTPS $HttpsPort, canonical overlay listener, and exact firewall rule; running and loose provenance agree at $runningSha"
+  Write-Output "remote acceptance remains separate: run scripts/lab-control/transport/verify-cockpit-transport.ps1 on OMEN"
   exit 0
 }
 
@@ -242,6 +295,10 @@ if ($SkipRollbackCapture -and (Test-Path -LiteralPath $LiveStartTarget -PathType
   throw "SkipRollbackCapture cannot overwrite the existing WilliamOS Live start definition at '$LiveStartTarget'. Run without -SkipRollbackCapture so the external launcher is captured and restorable."
 }
 Assert-LiveLauncherWritable
+$legacyRelayState = Get-LegacyCockpitRelayState
+if ($SkipRollbackCapture -and $legacyRelayState.wasPresent) {
+  throw "SkipRollbackCapture cannot retire the existing cockpit relay without a rollback record"
+}
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
@@ -367,11 +424,12 @@ if (-not $SkipRollbackCapture) {
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 4
+    version = 5
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
+    legacyRelay = [ordered]@{ wasPresent = [bool]$legacyRelayState.wasPresent; listenAddress = $HermesOverlayAddress; listenPort = $HttpsPort; connectAddress = $HermesLanAddress; connectPort = $HttpsPort }
   }
   foreach ($directory in $rollbackDirectories) {
     $existing = Join-Path $Runtime $directory
@@ -423,6 +481,7 @@ if ($WithDependencies -and $rollbackRoot -and (Get-PhysicalVolumeIdentity -Path 
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
+if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }
 Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandPath (Join-Path $Runtime "server.js")
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $Runtime "scripts\hermes-https-proxy.mjs")
 Start-Sleep -Seconds 2
@@ -587,8 +646,14 @@ if ($deployedLooseSha -ne $builtSha) {
 
 Start-ScheduledTask -TaskName $HttpsTaskName
 if (-not (Test-HttpsCockpit -Port $HttpsPort)) {
-  Write-Error "The application is live on loopback, but the supervised HTTPS product origin did not answer on port $HttpsPort. Treating the deploy as failed."
+  Write-Error "The application is live on loopback, but the HERMES LAN HTTPS listener did not answer on port $HttpsPort. Treating the deploy as failed."
+  exit 1
+}
+if (-not (Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay)) {
+  Write-Error "The LAN listener is live, but the canonical williamos.lan origin did not answer over the HERMES overlay. Treating the deploy as failed."
   exit 1
 }
 
-Write-Output "deployed and verified: running $runningSha, loose provenance agrees, HTTP $Port and HTTPS $HttpsPort healthy"
+Assert-OverlayFirewallRule
+Write-Output "deployed and HERMES-local verified: running $runningSha, loose provenance agrees, HTTP $Port, LAN HTTPS $HttpsPort, canonical overlay listener, and exact firewall rule healthy"
+Write-Output "remote acceptance remains separate: run scripts/lab-control/transport/verify-cockpit-transport.ps1 on OMEN"

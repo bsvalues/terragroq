@@ -21,10 +21,12 @@ import path from "node:path"
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
 const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
+const TRANSPORT_VERIFY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "verify-cockpit-transport.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
 const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
+const transportVerifyText = fs.readFileSync(TRANSPORT_VERIFY_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -404,6 +406,37 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("Test-HttpsCockpit")
   })
 
+  it("retires only the exact legacy overlay relay and records it for truthful rollback", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toContain("Get-LegacyCockpitRelayState")
+    expect(deploy).toContain("Remove-LegacyCockpitRelay")
+    expect(deploy).toContain("reserved by an unrelated portproxy target")
+    expect(deploy).toMatch(/version\s*=\s*5/)
+    expect(deploy).toContain("legacyRelay =")
+    expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
+      .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
+    expect(restore).toMatch(/\$manifestVersion\s+-notin\s+@\(3,\s*4,\s*5\)/)
+    expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
+    expect(restore).toMatch(/if \(\$manifestVersion -ge 5 -and \[bool\]\$manifest\.legacyRelay\.wasPresent\)[\s\S]*portproxy add v4tov4/)
+  })
+
+  it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
+    const code = executableOnly(deployText)
+    const finalStart = code.lastIndexOf("Start-ScheduledTask -TaskName $HttpsTaskName")
+    const afterStart = code.slice(finalStart)
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort")
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay")
+    expect(code).toContain('--resolve "williamos.lan:${Port}:$HermesOverlayAddress"')
+    expect(afterStart).toContain("canonical williamos.lan origin did not answer over the HERMES overlay")
+    expect(afterStart).toContain("Assert-OverlayFirewallRule")
+    expect(code).toContain("Get-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain("not exactly scoped to inbound Private TCP")
+    expect(afterStart).toContain("remote acceptance remains separate")
+    expect(afterStart).toContain("verify-cockpit-transport.ps1 on OMEN")
+    expect(afterStart).not.toContain("canonical overlay HTTPS healthy")
+  })
+
   it("makes verify-only prove both product origins and agreement between both provenance surfaces", () => {
     const code = executableOnly(deployText)
     const verify = code.slice(code.indexOf('if ($VerifyOnly)'))
@@ -566,5 +599,15 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(restore).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(code).toContain("owned by an unrelated process")
+  })
+})
+
+describe("the OMEN transport verifier survives its expected off-LAN control", () => {
+  it("captures native curl stderr under Continue and restores the caller preference", () => {
+    const code = executableOnly(transportVerifyText)
+    expect(code).toContain("$previousPreference = $ErrorActionPreference")
+    expect(code).toMatch(/\$ErrorActionPreference\s*=\s*'Continue'[\s\S]*& \$curl @arguments 2>&1[\s\S]*\$curlExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).toContain("$ErrorActionPreference = $previousPreference")
+    expect(code.indexOf("$curlExit = $LASTEXITCODE")).toBeLessThan(code.indexOf("$ErrorActionPreference = $previousPreference"))
   })
 })

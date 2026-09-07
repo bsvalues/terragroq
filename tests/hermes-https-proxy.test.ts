@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
+import { EventEmitter } from "node:events"
 
 import { DEVICE_AUTH_HEADER, validateDeviceMutationOrigin } from "@/lib/device-auth/contract"
 import {
@@ -16,6 +17,7 @@ import {
   buildTlsServerOptions,
   buildUpstreamHeaders,
   createHermesHttpsProxy,
+  startHermesHttpsListeners,
   verifiedDeviceName,
 } from "@/scripts/hermes-https-proxy.mjs"
 
@@ -59,13 +61,57 @@ describe("HERMES HTTPS proxy boundary", () => {
     expect(Object.isFrozen(HERMES_HTTPS_LISTEN_HOSTS)).toBe(true)
   })
 
-  it("builds every listener from the same TLS options and proxy handler factory", () => {
-    const source = fs.readFileSync(new URL("../scripts/hermes-https-proxy.mjs", import.meta.url), "utf8")
-    const mainBody = source.slice(source.indexOf("async function main"))
-    const instances = mainBody.match(/createHermesHttpsProxy\(tlsMaterial\)/g) ?? []
-    expect(instances.length).toBe(1) // single factory call inside the per-host map
-    expect(mainBody).toContain("HERMES_HTTPS_LISTEN_HOSTS.map")
-    expect(mainBody).not.toMatch(/server\.listen\(HERMES_HTTPS_PORT,\s*server/)
+  it("keeps LAN ready while a missing overlay degrades and retries independently", async () => {
+    const outputs: string[] = []
+    const errors: string[] = []
+    const retries: Array<() => void> = []
+    let created = 0
+    const createServer = () => {
+      const server = new EventEmitter() as EventEmitter & { listen: (port: number, host: string) => void }
+      created += 1
+      const attempt = created
+      server.listen = (port, host) => queueMicrotask(() => {
+        expect(port).toBe(3443)
+        if (host === HERMES_HTTPS_OVERLAY_HOST && attempt === 2) {
+          server.emit("error", Object.assign(new Error("missing address"), { code: "EADDRNOTAVAIL" }))
+        } else {
+          server.emit("listening")
+        }
+      })
+      return server
+    }
+
+    await startHermesHttpsListeners({
+      tlsMaterial: { pfx: Buffer.from("pfx"), passphrase: "x".repeat(32), clientCa: null },
+      createServer,
+      scheduleRetry: (callback: () => void) => { retries.push(callback); return 1 },
+      writeOut: (message: string) => outputs.push(message),
+      writeErr: (message: string) => errors.push(message),
+    })
+    await Promise.resolve()
+
+    expect(outputs.join("")).toContain(`HERMES_HTTPS_LISTENER_READY|HOST=${HERMES_HTTPS_HOST}`)
+    expect(outputs.join("")).toContain("HERMES_HTTPS_READY")
+    expect(errors.join("")).toContain(`HERMES_HTTPS_OVERLAY_DEGRADED|HOST=${HERMES_HTTPS_OVERLAY_HOST}|CODE=EADDRNOTAVAIL`)
+    expect(retries).toHaveLength(1)
+
+    retries[0]()
+    await Promise.resolve()
+    expect(outputs.join("")).toContain(`HERMES_HTTPS_LISTENER_READY|HOST=${HERMES_HTTPS_OVERLAY_HOST}`)
+  })
+
+  it("fails closed when the required LAN address cannot bind", async () => {
+    const createServer = () => {
+      const server = new EventEmitter() as EventEmitter & { listen: () => void }
+      server.listen = () => queueMicrotask(() => {
+        server.emit("error", Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
+      })
+      return server
+    }
+    await expect(startHermesHttpsListeners({
+      tlsMaterial: { pfx: Buffer.from("pfx"), passphrase: "x".repeat(32), clientCa: null },
+      createServer,
+    })).rejects.toThrow(`REQUIRED_LISTENER_FAILED:${HERMES_HTTPS_HOST}:EADDRINUSE`)
   })
 
   it("removes hop-by-hop headers and records the exact HTTPS forwarding boundary", () => {

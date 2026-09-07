@@ -27,19 +27,19 @@ terminates, decrypts, or inspects it.
 
 | Script | Runs on | Purpose |
 |---|---|---|
-| `hermes-cockpit-relay.ps1` | HERMES, elevated | portproxy from the overlay address to the LAN bind, plus a narrowly scoped inbound rule |
+| `hermes-cockpit-relay.ps1` | HERMES, elevated | retire the exact obsolete overlay-to-LAN portproxy while preserving the narrowly scoped inbound rule |
 | `omen-cockpit-route.ps1` | OMEN, elevated | resolve `williamos.lan` to the overlay address (`-Restore` reverts to the LAN) |
 | `verify-cockpit-transport.ps1` | OMEN | prove both paths authenticate **and** that an uncertificated request is still refused |
 
 All three are idempotent and verify their own result rather than trusting the command's exit code.
 
-## Why `hermes-cockpit-relay.ps1` exists instead of a one-line code change
+## Why `hermes-cockpit-relay.ps1` now retires the old relay
 
-`scripts/hermes-https-proxy.mjs` hardcodes `HERMES_HTTPS_HOST = "192.168.88.9"`, so the listener binds
-the LAN interface only and the overlay address cannot reach it. Editing that constant is a
-control-plane change owned by the HERMES lane while #871 is the active gate there, so reachability is
-solved outside the application. If that bind ever becomes configurable, this relay should be removed
-rather than kept as a second mechanism.
+The HERMES proxy now owns two explicit listeners: the LAN address and the Tailscale overlay address.
+The older portproxy used the same overlay endpoint and therefore collides with the direct listener.
+The retirement script removes only that exact historical mapping, fails closed on a different target,
+and verifies that the already-scoped firewall rule was preserved. TLS and device-certificate handling
+remain in the repository-owned proxy.
 
 ## The control case is the assertion that matters
 
@@ -53,9 +53,9 @@ collapsing them either cries wolf or hides a breach.
 
 ## Operational notes
 
-- **Both `Tailscale` and `iphlpsvc` must be `Automatic` on HERMES.** portproxy is implemented by
-  `iphlpsvc`; if it is not automatic the relay silently disappears at the next reboot. The relay script
-  asserts this rather than assuming it.
+- **`Tailscale` must be `Automatic` on HERMES.** The proxy keeps the LAN listener alive and retries the
+  overlay bind when Tailscale is temporarily unavailable; the canonical route still fails deployment
+  verification until it is actually reachable.
 - **Node keys expire 2027-02-15.** Expiry is a silent break: the cockpit simply becomes unreachable,
   most likely while travelling. Re-authenticate before then or disable key expiry for these two nodes.
 - **Tradeoff, accepted deliberately:** because `williamos.lan` now resolves to the overlay, the cockpit
