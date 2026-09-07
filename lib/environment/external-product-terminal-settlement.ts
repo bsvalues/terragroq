@@ -95,7 +95,6 @@ async function settleExternalProductTerminalOnce(input: SettlementInput): Promis
     await transaction.execute(
       // Share the admission lock so settlement cannot race the graph that establishes its authority.
       // A second world-specific lock serializes retries without blocking unrelated owner activity.
-      // eslint-disable-next-line drizzle/enforce-delete-with-where
       sql`SELECT
         pg_advisory_xact_lock(hashtext(${`${input.userId}:external-work-order-admission`})),
         pg_advisory_xact_lock(hashtext(${`${input.userId}:${input.worldId}:external-product-terminal`}))`,
