@@ -206,6 +206,7 @@ export async function runHermesQueueDrain({
   let decision = null
   let pendingDecision = null
   let findingDecisionDirty = false
+  const replayedChildRechecks = new Set()
   try {
     if (consumeDecision) {
       const decisionResult = await consumeDecision({ repositoryPath: process.cwd() })
@@ -219,9 +220,23 @@ export async function runHermesQueueDrain({
       const result = await orchestrator.cycle()
       const findingResult = await orchestrator.consumeRuntimeFindings?.()
       findingDecisionDirty ||= Number(findingResult?.gated) > 0
+      const queuedChildAvailable = Number(findingResult?.queuedChildren) > 0
+      const replayedChildKey = Array.isArray(findingResult?.results)
+        ? findingResult.results.find((entry) => (
+          entry?.disposition === "DERIVED" && entry?.replayed === true
+          && typeof entry?.outcomeKey === "string" && entry.outcomeKey.length > 0
+          && !replayedChildRechecks.has(entry.outcomeKey)
+        ))?.outcomeKey ?? null
+        : null
+      const retryForFindingChild = () => {
+        if (queuedChildAvailable) return true
+        if (!replayedChildKey) return false
+        replayedChildRechecks.add(replayedChildKey)
+        return true
+      }
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
         if (PARENT_MISSION_WALL_RESULTS.has(result.result)) {
-          if (Number(findingResult?.queuedChildren) > 0) continue
+          if (retryForFindingChild()) continue
           if (findingDecisionDirty && consumeDecision) {
             const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
             findingDecisionDirty = false
@@ -247,8 +262,7 @@ export async function runHermesQueueDrain({
             ...(decision ? { decision } : {}),
           }
         }
-        if (result.result === "NO_ELIGIBLE_OUTCOME"
-          && Number(findingResult?.queuedChildren) > 0) continue
+        if (result.result === "NO_ELIGIBLE_OUTCOME" && retryForFindingChild()) continue
         if (result.result === "NO_ELIGIBLE_OUTCOME" && findingDecisionDirty && consumeDecision) {
           const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
           findingDecisionDirty = false

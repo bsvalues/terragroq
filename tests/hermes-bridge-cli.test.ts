@@ -572,6 +572,33 @@ describe("Hermes bridge CLI", () => {
     expect(consumeDecision).toHaveBeenCalledTimes(2)
   })
 
+  it("rechecks a verified replayed child before returning a stale parent wall", async () => {
+    const replayedChild = {
+      disposition: "DERIVED",
+      replayed: true,
+      outcomeKey: `runtime-finding:91:${"a".repeat(64)}`,
+    }
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ queuedChildren: 0, results: [] })
+      .mockResolvedValue({ queuedChildren: 0, results: [replayedChild] })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce(parentWall)
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "replayed-derived" })
+      .mockResolvedValueOnce(parentWall)
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, maxOutcomes: 3,
+    })).resolves.toEqual({
+      ...parentWall,
+      settled: [{ result: "COMPLETE", outcomeId: "replayed-derived" }],
+    })
+    expect(cycle).toHaveBeenCalledTimes(3)
+  })
+
   it("presents an existing Primary decision before an unresolved parent mission wall", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",
