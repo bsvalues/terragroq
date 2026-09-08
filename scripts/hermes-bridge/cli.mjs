@@ -240,6 +240,7 @@ export async function runHermesQueueDrain({
           } else if (pendingDecision) {
             return pendingDecision
           }
+          if (Number(findingResult?.queuedChildren) > 0) continue
           return {
             ...result,
             ...(settled.length > 0 ? { settled } : {}),

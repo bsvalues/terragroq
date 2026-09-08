@@ -513,6 +513,34 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledTimes(2)
   })
 
+  it("continues draining when finding consumption queues a child after a parent wall", async () => {
+    const calls: string[] = []
+    const consumeRuntimeFindings = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("findings:backlog"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-wall"); return { queuedChildren: 1 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-child"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-final-wall"); return { queuedChildren: 0 } })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("cycle:wall"); return parentWall })
+      .mockImplementationOnce(async () => { calls.push("cycle:child"); return { result: "COMPLETE", outcomeId: "derived" } })
+      .mockImplementationOnce(async () => { calls.push("cycle:final-wall"); return parentWall })
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, maxOutcomes: 3,
+    })).resolves.toEqual({
+      ...parentWall,
+      settled: [{ result: "COMPLETE", outcomeId: "derived" }],
+    })
+    expect(calls).toEqual([
+      "findings:backlog", "cycle:wall", "findings:post-wall", "cycle:child",
+      "findings:post-child", "cycle:final-wall", "findings:post-final-wall",
+    ])
+  })
+
   it("presents an existing Primary decision before an unresolved parent mission wall", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",
