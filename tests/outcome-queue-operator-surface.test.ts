@@ -58,6 +58,19 @@ function project(queue: readonly OutcomeQueueRecord[]) {
   return projectOutcomeQueueOperatorSurface({ queue, ...ELIGIBILITY })
 }
 
+const ACTIVE_PARENT_MISSIONS = {
+  integrity: "VERIFIED" as const,
+  unresolved: [{
+    missionKey: "external-parent:abc123",
+    externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+    goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+    worldId: "space-terrafusion",
+    projectId: 7,
+    repository: "bsvalues/terrafusion_os_1.0",
+  }],
+  resolved: [],
+}
+
 describe("outcome queue operator surface", () => {
   it("shows the live active item and its lease without claiming another item is next", () => {
     const active = outcome({
@@ -195,6 +208,7 @@ describe("outcome queue operator surface", () => {
         superseded: 0,
       },
       counts: { total: 0, nonTerminal: 0, terminal: 0 },
+      unresolvedParentMissions: [],
     })
   })
 
@@ -218,6 +232,62 @@ describe("outcome queue operator surface", () => {
         superseded: 1,
       },
       counts: { total: 3, nonTerminal: 0, terminal: 3 },
+    })
+  })
+
+  it("does not represent an unresolved persisted parent mission as an empty or completed queue", () => {
+    for (const queue of [[], [outcome({ lifecycleState: "completed" })]]) {
+      const surface = projectOutcomeQueueOperatorSurface({
+        queue,
+        ...ELIGIBILITY,
+        parentMissions: ACTIVE_PARENT_MISSIONS,
+      })
+
+      expect(surface).toMatchObject({
+        state: "BLOCKED",
+        reason: "ORPHANED_ACTIVE_MISSION",
+        unresolvedParentMissions: ACTIVE_PARENT_MISSIONS.unresolved,
+      })
+    }
+  })
+
+  it("retains unresolved parent identity while a child remains runnable or active", () => {
+    const runnable = projectOutcomeQueueOperatorSurface({
+      queue: [outcome()],
+      ...ELIGIBILITY,
+      parentMissions: ACTIVE_PARENT_MISSIONS,
+    })
+    const active = projectOutcomeQueueOperatorSurface({
+      queue: [outcome({
+        lifecycleState: "active",
+        executionBinding: "execution-parent-child",
+        leaseHolder: "codex:builder",
+        leaseToken: "lease-parent-child",
+        leaseExpiresAt: "2026-07-28T12:05:00.000Z",
+      })],
+      ...ELIGIBILITY,
+      parentMissions: ACTIVE_PARENT_MISSIONS,
+    })
+
+    expect(runnable).toMatchObject({
+      state: "READY",
+      unresolvedParentMissions: ACTIVE_PARENT_MISSIONS.unresolved,
+    })
+    expect(active).toMatchObject({
+      state: "ACTIVE",
+      unresolvedParentMissions: ACTIVE_PARENT_MISSIONS.unresolved,
+    })
+  })
+
+  it("fails closed on ambiguous persisted parent mission evidence", () => {
+    expect(projectOutcomeQueueOperatorSurface({
+      queue: [],
+      ...ELIGIBILITY,
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    })).toMatchObject({
+      state: "BLOCKED",
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      unresolvedParentMissions: [],
     })
   })
 
