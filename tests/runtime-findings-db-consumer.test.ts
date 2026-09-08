@@ -332,6 +332,7 @@ describe("native runtime finding database consumer", () => {
     row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
     bindCheckpointFindings(row)
     let now = new Date("2026-08-20T17:40:00.000Z")
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now.getTime())
     const writes: string[] = []
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.includes("FROM governance_event finding")) return { rows: [row] }
@@ -356,12 +357,14 @@ describe("native runtime finding database consumer", () => {
       gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: false }],
     })
     now = new Date("2026-08-20T18:00:00.000Z")
+    dateNow.mockReturnValue(now.getTime())
     row.implementationGrantStatus = "expired"
     await expect(consume()).resolves.toMatchObject({
       gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: true }],
     })
     expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_OWNER_GATED'"))).toHaveLength(1)
     expect(writes.some((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toBe(false)
+    dateNow.mockRestore()
   })
 
   it("derives the ordinary docs child from the exact singleton live-acceptance parent", async () => {

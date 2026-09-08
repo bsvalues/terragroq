@@ -1290,7 +1290,13 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                   fail("FINDING_SETTLEMENT_REPLAY_WALL")
                 }
                 const settledResult = deriveRemediationWorkOrder({
-                  objective: parentObjective({ ...row, implementationGrantStatus: "active" }, finding), finding,
+                  objective: {
+                    ...parentObjective({ ...row, implementationGrantStatus: "active" }, finding),
+                    // Chronology above proves this exact settlement preceded expiry. Do not let the
+                    // ambient wall clock reclassify that immutable historical decision during replay.
+                    grantExpiresAt: null,
+                  },
+                  finding,
                   now: () => settlementAt.toISOString() })
                 const settledClassification = classifyProposedAction({ effects: finding.effects })
                 if (settledResult.gate) {

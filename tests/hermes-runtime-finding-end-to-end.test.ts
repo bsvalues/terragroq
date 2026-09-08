@@ -665,14 +665,13 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
     await client.query("ROLLBACK")
 
-    const replayCheckpointAt = new Date((await client.query(`SELECT max("createdAt") AS "createdAt"
-      FROM governance_event WHERE "eventType"='HERMES_RUNTIME_CHECKPOINT' AND "entityId"='4'`))
-      .rows[0].createdAt)
-    const replaySettlementAt = new Date(replayCheckpointAt.getTime() + 60_000)
+    const replayCheckpointAt = new Date((await client.query(`SELECT "createdAt" FROM governance_event
+      WHERE id=$1`, [Number(recorded[0].metadata.sourceCheckpointId)])).rows[0].createdAt)
+    const replaySettlementAt = new Date(replayCheckpointAt.getTime() + 10)
     await client.query(`UPDATE governance_event SET "createdAt"=$1
       WHERE "eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')`,
     [replaySettlementAt])
-    const replayExpiresAt = new Date(replaySettlementAt.getTime() + 60_000)
+    const replayExpiresAt = new Date(replaySettlementAt.getTime() + 10)
     const replayExpiresIso = new Date(Date.UTC(
       replayExpiresAt.getFullYear(), replayExpiresAt.getMonth(), replayExpiresAt.getDate(),
       replayExpiresAt.getHours(), replayExpiresAt.getMinutes(), replayExpiresAt.getSeconds(),
@@ -689,7 +688,7 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
         const consumerPool = new Pool({ connectionString: scopedUrl })
         try { return await action(consumerPool) } finally { await consumerPool.end() }
       },
-      now: () => new Date(new Date(replayExpiresIso).getTime() + 60_000),
+      now: () => new Date(new Date(replayExpiresIso).getTime() + 10),
     })
     await expect(replayConsumer()).resolves.toMatchObject({
       status: "RUNTIME_FINDINGS_CONSUMED", considered: 2, derived: 1, gated: 1, lapsed: 0,
