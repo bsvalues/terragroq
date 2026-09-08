@@ -652,19 +652,32 @@ async function summonSurface(
         : rows.length === 0
           ? "The governed queue is empty."
           : `${rows.length} ${rows.length === 1 ? "outcome" : "outcomes"} in the governed queue, in queue order.`
+    const parentMissionRows = surface.unresolvedParentMissions.map((mission, index) => ({
+      recordType: "parent-mission" as const,
+      outcomeKey: mission.missionKey,
+      title: `Unresolved parent mission ${mission.goalRef} · ${mission.externalRef} · `
+        + `Space ${mission.worldId} · project ${mission.projectId} · ${mission.repository} · ${mission.missionKey}`,
+      lifecycleState: "parent-mission-active",
+      queueOrder: -(index + 1),
+      activeWorkOrderId: null,
+    }))
     return {
       say,
       surface: {
         kind: "queue",
         subject: "governed outcome queue",
         unresolvedParentMissions: surface.unresolvedParentMissions.map((mission) => ({ ...mission })),
-        payload: rows.map((row) => ({
-          outcomeKey: row.outcomeKey,
-          title: row.title,
-          lifecycleState: row.lifecycleState,
-          queueOrder: row.queueOrder,
-          activeWorkOrderId: row.activeWorkOrderId,
-        })),
+        payload: [
+          ...parentMissionRows,
+          ...rows.map((row) => ({
+            recordType: "child-outcome" as const,
+            outcomeKey: row.outcomeKey,
+            title: row.title,
+            lifecycleState: row.lifecycleState,
+            queueOrder: row.queueOrder,
+            activeWorkOrderId: row.activeWorkOrderId,
+          })),
+        ],
       },
     }
   }

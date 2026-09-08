@@ -58,6 +58,10 @@ describe("an authorized retained selection becomes the mounted world's work", ()
     expect(queueBranch).toContain(
       "unresolvedParentMissions: surface.unresolvedParentMissions.map((mission) => ({ ...mission }))",
     )
+    expect(queueBranch).toContain("const parentMissionRows = surface.unresolvedParentMissions.map")
+    expect(queueBranch).toContain('recordType: "parent-mission"')
+    expect(queueBranch).toContain("Unresolved parent mission ${mission.goalRef}")
+    expect(queueBranch).toContain("...parentMissionRows")
     expect(route).toContain(
       "unresolvedParentMissions?: readonly ParentMissionIdentity[]",
     )

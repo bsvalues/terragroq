@@ -1798,7 +1798,7 @@ WHERE "outcome_queue_item"."lifecycleState" = 'suggested'
 RETURNING *
 `,
   readExternalParentMissionReceipts: `
-SELECT "id", "idempotencyKey", "operation", "outcomeKey", "requestHash", "requestBinding", "resultBinding"
+SELECT "id", "userId", "idempotencyKey", "operation", "outcomeKey", "requestHash", "requestBinding", "resultBinding"
 FROM "outcome_queue_mutation_receipt"
 WHERE "userId" = $1
   AND "operation" IN (
@@ -4131,7 +4131,8 @@ function validExternalParentMissionBindReceipt(receipt) {
     && result.authorityEvidenceRole === "SUPPORTING_ONLY"
     && result.provenanceDigest === provenanceDigest
     && result.state === "ACTIVE"
-    && typeof result.admittedBy === "string" && result.admittedBy.trim() !== ""
+    && typeof receipt.userId === "string" && receipt.userId.trim() !== ""
+    && result.admittedBy === receipt.userId
     && canonicalJson(result.authorityProvenance) === canonicalJson({
       kind: "AUTHENTICATED_CONFIGURED_OWNER_ADMISSION",
       ownerUserId: result.admittedBy,

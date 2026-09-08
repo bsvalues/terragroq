@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import path from "node:path"
+
 import { describe, expect, it } from "vitest"
 
 import { projectHomeQueueContinuity } from "@/components/dashboard/home-queue-continuity"
@@ -5,6 +8,10 @@ import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
 import { projectOutcomeQueueOperatorSurface } from "@/lib/outcome-queue/operator-surface"
 
 const NOW = "2026-07-28T12:00:00.000Z"
+const panel = fs.readFileSync(
+  path.join(process.cwd(), "components/dashboard/home-queue-continuity-panel.tsx"),
+  "utf8",
+)
 const ELIGIBILITY = {
   now: NOW,
   validApprovalDecisionIds: [100],
@@ -271,7 +278,12 @@ describe("Home queue continuity", () => {
 
     expect(continuity).toMatchObject({
       state: "READY",
-      next: { identity: "GOAL-0006" },
+      next: {
+        identity: "GOAL-0006",
+        context: expect.stringContaining(
+          "Active parent mission: GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        ),
+      },
       unresolvedParentMissions: [ACTIVE_PARENT_MISSION],
       blockerReason: null,
     })
@@ -291,11 +303,21 @@ describe("Home queue continuity", () => {
 
     expect(continuity).toMatchObject({
       state: "ACTIVE",
-      active: { identity: "GOAL-0006" },
+      active: {
+        identity: "GOAL-0006",
+        context: expect.stringContaining(
+          "Active parent mission: GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        ),
+      },
       next: null,
       unresolvedParentMissions: [ACTIVE_PARENT_MISSION],
       blockerReason: "The active outcome holds a live lease",
     })
+  })
+
+  it("renders the projected parent mission context through the mounted Home panel", () => {
+    expect(panel).toContain("continuity.active.context")
+    expect(panel).toContain("continuity.next.context")
   })
 
   it("preserves the settled empty-queue behavior when the parent mission is resolved", () => {

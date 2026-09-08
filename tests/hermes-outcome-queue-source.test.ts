@@ -135,6 +135,7 @@ function parentMissionReceipts(
   }
   const bind = {
     id: 101,
+    userId,
     idempotencyKey: requestBinding.idempotencyKey,
     operation: EXTERNAL_PARENT_MISSION_BIND_OPERATION,
     outcomeKey: missionKey,
@@ -166,6 +167,7 @@ function parentMissionReceipts(
   }
   return [bind, {
     id: 102,
+    userId,
     idempotencyKey: terminalRequest.idempotencyKey,
     operation: EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
     outcomeKey: missionKey,
@@ -2147,6 +2149,36 @@ describe("transactional durable outcome queue source", () => {
     })).resolves.toMatchObject({
       acquired: false,
       outcome: null,
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    })
+  })
+
+  it("rejects a parent authority identity that does not match the scoped receipt owner", async () => {
+    const [bind] = parentMissionReceipts()
+    if (!("authorityProvenance" in bind.resultBinding)) {
+      throw new Error("expected bind receipt")
+    }
+    const forged = {
+      ...bind,
+      resultBinding: {
+        ...bind.resultBinding,
+        admittedBy: "foreign-owner",
+        authorityProvenance: {
+          ...bind.resultBinding.authorityProvenance,
+          ownerUserId: "foreign-owner",
+        },
+      },
+    }
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 0 }],
+      parentMissionReceipts: [forged],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
       reason: "PARENT_MISSION_BINDING_REQUIRED",
       parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
     })

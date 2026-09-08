@@ -683,6 +683,13 @@ async function admitExternalParentMissionOnce(
     if (idempotencyRows.length > 1 || missionRows.length > 1 || terminalRows.length > 1) {
       throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
     }
+    const replayReceipt = idempotencyRows[0]
+    if (replayReceipt
+      && (replayReceipt.operation !== EXTERNAL_PARENT_MISSION_BIND_OPERATION
+        || replayReceipt.requestHash !== requestHash
+        || !exactRecord(replayReceipt.requestBinding, requestBinding))) {
+      throw new ExternalParentMissionAdmissionError("IDEMPOTENCY_CONFLICT")
+    }
     if (terminalRows[0]) {
       const bound = missionRows[0] ?? idempotencyRows.find((row) =>
         row.operation === EXTERNAL_PARENT_MISSION_BIND_OPERATION && row.outcomeKey === missionKey)
@@ -694,6 +701,17 @@ async function admitExternalParentMissionOnce(
       throw new ExternalParentMissionAdmissionError(
         state === "REVOKED" ? "PARENT_MISSION_AUTHORITY_REVOKED" : "PARENT_MISSION_ALREADY_TERMINAL",
       )
+    }
+    if (replayReceipt) {
+      const result = record(replayReceipt.resultBinding)
+      if (replayReceipt.outcomeKey !== missionKey
+        || !validBindReceipt(replayReceipt)
+        || !result
+        || result.worldId !== input.worldId
+        || result.admittedBy !== userId) {
+        throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+      }
+      return resultFromReceipt(replayReceipt, true)
     }
 
     const worlds = await transaction.select().from(workingWorld).where(and(
@@ -742,30 +760,6 @@ async function admitExternalParentMissionOnce(
       projectId,
       objectiveDigest: hashRecord(mission.objective),
       missionKey,
-    }
-    const validateReplay = (receipt: ReceiptLike): ExternalParentMissionAdmissionSuccess => {
-      const result = record(receipt.resultBinding)
-      if (receipt.operation !== EXTERNAL_PARENT_MISSION_BIND_OPERATION
-        || receipt.outcomeKey !== missionKey
-        || receipt.requestHash !== requestHash
-        || !exactRecord(receipt.requestBinding, requestBinding)
-        || !validBindReceipt(receipt)
-        || !result
-        || !exactRecord(result.binding, canonicalBinding)
-        || result.worldId !== input.worldId
-        || Number(result.repositoryResourceId) !== resourceRows[0].id
-        || result.admittedBy !== userId) {
-        throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
-      }
-      return resultFromReceipt(receipt, true)
-    }
-    if (idempotencyRows[0]) {
-      if (idempotencyRows[0].operation !== EXTERNAL_PARENT_MISSION_BIND_OPERATION
-        || idempotencyRows[0].requestHash !== requestHash
-        || !exactRecord(idempotencyRows[0].requestBinding, requestBinding)) {
-        throw new ExternalParentMissionAdmissionError("IDEMPOTENCY_CONFLICT")
-      }
-      return validateReplay(idempotencyRows[0])
     }
     if (missionRows[0]) throw new ExternalParentMissionAdmissionError("PARENT_MISSION_ALREADY_BOUND")
 

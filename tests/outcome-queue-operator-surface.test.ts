@@ -251,6 +251,34 @@ describe("outcome queue operator surface", () => {
     }
   })
 
+  it("retains unresolved parent identity while a child remains runnable or active", () => {
+    const runnable = projectOutcomeQueueOperatorSurface({
+      queue: [outcome()],
+      ...ELIGIBILITY,
+      parentMissions: ACTIVE_PARENT_MISSIONS,
+    })
+    const active = projectOutcomeQueueOperatorSurface({
+      queue: [outcome({
+        lifecycleState: "active",
+        executionBinding: "execution-parent-child",
+        leaseHolder: "codex:builder",
+        leaseToken: "lease-parent-child",
+        leaseExpiresAt: "2026-07-28T12:05:00.000Z",
+      })],
+      ...ELIGIBILITY,
+      parentMissions: ACTIVE_PARENT_MISSIONS,
+    })
+
+    expect(runnable).toMatchObject({
+      state: "READY",
+      unresolvedParentMissions: ACTIVE_PARENT_MISSIONS.unresolved,
+    })
+    expect(active).toMatchObject({
+      state: "ACTIVE",
+      unresolvedParentMissions: ACTIVE_PARENT_MISSIONS.unresolved,
+    })
+  })
+
   it("fails closed on ambiguous persisted parent mission evidence", () => {
     expect(projectOutcomeQueueOperatorSurface({
       queue: [],

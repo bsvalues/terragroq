@@ -48,6 +48,11 @@ function identity(row: OutcomeQueueOperatorRow): string {
   return row.goalRef ?? row.outcomeKey
 }
 
+function joinContext(current: string | null, parentMissionContext: string): string | null {
+  if (!parentMissionContext) return current
+  return current ? `${current} ${parentMissionContext}` : parentMissionContext
+}
+
 export function projectHomeQueueContinuity(
   surface: OutcomeQueueOperatorSurface,
 ): HomeQueueContinuity {
@@ -55,12 +60,15 @@ export function projectHomeQueueContinuity(
   const next = surface.nextEligibleItem
   const unresolvedParentMissions = surface.unresolvedParentMissions
     .map((mission) => ({ ...mission }))
-  const orphanedMissionIdentity = unresolvedParentMissions
+  const unresolvedMissionIdentity = unresolvedParentMissions
     .map((mission) => (
       `${mission.goalRef} (${mission.externalRef}; Space ${mission.worldId}; `
       + `project ${mission.projectId}; ${mission.repository}; ${mission.missionKey})`
     ))
     .join(", ")
+  const parentMissionContext = unresolvedMissionIdentity
+    ? `Active parent mission: ${unresolvedMissionIdentity}.`
+    : ""
 
   return {
     state: surface.state,
@@ -71,7 +79,7 @@ export function projectHomeQueueContinuity(
           identity: identity(active),
           title: active.title,
           status: active.lifecycleLabel,
-          context: active.lifecycleReason,
+          context: joinContext(active.lifecycleReason, parentMissionContext),
           staleLease: active.staleLease,
         }
       : null,
@@ -81,13 +89,15 @@ export function projectHomeQueueContinuity(
           identity: identity(next),
           title: next.title,
           mode: surface.nextEligibleModeLabel ?? "Mode not recorded",
-          context: next.lifecycleReason,
+          context: joinContext(next.lifecycleReason, parentMissionContext),
         }
       : null,
     unresolvedParentMissions,
     blockerReason: surface.state === "ACTIVE" || surface.state === "BLOCKED"
-      ? surface.reason === "ORPHANED_ACTIVE_MISSION" && orphanedMissionIdentity
-        ? `${surface.reasonLabel}: ${orphanedMissionIdentity}`
+      ? surface.reason === "ORPHANED_ACTIVE_MISSION" && unresolvedMissionIdentity
+        ? `${surface.reasonLabel}: ${unresolvedMissionIdentity}`
+        : surface.state === "BLOCKED" && parentMissionContext
+          ? `${surface.reasonLabel}. ${parentMissionContext}`
         : surface.reasonLabel
       : null,
     links: HOME_QUEUE_CONTINUITY_LINKS,

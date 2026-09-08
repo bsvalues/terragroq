@@ -137,6 +137,17 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
         status: "ALREADY_ADMITTED", replayed: true, receiptId: admitted.receiptId,
       })
 
+      await fixture.query(`UPDATE working_world SET snapshot=$1 WHERE id='space-tf'`, [JSON.stringify(wrongWorld)])
+      await fixture.query(`UPDATE project SET lifecycle='archived' WHERE id=1`)
+      await fixture.query(`UPDATE project_resource SET "canonicalIdentity"='owner/moved' WHERE id=7`)
+      await expect(admitExternalParentMission("owner", body)).resolves.toMatchObject({
+        status: "ALREADY_ADMITTED", replayed: true, receiptId: admitted.receiptId,
+        worldId: "space-tf", repositoryResourceId: 7,
+      })
+      await fixture.query(`UPDATE working_world SET snapshot=$1 WHERE id='space-tf'`, [beforeSnapshot])
+      await fixture.query(`UPDATE project SET lifecycle='active' WHERE id=1`)
+      await fixture.query(`UPDATE project_resource SET "canonicalIdentity"='bsvalues/terrafusion_os_1.0' WHERE id=7`)
+
       const counts = (await fixture.query(`SELECT
         (SELECT count(*)::int FROM outcome_queue_mutation_receipt) receipts,
         (SELECT count(*)::int FROM goal) goals,
