@@ -958,6 +958,36 @@ describe("Hermes durable outcome queue runtime", () => {
     })
   })
 
+  it("preserves multiple canonically ordered unresolved parent missions", async () => {
+    const parentMissions = {
+      integrity: "VERIFIED",
+      unresolved: [
+        parentMissionIdentity(),
+        parentMissionIdentity({
+          externalRef: "github:bsvalues/terrafusion_os_1.0#1486",
+          goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V2",
+        }),
+      ].sort((left, right) => left.missionKey.localeCompare(right.missionKey)),
+      resolved: [],
+    }
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        replayed: false,
+        reclaimed: false,
+        reason: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toEqual({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions,
+    })
+  })
+
   it("preserves an invalid parent mission ledger instead of reporting an empty queue", async () => {
     const bridge = runtime({
       acquire: vi.fn(async () => ({

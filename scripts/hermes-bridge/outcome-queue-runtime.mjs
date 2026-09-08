@@ -118,7 +118,7 @@ function unresolvedParentMissionSelection(acquired) {
     && acquired?.replayed === false && acquired?.reclaimed === false
   const valid = acquired.reason === "ORPHANED_ACTIVE_MISSION"
     ? exactNoSelection && exactState && state.integrity === "VERIFIED" && unresolved.length > 0
-      && unresolved.every(validIdentity)
+      && unresolved.every((mission) => validIdentity(mission))
       && state.resolved.every((mission) => validIdentity(mission, true))
       && canonicallyOrdered(unresolved) && canonicallyOrdered(state.resolved)
       && new Set([...unresolved, ...state.resolved].map((mission) => mission.missionKey)).size
