@@ -1,11 +1,14 @@
-# Retire the obsolete HERMES cockpit portproxy -- RUNS ON HERMES, elevated.
+# Verify that the obsolete HERMES cockpit portproxy is retired -- RUNS ON HERMES, elevated.
 #
 # The repository-owned HTTPS proxy now binds the LAN and Tailscale addresses directly. A retained
 # portproxy on the overlay address collides with that listener and can prevent an otherwise healthy
-# deployment from starting. This script removes only the exact historical relay; any different
-# target on the same endpoint fails closed. The narrow existing firewall rule is preserved.
+# deployment from starting. This script audits the endpoint and direct listener, but deliberately
+# refuses to perform the migration itself: deploy-hermes-runtime.ps1 owns rollback capture and safe
+# retirement. Any different target on the same endpoint fails closed. The firewall is preserved.
 [CmdletBinding()]
-param()
+param(
+    [string]$Runtime = 'C:\HermesLab\williamos-runtime-64034e93-flat'
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -13,6 +16,21 @@ $overlayAddress = '100.97.194.84'
 $lanAddress     = '192.168.88.9'
 $port           = 3443
 $ruleName       = 'WilliamOS cockpit over Tailscale'
+$proxyPath      = [IO.Path]::GetFullPath((Join-Path $Runtime 'scripts\hermes-https-proxy.mjs')).TrimEnd('\')
+
+function Test-ExpectedDirectOverlayListener {
+    $listeners = @(Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    $ownerProcessIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($ownerProcessIds.Count -ne 1) { return $false }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($ownerProcessIds[0])" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) { return $false }
+    $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
+        @($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) |
+            Where-Object { $_ } | Select-Object -First 1
+    })
+    if ($tokens.Count -lt 2 -or [IO.Path]::GetFileName($tokens[0]) -ine 'node.exe') { return $false }
+    try { return [IO.Path]::GetFullPath($tokens[1]).TrimEnd('\') -ieq $proxyPath } catch { return $false }
+}
 
 $tailscale = @(Get-CimInstance Win32_Service -Filter "Name='Tailscale'" -ErrorAction SilentlyContinue)
 if ($tailscale.Count -ne 1 -or $tailscale[0].StartMode -ne 'Auto') {
@@ -32,11 +50,14 @@ if ($matches.Count -eq 1) {
     if ($targetAddress -ne $lanAddress -or $targetPort -ne $port) {
         throw "RELAY_FOREIGN: ${overlayAddress}:$port targets ${targetAddress}:$targetPort; refusing to remove it"
     }
-    netsh interface portproxy delete v4tov4 listenaddress=$overlayAddress listenport=$port 2>&1 | Out-Null
+    throw 'RELAY_MIGRATION_REQUIRES_DEPLOYMENT: use deploy-hermes-runtime.ps1 so the exact relay is captured for rollback before retirement'
 }
 
 $remaining = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() }) -match $listenPattern
 if ($remaining) { throw "RELAY_RETIREMENT_FAILED: ${overlayAddress}:$port is still reserved by portproxy" }
+if (-not (Test-ExpectedDirectOverlayListener)) {
+    throw "DIRECT_LISTENER_NOT_PROVEN: the exact deployed WilliamOS proxy does not own ${overlayAddress}:$port"
+}
 
 $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 if (-not $rule -or [string]$rule.Enabled -ne 'True') { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }
@@ -47,4 +68,4 @@ if ($rule.Profile -notmatch 'Private' -or $portFilter.Protocol -ne 'TCP' -or [st
     throw "FIREWALL_RULE_WIDE: '$ruleName' does not remain scoped to ${overlayAddress}:$port on Private TCP"
 }
 
-'LEGACY_RELAY_RETIRED direct-listener={0}:{1} firewall=preserved' -f $overlayAddress, $port
+'LEGACY_RELAY_RETIRED direct-listener={0}:{1} proxy={2} firewall=preserved' -f $overlayAddress, $port, $proxyPath

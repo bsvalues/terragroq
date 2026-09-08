@@ -624,17 +624,45 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code.lastIndexOf("Ensure-CanonicalHostname")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
   })
 
-  it("requires Tailscale to survive reboot before retiring the legacy relay", () => {
+  it("requires Tailscale to survive reboot before accepting the direct overlay listener", () => {
     const code = executableOnly(relayText)
     const preflight = code.indexOf("TAILSCALE_NOT_AUTOMATIC")
-    const mutation = code.indexOf("portproxy delete")
+    const listenerProof = code.lastIndexOf("if (-not (Test-ExpectedDirectOverlayListener))")
     expect(code).toContain("Get-CimInstance Win32_Service")
     expect(code).toContain("StartMode -ne 'Auto'")
     expect(code).toContain("TAILSCALE_NOT_RUNNING")
     expect(code).toContain("[string]$rule.Enabled -ne 'True'")
     expect(code).not.toContain("-not $rule.Enabled")
     expect(preflight).toBeGreaterThan(-1)
-    expect(preflight).toBeLessThan(mutation)
+    expect(listenerProof).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(listenerProof)
+  })
+
+  it("keeps standalone relay migration inside the rollback-capturing deployment and proves the exact direct listener", () => {
+    const code = executableOnly(relayText)
+    expect(code).toContain("Test-ExpectedDirectOverlayListener")
+    expect(code).toContain("Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port")
+    expect(code).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(code).toContain("-ieq $proxyPath")
+    expect(code).toContain("RELAY_MIGRATION_REQUIRES_DEPLOYMENT")
+    expect(code).toContain("use deploy-hermes-runtime.ps1")
+    expect(code).toContain("DIRECT_LISTENER_NOT_PROVEN")
+    expect(code).not.toContain("portproxy delete")
+  })
+
+  it("removes an exact current relay before rollback applies Node-only listener ownership checks", () => {
+    const restore = executableOnly(restoreText)
+    expect(restore).toContain("Get-CurrentLegacyRelayState")
+    expect(restore).toContain("Remove-CurrentLegacyRelay")
+    expect(restore).toContain("owned by an unrelated portproxy target")
+    const preflight = restore.lastIndexOf("$currentLegacyRelay = Get-CurrentLegacyRelayState")
+    const stopTasks = restore.indexOf("Stop-ScheduledTask")
+    const removeRelay = restore.lastIndexOf("if ($currentLegacyRelay.wasPresent) { Remove-CurrentLegacyRelay }")
+    const stopHttpsListener = restore.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort')
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(stopTasks)
+    expect(removeRelay).toBeGreaterThan(stopTasks)
+    expect(removeRelay).toBeLessThan(stopHttpsListener)
   })
 })
 
