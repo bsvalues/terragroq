@@ -320,6 +320,50 @@ describe("native runtime finding database consumer", () => {
       && sql.includes("RUNTIME_FINDING_AUTHORITY_LAPSED"))).toBe(false)
   })
 
+  it("preserves an exact owner-gated settlement after its source authority later lapses", async () => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      implementationGrantExpiresAt: "2026-08-20 17:45:00",
+      parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",
+    }) as any
+    row.parentReceiptResultBinding.expiresAt = "2026-08-20T17:45:00.000Z"
+    row.findingMetadata.effects = { ...effects, changesReviewedPolicy: true }
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    bindCheckpointFindings(row)
+    let now = new Date("2026-08-20T17:40:00.000Z")
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("'RUNTIME_FINDING_OWNER_GATED'")) {
+        writes.push(sql)
+        row.settlementId = 702
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_OWNER_GATED"
+        row.settlementCreatedAt = "2026-08-20 17:40:00"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 702 }] }
+      }
+      if (sql.includes("INSERT INTO")) writes.push(sql)
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => now,
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: false }],
+    })
+    now = new Date("2026-08-20T18:00:00.000Z")
+    row.implementationGrantStatus = "expired"
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: true }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_OWNER_GATED'"))).toHaveLength(1)
+    expect(writes.some((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toBe(false)
+  })
+
   it("derives the ordinary docs child from the exact singleton live-acceptance parent", async () => {
     const row = liveAcceptanceSourceRow()
     let nextId = 800

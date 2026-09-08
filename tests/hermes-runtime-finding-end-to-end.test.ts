@@ -664,6 +664,43 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     await client.query(`UPDATE evidence_record SET "contentHash"=$1 WHERE "workOrderId"=4`, ["d".repeat(64)])
     await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
     await client.query("ROLLBACK")
+
+    const replayCheckpointAt = new Date((await client.query(`SELECT max("createdAt") AS "createdAt"
+      FROM governance_event WHERE "eventType"='HERMES_RUNTIME_CHECKPOINT' AND "entityId"='4'`))
+      .rows[0].createdAt)
+    const replaySettlementAt = new Date(replayCheckpointAt.getTime() + 60_000)
+    await client.query(`UPDATE governance_event SET "createdAt"=$1
+      WHERE "eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')`,
+    [replaySettlementAt])
+    const replayExpiresAt = new Date(replaySettlementAt.getTime() + 60_000)
+    const replayExpiresIso = new Date(Date.UTC(
+      replayExpiresAt.getFullYear(), replayExpiresAt.getMonth(), replayExpiresAt.getDate(),
+      replayExpiresAt.getHours(), replayExpiresAt.getMinutes(), replayExpiresAt.getSeconds(),
+      replayExpiresAt.getMilliseconds(),
+    )).toISOString()
+    await client.query(`UPDATE authority_grant SET status='expired', "expiresAt"=$1
+      WHERE id IN (80,81) OR "workOrderId"=$2`, [replayExpiresAt, Number(child.workOrderId)])
+    await client.query(`UPDATE outcome_queue_mutation_receipt
+      SET "resultBinding"=jsonb_set("resultBinding",'{expiresAt}',to_jsonb($1::text))
+      WHERE operation='workbench_execution.authorize'`, [replayExpiresIso])
+    const replayConsumer = createRuntimeFindingDbConsumer({
+      withPool: async (action) => {
+        const { Pool } = await import("pg")
+        const consumerPool = new Pool({ connectionString: scopedUrl })
+        try { return await action(consumerPool) } finally { await consumerPool.end() }
+      },
+      now: () => new Date(new Date(replayExpiresIso).getTime() + 60_000),
+    })
+    await expect(replayConsumer()).resolves.toMatchObject({
+      status: "RUNTIME_FINDINGS_CONSUMED", considered: 2, derived: 1, gated: 1, lapsed: 0,
+      queuedChildren: 0,
+      results: [
+        { disposition: "DERIVED", replayed: true },
+        { disposition: "OWNER_GATED", replayed: true },
+      ],
+    })
+    expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
+      WHERE "eventType"='RUNTIME_FINDING_AUTHORITY_LAPSED'`)).rows).toEqual([{ count: 0 }])
   })
 
   it("records immutable authority-lapsed settlements in PostgreSQL without reviving expired work", async () => {

@@ -1005,6 +1005,20 @@ async function replayOrdinary(client, row, finding, order, classification) {
   return { disposition: "DERIVED", findingId: finding.findingId, replayed: true, ...artifacts, ...identity }
 }
 
+function replayDerivedSettlementAfterLapse(row, finding, order, classification) {
+  const identity = childIdentity(row, order)
+  const artifactKeys = ["workOrderId", "goalId", "queueId", "decisionId", "grantId", "queueGrantId", "receiptId"]
+  const artifacts = Object.fromEntries(artifactKeys.map((key) => [key, Number(row.settlementMetadata?.[key])]))
+  if (artifactKeys.some((key) => !Number.isSafeInteger(artifacts[key]) || artifacts[key] <= 0)) {
+    fail("FINDING_SETTLEMENT_REPLAY_WALL")
+  }
+  const metadata = settlementMetadata({ finding, classification, identity, artifacts: {
+    ...artifacts, task: order.task, parentGrantRef: row.implementationGrantRef,
+  } })
+  exactSettlement(row, "RUNTIME_FINDING_DERIVED", metadata)
+  return { disposition: "DERIVED", findingId: finding.findingId, replayed: true, ...artifacts, ...identity }
+}
+
 async function insertGate(client, row, finding, classification, at) {
   const metadata = settlementMetadata({ finding, classification, artifacts: {
     parentGrantRef: row.implementationGrantRef,
@@ -1206,7 +1220,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     execution_grant."allowedActions" AS "parentExecutionGrantAllowedActions",
                     execution_grant."blockedActions" AS "parentExecutionGrantBlockedActions",
                     settlement.id AS "settlementId", settlement."eventType" AS "settlementEventType",
-                    settlement.metadata AS "settlementMetadata", settlement."settlementCount"
+                    settlement.metadata AS "settlementMetadata", settlement."settlementCreatedAt",
+                    settlement."settlementCount"
                FROM governance_event finding
                JOIN work_order parent ON parent."userId" = finding."userId"
                  AND parent.id::text = finding."entityId"::text
@@ -1244,6 +1259,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND execution_grant.ref = receipt."resultBinding"->>'grantRef'
                LEFT JOIN LATERAL (
                  SELECT settled.id, settled."eventType", settled.metadata,
+                        settled."createdAt" AS "settlementCreatedAt",
                         count(*) OVER ()::integer AS "settlementCount"
                    FROM governance_event settled
                   WHERE settled."userId" = finding."userId"
@@ -1266,6 +1282,25 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
               fail("FINDING_SETTLEMENT_CARDINALITY_WALL")
             }
             if (finding.authorityState === "lapsed") {
+              if (row.settlementId && row.settlementEventType !== "RUNTIME_FINDING_AUTHORITY_LAPSED") {
+                const settlementAt = normalizeGrantTimestamp(row.settlementCreatedAt)
+                if (settlementAt.getTime() < normalizeDate(finding.checkpointCreatedAt).getTime()
+                  || settlementAt.getTime() >= normalizeDate(finding.implementationGrantExpiresAt).getTime()
+                  || settlementAt.getTime() >= normalizeDate(finding.executionGrantExpiresAt).getTime()) {
+                  fail("FINDING_SETTLEMENT_REPLAY_WALL")
+                }
+                const settledResult = deriveRemediationWorkOrder({
+                  objective: parentObjective({ ...row, implementationGrantStatus: "active" }, finding), finding,
+                  now: () => settlementAt.toISOString() })
+                const settledClassification = classifyProposedAction({ effects: finding.effects })
+                if (settledResult.gate) {
+                  results.push(await insertGate(client, row, finding, settledResult.gate, settlementAt))
+                } else {
+                  results.push(replayDerivedSettlementAfterLapse(row, finding, settledResult.dispatch,
+                    settledClassification))
+                }
+                continue
+              }
               results.push(await insertAuthorityLapse(client, row, finding, normalizeDate(now())))
               continue
             }
