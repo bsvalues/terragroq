@@ -121,7 +121,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if ($manifestVersion -ne 5 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if ($manifestVersion -ne 6 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
 if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
@@ -130,6 +130,20 @@ if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPrese
   -or [string]$manifest.legacyRelay.connectAddress -ne $HermesLanAddress `
   -or [int]$manifest.legacyRelay.connectPort -ne $HttpsPort) {
   throw "Rollback manifest does not name the exact legacy cockpit relay boundary"
+}
+$overlayRestoreMode = [string]$manifest.overlayRestoreMode
+if ($overlayRestoreMode -notin @("direct", "legacy-relay", "compatibility-relay")) {
+  throw "Rollback manifest does not name a supported overlay restore mode"
+}
+$rollbackProxyPath = Join-Path $RollbackRoot "scripts\hermes-https-proxy.mjs"
+$rollbackProxyText = if (Test-Path -LiteralPath $rollbackProxyPath -PathType Leaf) {
+  Get-Content -LiteralPath $rollbackProxyPath -Raw
+} else { "" }
+$rollbackProxySupportsNativeOverlay = [bool]($rollbackProxyText -match 'startListener\(HERMES_HTTPS_OVERLAY_HOST,\s*\{\s*required:\s*false\s*\}\)')
+if (($overlayRestoreMode -eq "direct" -and -not $rollbackProxySupportsNativeOverlay) `
+  -or ($overlayRestoreMode -eq "legacy-relay" -and -not [bool]$manifest.legacyRelay.wasPresent) `
+  -or ($overlayRestoreMode -eq "compatibility-relay" -and ([bool]$manifest.legacyRelay.wasPresent -or $rollbackProxySupportsNativeOverlay))) {
+  throw "Rollback manifest overlay mode contradicts the captured proxy and relay state"
 }
 
 function Get-PhysicalVolumeIdentity {
@@ -271,12 +285,12 @@ do {
 } while ((Get-Date) -lt $deadline)
 if (-not $httpsHealth -or $httpsHealth.StatusCode -ne 200) { throw "Restored WilliamOS HTTPS origin did not become healthy on port $HttpsPort" }
 
-if ([bool]$manifest.legacyRelay.wasPresent) {
+if ($overlayRestoreMode -in @("legacy-relay", "compatibility-relay")) {
   netsh interface portproxy add v4tov4 listenaddress=$HermesOverlayAddress listenport=$HttpsPort `
     connectaddress=$HermesLanAddress connectport=$HttpsPort 2>&1 | Out-Null
   $relayPattern = "^\s*$([regex]::Escape($HermesOverlayAddress))\s+$HttpsPort\s+$([regex]::Escape($HermesLanAddress))\s+$HttpsPort\s*$"
   $relay = @(netsh interface portproxy show v4tov4) -match $relayPattern
-  if (-not $relay) { throw "Restored runtime is healthy on LAN, but its captured legacy overlay relay could not be restored" }
+  if (-not $relay) { throw "Restored runtime is healthy on LAN, but its required overlay relay could not be restored" }
 }
 
 $canonicalReady = $false

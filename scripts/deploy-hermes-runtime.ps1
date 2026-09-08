@@ -149,6 +149,13 @@ function Remove-LegacyCockpitRelay {
   Write-Output "retired exact legacy cockpit relay ${HermesOverlayAddress}:$HttpsPort -> ${HermesLanAddress}:$HttpsPort"
 }
 
+function Test-ProxySupportsNativeOverlay {
+  param([string]$ProxyPath)
+  if (-not (Test-Path -LiteralPath $ProxyPath -PathType Leaf)) { return $false }
+  $proxyText = Get-Content -LiteralPath $ProxyPath -Raw
+  return [bool]($proxyText -match 'startListener\(HERMES_HTTPS_OVERLAY_HOST,\s*\{\s*required:\s*false\s*\}\)')
+}
+
 function Assert-OverlayFirewallRule {
   $ruleName = "WilliamOS cockpit over Tailscale"
   $rules = @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
@@ -357,6 +364,18 @@ $legacyRelayState = Get-LegacyCockpitRelayState
 if ($SkipRollbackCapture -and $legacyRelayState.wasPresent) {
   throw "SkipRollbackCapture cannot retire the existing cockpit relay without a rollback record"
 }
+$outgoingProxyPath = Join-Path $Runtime "scripts\hermes-https-proxy.mjs"
+$outgoingProxySupportsNativeOverlay = Test-ProxySupportsNativeOverlay -ProxyPath $outgoingProxyPath
+$rollbackOverlayMode = if ($outgoingProxySupportsNativeOverlay) {
+  "direct"
+} elseif ($legacyRelayState.wasPresent) {
+  "legacy-relay"
+} else {
+  # The outgoing runtime predates the direct overlay listener and no relay currently survives. A
+  # rollback must add the exact TLS-pass-through relay or it would restore local bytes while silently
+  # removing the canonical owner route.
+  "compatibility-relay"
+}
 
 # Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
 # placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
@@ -482,12 +501,13 @@ if (-not $SkipRollbackCapture) {
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 5
+    version = 6
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
     legacyRelay = [ordered]@{ wasPresent = [bool]$legacyRelayState.wasPresent; listenAddress = $HermesOverlayAddress; listenPort = $HttpsPort; connectAddress = $HermesLanAddress; connectPort = $HttpsPort }
+    overlayRestoreMode = $rollbackOverlayMode
   }
   foreach ($directory in $rollbackDirectories) {
     $existing = Join-Path $Runtime $directory
