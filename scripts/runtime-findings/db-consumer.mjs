@@ -24,6 +24,10 @@ const FINDING_METADATA_KEYS = Object.freeze([
   "workContractDigest", "workContractId", "workContractLane", "workContractRepository",
   "workContractVersion",
 ])
+const FINDING_PROJECTION_KEYS = Object.freeze(["projectionIssueNumber", "projectionCompletionOwned"])
+const LEGACY_FINDING_METADATA_KEYS = Object.freeze(
+  FINDING_METADATA_KEYS.filter((key) => !FINDING_PROJECTION_KEYS.includes(key)),
+)
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -150,7 +154,7 @@ function exactCheckpointFindings(row) {
   const normalized = []
   for (const metadata of values) {
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)
-      || canonicalJson(Object.keys(metadata).sort()) !== canonicalJson(FINDING_METADATA_KEYS)
+      || !exactFindingMetadataKeys(metadata)
       || Number(metadata.sourceCheckpointId) !== Number(row.checkpointId)
       || metadata.sourceCheckpointDigest !== row.checkpointMetadata?.payloadDigest
       || digest(findingPayload(metadata)) !== metadata.payloadDigest
@@ -187,6 +191,31 @@ function fail(reasonCode, message = reasonCode) {
 
 function safeText(value) {
   return typeof value === "string" && value.trim() !== ""
+}
+
+function findingProjectionShape(metadata) {
+  const issue = Object.hasOwn(metadata ?? {}, "projectionIssueNumber")
+  const completion = Object.hasOwn(metadata ?? {}, "projectionCompletionOwned")
+  if (issue !== completion) return null
+  return issue ? "projected" : "legacy"
+}
+
+function exactFindingMetadataKeys(metadata) {
+  const shape = findingProjectionShape(metadata)
+  if (!shape) return false
+  const expected = shape === "projected" ? FINDING_METADATA_KEYS : LEGACY_FINDING_METADATA_KEYS
+  return canonicalJson(Object.keys(metadata).sort()) === canonicalJson(expected)
+}
+
+function exactProjectionBinding(checkpoint, metadata, contract) {
+  const expectedShape = Object.hasOwn(contract ?? {}, "projection") ? "projected" : "legacy"
+  if (findingProjectionShape(checkpoint) !== expectedShape
+    || findingProjectionShape(metadata) !== expectedShape) return false
+  if (expectedShape === "legacy") return true
+  return checkpoint.projectionIssueNumber === metadata.projectionIssueNumber
+    && metadata.projectionIssueNumber === contract.projection.issueNumber
+    && checkpoint.projectionCompletionOwned === metadata.projectionCompletionOwned
+    && metadata.projectionCompletionOwned === contract.projection.completionOwned
 }
 
 function normalizeDate(value) {
@@ -291,7 +320,7 @@ function sourceFinding(row, nowMs) {
     || !safeText(row?.userId) || !Number.isSafeInteger(Number(row?.parentWorkOrderId))
     || !safeText(row?.parentWorkOrderRef) || row?.parentAssignee !== "hermes-codex-bridge"
     || !metadata || metadata.schemaVersion !== 1 || !checkpointFindings
-    || canonicalJson(Object.keys(metadata).sort()) !== canonicalJson(FINDING_METADATA_KEYS)
+    || !exactFindingMetadataKeys(metadata)
     || !/^FINDING-[A-Z0-9][A-Z0-9-]{0,119}$/.test(metadata.findingId ?? "")
     || metadata.objectiveWorkOrderId !== row.parentWorkOrderRef
     || !Number.isSafeInteger(metadata.sequence) || metadata.sequence <= 0
@@ -350,6 +379,7 @@ function sourceFinding(row, nowMs) {
     || (contract.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
       ? !exactLiveAcceptance
       : contract.acceptance !== undefined)
+    || !exactProjectionBinding(checkpoint, metadata, contract)
     || (exactLiveAcceptance
       ? canonicalJson(row.parentGoalAcceptedContractIds) !== canonicalJson([HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID])
         || canonicalJson(row.parentQueueAcceptedContractIds) !== canonicalJson([HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID])
@@ -368,10 +398,6 @@ function sourceFinding(row, nowMs) {
     || contract.delivery?.commitAllowed !== metadata.commitAllowed
     || contract.delivery?.tagAllowed !== metadata.tagAllowed
     || contract.delivery?.pushAllowed !== metadata.pushAllowed
-    || (contract.projection !== undefined && (
-      Number(contract.projection?.issueNumber) !== Number(metadata.projectionIssueNumber)
-      || contract.projection?.completionOwned !== metadata.projectionCompletionOwned
-    ))
     || Number(row.parentApprovalDecisionId) !== Number(metadata.authorizationDecisionId)
     || Number(row.parentQueueApprovalDecisionId) !== Number(metadata.authorizationDecisionId)
     || !safeText(row.parentOutcomeKey) || row.parentApprovalScope !== row.parentOutcomeKey
@@ -580,13 +606,17 @@ function childIdentity(row, order) {
 }
 
 function settlementMetadata({ finding, classification, identity, artifacts = {} }) {
+  const issueNumber = finding.issueNumber === undefined ? {} : { issueNumber: finding.issueNumber }
+  const projectionCompletion = finding.issueNumber === undefined ? {} : {
+    projectionCompletionOwned: finding.projectionCompletionOwned,
+  }
   const canonical = identity ? {
     sourceFindingEventId: finding.sourceFindingEventId,
     sourceUserId: finding.sourceUserId,
     findingId: finding.findingId,
     objectiveWorkOrderId: finding.objectiveWorkOrderId,
     childWorkOrderRef: identity.workOrderRef,
-    issueNumber: finding.issueNumber,
+    ...issueNumber,
     allowedPaths: identity.workContract.reservations,
     requiredValidation: validatorLabels(identity.workContract.validationCommands),
     task: artifacts.task,
@@ -595,7 +625,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     contractDigest: finding.contractDigest,
     authorizationDecisionId: finding.authorizationDecisionId,
     implementationGrantId: finding.implementationGrantId,
-    projectionCompletionOwned: finding.projectionCompletionOwned,
+    ...projectionCompletion,
     sourceCheckpointId: finding.sourceCheckpointId,
     sourceCheckpointDigest: finding.sourceCheckpointDigest,
     contractVersion: finding.contractVersion,
@@ -611,7 +641,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     sourceUserId: finding.sourceUserId,
     findingId: finding.findingId,
     objectiveWorkOrderId: finding.objectiveWorkOrderId,
-    issueNumber: finding.issueNumber,
+    ...issueNumber,
     gate: classification.gate,
     gates: classification.gates,
     reason: classification.reason,
@@ -620,7 +650,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     authorizationDecisionId: finding.authorizationDecisionId,
     implementationGrantId: finding.implementationGrantId,
     grantRef: artifacts.parentGrantRef,
-    projectionCompletionOwned: finding.projectionCompletionOwned,
+    ...projectionCompletion,
     sourceCheckpointId: finding.sourceCheckpointId,
     sourceCheckpointDigest: finding.sourceCheckpointDigest,
     contractVersion: finding.contractVersion,

@@ -89,6 +89,7 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     workContractLane: workContract.lane, authorizationDecisionId: 74,
     executionGrantRef: "WB-EXEC-GRANT-911",
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+    projectionIssueNumber: 911, projectionCompletionOwned: false,
     deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
     commitAllowed: true, tagAllowed: false, pushAllowed: true,
   }
@@ -252,7 +253,235 @@ function bindCheckpointFindings(...rows: any[]) {
   return rows
 }
 
+function legacyNoProjectionLapsedRow() {
+  const row = sourceRow({
+    settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+    implementationGrantStatus: "expired",
+    implementationGrantExpiresAt: "2026-08-20 17:45:00",
+    parentExecutionGrantStatus: "expired",
+    parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",
+  }) as any
+  const contractBody = { ...row.workContract }
+  delete contractBody.digest
+  delete contractBody.projection
+  const workContract = { ...contractBody, digest: sha(contractBody) }
+  row.workContract = workContract
+  row.parentReceiptResultBinding = {
+    ...row.parentReceiptResultBinding,
+    expiresAt: "2026-08-20T17:45:00.000Z",
+    workContract,
+  }
+  row.parentApprovalEvidence = row.parentApprovalEvidence.map((entry: string) => {
+    if (entry.startsWith("work-contract-digest:")) return `work-contract-digest:${workContract.digest}`
+    if (entry.startsWith("work-contract-json:")) return `work-contract-json:${JSON.stringify(workContract)}`
+    return entry
+  })
+  const checkpointBase = { ...row.checkpointMetadata, workContractDigest: workContract.digest }
+  delete checkpointBase.payloadDigest
+  delete checkpointBase.projectionIssueNumber
+  delete checkpointBase.projectionCompletionOwned
+  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointBase) }
+  const findingMetadata = {
+    ...row.findingMetadata,
+    workContractDigest: workContract.digest,
+    sourceCheckpointDigest: checkpointMetadata.payloadDigest,
+  }
+  delete findingMetadata.payloadDigest
+  delete findingMetadata.projectionIssueNumber
+  delete findingMetadata.projectionCompletionOwned
+  findingMetadata.payloadDigest = sha(findingPayload(findingMetadata))
+  row.checkpointMetadata = checkpointMetadata
+  row.findingMetadata = findingMetadata
+  row.checkpointFindings = [findingMetadata]
+  return row
+}
+
+function rebindCheckpoint(row: any, mutate: (checkpoint: any) => void) {
+  const checkpointBase = { ...row.checkpointMetadata }
+  delete checkpointBase.payloadDigest
+  mutate(checkpointBase)
+  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointBase) }
+  const findingMetadata = {
+    ...row.findingMetadata,
+    sourceCheckpointDigest: checkpointMetadata.payloadDigest,
+  }
+  delete findingMetadata.payloadDigest
+  findingMetadata.payloadDigest = sha(findingPayload(findingMetadata))
+  row.checkpointMetadata = checkpointMetadata
+  row.findingMetadata = findingMetadata
+  row.checkpointFindings = [findingMetadata]
+  return row
+}
+
+async function expectSourceLineageWall(row: any) {
+  const query = vi.fn(async (sql: string) => (
+    sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+  ))
+  const consume = createRuntimeFindingDbConsumer({
+    withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+    now: () => new Date("2026-08-20T18:00:00.000Z"),
+  })
+  await expect(consume()).rejects.toMatchObject({
+    code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+  })
+}
+
 describe("native runtime finding database consumer", () => {
+  it("terminalizes a valid legacy no-projection finding after its source authority lapses", async () => {
+    const row = legacyNoProjectionLapsedRow()
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("INSERT INTO")) {
+        writes.push(sql)
+        row.settlementId = 702
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_AUTHORITY_LAPSED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 702 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      status: "RUNTIME_FINDINGS_CONSUMED", considered: 1, derived: 0, gated: 0, lapsed: 1,
+      queuedChildren: 0,
+      results: [{ disposition: "AUTHORITY_LAPSED", findingId: "FINDING-COMPOSE", replayed: false }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toHaveLength(1)
+    expect(writes.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
+      .toBe(false)
+  })
+
+  it("replays a legacy no-projection owner-gated settlement without projection key drift", async () => {
+    const row = legacyNoProjectionLapsedRow() as any
+    row.implementationGrantStatus = "active"
+    row.implementationGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentExecutionGrantStatus = "active"
+    row.parentExecutionGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentReceiptResultBinding.expiresAt = "2099-01-01T00:00:00.000Z"
+    row.findingMetadata.effects = { ...effects, changesReviewedPolicy: true }
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    bindCheckpointFindings(row)
+    const gateInserts: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("'RUNTIME_FINDING_OWNER_GATED'")) {
+        gateInserts.push(sql)
+        row.settlementId = 703
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_OWNER_GATED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 703 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, results: [{ disposition: "OWNER_GATED", replayed: false }],
+    })
+    expect(row.settlementMetadata).not.toHaveProperty("issueNumber")
+    expect(row.settlementMetadata).not.toHaveProperty("projectionCompletionOwned")
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, results: [{ disposition: "OWNER_GATED", replayed: true }],
+    })
+    expect(gateInserts).toHaveLength(1)
+  })
+
+  it("rejects a legacy finding with only one projection field", async () => {
+    const row = legacyNoProjectionLapsedRow()
+    row.findingMetadata.projectionIssueNumber = 911
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    row.checkpointFindings = [row.findingMetadata]
+    const query = vi.fn(async (sql: string) => (
+      sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+    ))
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+    })
+  })
+
+  it("rejects missing projection fields when the immutable contract has a projection", async () => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      implementationGrantStatus: "expired",
+      implementationGrantExpiresAt: "2026-08-20 17:45:00",
+      parentExecutionGrantStatus: "expired",
+      parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",
+    }) as any
+    row.parentReceiptResultBinding.expiresAt = "2026-08-20T17:45:00.000Z"
+    const checkpointBase = { ...row.checkpointMetadata }
+    delete checkpointBase.payloadDigest
+    delete checkpointBase.projectionIssueNumber
+    delete checkpointBase.projectionCompletionOwned
+    row.checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointBase) }
+    delete row.findingMetadata.projectionIssueNumber
+    delete row.findingMetadata.projectionCompletionOwned
+    row.findingMetadata.sourceCheckpointDigest = row.checkpointMetadata.payloadDigest
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    row.checkpointFindings = [row.findingMetadata]
+    const query = vi.fn(async (sql: string) => (
+      sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+    ))
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+    })
+  })
+
+  it("rejects a legacy checkpoint with only one projection field", async () => {
+    const row = rebindCheckpoint(legacyNoProjectionLapsedRow(), (checkpoint) => {
+      checkpoint.projectionIssueNumber = 911
+    })
+
+    await expectSourceLineageWall(row)
+  })
+
+  it("rejects a projected contract whose checkpoint omits projection fields", async () => {
+    const row = rebindCheckpoint(sourceRow(), (checkpoint) => {
+      delete checkpoint.projectionIssueNumber
+      delete checkpoint.projectionCompletionOwned
+    })
+
+    await expectSourceLineageWall(row)
+  })
+
+  it("rejects a projected checkpoint with only one projection field", async () => {
+    const row = rebindCheckpoint(sourceRow(), (checkpoint) => {
+      delete checkpoint.projectionCompletionOwned
+    })
+
+    await expectSourceLineageWall(row)
+  })
+
+  it("rejects projected checkpoint values that differ from the contract and finding", async () => {
+    const row = rebindCheckpoint(sourceRow(), (checkpoint) => {
+      checkpoint.projectionIssueNumber = 912
+    })
+
+    await expectSourceLineageWall(row)
+  })
+
   it("terminalizes exact historical findings whose valid-at-emission authority later expired", async () => {
     const row = sourceRow({
       settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
