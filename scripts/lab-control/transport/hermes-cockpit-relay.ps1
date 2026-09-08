@@ -39,7 +39,7 @@ $remaining = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.
 if ($remaining) { throw "RELAY_RETIREMENT_FAILED: ${overlayAddress}:$port is still reserved by portproxy" }
 
 $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if (-not $rule -or -not $rule.Enabled) { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }
+if (-not $rule -or [string]$rule.Enabled -ne 'True') { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }
 $portFilter = $rule | Get-NetFirewallPortFilter
 $addressFilter = $rule | Get-NetFirewallAddressFilter
 if ($rule.Profile -notmatch 'Private' -or $portFilter.Protocol -ne 'TCP' -or [string]$portFilter.LocalPort -ne [string]$port `

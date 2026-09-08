@@ -163,7 +163,7 @@ function Assert-OverlayFirewallRule {
   $rule = $rules[0]
   $portFilters = @($rule | Get-NetFirewallPortFilter)
   $addressFilters = @($rule | Get-NetFirewallAddressFilter)
-  if (-not $rule.Enabled -or [string]$rule.Direction -ne "Inbound" -or [string]$rule.Action -ne "Allow" `
+  if ([string]$rule.Enabled -ne "True" -or [string]$rule.Direction -ne "Inbound" -or [string]$rule.Action -ne "Allow" `
     -or [string]$rule.Profile -ne "Private" -or $portFilters.Count -ne 1 -or $addressFilters.Count -ne 1 `
     -or [string]$portFilters[0].Protocol -notin @("TCP", "6") `
     -or [string]$portFilters[0].LocalPort -ne [string]$HttpsPort `
@@ -192,7 +192,7 @@ function Ensure-OverlayFirewallRule {
       -or [string]@($addressFilters[0].LocalAddress)[0] -ne $HermesOverlayAddress) {
       throw "The existing HERMES overlay firewall rule '$ruleName' is not the exact rule WilliamOS is allowed to manage"
     }
-    if (-not $rule.Enabled) { $null = $rule | Set-NetFirewallRule -Enabled True }
+    if ([string]$rule.Enabled -ne "True") { $null = $rule | Set-NetFirewallRule -Enabled True }
   }
   Assert-OverlayFirewallRule
 }
