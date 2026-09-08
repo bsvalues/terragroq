@@ -680,7 +680,7 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     )).toISOString()
     await client.query(`DELETE FROM governance_event
       WHERE "eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')`)
-    await client.query(`UPDATE authority_grant SET status='expired', "expiresAt"=$1
+    await client.query(`UPDATE authority_grant SET "expiresAt"=$1
       WHERE id IN (80,81)`, [expiresAt])
     await client.query(`UPDATE outcome_queue_mutation_receipt
       SET "resultBinding"=jsonb_set("resultBinding",'{expiresAt}',to_jsonb($1::text))

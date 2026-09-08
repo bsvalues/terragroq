@@ -256,7 +256,7 @@ describe("native runtime finding database consumer", () => {
   it("terminalizes exact historical findings whose valid-at-emission authority later expired", async () => {
     const row = sourceRow({
       settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
-      implementationGrantStatus: "expired",
+      implementationGrantStatus: "active",
       implementationGrantExpiresAt: "2026-08-20 17:45:00",
       parentExecutionGrantStatus: "expired",
       parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",

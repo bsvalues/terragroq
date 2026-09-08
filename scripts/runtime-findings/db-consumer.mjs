@@ -467,16 +467,19 @@ function sourceFinding(row, nowMs) {
     || implementationExpiresAt.getTime() <= checkpointAt.getTime()
     || executionCreatedAt.getTime() > checkpointAt.getTime()
     || executionExpiresAt.getTime() <= checkpointAt.getTime()) fail("FINDING_SOURCE_LINEAGE_WALL")
+  const implementationElapsed = implementationExpiresAt.getTime() <= nowMs
+  const executionElapsed = executionExpiresAt.getTime() <= nowMs
+  const lapsedAuthority = ["active", "expired"].includes(row.parentExecutionGrantStatus)
+    && row.parentStatus === "closed"
+    && implementationElapsed && executionElapsed
   const activeAuthority = row.implementationGrantStatus === "active"
     && row.parentExecutionGrantStatus === "active"
-  const lapsedAuthority = row.implementationGrantStatus === "expired"
-    && row.parentExecutionGrantStatus === "expired"
-    && row.parentStatus === "closed"
-    && implementationExpiresAt.getTime() <= nowMs
-    && executionExpiresAt.getTime() <= nowMs
+    && !implementationElapsed && !executionElapsed
+  if (!lapsedAuthority && row.implementationGrantStatus === "active"
+    && row.parentExecutionGrantStatus === "active" && implementationElapsed) {
+    fail("FINDING_AUTHORITY_EXPIRED")
+  }
   if (!activeAuthority && !lapsedAuthority) fail("FINDING_SOURCE_LINEAGE_WALL")
-  if (activeAuthority && implementationExpiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
-  if (activeAuthority && executionExpiresAt.getTime() <= nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
