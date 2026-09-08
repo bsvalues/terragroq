@@ -49,6 +49,27 @@ function Stop-ExpectedListener {
   }
 }
 
+function Get-CurrentLegacyRelayState {
+  $rows = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() })
+  $pattern = "^\s*$([regex]::Escape($HermesOverlayAddress))\s+$HttpsPort\s+(\S+)\s+(\d+)\s*$"
+  $matches = @($rows | Select-String -Pattern $pattern)
+  if ($matches.Count -gt 1) { throw "Multiple portproxy records claim ${HermesOverlayAddress}:$HttpsPort; refusing rollback before stopping production" }
+  if ($matches.Count -eq 0) { return [pscustomobject]@{ wasPresent = $false } }
+  $targetAddress = $matches[0].Matches[0].Groups[1].Value
+  $targetPort = [int]$matches[0].Matches[0].Groups[2].Value
+  if ($targetAddress -ne $HermesLanAddress -or $targetPort -ne $HttpsPort) {
+    throw "${HermesOverlayAddress}:$HttpsPort is owned by an unrelated portproxy target ${targetAddress}:$targetPort; refusing rollback before stopping production"
+  }
+  return [pscustomobject]@{ wasPresent = $true }
+}
+
+function Remove-CurrentLegacyRelay {
+  netsh interface portproxy delete v4tov4 listenaddress=$HermesOverlayAddress listenport=$HttpsPort 2>&1 | Out-Null
+  if ((Get-CurrentLegacyRelayState).wasPresent) {
+    throw "The exact current legacy cockpit relay still owns ${HermesOverlayAddress}:$HttpsPort after deletion"
+  }
+}
+
 if (-not (Test-Path -LiteralPath $RollbackRoot -PathType Container)) {
   throw "Rollback directory does not exist: $RollbackRoot"
 }
@@ -194,6 +215,7 @@ if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartR
   throw "Rollback is incomplete: $liveStartRollbackFile is missing"
 }
 Assert-LauncherMutationAccess -TargetPath $LiveStartTarget -WillBePresent ([bool]$manifest.liveStart.wasPresent)
+$currentLegacyRelay = Get-CurrentLegacyRelayState
 
 $v4ModuleEntry = @()
 if ($manifestVersion -ge 4 -and [bool]$manifest.withDependencies) {
@@ -210,6 +232,7 @@ if ($manifestVersion -ge 4 -and [bool]$manifest.withDependencies) {
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
+if ($currentLegacyRelay.wasPresent) { Remove-CurrentLegacyRelay }
 Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandPath (Join-Path $Runtime "server.js")
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandPath (Join-Path $Runtime "scripts\hermes-https-proxy.mjs")
 Start-Sleep -Seconds 2
