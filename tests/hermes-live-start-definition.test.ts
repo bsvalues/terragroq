@@ -22,11 +22,13 @@ const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-liv
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
 const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
 const TRANSPORT_VERIFY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "verify-cockpit-transport.ps1")
+const RELAY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "hermes-cockpit-relay.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
 const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
 const transportVerifyText = fs.readFileSync(TRANSPORT_VERIFY_SCRIPT, "utf8")
+const relayText = fs.readFileSync(RELAY_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -416,9 +418,10 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(deploy).toContain("legacyRelay =")
     expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
       .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
-    expect(restore).toMatch(/\$manifestVersion\s+-notin\s+@\(3,\s*4,\s*5\)/)
+    expect(restore).toMatch(/\$manifestVersion\s+-ne\s+5/)
     expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
-    expect(restore).toMatch(/if \(\$manifestVersion -ge 5 -and \[bool\]\$manifest\.legacyRelay\.wasPresent\)[\s\S]*portproxy add v4tov4/)
+    expect(restore).toMatch(/if \(\[bool\]\$manifest\.legacyRelay\.wasPresent\)[\s\S]*portproxy add v4tov4/)
+    expect(restore.indexOf("$manifestVersion -ne 5")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
   })
 
   it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
@@ -431,6 +434,8 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(afterStart).toContain("canonical williamos.lan origin did not answer over the HERMES overlay")
     expect(afterStart).toContain("Assert-OverlayFirewallRule")
     expect(code).toContain("Get-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain("New-NetFirewallRule -DisplayName $ruleName")
+    expect(code.lastIndexOf("Ensure-OverlayFirewallRule")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
     expect(code).toContain("not exactly scoped to inbound Private TCP")
     expect(afterStart).toContain("remote acceptance remains separate")
     expect(afterStart).toContain("verify-cockpit-transport.ps1 on OMEN")
@@ -599,6 +604,27 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(restore).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(code).toContain("owned by an unrelated process")
+    expect(code).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+    expect(restore).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+  })
+
+  it("provisions the canonical HERMES hostname without replacing conflicting ownership", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain('$CanonicalHostname = "williamos.lan"')
+    expect(code).toContain('Add-Content -LiteralPath $HostsPath')
+    expect(code).toContain("contains a conflicting or ambiguous '$CanonicalHostname' mapping")
+    expect(code.lastIndexOf("Ensure-CanonicalHostname")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("requires Tailscale to survive reboot before retiring the legacy relay", () => {
+    const code = executableOnly(relayText)
+    const preflight = code.indexOf("TAILSCALE_NOT_AUTOMATIC")
+    const mutation = code.indexOf("portproxy delete")
+    expect(code).toContain("Get-CimInstance Win32_Service")
+    expect(code).toContain("StartMode -ne 'Auto'")
+    expect(code).toContain("TAILSCALE_NOT_RUNNING")
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(mutation)
   })
 })
 

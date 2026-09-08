@@ -26,9 +26,10 @@ if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandPath)
   $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
-  Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+  $ownerProcessIds = @(Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($ownerProcessId in $ownerProcessIds) {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerProcessId"
       $pathMatched = $false
       if ($process -and $process.CommandLine) {
         $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
@@ -45,7 +46,7 @@ function Stop-ExpectedListener {
         throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS rollback"
       }
       Stop-Process -Id $process.ProcessId -Force
-    }
+  }
 }
 
 if (-not (Test-Path -LiteralPath $RollbackRoot -PathType Container)) {
@@ -120,17 +121,15 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if ($manifestVersion -notin @(3, 4, 5) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if ($manifestVersion -ne 5 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
-if ($manifestVersion -ge 5) {
-  if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
-    -or [string]$manifest.legacyRelay.listenAddress -ne $HermesOverlayAddress `
-    -or [int]$manifest.legacyRelay.listenPort -ne $HttpsPort `
-    -or [string]$manifest.legacyRelay.connectAddress -ne $HermesLanAddress `
-    -or [int]$manifest.legacyRelay.connectPort -ne $HttpsPort) {
-    throw "Rollback manifest does not name the exact legacy cockpit relay boundary"
-  }
+if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
+  -or [string]$manifest.legacyRelay.listenAddress -ne $HermesOverlayAddress `
+  -or [int]$manifest.legacyRelay.listenPort -ne $HttpsPort `
+  -or [string]$manifest.legacyRelay.connectAddress -ne $HermesLanAddress `
+  -or [int]$manifest.legacyRelay.connectPort -ne $HttpsPort) {
+  throw "Rollback manifest does not name the exact legacy cockpit relay boundary"
 }
 
 function Get-PhysicalVolumeIdentity {
@@ -272,7 +271,7 @@ do {
 } while ((Get-Date) -lt $deadline)
 if (-not $httpsHealth -or $httpsHealth.StatusCode -ne 200) { throw "Restored WilliamOS HTTPS origin did not become healthy on port $HttpsPort" }
 
-if ($manifestVersion -ge 5 -and [bool]$manifest.legacyRelay.wasPresent) {
+if ([bool]$manifest.legacyRelay.wasPresent) {
   netsh interface portproxy add v4tov4 listenaddress=$HermesOverlayAddress listenport=$HttpsPort `
     connectaddress=$HermesLanAddress connectport=$HttpsPort 2>&1 | Out-Null
   $relayPattern = "^\s*$([regex]::Escape($HermesOverlayAddress))\s+$HttpsPort\s+$([regex]::Escape($HermesLanAddress))\s+$HttpsPort\s*$"

@@ -45,6 +45,8 @@ param(
 $ErrorActionPreference = "Stop"
 $HermesLanAddress = "192.168.88.9"
 $HermesOverlayAddress = "100.97.194.84"
+$CanonicalHostname = "williamos.lan"
+$HostsPath = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
 
 # These are product identity, not deployment knobs. The HTTPS proxy's host allow-list, forwarded
 # origin, device-auth boundary, native Cockpit capability, and HERMES certificates all name this
@@ -164,12 +166,65 @@ function Assert-OverlayFirewallRule {
   }
 }
 
+function Ensure-OverlayFirewallRule {
+  $ruleName = "WilliamOS cockpit over Tailscale"
+  $rules = @(Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)
+  if ($rules.Count -gt 1) { throw "The exact HERMES overlay firewall rule '$ruleName' is ambiguous" }
+  if ($rules.Count -eq 0) {
+    $null = New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Enabled True `
+      -Profile Private -Protocol TCP -LocalAddress $HermesOverlayAddress -LocalPort $HttpsPort
+  } else {
+    $rule = $rules[0]
+    $portFilters = @($rule | Get-NetFirewallPortFilter)
+    $addressFilters = @($rule | Get-NetFirewallAddressFilter)
+    if ([string]$rule.Direction -ne "Inbound" -or [string]$rule.Action -ne "Allow" `
+      -or [string]$rule.Profile -ne "Private" -or $portFilters.Count -ne 1 -or $addressFilters.Count -ne 1 `
+      -or [string]$portFilters[0].Protocol -notin @("TCP", "6") `
+      -or [string]$portFilters[0].LocalPort -ne [string]$HttpsPort `
+      -or @($addressFilters[0].LocalAddress).Count -ne 1 `
+      -or [string]@($addressFilters[0].LocalAddress)[0] -ne $HermesOverlayAddress) {
+      throw "The existing HERMES overlay firewall rule '$ruleName' is not the exact rule WilliamOS is allowed to manage"
+    }
+    if (-not $rule.Enabled) { $null = $rule | Set-NetFirewallRule -Enabled True }
+  }
+  Assert-OverlayFirewallRule
+}
+
+function Get-CanonicalHostnameMappings {
+  if (-not (Test-Path -LiteralPath $HostsPath -PathType Leaf)) { return @() }
+  return @(Get-Content -LiteralPath $HostsPath | ForEach-Object {
+    $fields = @(($_ -replace '#.*$', '').Trim() -split '\s+' | Where-Object { $_ })
+    if ($fields.Count -ge 2 -and @($fields[1..($fields.Count - 1)] | Where-Object { $_ -ieq $CanonicalHostname }).Count -gt 0) {
+      $fields[0]
+    }
+  })
+}
+
+function Assert-CanonicalHostname {
+  $mappings = @(Get-CanonicalHostnameMappings)
+  if ($mappings.Count -ne 1 -or $mappings[0] -ne $HermesLanAddress) {
+    throw "The HERMES hosts file must map exactly one '$CanonicalHostname' entry to $HermesLanAddress"
+  }
+}
+
+function Ensure-CanonicalHostname {
+  $mappings = @(Get-CanonicalHostnameMappings)
+  if ($mappings.Count -gt 0 -and ($mappings.Count -ne 1 -or $mappings[0] -ne $HermesLanAddress)) {
+    throw "The HERMES hosts file contains a conflicting or ambiguous '$CanonicalHostname' mapping; refusing to replace it"
+  }
+  if ($mappings.Count -eq 0) {
+    Add-Content -LiteralPath $HostsPath -Value "$HermesLanAddress $CanonicalHostname # WilliamOS canonical HERMES origin"
+  }
+  Assert-CanonicalHostname
+}
+
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandPath)
   $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
-  Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+  $ownerProcessIds = @(Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($ownerProcessId in $ownerProcessIds) {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerProcessId"
       $pathMatched = $false
       if ($process -and $process.CommandLine) {
         $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
@@ -186,7 +241,7 @@ function Stop-ExpectedListener {
         throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS deploy"
       }
       Stop-Process -Id $process.ProcessId -Force
-    }
+  }
 }
 
 function Assert-LiveTaskUsesLauncher {
@@ -244,7 +299,10 @@ function Assert-LiveLauncherWritable {
 # Validate the external task binding before verification, rollback capture, task control, or file
 # mutation. A custom target is supported only when the supervised task actually invokes it.
 Assert-LiveTaskUsesLauncher
-Assert-OverlayFirewallRule
+if ($VerifyOnly) {
+  Assert-CanonicalHostname
+  Assert-OverlayFirewallRule
+}
 
 if ($VerifyOnly) {
   if (-not (Test-Cockpit -Port $Port)) {
@@ -478,6 +536,8 @@ if ($WithDependencies -and $rollbackRoot -and (Get-PhysicalVolumeIdentity -Path 
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
+Ensure-CanonicalHostname
+Ensure-OverlayFirewallRule
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2

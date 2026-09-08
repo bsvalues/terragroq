@@ -14,6 +14,14 @@ $lanAddress     = '192.168.88.9'
 $port           = 3443
 $ruleName       = 'WilliamOS cockpit over Tailscale'
 
+$tailscale = @(Get-CimInstance Win32_Service -Filter "Name='Tailscale'" -ErrorAction SilentlyContinue)
+if ($tailscale.Count -ne 1 -or $tailscale[0].StartMode -ne 'Auto') {
+    throw 'TAILSCALE_NOT_AUTOMATIC: the HERMES Tailscale service must start automatically before the legacy relay is retired'
+}
+if ($tailscale[0].State -ne 'Running') {
+    throw 'TAILSCALE_NOT_RUNNING: the HERMES Tailscale service must be running before the legacy relay is retired'
+}
+
 $rows = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() })
 $listenPattern = "^\s*$([regex]::Escape($overlayAddress))\s+$port\s+(\S+)\s+(\d+)\s*$"
 $matches = @($rows | Select-String -Pattern $listenPattern)
