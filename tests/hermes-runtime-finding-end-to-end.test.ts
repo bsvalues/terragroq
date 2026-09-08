@@ -664,5 +664,105 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     await client.query(`UPDATE evidence_record SET "contentHash"=$1 WHERE "workOrderId"=4`, ["d".repeat(64)])
     await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
     await client.query("ROLLBACK")
+
+    const replayCheckpointAt = new Date((await client.query(`SELECT "createdAt" FROM governance_event
+      WHERE id=$1`, [Number(recorded[0].metadata.sourceCheckpointId)])).rows[0].createdAt)
+    const replaySettlementAt = new Date(replayCheckpointAt.getTime() + 10)
+    await client.query(`UPDATE governance_event SET "createdAt"=$1
+      WHERE "eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')`,
+    [replaySettlementAt])
+    const replayExpiresAt = new Date(replaySettlementAt.getTime() + 10)
+    const replayExpiresIso = new Date(Date.UTC(
+      replayExpiresAt.getFullYear(), replayExpiresAt.getMonth(), replayExpiresAt.getDate(),
+      replayExpiresAt.getHours(), replayExpiresAt.getMinutes(), replayExpiresAt.getSeconds(),
+      replayExpiresAt.getMilliseconds(),
+    )).toISOString()
+    await client.query(`UPDATE authority_grant SET status='expired', "expiresAt"=$1
+      WHERE id IN (80,81) OR "workOrderId"=$2`, [replayExpiresAt, Number(child.workOrderId)])
+    await client.query(`UPDATE outcome_queue_mutation_receipt
+      SET "resultBinding"=jsonb_set("resultBinding",'{expiresAt}',to_jsonb($1::text))
+      WHERE operation='workbench_execution.authorize'`, [replayExpiresIso])
+    const replayConsumer = createRuntimeFindingDbConsumer({
+      withPool: async (action) => {
+        const { Pool } = await import("pg")
+        const consumerPool = new Pool({ connectionString: scopedUrl })
+        try { return await action(consumerPool) } finally { await consumerPool.end() }
+      },
+      now: () => new Date(new Date(replayExpiresIso).getTime() + 10),
+    })
+    await expect(replayConsumer()).resolves.toMatchObject({
+      status: "RUNTIME_FINDINGS_CONSUMED", considered: 2, derived: 1, gated: 1, lapsed: 0,
+      queuedChildren: 0,
+      results: [
+        { disposition: "DERIVED", replayed: true },
+        { disposition: "OWNER_GATED", replayed: true },
+      ],
+    })
+    expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
+      WHERE "eventType"='RUNTIME_FINDING_AUTHORITY_LAPSED'`)).rows).toEqual([{ count: 0 }])
+  })
+
+  it("records immutable authority-lapsed settlements in PostgreSQL without reviving expired work", async () => {
+    const checkpoint = (await client.query(`SELECT "createdAt" FROM governance_event
+      WHERE "eventType"='HERMES_RUNTIME_CHECKPOINT' AND "entityId"='4'
+      AND metadata->>'checkpointState'='CODEX_TURN_COMPLETED'
+      ORDER BY id DESC LIMIT 1`)).rows[0]
+    const checkpointAt = new Date(checkpoint.createdAt)
+    const expiresAt = new Date(checkpointAt.getTime() + 60_000)
+    const consumeAt = new Date(expiresAt.getTime() + 60_000)
+    const expiresIso = new Date(Date.UTC(
+      expiresAt.getFullYear(), expiresAt.getMonth(), expiresAt.getDate(), expiresAt.getHours(),
+      expiresAt.getMinutes(), expiresAt.getSeconds(), expiresAt.getMilliseconds(),
+    )).toISOString()
+    await client.query(`DELETE FROM governance_event
+      WHERE "eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')`)
+    await client.query(`UPDATE authority_grant SET "expiresAt"=$1
+      WHERE id IN (80,81)`, [expiresAt])
+    await client.query(`UPDATE outcome_queue_mutation_receipt
+      SET "resultBinding"=jsonb_set("resultBinding",'{expiresAt}',to_jsonb($1::text))
+      WHERE operation='workbench_execution.authorize'`, [expiresIso])
+    const countsBefore = (await client.query(`SELECT
+      (SELECT count(*)::integer FROM work_order) AS work_orders,
+      (SELECT count(*)::integer FROM goal) AS goals,
+      (SELECT count(*)::integer FROM outcome_queue_item) AS outcomes,
+      (SELECT count(*)::integer FROM authority_grant) AS grants`)).rows[0]
+    const consumer = createRuntimeFindingDbConsumer({
+      withPool: async (action) => {
+        const { Pool } = await import("pg")
+        const consumerPool = new Pool({ connectionString: scopedUrl })
+        try { return await action(consumerPool) } finally { await consumerPool.end() }
+      },
+      now: () => consumeAt,
+    })
+
+    await expect(consumer()).resolves.toMatchObject({
+      status: "RUNTIME_FINDINGS_CONSUMED", considered: 2, derived: 0, gated: 0, lapsed: 2,
+      queuedChildren: 0,
+      results: [
+        { disposition: "AUTHORITY_LAPSED", replayed: false },
+        { disposition: "AUTHORITY_LAPSED", replayed: false },
+      ],
+    })
+    await expect(consumer()).resolves.toMatchObject({
+      lapsed: 2,
+      results: [
+        { disposition: "AUTHORITY_LAPSED", replayed: true },
+        { disposition: "AUTHORITY_LAPSED", replayed: true },
+      ],
+    })
+    const settlements = (await client.query(`SELECT reason,metadata FROM governance_event
+      WHERE "eventType"='RUNTIME_FINDING_AUTHORITY_LAPSED' ORDER BY id`)).rows
+    expect(settlements).toHaveLength(2)
+    expect(settlements.every((row) => row.reason === "SOURCE_AUTHORITY_LAPSED_AFTER_VALID_EMISSION"))
+      .toBe(true)
+    expect(settlements.every((row) => row.metadata.terminalReason
+      === "SOURCE_AUTHORITY_LAPSED_AFTER_VALID_EMISSION")).toBe(true)
+    expect(settlements.every((row) => /^[0-9a-f]{64}$/.test(row.metadata.payloadDigest))).toBe(true)
+    const countsAfter = (await client.query(`SELECT
+      (SELECT count(*)::integer FROM work_order) AS work_orders,
+      (SELECT count(*)::integer FROM goal) AS goals,
+      (SELECT count(*)::integer FROM outcome_queue_item) AS outcomes,
+      (SELECT count(*)::integer FROM authority_grant) AS grants`)).rows[0]
+    expect(countsAfter).toEqual(countsBefore)
   })
 })

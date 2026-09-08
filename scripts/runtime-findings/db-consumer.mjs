@@ -428,7 +428,8 @@ function sourceFinding(row, nowMs) {
     || !exactArray(row.parentApprovalTags, ["workbench", "outcome", "explicit-start-work"])
     || Number(row.implementationGrantId) !== Number(metadata.implementationGrantId)
     || row.implementationGrantRef !== metadata.implementationGrantRef
-    || row.implementationGrantStatus !== "active" || row.implementationGrantRevokedAt != null
+    || !["active", "expired"].includes(row.implementationGrantStatus)
+    || row.implementationGrantRevokedAt != null
     || row.implementationGrantAuthorityLevel !== metadata.deliveryAuthorityLevel
     || row.implementationGrantGrantedTo !== "operator"
     || row.implementationGrantScope !== row.parentWorkOrderRef
@@ -443,10 +444,16 @@ function sourceFinding(row, nowMs) {
     || row.parentPushAllowed !== metadata.pushAllowed) {
     fail("FINDING_SOURCE_LINEAGE_WALL")
   }
-  if (row.implementationGrantExpiresAt == null) fail("FINDING_AUTHORITY_EXPIRED")
-  const expiresAt = normalizeGrantTimestamp(row.implementationGrantExpiresAt)
-  if (expiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
-  if (row.parentExecutionGrantStatus !== "active" || row.parentExecutionGrantRevokedAt != null
+  if (row.implementationGrantCreatedAt == null || row.implementationGrantExpiresAt == null
+    || row.parentExecutionGrantCreatedAt == null || row.parentExecutionGrantExpiresAt == null
+    || row.checkpointCreatedAt == null) fail("FINDING_SOURCE_LINEAGE_WALL")
+  const checkpointAt = normalizeGrantTimestamp(row.checkpointCreatedAt)
+  const authorizedAt = normalizeDate(parentResult.authorizedAt)
+  const implementationCreatedAt = normalizeGrantTimestamp(row.implementationGrantCreatedAt)
+  const implementationExpiresAt = normalizeGrantTimestamp(row.implementationGrantExpiresAt)
+  const executionCreatedAt = normalizeGrantTimestamp(row.parentExecutionGrantCreatedAt)
+  const executionExpiresAt = normalizeGrantTimestamp(row.parentExecutionGrantExpiresAt)
+  if (row.parentExecutionGrantRevokedAt != null
     || row.parentExecutionGrantAuthorityLevel !== metadata.deliveryAuthorityLevel
     || row.parentExecutionGrantGrantedTo !== "operator"
     || row.parentExecutionGrantScope !== row.parentOutcomeKey
@@ -454,10 +461,25 @@ function sourceFinding(row, nowMs) {
     || row.parentExecutionGrantWorkOrderId != null
     || !Array.isArray(row.parentExecutionGrantBlockedActions)
     || blocksAction(row.parentExecutionGrantBlockedActions, "outcome:execute")
-    || row.parentExecutionGrantExpiresAt == null
-    || normalizeGrantTimestamp(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
-    || normalizeDate(parentResult.expiresAt).getTime() !== expiresAt.getTime()
-    || normalizeDate(parentResult.authorizedAt).getTime() > nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
+    || normalizeDate(parentResult.expiresAt).getTime() !== implementationExpiresAt.getTime()
+    || authorizedAt.getTime() > checkpointAt.getTime()
+    || implementationCreatedAt.getTime() > checkpointAt.getTime()
+    || implementationExpiresAt.getTime() <= checkpointAt.getTime()
+    || executionCreatedAt.getTime() > checkpointAt.getTime()
+    || executionExpiresAt.getTime() <= checkpointAt.getTime()) fail("FINDING_SOURCE_LINEAGE_WALL")
+  const implementationElapsed = implementationExpiresAt.getTime() <= nowMs
+  const executionElapsed = executionExpiresAt.getTime() <= nowMs
+  const lapsedAuthority = ["active", "expired"].includes(row.parentExecutionGrantStatus)
+    && row.parentStatus === "closed"
+    && implementationElapsed && executionElapsed
+  const activeAuthority = row.implementationGrantStatus === "active"
+    && row.parentExecutionGrantStatus === "active"
+    && !implementationElapsed && !executionElapsed
+  if (!lapsedAuthority && row.implementationGrantStatus === "active"
+    && row.parentExecutionGrantStatus === "active" && implementationElapsed) {
+    fail("FINDING_AUTHORITY_EXPIRED")
+  }
+  if (!activeAuthority && !lapsedAuthority) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
@@ -486,6 +508,14 @@ function sourceFinding(row, nowMs) {
     commitAllowed: metadata.commitAllowed,
     tagAllowed: metadata.tagAllowed,
     pushAllowed: metadata.pushAllowed,
+    authorityState: lapsedAuthority ? "lapsed" : "active",
+    checkpointCreatedAt: checkpointAt.toISOString(),
+    implementationGrantRef: row.implementationGrantRef,
+    implementationGrantCreatedAt: implementationCreatedAt.toISOString(),
+    implementationGrantExpiresAt: implementationExpiresAt.toISOString(),
+    executionGrantRef: row.parentExecutionGrantRef,
+    executionGrantCreatedAt: executionCreatedAt.toISOString(),
+    executionGrantExpiresAt: executionExpiresAt.toISOString(),
   }
 }
 
@@ -975,6 +1005,20 @@ async function replayOrdinary(client, row, finding, order, classification) {
   return { disposition: "DERIVED", findingId: finding.findingId, replayed: true, ...artifacts, ...identity }
 }
 
+function replayDerivedSettlementAfterLapse(row, finding, order, classification) {
+  const identity = childIdentity(row, order)
+  const artifactKeys = ["workOrderId", "goalId", "queueId", "decisionId", "grantId", "queueGrantId", "receiptId"]
+  const artifacts = Object.fromEntries(artifactKeys.map((key) => [key, Number(row.settlementMetadata?.[key])]))
+  if (artifactKeys.some((key) => !Number.isSafeInteger(artifacts[key]) || artifacts[key] <= 0)) {
+    fail("FINDING_SETTLEMENT_REPLAY_WALL")
+  }
+  const metadata = settlementMetadata({ finding, classification, identity, artifacts: {
+    ...artifacts, task: order.task, parentGrantRef: row.implementationGrantRef,
+  } })
+  exactSettlement(row, "RUNTIME_FINDING_DERIVED", metadata)
+  return { disposition: "DERIVED", findingId: finding.findingId, replayed: true, ...artifacts, ...identity }
+}
+
 async function insertGate(client, row, finding, classification, at) {
   const metadata = settlementMetadata({ finding, classification, artifacts: {
     parentGrantRef: row.implementationGrantRef,
@@ -991,6 +1035,47 @@ async function insertGate(client, row, finding, classification, at) {
   )
   if (count(settled) !== 1) fail("FINDING_SETTLEMENT_WALL")
   return { disposition: "OWNER_GATED", findingId: finding.findingId, replayed: false }
+}
+
+function authorityLapseMetadata(finding) {
+  const canonical = {
+    sourceFindingEventId: finding.sourceFindingEventId,
+    sourceUserId: finding.sourceUserId,
+    sourcePayloadDigest: finding.sourcePayloadDigest,
+    findingId: finding.findingId,
+    objectiveWorkOrderId: finding.objectiveWorkOrderId,
+    sourceCheckpointId: finding.sourceCheckpointId,
+    sourceCheckpointDigest: finding.sourceCheckpointDigest,
+    checkpointCreatedAt: finding.checkpointCreatedAt,
+    contractId: finding.contractId,
+    contractDigest: finding.contractDigest,
+    authorizationDecisionId: finding.authorizationDecisionId,
+    implementationGrantId: finding.implementationGrantId,
+    implementationGrantRef: finding.implementationGrantRef,
+    implementationGrantCreatedAt: finding.implementationGrantCreatedAt,
+    implementationGrantExpiresAt: finding.implementationGrantExpiresAt,
+    executionGrantRef: finding.executionGrantRef,
+    executionGrantCreatedAt: finding.executionGrantCreatedAt,
+    executionGrantExpiresAt: finding.executionGrantExpiresAt,
+    terminalReason: "SOURCE_AUTHORITY_LAPSED_AFTER_VALID_EMISSION",
+  }
+  return { ...canonical, payloadDigest: digest(canonical) }
+}
+
+async function insertAuthorityLapse(client, row, finding, at) {
+  const metadata = authorityLapseMetadata(finding)
+  if (exactSettlement(row, "RUNTIME_FINDING_AUTHORITY_LAPSED", metadata)) {
+    return { disposition: "AUTHORITY_LAPSED", findingId: finding.findingId, replayed: true }
+  }
+  const settled = await client.query(
+    `INSERT INTO governance_event
+      ("userId", "eventType", "entityType", "entityId", actor, reason, metadata, "createdAt")
+     VALUES ($1,'RUNTIME_FINDING_AUTHORITY_LAPSED','work_order',$2,'williamos-runtime-operator',$3,$4::jsonb,$5)
+     RETURNING id`, [finding.sourceUserId, String(row.parentWorkOrderId),
+      "SOURCE_AUTHORITY_LAPSED_AFTER_VALID_EMISSION", JSON.stringify(metadata), at],
+  )
+  if (count(settled) !== 1) fail("FINDING_SETTLEMENT_WALL")
+  return { disposition: "AUTHORITY_LAPSED", findingId: finding.findingId, replayed: false }
 }
 
 /**
@@ -1034,7 +1119,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     parent."authorityGrantId" AS "parentAuthorityGrantId",
                     parent."commitAllowed" AS "parentCommitAllowed", parent."tagAllowed" AS "parentTagAllowed",
                     parent."pushAllowed" AS "parentPushAllowed", checkpoint.id AS "checkpointId",
-                    checkpoint.metadata AS "checkpointMetadata", receipt."resultBinding"->'workContract' AS "workContract",
+                    checkpoint.metadata AS "checkpointMetadata", checkpoint."createdAt" AS "checkpointCreatedAt",
+                    receipt."resultBinding"->'workContract' AS "workContract",
                     parent_goal.id AS "parentGoalId", parent_goal.command AS "parentGoalCommand",
                     parent_goal."acceptedContractIds" AS "parentGoalAcceptedContractIds",
                     parent_queue."outcomeKey" AS "parentOutcomeKey",
@@ -1113,6 +1199,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     implementation_grant.id AS "implementationGrantId",
                     implementation_grant.ref AS "implementationGrantRef",
                     implementation_grant.status AS "implementationGrantStatus",
+                    implementation_grant."createdAt" AS "implementationGrantCreatedAt",
                     implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
                     implementation_grant."expiresAt" AS "implementationGrantExpiresAt",
                     implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
@@ -1123,6 +1210,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     execution_grant.id AS "parentExecutionGrantId",
                     execution_grant.ref AS "parentExecutionGrantRef",
                     execution_grant.status AS "parentExecutionGrantStatus",
+                    execution_grant."createdAt" AS "parentExecutionGrantCreatedAt",
                     execution_grant."revokedAt" AS "parentExecutionGrantRevokedAt",
                     execution_grant."expiresAt" AS "parentExecutionGrantExpiresAt",
                     execution_grant."authorityLevel" AS "parentExecutionGrantAuthorityLevel",
@@ -1132,7 +1220,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     execution_grant."allowedActions" AS "parentExecutionGrantAllowedActions",
                     execution_grant."blockedActions" AS "parentExecutionGrantBlockedActions",
                     settlement.id AS "settlementId", settlement."eventType" AS "settlementEventType",
-                    settlement.metadata AS "settlementMetadata", settlement."settlementCount"
+                    settlement.metadata AS "settlementMetadata", settlement."settlementCreatedAt",
+                    settlement."settlementCount"
                FROM governance_event finding
                JOIN work_order parent ON parent."userId" = finding."userId"
                  AND parent.id::text = finding."entityId"::text
@@ -1170,10 +1259,12 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND execution_grant.ref = receipt."resultBinding"->>'grantRef'
                LEFT JOIN LATERAL (
                  SELECT settled.id, settled."eventType", settled.metadata,
+                        settled."createdAt" AS "settlementCreatedAt",
                         count(*) OVER ()::integer AS "settlementCount"
                    FROM governance_event settled
                   WHERE settled."userId" = finding."userId"
-                    AND settled."eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED')
+                    AND settled."eventType" IN ('RUNTIME_FINDING_DERIVED','RUNTIME_FINDING_OWNER_GATED',
+                      'RUNTIME_FINDING_AUTHORITY_LAPSED')
                     AND settled.metadata->>'sourceFindingEventId' = finding.id::text
                   ORDER BY settled.id LIMIT 2
                ) settlement ON true
@@ -1189,6 +1280,35 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
             const finding = sourceFinding(row, normalizeDate(now()).getTime())
             if (row.settlementId && Number(row.settlementCount) !== 1) {
               fail("FINDING_SETTLEMENT_CARDINALITY_WALL")
+            }
+            if (finding.authorityState === "lapsed") {
+              if (row.settlementId && row.settlementEventType !== "RUNTIME_FINDING_AUTHORITY_LAPSED") {
+                const settlementAt = normalizeGrantTimestamp(row.settlementCreatedAt)
+                if (settlementAt.getTime() < normalizeDate(finding.checkpointCreatedAt).getTime()
+                  || settlementAt.getTime() >= normalizeDate(finding.implementationGrantExpiresAt).getTime()
+                  || settlementAt.getTime() >= normalizeDate(finding.executionGrantExpiresAt).getTime()) {
+                  fail("FINDING_SETTLEMENT_REPLAY_WALL")
+                }
+                const settledResult = deriveRemediationWorkOrder({
+                  objective: {
+                    ...parentObjective({ ...row, implementationGrantStatus: "active" }, finding),
+                    // Chronology above proves this exact settlement preceded expiry. Do not let the
+                    // ambient wall clock reclassify that immutable historical decision during replay.
+                    grantExpiresAt: null,
+                  },
+                  finding,
+                  now: () => settlementAt.toISOString() })
+                const settledClassification = classifyProposedAction({ effects: finding.effects })
+                if (settledResult.gate) {
+                  results.push(await insertGate(client, row, finding, settledResult.gate, settlementAt))
+                } else {
+                  results.push(replayDerivedSettlementAfterLapse(row, finding, settledResult.dispatch,
+                    settledClassification))
+                }
+                continue
+              }
+              results.push(await insertAuthorityLapse(client, row, finding, normalizeDate(now())))
+              continue
             }
             const result = deriveRemediationWorkOrder({ objective: parentObjective(row, finding), finding,
               now: () => normalizeDate(now()).toISOString() })
@@ -1208,6 +1328,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
             considered: sources.rows.length,
             derived: results.filter((entry) => entry.disposition === "DERIVED").length,
             gated: results.filter((entry) => entry.disposition === "OWNER_GATED").length,
+            lapsed: results.filter((entry) => entry.disposition === "AUTHORITY_LAPSED").length,
             queuedChildren: results.filter((entry) => entry.disposition === "DERIVED" && !entry.replayed).length,
             results,
           }

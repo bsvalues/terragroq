@@ -122,6 +122,7 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentAuthorityGranted: "A2_WRITE_OWN", parentAuthorityGrantId: 81,
     parentCommitAllowed: true, parentTagAllowed: false, parentPushAllowed: true,
     checkpointId: 91, checkpointMetadata, checkpointFindings: [findingMetadata], workContract,
+    checkpointCreatedAt: "2026-08-20 17:30:00",
     parentOutcomeKey, parentQueueApprovalDecisionId: 74,
     parentQueueAuthorityGrantRef: "WB-EXEC-GRANT-911",
     parentQueueExecutionBinding: parentExecutionBinding, parentQueueAcquisitionKey: parentAcquisitionKey,
@@ -145,12 +146,14 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentApprovalTags: ["workbench", "outcome", "explicit-start-work"],
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
     implementationGrantStatus: "active", implementationGrantRevokedAt: null,
+    implementationGrantCreatedAt: "2026-08-20 17:00:00",
     implementationGrantExpiresAt: new Date(2099, 0, 1, 0, 0, 0, 0),
     implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
     implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
     implementationGrantBlockedActions: ["host-storage-mutation"],
     parentExecutionGrantId: 80, parentExecutionGrantRef: "WB-EXEC-GRANT-911",
     parentExecutionGrantStatus: "active", parentExecutionGrantRevokedAt: null,
+    parentExecutionGrantCreatedAt: "2026-08-20 17:00:00",
     parentExecutionGrantExpiresAt: new Date(2099, 0, 1, 0, 0, 0, 0),
     parentExecutionGrantAuthorityLevel: "A2_WRITE_OWN", parentExecutionGrantGrantedTo: "operator",
     parentExecutionGrantScope: "goal:GOAL-0004", parentExecutionGrantWorkOrderId: null,
@@ -250,6 +253,120 @@ function bindCheckpointFindings(...rows: any[]) {
 }
 
 describe("native runtime finding database consumer", () => {
+  it("terminalizes exact historical findings whose valid-at-emission authority later expired", async () => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      implementationGrantStatus: "active",
+      implementationGrantExpiresAt: "2026-08-20 17:45:00",
+      parentExecutionGrantStatus: "expired",
+      parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",
+    }) as any
+    row.parentReceiptResultBinding.expiresAt = "2026-08-20T17:45:00.000Z"
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("INSERT INTO")) {
+        writes.push(sql)
+        row.settlementId = 701
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_AUTHORITY_LAPSED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 701 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      status: "RUNTIME_FINDINGS_CONSUMED", considered: 1, derived: 0, gated: 0, lapsed: 1,
+      queuedChildren: 0,
+      results: [{ disposition: "AUTHORITY_LAPSED", findingId: "FINDING-COMPOSE", replayed: false }],
+    })
+    await expect(consume()).resolves.toMatchObject({
+      lapsed: 1, results: [{ disposition: "AUTHORITY_LAPSED", replayed: true }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toHaveLength(1)
+    expect(writes.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
+      .toBe(false)
+    expect(query.mock.calls.some(([sql]) => sql.startsWith("UPDATE work_order"))).toBe(false)
+  })
+
+  it("does not terminalize expired authority that was already invalid when the finding was emitted", async () => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      implementationGrantStatus: "expired",
+      implementationGrantExpiresAt: "2026-08-20 17:15:00",
+      parentExecutionGrantStatus: "expired",
+      parentExecutionGrantExpiresAt: "2026-08-20 17:15:00",
+    }) as any
+    row.parentReceiptResultBinding.expiresAt = "2026-08-20T17:15:00.000Z"
+    const statements: string[] = []
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql)
+      return sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+    })
+    expect(statements.some((sql) => sql.includes("INSERT INTO")
+      && sql.includes("RUNTIME_FINDING_AUTHORITY_LAPSED"))).toBe(false)
+  })
+
+  it("preserves an exact owner-gated settlement after its source authority later lapses", async () => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      implementationGrantExpiresAt: "2026-08-20 17:45:00",
+      parentExecutionGrantExpiresAt: "2026-08-20 17:45:00",
+    }) as any
+    row.parentReceiptResultBinding.expiresAt = "2026-08-20T17:45:00.000Z"
+    row.findingMetadata.effects = { ...effects, changesReviewedPolicy: true }
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    bindCheckpointFindings(row)
+    let now = new Date("2026-08-20T17:40:00.000Z")
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now.getTime())
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("'RUNTIME_FINDING_OWNER_GATED'")) {
+        writes.push(sql)
+        row.settlementId = 702
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_OWNER_GATED"
+        row.settlementCreatedAt = "2026-08-20 17:40:00"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 702 }] }
+      }
+      if (sql.includes("INSERT INTO")) writes.push(sql)
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => now,
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: false }],
+    })
+    now = new Date("2026-08-20T18:00:00.000Z")
+    dateNow.mockReturnValue(now.getTime())
+    row.implementationGrantStatus = "expired"
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, lapsed: 0, results: [{ disposition: "OWNER_GATED", replayed: true }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_OWNER_GATED'"))).toHaveLength(1)
+    expect(writes.some((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toBe(false)
+    dateNow.mockRestore()
+  })
+
   it("derives the ordinary docs child from the exact singleton live-acceptance parent", async () => {
     const row = liveAcceptanceSourceRow()
     let nextId = 800
