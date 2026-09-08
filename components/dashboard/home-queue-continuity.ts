@@ -25,11 +25,21 @@ export interface HomeQueueContinuityNextItem {
   context: string | null
 }
 
+export interface HomeQueueContinuityParentMission {
+  missionKey: string
+  externalRef: string
+  goalRef: string
+  worldId: string
+  projectId: number
+  repository: string
+}
+
 export interface HomeQueueContinuity {
   state: OutcomeQueueOperatorSurface["state"]
   stateLabel: string
   active: HomeQueueContinuityActiveItem | null
   next: HomeQueueContinuityNextItem | null
+  unresolvedParentMissions: readonly HomeQueueContinuityParentMission[]
   blockerReason: string | null
   links: typeof HOME_QUEUE_CONTINUITY_LINKS
 }
@@ -43,6 +53,14 @@ export function projectHomeQueueContinuity(
 ): HomeQueueContinuity {
   const active = surface.activeItem
   const next = surface.nextEligibleItem
+  const unresolvedParentMissions = surface.unresolvedParentMissions
+    .map((mission) => ({ ...mission }))
+  const orphanedMissionIdentity = unresolvedParentMissions
+    .map((mission) => (
+      `${mission.goalRef} (${mission.externalRef}; Space ${mission.worldId}; `
+      + `project ${mission.projectId}; ${mission.repository}; ${mission.missionKey})`
+    ))
+    .join(", ")
 
   return {
     state: surface.state,
@@ -66,8 +84,11 @@ export function projectHomeQueueContinuity(
           context: next.lifecycleReason,
         }
       : null,
+    unresolvedParentMissions,
     blockerReason: surface.state === "ACTIVE" || surface.state === "BLOCKED"
-      ? surface.reasonLabel
+      ? surface.reason === "ORPHANED_ACTIVE_MISSION" && orphanedMissionIdentity
+        ? `${surface.reasonLabel}: ${orphanedMissionIdentity}`
+        : surface.reasonLabel
       : null,
     links: HOME_QUEUE_CONTINUITY_LINKS,
   }

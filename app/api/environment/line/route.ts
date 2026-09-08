@@ -22,6 +22,7 @@ import { getWorkOrders } from "@/app/actions/work-orders"
 import { getActivity } from "@/lib/operator/activity"
 import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
+import type { ParentMissionIdentity } from "@/lib/outcome-queue/engine"
 import { describeHermesForOwner, readHermesStatus } from "@/lib/hermes/status-source"
 import { createDecision, getDecisions, supersedeDecision } from "@/app/actions/decisions"
 import {
@@ -79,6 +80,7 @@ type SurfaceDirective = Readonly<{
   kind: "hermes" | "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
   subject: string
   payload?: unknown
+  unresolvedParentMissions?: readonly ParentMissionIdentity[]
 }>
 
 /**
@@ -633,13 +635,29 @@ async function summonSurface(
     // ORDER, and a list that drops it answers a different question convincingly.
     const surface = await getOutcomeQueueSurface()
     const rows = [...surface.rows].sort((left, right) => left.queueOrder - right.queueOrder)
+    const orphanedMissionIdentity = surface.reason === "ORPHANED_ACTIVE_MISSION"
+      ? surface.unresolvedParentMissions
+        .map((mission) => (
+          `${mission.goalRef} (${mission.externalRef}; Space ${mission.worldId}; `
+          + `project ${mission.projectId}; ${mission.repository}; ${mission.missionKey})`
+        ))
+        .join(", ")
+      : ""
+    const say = orphanedMissionIdentity
+      ? `${rows.length === 0
+          ? "The governed child-outcome queue is empty"
+          : "Every governed child outcome is terminal"}, but the active parent mission remains unresolved: ${orphanedMissionIdentity}.`
+      : surface.reason === "PARENT_MISSION_BINDING_REQUIRED"
+        ? `The governed child-outcome queue cannot be reported as settled: ${surface.reasonLabel}.`
+        : rows.length === 0
+          ? "The governed queue is empty."
+          : `${rows.length} ${rows.length === 1 ? "outcome" : "outcomes"} in the governed queue, in queue order.`
     return {
-      say: rows.length === 0
-        ? "The governed queue is empty."
-        : `${rows.length} ${rows.length === 1 ? "outcome" : "outcomes"} in the governed queue, in queue order.`,
+      say,
       surface: {
         kind: "queue",
         subject: "governed outcome queue",
+        unresolvedParentMissions: surface.unresolvedParentMissions.map((mission) => ({ ...mission })),
         payload: rows.map((row) => ({
           outcomeKey: row.outcomeKey,
           title: row.title,

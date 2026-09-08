@@ -41,4 +41,27 @@ describe("an authorized retained selection becomes the mounted world's work", ()
     expect(authorizedBranch).toContain("withBoundOutcome(updated, retained)")
     expect(authorizedBranch).toContain('execution: "authorized"')
   })
+
+  it("does not describe an unresolved parent mission as an empty governed queue", () => {
+    const start = route.indexOf('if (kind === "queue")')
+    const end = route.indexOf('if (kind === "runtime-trace")', start)
+    const queueBranch = route.slice(start, end)
+
+    expect(queueBranch).toContain('surface.reason === "ORPHANED_ACTIVE_MISSION"')
+    expect(queueBranch).toContain("surface.unresolvedParentMissions")
+    expect(queueBranch).toContain("mission.worldId")
+    expect(queueBranch).toContain("mission.projectId")
+    expect(queueBranch).toContain("mission.repository")
+    expect(queueBranch).toContain("The governed child-outcome queue is empty")
+    expect(queueBranch).toContain("the active parent mission remains unresolved")
+    expect(queueBranch).toContain('surface.reason === "PARENT_MISSION_BINDING_REQUIRED"')
+    expect(queueBranch).toContain(
+      "unresolvedParentMissions: surface.unresolvedParentMissions.map((mission) => ({ ...mission }))",
+    )
+    expect(route).toContain(
+      "unresolvedParentMissions?: readonly ParentMissionIdentity[]",
+    )
+    expect(queueBranch.indexOf('surface.reason === "ORPHANED_ACTIVE_MISSION"'))
+      .toBeLessThan(queueBranch.indexOf('rows.length === 0'))
+  })
 })
