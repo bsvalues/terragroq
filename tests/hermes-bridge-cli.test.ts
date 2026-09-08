@@ -482,6 +482,64 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledTimes(3)
   })
 
+  it("does not convert an unresolved parent mission into a successful queue drain", async () => {
+    const parentMissions = {
+      integrity: "VERIFIED",
+      unresolved: [{
+        missionKey: `external-parent:${"c".repeat(64)}`,
+        externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+        goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        worldId: "space-terrafusion",
+        projectId: 2,
+        repository: "bsvalues/terrafusion_os_1.0",
+      }],
+      resolved: [],
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "child-1" })
+      .mockResolvedValueOnce({
+        result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+        reasonCode: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+      })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, maxOutcomes: 3 }))
+      .resolves.toEqual({
+        result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+        reasonCode: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+        settled: [{ result: "COMPLETE", outcomeId: "child-1" }],
+      })
+    expect(cycle).toHaveBeenCalledTimes(2)
+  })
+
+  it("exits the real cycle command nonzero for an unresolved parent mission wall", async () => {
+    const close = vi.fn(async () => {})
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{
+          missionKey: `external-parent:${"d".repeat(64)}`,
+          externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+          goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+          worldId: "space-terrafusion",
+          projectId: 2,
+          repository: "bsvalues/terrafusion_os_1.0",
+        }],
+        resolved: [],
+      },
+    }))
+
+    await expect(runCli("cycle", {
+      createResidentOrchestrator: () => ({ cycle, close }),
+      consumeDecision: vi.fn(async () => ({ status: "NO_PENDING_PRIMARY_DECISION" })),
+    })).resolves.toBe(1)
+    expect(cycle).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it("consumes a Primary decision exactly once before the first queue cycle", async () => {
     const calls: string[] = []
     const consumeDecision = vi.fn(async () => {

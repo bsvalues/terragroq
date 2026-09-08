@@ -21,6 +21,30 @@ const canonicalJson = (value: any): string => value && typeof value === "object"
     : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
   : JSON.stringify(value)
 
+const parentMissionIdentity = (overrides: Record<string, unknown> = {}) => {
+  const identity = {
+    externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+    goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+    worldId: "space-terrafusion",
+    projectId: 2,
+    repository: "bsvalues/terrafusion_os_1.0",
+    ...overrides,
+  }
+  const issueNumber = Number(String(identity.externalRef).split("#")[1])
+  const missionKey = `external-parent:${createHash("sha256").update(canonicalJson({
+    version: "external-parent-mission-binding.v1",
+    source: "github",
+    repository: identity.repository,
+    externalRef: identity.externalRef,
+    issueNumber,
+    goalRef: identity.goalRef,
+  })).digest("hex")}`
+  return {
+    missionKey,
+    ...identity,
+  }
+}
+
 const queueItem = {
   userId: "primary-user",
   outcomeKey: "outcome:home-radar",
@@ -908,6 +932,137 @@ describe("Hermes durable outcome queue runtime", () => {
     })
 
     await expect(bridge.selectOutcome()).resolves.toBeNull()
+  })
+
+  it("preserves an unresolved parent mission no-selection result", async () => {
+    const parentMissions = {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity()],
+      resolved: [],
+    }
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        replayed: false,
+        reclaimed: false,
+        reason: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toEqual({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions,
+    })
+  })
+
+  it("preserves an invalid parent mission ledger instead of reporting an empty queue", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        replayed: false,
+        reclaimed: false,
+        reason: "PARENT_MISSION_BINDING_REQUIRED",
+        parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      result: "PARENT_MISSION_BINDING_REQUIRED",
+      reasonCode: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+  })
+
+  it("walls malformed unresolved parent mission evidence", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        reason: "ORPHANED_ACTIVE_MISSION",
+        parentMissions: { integrity: "VERIFIED", unresolved: [], resolved: [] },
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_PARENT_MISSION_PROOF_WALL",
+    })
+  })
+
+  it.each([
+    ["noncanonical unresolved identity", {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity({ goalRef: " GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1" })],
+      resolved: [],
+    }],
+    ["oversized unsafe issue identity", {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity({
+        externalRef: `github:bsvalues/terrafusion_os_1.0#${"9".repeat(301)}`,
+      })],
+      resolved: [],
+    }],
+    ["overlong goal identity", {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity({ goalRef: "G".repeat(201) })],
+      resolved: [],
+    }],
+    ["overlong world identity", {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity({ worldId: "w".repeat(201) })],
+      resolved: [],
+    }],
+    ["malformed resolved identity", {
+      integrity: "VERIFIED",
+      unresolved: [parentMissionIdentity()],
+      resolved: [{ ...parentMissionIdentity(), terminalState: "COMPLETE" }],
+    }],
+    ["nonempty binding-required projection", {
+      integrity: "BINDING_REQUIRED",
+      unresolved: [parentMissionIdentity()],
+      resolved: [],
+    }],
+  ])("walls %s", async (_label, parentMissions) => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: null,
+        acquired: false,
+        replayed: false,
+        reclaimed: false,
+        reason: parentMissions.integrity === "BINDING_REQUIRED"
+          ? "PARENT_MISSION_BINDING_REQUIRED"
+          : "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_PARENT_MISSION_PROOF_WALL",
+    })
+  })
+
+  it("walls contradictory parent mission acquisition state", async () => {
+    const bridge = runtime({
+      acquire: vi.fn(async () => ({
+        outcome: { outcomeKey: "unexpected-child" },
+        acquired: true,
+        replayed: false,
+        reclaimed: false,
+        reason: "ORPHANED_ACTIVE_MISSION",
+        parentMissions: {
+          integrity: "VERIFIED",
+          unresolved: [parentMissionIdentity()],
+          resolved: [],
+        },
+      })),
+    })
+
+    await expect(bridge.selectOutcome()).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_PARENT_MISSION_PROOF_WALL",
+    })
   })
 
   it("uses the active-only source contract for an initial Work Order binding", async () => {

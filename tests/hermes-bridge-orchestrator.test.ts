@@ -772,6 +772,52 @@ function seedGoalStyleRetryableExecution(
 }
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("returns a typed wall with exact identity when an active parent has no executable child", async () => {
+    const parentMissions = {
+      integrity: "VERIFIED",
+      unresolved: [{
+        missionKey: `external-parent:${"b".repeat(64)}`,
+        externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+        goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        worldId: "space-terrafusion",
+        projectId: 2,
+        repository: "bsvalues/terrafusion_os_1.0",
+      }],
+      resolved: [],
+    }
+    const selectOutcome = vi.fn(async () => ({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions,
+    }))
+    const value = fixture(undefined, { selectOutcome })
+
+    await expect(value.orchestrator.cycle()).resolves.toEqual({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions,
+    })
+    expect(selectOutcome).toHaveBeenCalledOnce()
+    expect(value.lifecycle.refreshOriginMain).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it("fails closed when the persisted parent mission ledger cannot be verified", async () => {
+    const selectOutcome = vi.fn(async () => ({
+      result: "PARENT_MISSION_BINDING_REQUIRED",
+      reasonCode: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    }))
+    const value = fixture(undefined, { selectOutcome })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PARENT_MISSION_BINDING_REQUIRED",
+      reasonCode: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+    expect(value.lifecycle.refreshOriginMain).not.toHaveBeenCalled()
+  })
+
   it("carries the immutable acquisition key into runtime projection authorization", () => {
     const contract = {
       version: "hermes-work-contract.v1", id: "issue-911-runtime-reliability-evidence.v1",

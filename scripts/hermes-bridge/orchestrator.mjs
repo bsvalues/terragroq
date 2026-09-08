@@ -1966,6 +1966,10 @@ export function createHermesOrchestrator(options = {}) {
     let outcome = durableOutcome ?? requestedOutcome ?? await selectOutcome({
       enabled: true, killSwitch: false, standingAuthority: true, notBefore,
     })
+    if (outcome?.result === "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE"
+      || outcome?.result === "PARENT_MISSION_BINDING_REQUIRED") {
+      return outcome
+    }
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
 
     const decision = evaluateOutcomePolicy({

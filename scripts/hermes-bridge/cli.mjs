@@ -48,6 +48,11 @@ export function printHermesCycleResult(value, write = process.stdout.write.bind(
     : `${JSON.stringify(value)}\n`)
 }
 
+const PARENT_MISSION_WALL_RESULTS = new Set([
+  "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+  "PARENT_MISSION_BINDING_REQUIRED",
+])
+
 function flushStdout() {
   return new Promise((resolve, reject) => {
     process.stdout.write("", (error) => error ? reject(error) : resolve())
@@ -215,6 +220,12 @@ export async function runHermesQueueDrain({
       const findingResult = await orchestrator.consumeRuntimeFindings?.()
       findingDecisionDirty ||= Number(findingResult?.gated) > 0
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
+        if (PARENT_MISSION_WALL_RESULTS.has(result.result)) {
+          return {
+            ...result,
+            ...(settled.length > 0 ? { settled } : {}),
+          }
+        }
         if (result.result === "NO_ELIGIBLE_OUTCOME"
           && Number(findingResult?.queuedChildren) > 0) continue
         if (result.result === "NO_ELIGIBLE_OUTCOME" && findingDecisionDirty && consumeDecision) {
@@ -1402,14 +1413,15 @@ export async function runCli(command = process.argv[2], options = {}) {
   let orchestrator = null
   const args = options.args ?? process.argv.slice(3)
   const printResult = options.print ?? print
+  const consumeDecision = options.consumeDecision ?? consumePrimaryDecisionIntake
   const createResident = options.createResidentOrchestrator ?? createResidentHermesOrchestrator
   const runRetiredReconciliation = options.reconcileRetiredAcquisition ?? reconcileRetiredAcquisition
   try {
     if (command === "cycle") {
       orchestrator = createResident({ requireAegis: true })
-      printHermesCycleResult(
-        await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
-      )
+      const result = await runHermesQueueDrain({ orchestrator, consumeDecision })
+      printHermesCycleResult(result)
+      if (PARENT_MISSION_WALL_RESULTS.has(result.result)) return 1
     }
     else if (command === "reconcile-retired-acquisition") {
       if (args.length !== 2) assertRetiredAcquisitionRecoveryIdentity(undefined, undefined)
