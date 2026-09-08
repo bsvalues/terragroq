@@ -221,9 +221,29 @@ export async function runHermesQueueDrain({
       findingDecisionDirty ||= Number(findingResult?.gated) > 0
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
         if (PARENT_MISSION_WALL_RESULTS.has(result.result)) {
+          if (findingDecisionDirty && consumeDecision) {
+            const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
+            findingDecisionDirty = false
+            if (refreshedDecision?.status === "PENDING_PRIMARY_DECISION") return refreshedDecision
+            if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+              .includes(refreshedDecision?.status)) {
+              decision = refreshedDecision
+              pendingDecision = null
+            }
+          }
+          if (pendingDecision?.sourceKind === "RUNTIME_FINDING") {
+            const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
+            if (refreshedDecision?.status === "PENDING_PRIMARY_DECISION") return refreshedDecision
+            pendingDecision = null
+            if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+              .includes(refreshedDecision?.status)) decision = refreshedDecision
+          } else if (pendingDecision) {
+            return pendingDecision
+          }
           return {
             ...result,
             ...(settled.length > 0 ? { settled } : {}),
+            ...(decision ? { decision } : {}),
           }
         }
         if (result.result === "NO_ELIGIBLE_OUTCOME"

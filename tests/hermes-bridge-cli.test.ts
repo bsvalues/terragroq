@@ -513,6 +513,50 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledTimes(2)
   })
 
+  it("presents an existing Primary decision before an unresolved parent mission wall", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: "e".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact",
+    }
+    const consumeDecision = vi.fn(async () => pending)
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }))
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
+  it("presents a newly gated Primary decision before an unresolved parent mission wall", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      sourceKind: "RUNTIME_FINDING",
+      requestDigest: "f".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:new-gate",
+    }
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+      .mockResolvedValueOnce(pending)
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ gated: 0 })
+      .mockResolvedValueOnce({ gated: 1 })
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_BINDING_REQUIRED",
+      reasonCode: "PARENT_MISSION_BINDING_REQUIRED",
+    }))
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, consumeDecision,
+    })).resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
   it("exits the real cycle command nonzero for an unresolved parent mission wall", async () => {
     const close = vi.fn(async () => {})
     const cycle = vi.fn(async () => ({
