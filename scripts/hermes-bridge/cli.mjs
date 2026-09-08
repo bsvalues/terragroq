@@ -221,6 +221,7 @@ export async function runHermesQueueDrain({
       findingDecisionDirty ||= Number(findingResult?.gated) > 0
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
         if (PARENT_MISSION_WALL_RESULTS.has(result.result)) {
+          if (Number(findingResult?.queuedChildren) > 0) continue
           if (findingDecisionDirty && consumeDecision) {
             const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
             findingDecisionDirty = false
@@ -240,7 +241,6 @@ export async function runHermesQueueDrain({
           } else if (pendingDecision) {
             return pendingDecision
           }
-          if (Number(findingResult?.queuedChildren) > 0) continue
           return {
             ...result,
             ...(settled.length > 0 ? { settled } : {}),

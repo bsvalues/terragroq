@@ -541,6 +541,37 @@ describe("Hermes bridge CLI", () => {
     ])
   })
 
+  it("drains a child from a mixed finding batch before presenting its Primary decision", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      sourceKind: "RUNTIME_FINDING",
+      requestDigest: "f".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:mixed-batch",
+    }
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+      .mockResolvedValueOnce(pending)
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+      .mockResolvedValueOnce({ gated: 1, queuedChildren: 1 })
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce(parentWall)
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "derived" })
+      .mockResolvedValueOnce(parentWall)
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, consumeDecision, maxOutcomes: 3,
+    })).resolves.toEqual(pending)
+    expect(cycle).toHaveBeenCalledTimes(3)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+  })
+
   it("presents an existing Primary decision before an unresolved parent mission wall", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",
