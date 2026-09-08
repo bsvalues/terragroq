@@ -606,13 +606,17 @@ function childIdentity(row, order) {
 }
 
 function settlementMetadata({ finding, classification, identity, artifacts = {} }) {
+  const issueNumber = finding.issueNumber === undefined ? {} : { issueNumber: finding.issueNumber }
+  const projectionCompletion = finding.issueNumber === undefined ? {} : {
+    projectionCompletionOwned: finding.projectionCompletionOwned,
+  }
   const canonical = identity ? {
     sourceFindingEventId: finding.sourceFindingEventId,
     sourceUserId: finding.sourceUserId,
     findingId: finding.findingId,
     objectiveWorkOrderId: finding.objectiveWorkOrderId,
     childWorkOrderRef: identity.workOrderRef,
-    issueNumber: finding.issueNumber,
+    ...issueNumber,
     allowedPaths: identity.workContract.reservations,
     requiredValidation: validatorLabels(identity.workContract.validationCommands),
     task: artifacts.task,
@@ -621,7 +625,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     contractDigest: finding.contractDigest,
     authorizationDecisionId: finding.authorizationDecisionId,
     implementationGrantId: finding.implementationGrantId,
-    projectionCompletionOwned: finding.projectionCompletionOwned,
+    ...projectionCompletion,
     sourceCheckpointId: finding.sourceCheckpointId,
     sourceCheckpointDigest: finding.sourceCheckpointDigest,
     contractVersion: finding.contractVersion,
@@ -637,7 +641,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     sourceUserId: finding.sourceUserId,
     findingId: finding.findingId,
     objectiveWorkOrderId: finding.objectiveWorkOrderId,
-    issueNumber: finding.issueNumber,
+    ...issueNumber,
     gate: classification.gate,
     gates: classification.gates,
     reason: classification.reason,
@@ -646,7 +650,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
     authorizationDecisionId: finding.authorizationDecisionId,
     implementationGrantId: finding.implementationGrantId,
     grantRef: artifacts.parentGrantRef,
-    projectionCompletionOwned: finding.projectionCompletionOwned,
+    ...projectionCompletion,
     sourceCheckpointId: finding.sourceCheckpointId,
     sourceCheckpointDigest: finding.sourceCheckpointDigest,
     contractVersion: finding.contractVersion,

@@ -357,6 +357,46 @@ describe("native runtime finding database consumer", () => {
       .toBe(false)
   })
 
+  it("replays a legacy no-projection owner-gated settlement without projection key drift", async () => {
+    const row = legacyNoProjectionLapsedRow() as any
+    row.implementationGrantStatus = "active"
+    row.implementationGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentExecutionGrantStatus = "active"
+    row.parentExecutionGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentReceiptResultBinding.expiresAt = "2099-01-01T00:00:00.000Z"
+    row.findingMetadata.effects = { ...effects, changesReviewedPolicy: true }
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    bindCheckpointFindings(row)
+    const gateInserts: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("'RUNTIME_FINDING_OWNER_GATED'")) {
+        gateInserts.push(sql)
+        row.settlementId = 703
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_OWNER_GATED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 703 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, results: [{ disposition: "OWNER_GATED", replayed: false }],
+    })
+    expect(row.settlementMetadata).not.toHaveProperty("issueNumber")
+    expect(row.settlementMetadata).not.toHaveProperty("projectionCompletionOwned")
+    await expect(consume()).resolves.toMatchObject({
+      gated: 1, results: [{ disposition: "OWNER_GATED", replayed: true }],
+    })
+    expect(gateInserts).toHaveLength(1)
+  })
+
   it("rejects a legacy finding with only one projection field", async () => {
     const row = legacyNoProjectionLapsedRow()
     row.findingMetadata.projectionIssueNumber = 911
