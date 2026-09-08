@@ -225,6 +225,16 @@ function Ensure-CanonicalHostname {
   Assert-CanonicalHostname
 }
 
+function Assert-TailscaleServiceReady {
+  $tailscale = @(Get-CimInstance Win32_Service -Filter "Name='Tailscale'" -ErrorAction SilentlyContinue)
+  if ($tailscale.Count -ne 1 -or $tailscale[0].StartMode -ne "Auto") {
+    throw "The HERMES Tailscale service must be configured for automatic start before WilliamOS deployment"
+  }
+  if ($tailscale[0].State -ne "Running") {
+    throw "The HERMES Tailscale service must be running before WilliamOS deployment"
+  }
+}
+
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandPath)
   $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
@@ -306,6 +316,7 @@ function Assert-LiveLauncherWritable {
 # Validate the external task binding before verification, rollback capture, task control, or file
 # mutation. A custom target is supported only when the supervised task actually invokes it.
 Assert-LiveTaskUsesLauncher
+Assert-TailscaleServiceReady
 if ($VerifyOnly) {
   Assert-CanonicalHostname
   Assert-OverlayFirewallRule
