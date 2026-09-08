@@ -14,6 +14,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$HermesLanAddress = "192.168.88.9"
+$HermesOverlayAddress = "100.97.194.84"
 
 # The deployed HERMES proxy and its authenticated origin are one canonical 3443 -> 3100 boundary.
 # Refuse misleading probe/listener overrides before validating or mutating a rollback.
@@ -24,9 +26,10 @@ if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
 function Stop-ExpectedListener {
   param([int]$ListenerPort, [string]$ExpectedCommandPath)
   $expectedPath = [IO.Path]::GetFullPath($ExpectedCommandPath).TrimEnd('\')
-  Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+  $ownerProcessIds = @(Get-NetTCPConnection -LocalPort $ListenerPort -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($ownerProcessId in $ownerProcessIds) {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerProcessId"
       $pathMatched = $false
       if ($process -and $process.CommandLine) {
         $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
@@ -43,7 +46,7 @@ function Stop-ExpectedListener {
         throw "Port $ListenerPort is owned by an unrelated process; refusing to stop it during WilliamOS rollback"
       }
       Stop-Process -Id $process.ProcessId -Force
-    }
+  }
 }
 
 if (-not (Test-Path -LiteralPath $RollbackRoot -PathType Container)) {
@@ -118,8 +121,29 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if ($manifestVersion -notin @(3, 4) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if ($manifestVersion -ne 6 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
+}
+if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
+  -or [string]$manifest.legacyRelay.listenAddress -ne $HermesOverlayAddress `
+  -or [int]$manifest.legacyRelay.listenPort -ne $HttpsPort `
+  -or [string]$manifest.legacyRelay.connectAddress -ne $HermesLanAddress `
+  -or [int]$manifest.legacyRelay.connectPort -ne $HttpsPort) {
+  throw "Rollback manifest does not name the exact legacy cockpit relay boundary"
+}
+$overlayRestoreMode = [string]$manifest.overlayRestoreMode
+if ($overlayRestoreMode -notin @("direct", "legacy-relay", "compatibility-relay")) {
+  throw "Rollback manifest does not name a supported overlay restore mode"
+}
+$rollbackProxyPath = Join-Path $RollbackRoot "scripts\hermes-https-proxy.mjs"
+$rollbackProxyText = if (Test-Path -LiteralPath $rollbackProxyPath -PathType Leaf) {
+  Get-Content -LiteralPath $rollbackProxyPath -Raw
+} else { "" }
+$rollbackProxySupportsNativeOverlay = [bool]($rollbackProxyText -match 'startListener\(HERMES_HTTPS_OVERLAY_HOST,\s*\{\s*required:\s*false\s*\}\)')
+if (($overlayRestoreMode -eq "direct" -and -not $rollbackProxySupportsNativeOverlay) `
+  -or ($overlayRestoreMode -eq "legacy-relay" -and -not [bool]$manifest.legacyRelay.wasPresent) `
+  -or ($overlayRestoreMode -eq "compatibility-relay" -and ([bool]$manifest.legacyRelay.wasPresent -or $rollbackProxySupportsNativeOverlay))) {
+  throw "Rollback manifest overlay mode contradicts the captured proxy and relay state"
 }
 
 function Get-PhysicalVolumeIdentity {
@@ -260,5 +284,23 @@ do {
   Start-Sleep -Seconds 3
 } while ((Get-Date) -lt $deadline)
 if (-not $httpsHealth -or $httpsHealth.StatusCode -ne 200) { throw "Restored WilliamOS HTTPS origin did not become healthy on port $HttpsPort" }
+
+if ($overlayRestoreMode -in @("legacy-relay", "compatibility-relay")) {
+  netsh interface portproxy add v4tov4 listenaddress=$HermesOverlayAddress listenport=$HttpsPort `
+    connectaddress=$HermesLanAddress connectport=$HttpsPort 2>&1 | Out-Null
+  $relayPattern = "^\s*$([regex]::Escape($HermesOverlayAddress))\s+$HttpsPort\s+$([regex]::Escape($HermesLanAddress))\s+$HttpsPort\s*$"
+  $relay = @(netsh interface portproxy show v4tov4) -match $relayPattern
+  if (-not $relay) { throw "Restored runtime is healthy on LAN, but its required overlay relay could not be restored" }
+}
+
+$canonicalReady = $false
+$deadline = (Get-Date).AddSeconds(60)
+do {
+  & "$env:SystemRoot\System32\curl.exe" --fail --silent --show-error --ssl-revoke-best-effort --max-time 10 `
+    --resolve "williamos.lan:${HttpsPort}:$HermesOverlayAddress" "https://williamos.lan:$HttpsPort/api/health" | Out-Null
+  if ($LASTEXITCODE -eq 0) { $canonicalReady = $true; break }
+  Start-Sleep -Seconds 3
+} while ((Get-Date) -lt $deadline)
+if (-not $canonicalReady) { throw "Restored WilliamOS did not answer through the canonical williamos.lan overlay route" }
 
 Write-Output "restored and verified: $RollbackRoot"
