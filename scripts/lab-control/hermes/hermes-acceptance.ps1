@@ -20,10 +20,15 @@ function Add-Check([string]$Name,[bool]$Pass,[string]$Detail) {
 function Read-Json([string]$Path) {
   try { Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { $null }
 }
+function Has-Properties([object]$Value,[string[]]$Names) {
+  if($null -eq $Value -or $Value -isnot [pscustomobject]){return $false}
+  foreach($name in $Names){if($null -eq $Value.PSObject.Properties[$name]){return $false}}
+  return $true
+}
 
 $status = $null
 try { $status = Invoke-RestMethod -Uri $ConsoleUri -TimeoutSec 15 -ErrorAction Stop } catch {}
-$statusValid = $status -and [string]$status.schema -eq 'hermes-console-status/1'
+$statusValid = (Has-Properties $status @('schema','observedAt','domains')) -and [string]$status.schema -eq 'hermes-console-status/1'
 Add-Check 'console-contract' $statusValid $(if($statusValid){'live Console returned hermes-console-status/1'}else{'live Console status unavailable or malformed'})
 
 $statusFresh = $false
@@ -41,18 +46,19 @@ foreach($domain in @('appliance','inference','protection','storage','security','
 }
 
 $owner=Read-Json 'C:\ProgramData\Hermes\inference\current-owner.json'
+$ownerValid=Has-Properties $owner @('owner','state','listen','models','gpuUuid','powerCapWatts','observedAt','pid')
 $boot=$null
 try{$boot=(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime()}catch{}
 $ownerFresh=$false
 $ownerAfterBoot=$false
-if($owner){
+if($ownerValid){
   try{$ownerAge=($observedAt-([datetime]$owner.observedAt).ToUniversalTime()).TotalSeconds;$ownerFresh=$ownerAge -ge -60 -and $ownerAge -le 120}catch{}
   try{
     $process=Get-CimInstance Win32_Process -Filter "ProcessId=$($owner.pid)" -ErrorAction Stop
     $ownerAfterBoot=$boot -and $process -and $process.CreationDate.ToUniversalTime() -gt $boot
   }catch{}
 }
-$ownerExact=$owner -and [string]$owner.owner -eq 'WilliamOS-HERMES-Ollama' -and [string]$owner.state -eq 'SERVING' -and [string]$owner.listen -eq '127.0.0.1:11434' -and [string]$owner.models -eq 'G:\HermesData\ollama\models' -and [string]$owner.gpuUuid -eq 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2' -and [int]$owner.powerCapWatts -eq 150 -and $ownerFresh
+$ownerExact=$ownerValid -and [string]$owner.owner -eq 'WilliamOS-HERMES-Ollama' -and [string]$owner.state -eq 'SERVING' -and [string]$owner.listen -eq '127.0.0.1:11434' -and [string]$owner.models -eq 'G:\HermesData\ollama\models' -and [string]$owner.gpuUuid -eq 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2' -and [int]$owner.powerCapWatts -eq 150 -and $ownerFresh
 Add-Check 'canonical-inference-owner' ([bool]$ownerExact) $(if($ownerExact){"pid=$($owner.pid) models=G: cap=150W"}else{'canonical owner receipt is missing, stale, or inconsistent'})
 Add-Check 'owner-after-boot' ([bool]$ownerAfterBoot) $(if($ownerAfterBoot){'serving process was created after current boot'}else{'serving process did not prove autonomous current-boot start'})
 
@@ -80,12 +86,12 @@ try{
   $loadBody=@{model=$GoldenModel;prompt='Write a detailed explanation of resilient appliance recovery testing.';stream=$false;options=@{num_predict=256;num_ctx=4096}}|ConvertTo-Json -Depth 5 -Compress
   $loadJob=Start-Job -ScriptBlock { param($Body) Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -ContentType 'application/json' -Body $Body -TimeoutSec 180 -ErrorAction Stop } -ArgumentList $loadBody
   $peak=0
-  for($sample=0;$sample -lt 180 -and $loadJob.State -eq 'Running';$sample++){
+  for($sample=0;$sample -lt 360 -and $loadJob.State -eq 'Running';$sample++){
     $raw=(& nvidia-smi.exe -i $p40Index --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>$null)
     if($LASTEXITCODE -eq 0 -and [string]$raw -match '^\s*(\d+)'){$value=[int]$Matches[1];if($value -gt $peak){$peak=$value}}
     Start-Sleep -Milliseconds 500
   }
-  Wait-Job -Job $loadJob -Timeout 20|Out-Null
+  Wait-Job -Job $loadJob -Timeout 10|Out-Null
   $loadReply=Receive-Job -Job $loadJob -ErrorAction Stop
   $p40LoadPass=$loadJob.State -eq 'Completed' -and $peak -ge 20 -and -not [string]::IsNullOrWhiteSpace([string]$loadReply.response)
   $p40LoadDetail="uuid=$p40Uuid peakUtilization=$peak% responsePresent=$(-not [string]::IsNullOrWhiteSpace([string]$loadReply.response))"
@@ -116,10 +122,10 @@ $release=$null
 if(Test-Path -LiteralPath $ProtectedReleaseRoot -PathType Container){
   foreach($candidate in Get-ChildItem -LiteralPath $ProtectedReleaseRoot -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending){
     $receipt=Read-Json (Join-Path $candidate.FullName 'release.json')
-    if($receipt -and [string]$receipt.status -eq 'DEPLOYED'){$release=$receipt;break}
+    if((Has-Properties $receipt @('status','commit','completedAt')) -and [string]$receipt.status -eq 'DEPLOYED'){$release=$receipt;break}
   }
 }
-$releaseValid=$release -and [string]$release.commit -match '^[0-9a-f]{40}$'
+$releaseValid=(Has-Properties $release @('commit','completedAt')) -and [string]$release.commit -match '^[0-9a-f]{40}$'
 Add-Check 'protected-deployment-receipt' ([bool]$releaseValid) $(if($releaseValid){"commit=$($release.commit) completed=$($release.completedAt)"}else{'no protected DEPLOYED release receipt'})
 if($RequirePostDeploymentReboot){
   $rebootAfterDeploy=$false

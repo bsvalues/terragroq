@@ -38,6 +38,9 @@ describe("HERMES appliance source convergence", () => {
     const collector = read("console/collect-hermes-console-status.ps1")
     expect(collector).toContain("Fact 'D: legacy rollback'")
     expect(collector).not.toContain("Fact 'D: appliance data'")
+    expect(collector).toContain("$LegacyDockerVhdxPath")
+    expect(collector).toContain("$legacyDockerBindingAvailable")
+    expect(collector).not.toContain("Get-Item -LiteralPath 'C:\\Users\\bs\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx'")
   })
 
   it("keeps Appliance V1 alerts native-only", () => {
@@ -56,13 +59,15 @@ describe("HERMES appliance source convergence", () => {
   it("uses real generation artifacts for backup freshness", () => {
     const source = read("morning-report.ps1")
     expect(source).toContain("hermes-recovery-proof-*.tar.gz")
-    expect(source).toContain("-File")
+    expect(source).toContain("Get-ChildItem 'G:\\lab-backups\\hermes-volumes' -Filter 'hermes-recovery-proof-*.tar.gz' -File -ErrorAction Stop")
     expect(source).toContain("'^\\d{8}_\\d{6}$'")
     expect(source).not.toContain("Get-ChildItem 'G:\\lab-backups\\hermes-volumes' -ErrorAction Stop")
   })
 
   it("fails immediately when a native Docker Compose command fails", () => {
     const source = read("start-hermes.ps1")
+    expect(source).toContain("function Invoke-DockerComposeChecked")
+    expect(source).toContain("$ErrorActionPreference = 'Continue'")
     for (const code of ["DOCKER_COMPOSE_PULL_FAILED", "DOCKER_COMPOSE_UP_FAILED", "DOCKER_COMPOSE_STATUS_FAILED"]) {
       expect(source).toContain(code)
     }
@@ -101,7 +106,23 @@ describe("HERMES appliance source convergence", () => {
     expect(acceptance).toContain("golden-model-generation")
     expect(acceptance).toContain("p40-active-under-generation")
     expect(acceptance).toContain("peakUtilization")
+    expect(acceptance).toContain("function Has-Properties")
     expect(durability).toContain("& $suite -RequirePostDeploymentReboot")
+    expect(durability).toContain("HERMES_ACCEPTANCE_SUITE_NO_VERDICT")
     expect(durability).not.toContain("ollama-watchdog")
+  })
+
+  it("fails closed on missing GPU telemetry and malformed catalogue entries", () => {
+    const guard = read("p40-guard.ps1")
+    expect(guard).toContain("$throttleTelemetryPresent")
+    expect(guard).toContain("P40 thermal slowdown telemetry unavailable")
+    expect(guard).toContain("$f.Count -lt 3")
+    expect(read("ollama-service/hermes-ollama-service.ps1")).toContain("$tags.models | Where-Object { $null -ne $_ }")
+  })
+
+  it("removes downloaded restore archives while retaining extracted evidence", () => {
+    const source = read("verify-offhost-restore.ps1")
+    expect(source).toContain("foreach($downloadName in @($latest.Name,$configName))")
+    expect(source).toContain("if(-not $completed")
   })
 })

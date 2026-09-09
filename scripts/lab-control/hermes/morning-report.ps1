@@ -116,10 +116,11 @@ $p40 = $null; $capOK = $null
 $p40json = Safe { Get-Content (Join-Path $HermesDir 'p40-watch.heartbeat') -Raw -ErrorAction Stop | ConvertFrom-Json }
 $p40age = AgeMin (Join-Path $HermesDir 'p40-watch.heartbeat')
 if ($p40json -and $p40age -ne $null -and $p40age -le 10) {
-  $temp = $p40json.temp_c; $cap = $p40json.power_limit_w; $load = $p40json.load_class; $delta = $p40json.p40_chassis_delta_c
+  $temp = Safe { [double]$p40json.temp_c }; $cap = Safe { [int]$p40json.power_limit_w }; $load = $p40json.load_class; $delta = $p40json.p40_chassis_delta_c
   $vitals.Add("- **Tesla P40:** ${temp}C (chassis delta ${delta}C), cap ${cap}W, load $load, thermal-slowdown $($p40json.thermal_slowdown) (guard telemetry, $p40age min old)")
-  if ($cap -and [int]$cap -ne 150) { Add-Problem 'FAIL' "P40 power cap is ${cap}W, doctrine is 150W"; $capOK=$false } else { $capOK=$true }
-  if ($temp -and [double]$temp -ge 87) { Add-Problem 'FAIL' "P40 hot: ${temp}C" }
+  if ($null -eq $cap -or $null -eq $temp) { Add-Problem 'UNKNOWN' 'P40 guard telemetry malformed'; $capOK=$null }
+  elseif ($cap -ne 150) { Add-Problem 'FAIL' "P40 power cap is ${cap}W, doctrine is 150W"; $capOK=$false } else { $capOK=$true }
+  if ($null -ne $temp -and $temp -ge 87) { Add-Problem 'FAIL' "P40 hot: ${temp}C" }
 } else {
   $smi = Safe { & nvidia-smi --query-gpu=name,temperature.gpu,power.limit,ecc.errors.uncorrected.volatile.total --format=csv,noheader,nounits 2>$null }
   if ($smi) { $vitals.Add("- **GPU (nvidia-smi):** $smi"); Add-Problem 'DEGRADED' 'P40 guard heartbeat stale - used nvidia-smi fallback' }
@@ -147,7 +148,8 @@ foreach ($hb in @(
     $ownerState = Safe { Get-Content 'C:\ProgramData\Hermes\inference\current-owner.json' -Raw -ErrorAction Stop | ConvertFrom-Json }
     if (-not $ownerState) { $vitals.Add("- **ollama-owner state:** MISSING"); Add-Problem 'FAIL' 'ollama owner-state missing - supervision may be down' }
     else {
-      $ownerAge = [math]::Round(((Get-Date) - [datetime]$ownerState.observedAt).TotalMinutes, 1)
+      $ownerAge = Safe { [math]::Round(((Get-Date) - [datetime]$ownerState.observedAt).TotalMinutes, 1) }
+      if($null -eq $ownerAge){$vitals.Add('- **ollama-owner state:** MALFORMED');Add-Problem 'UNKNOWN' 'ollama owner-state timestamp invalid';continue}
       $ownerServing = ($ownerState.state -eq 'SERVING') -and (Safe { (Invoke-WebRequest -Uri 'http://127.0.0.1:11434/' -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } $false)
       if ($ownerAge -gt $hb.max -or -not $ownerServing) { $vitals.Add("- **ollama-owner state:** STALE/NOT-SERVING (state=$($ownerState.state), observed $ownerAge min ago)"); Add-Problem 'FAIL' "ollama owner-state stale or not serving ($ownerAge min, state=$($ownerState.state))" }
       else { $vitals.Add("- **ollama-owner state:** SERVING, fresh ($ownerAge min, $($ownerState.modelCount) models)" ) }

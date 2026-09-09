@@ -93,7 +93,7 @@ export const GOLDEN = Object.freeze({
       OLLAMA_LLM_LIBRARY: "cuda_v11",
       OLLAMA_NOPRUNE: "1",
     },
-    serviceScriptSha256: "750286ba33f951f10c9aad480205ed89de6fb024728facc839d541f21112435c",
+      serviceScriptSha256: "e15cad93f53848d2bc3b8d9e12140da9ae7a1dd8e7dba87fddec3013ec97257e",
     modelsPath: "G:\\HermesData\\ollama\\models",
     gpuUuid: "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
   },

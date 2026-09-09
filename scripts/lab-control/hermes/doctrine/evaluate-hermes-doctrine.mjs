@@ -82,10 +82,10 @@ function isEphemeralListener(item) {
   return false
 }
 
-// Tailnet-only ranges Tailscale documents for CGNAT (100.64.0.0/10) and its ULA (fd7a:115c:a1e0::/64).
+// Tailnet-only ranges Tailscale documents for CGNAT (100.64.0.0/10) and its ULA (fd7a:115c:a1e0::/48).
 function isTailnetAddress(address) {
   if (typeof address !== "string") return false
-  if (address.startsWith("fd7a:115c:a1e0::")) return true
+  if (address.startsWith("fd7a:115c:a1e0:")) return true
   const m = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
   if (!m) return false
   const [a, b] = [Number(m[1]), Number(m[2])]

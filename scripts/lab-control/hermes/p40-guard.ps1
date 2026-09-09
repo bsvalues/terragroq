@@ -238,7 +238,11 @@ function Invoke-GuardPass {
   $amb = $null; $ambFan = $null
   foreach($r in (& nvidia-smi --query-gpu=uuid,temperature.gpu,fan.speed --format=csv,noheader,nounits 2>$null)){
     $f = $r -split ',\s*'
-    if($f[0].Trim() -ne $P40_UUID){ $amb = [double]$f[1]; $ambFan = $f[2] }
+    if($f.Count -lt 3 -or [string]::IsNullOrWhiteSpace($f[0]) -or [string]::IsNullOrWhiteSpace($f[1]) -or [string]::IsNullOrWhiteSpace($f[2])){continue}
+    $proxyTemp = 0.0
+    if($f[0].Trim() -ne $P40_UUID -and [double]::TryParse($f[1].Trim(),[ref]$proxyTemp)){
+      $amb = $proxyTemp; $ambFan = $f[2]
+    }
   }
 
   Say ("  Load    : {0}  ({1} W, {2} MHz, util avg {3}%)" -f $loadClass,$meanPw,$meanSm,$meanUtil)
@@ -301,7 +305,11 @@ function Invoke-GuardPass {
   $hwT = ($thr | Select-String 'HW Thermal Slowdown\s*:\s*(.+?)\s*$').Matches.Groups[1].Value
   $swT = ($thr | Select-String 'SW Thermal Slowdown\s*:\s*(.+?)\s*$').Matches.Groups[1].Value
   $swP = ($thr | Select-String 'SW Power Cap\s*:\s*(.+?)\s*$').Matches.Groups[1].Value
-  if($hwT -eq 'Active' -or $swT -eq 'Active'){
+  $throttleTelemetryPresent = $hwT -in @('Active','Not Active') -and $swT -in @('Active','Not Active')
+  if(-not $throttleTelemetryPresent){
+    Say '  Throttle: required slowdown telemetry unavailable   [FAIL]'
+    Bump 'fail'; P 'fail' 'P40 thermal slowdown telemetry unavailable'
+  } elseif($hwT -eq 'Active' -or $swT -eq 'Active'){
     Say ("  Throttle: THERMAL SLOWDOWN ACTIVE (hw={0} sw={1}) -- airflow regression   [FAIL]" -f $hwT,$swT)
     Bump 'fail'; P 'fail' 'P40 thermal slowdown active -- airflow regression'
   } else { Say ("  Throttle: no thermal slowdown; SW power cap {0}   [OK]" -f $swP) }
@@ -326,7 +334,8 @@ function Invoke-GuardPass {
     chassis_proxy_c = $amb; chassis_fan_pct = $ambFan
     p40_chassis_delta_c = $(if($null -ne $amb){ $maxTemp - $amb } else { $null })
     baseline_equilibrium_c = $BaselineEquilibC; baseline_delta_c = $BaselineDeltaC
-    thermal_slowdown = ($hwT -eq 'Active' -or $swT -eq 'Active')
+    throttle_telemetry_present = $throttleTelemetryPresent
+    thermal_slowdown = $(if($throttleTelemetryPresent){$hwT -eq 'Active' -or $swT -eq 'Active'}else{$null})
     ecc_telemetry_present = $eccPresent
     ecc_uncorrected_volatile = $(if($eccPresent){[int64]$e[0]}else{$null})
     ecc_corrected_volatile = $(if($eccPresent){[int64]$e[1]}else{$null})

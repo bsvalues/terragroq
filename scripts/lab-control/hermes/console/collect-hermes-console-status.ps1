@@ -10,6 +10,7 @@ param(
   [string]$DoctrineResultPath = 'C:\ProgramData\Hermes\doctrine\current-result.json',
   [string]$RestoreReceiptPath = 'G:\lab-backups\hermes-volumes\hermes-latest-restore-receipt.json',
   [string]$DockerSettingsPath = 'C:\Users\bs\AppData\Roaming\Docker\settings-store.json',
+  [string]$LegacyDockerVhdxPath = '',
   [string]$DockerDataPath = 'G:\DockerDesktopWSL\disk\docker_data.vhdx',
   [string]$GoldenModel = 'williamos-qwen3-4b:64k'
 )
@@ -201,15 +202,23 @@ $domains.doctrine = Domain $doctrineState ($(if($doctrineState -eq 'HEALTHY'){'D
   Fact 'Freshness' $(if($doctrineFresh){'Within 10 minutes'}else{'Not current'})
 )
 
-$dockerVhdx = Get-Item -LiteralPath 'C:\Users\bs\AppData\Local\Docker\wsl\disk\docker_data.vhdx' -ErrorAction SilentlyContinue
+$legacyDockerBindingAvailable = $true
+if([string]::IsNullOrWhiteSpace($LegacyDockerVhdxPath)){
+  try {
+    $profileRoot = ([IO.FileInfo][IO.Path]::GetFullPath($DockerSettingsPath)).Directory.Parent.Parent.Parent.FullName
+    if([string]::IsNullOrWhiteSpace($profileRoot)){throw 'PROFILE_ROOT_UNAVAILABLE'}
+    $LegacyDockerVhdxPath = Join-Path $profileRoot 'AppData\Local\Docker\wsl\disk\docker_data.vhdx'
+  } catch { $legacyDockerBindingAvailable = $false }
+}
+$dockerVhdx = if($legacyDockerBindingAvailable){Get-Item -LiteralPath $LegacyDockerVhdxPath -ErrorAction SilentlyContinue}else{$null}
 $workbenchOnG = Test-Path -LiteralPath 'G:\Workbench' -PathType Container
 $dockerSettings = Read-Json $DockerSettingsPath
 $dockerConfigured = $dockerSettings -and $dockerSettings.PSObject.Properties['CustomWslDistroDir'] -and [string]$dockerSettings.CustomWslDistroDir -eq 'G:\DockerDesktopWSL'
 $dockerDataPresent = Test-Path -LiteralPath $DockerDataPath -PathType Leaf
-$workbenchState = if($workbenchOnG -and -not $dockerVhdx -and $dockerConfigured -and $dockerDataPresent){'HEALTHY'}else{'DEGRADED'}
+$workbenchState = if($legacyDockerBindingAvailable -and $workbenchOnG -and -not $dockerVhdx -and $dockerConfigured -and $dockerDataPresent){'HEALTHY'}else{'DEGRADED'}
 $domains.workbench = Domain $workbenchState ($(if($workbenchState -eq 'HEALTHY'){'Disposable work stays off the appliance volumes'}else{'Workbench separation is incomplete'})) @(
   Fact 'G:\Workbench' $(if($workbenchOnG){'Present'}else{'Not established'})
-  Fact 'Docker disk' $(if($dockerVhdx){"Still on C: | $([math]::Round($dockerVhdx.Length/1GB,1)) GB"}elseif($dockerConfigured -and $dockerDataPresent){'Configured on G: | VHDX present'}else{'G: Docker data location not proven'})
+  Fact 'Docker disk' $(if(-not $legacyDockerBindingAvailable){'Legacy profile binding unavailable'}elseif($dockerVhdx){"Still on C: | $([math]::Round($dockerVhdx.Length/1GB,1)) GB"}elseif($dockerConfigured -and $dockerDataPresent){'Configured on G: | VHDX present'}else{'G: Docker data location not proven'})
 )
 
 # Each domain records its underlying evidence time separately from packet collection time.

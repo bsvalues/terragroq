@@ -78,6 +78,7 @@ function evaluate(observation) {
 describe("HERMES appliance doctrine comparator (stable-vs-ephemeral, #1034/#1035)", () => {
   it.each([
     ["100.64.0.1", true], ["100.127.255.254", true], ["fd7a:115c:a1e0::1234", true],
+    ["fd7a:115c:a1e0:ab12:4843:cd96:1234:5678", true],
     ["100.63.255.254", false], ["100.128.0.1", false], ["0.0.0.0", false],
     ["127.0.0.1", false], ["192.168.1.154", false],
   ])("bounds Tailscale TCP session exception at %s", (address, exempt) => {

@@ -60,11 +60,11 @@ $got = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if(-not $got){ Write-Host "  $TaskName did NOT register." -ForegroundColor Red; exit 2 }
 Write-Host ("  {0} : registered (AtStartup, SYSTEM, every {1}s, restart-on-failure)" -f $TaskName,$IntervalS)
 
+$beat = Join-Path $here 'p40-watch.heartbeat'
+if(Test-Path $beat){ Remove-Item $beat -Force }
+
 Start-ScheduledTask -TaskName $TaskName
 Write-Host '  started; waiting for the first heartbeat...'
-
-$beat = Join-Path $here 'p40-watch.heartbeat'
-if(Test-Path $beat){ Remove-Item $beat -Force -ErrorAction SilentlyContinue }
 $deadline = (Get-Date).AddSeconds(120)
 while((Get-Date) -lt $deadline){
   if(Test-Path $beat){

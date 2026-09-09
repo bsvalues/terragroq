@@ -304,7 +304,7 @@ while (-not $serve.HasExited) {
     $state = 'STARTING'; $modelCount = 0; $reason = 'endpoint not ready'
     try {
         $tags = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 8 -ErrorAction Stop
-        $modelCount = @($tags.models).Count
+        $modelCount = @($tags.models | Where-Object { $null -ne $_ }).Count
         if ($modelCount -gt 0) { $state = 'SERVING'; $reason = '' }
         else { $reason = 'empty model catalogue' }
     } catch { $reason = $_.Exception.GetType().Name }

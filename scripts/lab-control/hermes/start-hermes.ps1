@@ -15,6 +15,18 @@ $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
 
+function Invoke-DockerComposeChecked([string[]]$Arguments,[string]$FailureCode) {
+    # Windows PowerShell 5.1 may surface native stderr as an error record. The native exit code is
+    # the authority, so keep stderr visible and evaluate that code explicitly.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & docker compose @Arguments
+        $nativeExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($nativeExit -ne 0) { throw "$FailureCode exit=$nativeExit" }
+}
+
 # The model store. Owned by the Windows Ollama service; created here only so a fresh machine does
 # not fail confusingly.
 $modelDir = "G:\HermesData\ollama"
@@ -32,19 +44,16 @@ if (-not (Test-Path ".\.env")) {
 
 if ($PullImages) {
     Write-Host "Pulling images (this REPLACES the running image identity with :latest)..." -ForegroundColor Yellow
-    docker compose pull
-    if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_PULL_FAILED exit=$LASTEXITCODE" }
+    Invoke-DockerComposeChecked @('pull') 'DOCKER_COMPOSE_PULL_FAILED'
 } else {
     Write-Host "Using the images already present (pass -PullImages to update them)." -ForegroundColor Cyan
 }
 
 Write-Host "Starting stack..." -ForegroundColor Cyan
-docker compose up -d
-if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_UP_FAILED exit=$LASTEXITCODE" }
+Invoke-DockerComposeChecked @('up','-d') 'DOCKER_COMPOSE_UP_FAILED'
 
 Write-Host "`nStatus:" -ForegroundColor Green
-docker compose ps
-if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_STATUS_FAILED exit=$LASTEXITCODE" }
+Invoke-DockerComposeChecked @('ps') 'DOCKER_COMPOSE_STATUS_FAILED'
 
 Write-Host "`nOllama (Windows service, not a container):" -ForegroundColor Green
 $task = Get-ScheduledTask -TaskName "WilliamOS-HERMES-Ollama" -ErrorAction SilentlyContinue

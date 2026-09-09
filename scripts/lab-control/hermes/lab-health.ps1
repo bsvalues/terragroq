@@ -26,8 +26,14 @@ function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$Herm
   if($Overall -ne $previousOverall -and ($null -ne $previousOverall -or $Overall -ne 'ok')){
     $severity = if($Overall -eq 'fail'){'FAIL'}elseif($Overall -eq 'warn'){'WARN'}else{'RECOVERY'}
     $message = if($Overall -eq 'ok'){"Native HERMES health recovered from $previousOverall"}else{($Problems -join '; ')}
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $severity, $message
-    $line | Add-Content (Join-Path $OutputRoot 'alerts.log')
+    $alertPath = Join-Path $OutputRoot 'alerts.log'
+    $alertWriter = Join-Path $PSScriptRoot 'send-hermes-alert.ps1'
+    if(Test-Path -LiteralPath $alertWriter -PathType Leaf){
+      & $alertWriter -Severity $severity -Message $message -AlertPath $alertPath | Out-Null
+    } else {
+      $fallback = "Native HERMES health changed to $Overall"
+      ("{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'),$severity,$fallback) | Add-Content $alertPath
+    }
   }
 }
 

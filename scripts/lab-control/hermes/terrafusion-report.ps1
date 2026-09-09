@@ -85,7 +85,7 @@ foreach ($n in $Repos) {
       $soft = @($conc | Where-Object { $_ -in 'skipped','neutral',$null }).Count
       if ($fail.Count -gt 0) {
         $ci = "FAILING ($($fail.Count))"; $ciNote = "failing: " + ((@($fail | ForEach-Object { $_.name }) | Select-Object -Unique) -join ', ')
-        Add-Problem 'DEGRADED' "$n main CI has $($fail.Count) failing check(s): $((@($fail|ForEach-Object{$_.name})|Select-Object -Unique) -join ', ')"
+        Add-Problem 'FAIL' "$n main CI has $($fail.Count) failing check(s): $((@($fail|ForEach-Object{$_.name})|Select-Object -Unique) -join ', ')"
       } elseif ($real -eq 0 -and $soft -gt 0) {
         $ci = "SOFT-ONLY ($soft skipped/neutral)"; Add-Problem 'DEGRADED' "$n main CI is only skipped/neutral - no real proof (merge-gate gap)"
       } else {
