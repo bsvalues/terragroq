@@ -201,6 +201,7 @@ export function DeliveryAdoption({
   const [preview, setPreview] = useState<ArtifactPreview | null>(null)
   const [authorization, setAuthorization] = useState<ArtifactAuthorization | null>(null)
   const [seal, setSeal] = useState<ArtifactSeal | null>(null)
+  const [priorSeal, setPriorSeal] = useState<Readonly<{ preview: ArtifactPreview; seal: ArtifactSeal }> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<string | null>(null)
   const [pullRequestInput, setPullRequestInput] = useState("")
@@ -364,6 +365,20 @@ export function DeliveryAdoption({
     }
   }
 
+  function retargetDelivery() {
+    if (!preview || !seal || stage !== "sealed" || finalizing || finalized) return
+    setPriorSeal({ preview, seal })
+    setPullRequestInput(String(preview.pullRequest))
+    setExpectedHeadInput("")
+    targetRef.current = null
+    attemptRef.current = null
+    setAuthorization(null)
+    setSeal(null)
+    setCopyStatus(null)
+    setError(null)
+    setStage("target")
+  }
+
   async function finalizeMergedDelivery() {
     if (!seal || finalizing || finalized) return
     setFinalizing(true)
@@ -425,6 +440,11 @@ export function DeliveryAdoption({
             <button type="submit" className="justify-self-end rounded border border-[#687b63] bg-[#1a2419] px-4 py-2 text-xs font-semibold text-[#e5eee1] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9caf94]">Preview exact target</button>
           </form>
         ) : null}
+        {priorSeal ? <div aria-label="Prior issued delivery seal" className="grid gap-1 rounded border border-[#3b4939] bg-[#101510] px-3 py-2 text-[11px] text-[#9ca797]">
+          <strong className="text-[#d8e2d4]">Prior issued seal retained as immutable history</strong>
+          <span>PR #{priorSeal.preview.pullRequest} · <span className="break-all font-mono">{priorSeal.preview.headSha}</span></span>
+          <span>Seal {compact(priorSeal.seal.adoptionHash)} · not reused for the new target</span>
+        </div> : null}
         {preview ? (
           <div className="grid gap-3">
             <div className="grid grid-cols-[18px_1fr] gap-x-3 text-xs">
@@ -443,6 +463,7 @@ export function DeliveryAdoption({
           <p className="leading-5 text-[#aebaa9]">Publish this complete block in PR #{preview?.pullRequest}&apos;s description before protected merge so the delivery check can verify it. After protected merge, finalize the delivery to close the bound Work Order and refresh this Space.</p>
           <textarea aria-label="Complete WilliamOS delivery seal block" readOnly value={seal.sealBlock} rows={8} className="w-full resize-y rounded border border-[#42503f] bg-[#090c09] p-2 font-mono text-[10px] leading-4 text-[#dbe7d6]" />
           <div className="flex flex-wrap justify-end gap-2">
+            {!finalized ? <button type="button" disabled={finalizing} onClick={retargetDelivery} className="rounded border border-[#52604f] px-3 py-2 font-semibold text-[#d8e2d4] disabled:opacity-60">Retarget exact artifact</button> : null}
             <button type="button" onClick={() => void copySealBlock()} className="flex items-center gap-2 rounded border border-[#52604f] px-3 py-2 font-semibold text-[#d8e2d4]"><Clipboard className="size-3.5" aria-hidden />Copy complete seal block</button>
             {!finalized ? <button type="button" disabled={finalizing} onClick={() => void finalizeMergedDelivery()} className="rounded border border-[#8da083] bg-[#253122] px-3 py-2 font-semibold text-[#edf3e9] disabled:opacity-60">{finalizing ? "Finalizing merged delivery…" : "Finalize merged delivery"}</button> : null}
           </div>

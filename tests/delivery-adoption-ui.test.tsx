@@ -352,6 +352,58 @@ describe("prospective delivery adoption UI", () => {
     expect(screen.queryByRole("button", { name: /authorize|issue seal/i })).toBeNull()
   })
 
+  it("lets the owner retarget an issued seal without mutating the prior authorization", async () => {
+    const user = userEvent.setup()
+    const nextHead = "f".repeat(40)
+    const nextDigest = "7".repeat(64)
+    const nextPaths = ["components/workspace-shell/delivery-adoption.tsx", "tests/delivery-adoption-ui.test.tsx"]
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: sealedPaths,
+        previewDigest,
+        adoptionHash: defaultAdoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockResolvedValueOnce(response({
+        status: "READY_FOR_CONFIRMATION",
+        worldId,
+        pullRequest: 1117,
+        headSha: nextHead,
+        paths: nextPaths,
+        previewDigest: nextDigest,
+      }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} />)
+    expect(await screen.findByText(/delivery seal is issued/i)).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: "Retarget exact artifact" }))
+    expect((screen.getByLabelText("Pull request number") as HTMLInputElement).value).toBe("1117")
+    expect((screen.getByLabelText("Expected exact head SHA") as HTMLInputElement).value).toBe("")
+    expect(screen.getByLabelText("Prior issued delivery seal").textContent).toContain(headSha)
+    expect(screen.getByLabelText("Prior issued delivery seal").textContent).toContain("not reused for the new target")
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    await user.type(screen.getByLabelText("Expected exact head SHA"), nextHead)
+    await user.click(screen.getByRole("button", { name: "Preview exact target" }))
+
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      mode: "PREVIEW",
+      worldId,
+      pullRequest: 1117,
+      expectedHeadSha: nextHead,
+    })
+    expect(await screen.findByText(nextPaths[0])).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Authorize exact artifact" })).toBeTruthy()
+    expect(screen.getByLabelText("Prior issued delivery seal").textContent).toContain(headSha)
+    expect(screen.getByText(nextHead)).toBeTruthy()
+  })
+
   it("rejects a restored envelope whose outer hash is not the signed adoption hash", async () => {
     const signedHash = "e".repeat(64)
     const signedSeal = {
@@ -429,6 +481,48 @@ describe("prospective delivery adoption UI", () => {
     await waitFor(() => expect(onFinalized).toHaveBeenCalledOnce())
     expect(await screen.findByText("Merged delivery finalized and Space refreshed.")).toBeTruthy()
     expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(String(options?.body ?? "{}"))?.mode === "ISSUE")).toBe(false)
+  })
+
+  it("prevents retargeting while finalization is in flight", async () => {
+    let resolveFinalization!: (value: Response) => void
+    const finalization = new Promise<Response>((resolve) => { resolveFinalization = resolve })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        status: "SEALED",
+        worldId,
+        pullRequest: 1117,
+        headSha,
+        paths: sealedPaths,
+        previewDigest,
+        adoptionHash: defaultAdoptionHash,
+        seal,
+        sealBlock,
+      }))
+      .mockReturnValueOnce(finalization)
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} />)
+    expect(await screen.findByText(/delivery seal is issued/i)).toBeTruthy()
+
+    await userEvent.click(screen.getByRole("button", { name: "Finalize merged delivery" }))
+    const retarget = screen.getByRole("button", { name: "Retarget exact artifact" }) as HTMLButtonElement
+    expect(retarget.disabled).toBe(true)
+    await userEvent.click(retarget)
+    expect(screen.queryByLabelText("Expected exact head SHA")).toBeNull()
+
+    resolveFinalization(response({
+      status: "FINALIZED",
+      replayed: false,
+      worldId,
+      adoptionHash: defaultAdoptionHash,
+      outcomeKey: "external:outcome",
+      workOrderId: 34,
+      pullRequest: 1117,
+      headSha,
+      mergeSha: "b".repeat(40),
+      paths: sealedPaths,
+    }))
+    expect(await screen.findByText("Merged delivery finalized and Space refreshed.")).toBeTruthy()
   })
 
   it("closes the external-work dialog after finalization before refreshing the completed Space", async () => {
