@@ -34,6 +34,8 @@ $relativeFiles = @(
  'hermes/deploy-hermes-appliance.ps1'
 )
 $plan = @()
+$inferenceChanged = $false
+$ownerRestartAttempted = $false
 foreach ($relative in $relativeFiles) {
   $source = Join-Path $SourceRoot ('scripts/lab-control/' + $relative)
   & git -C $SourceRoot ls-files --error-unmatch -- ('scripts/lab-control/' + $relative) | Out-Null
@@ -51,6 +53,9 @@ foreach ($relative in $relativeFiles) {
     }
     if ((Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "REPARSE_TARGET $target" }
     $plan += [pscustomobject]@{ source=$source; target=$target; sha256=(Get-FileHash -LiteralPath $source).Hash; existed=(Test-Path -LiteralPath $target) }
+    if($relative -eq 'hermes/ollama-service/hermes-ollama-service.ps1') {
+      $inferenceChanged = -not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash
+    }
   }
 }
 if ($PlanOnly) { $plan | Select-Object target,sha256 | ConvertTo-Json; return }
@@ -100,7 +105,7 @@ try {
     Copy-Item -LiteralPath $entry.source -Destination $entry.target -Force
     if ((Get-FileHash -LiteralPath $entry.target).Hash -ne $entry.sha256) { throw "INSTALLED_HASH_MISMATCH $($entry.target)" }
   }
-  Restart-InferenceOwner
+  if($inferenceChanged) {$ownerRestartAttempted=$true;Restart-InferenceOwner}
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\ProgramData\Hermes\console\collect-hermes-console-status.ps1' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'COLLECTOR_FAILED' }
   Start-ScheduledTask -TaskName 'HermesConsole'
@@ -124,7 +129,7 @@ try {
       elseif(Test-Path -LiteralPath $entry.target -PathType Leaf) {Remove-Item -LiteralPath $entry.target -Force}
     } catch {$rollbackErrors += $_.Exception.Message}
   }
-  try {Restart-InferenceOwner} catch {$rollbackErrors += $_.Exception.Message}
+  if($ownerRestartAttempted) {try {Restart-InferenceOwner} catch {$rollbackErrors += $_.Exception.Message}}
   foreach($task in @('HermesConsole','HermesConsoleStatus')) {try {Start-ScheduledTask -TaskName $task} catch {$rollbackErrors += $_.Exception.Message}}
   $receipt.status=if($rollbackErrors.Count){'ROLLBACK_INCOMPLETE'}else{'ROLLED_BACK'}
   $receipt.failure=$failure;$receipt.rollbackErrors=$rollbackErrors;Save-Receipt
