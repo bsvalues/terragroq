@@ -4071,15 +4071,49 @@ const DECOMPOSITION_HARD_WALL_KEYS = Object.freeze([
 function validDecompositionPolicy(value) {
   const policy = parentMissionRecord(value)
   const hardWalls = parentMissionRecord(policy?.hardWalls)
+  const pathCeiling = policy?.pathReservationCeiling
+  const contractCeiling = policy?.contractReservationCeiling
+  const environmentCeiling = policy?.environmentReservationCeiling
+  const canonicalText = (text, max) => typeof text === "string" && text.length > 0
+    && text.length <= max && text.trim() === text && !text.includes("\0")
+  const safePath = (text) => canonicalText(text, 1_000) && !text.includes("\\") && !text.startsWith("/")
+    && !text.startsWith("//") && !/^[A-Za-z]:/.test(text)
+    && !text.split("/").some((segment) => segment === "..")
+  const canonicalRecords = (values, validator, sortKey) => Array.isArray(values) && values.length <= 64
+    && values.every(validator)
+    && values.every((entry, index) => index === 0
+      || compareCanonicalStrings(sortKey(values[index - 1]), sortKey(entry)) < 0)
   return exactParentMissionKeys(policy, [
     "version", "executionPowers", "pathReservationCeiling", "contractReservationCeiling",
     "environmentReservationCeiling", "hardWalls",
   ])
     && policy.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
     && isCanonicalNonemptyStringArray(policy.executionPowers)
-    && isCanonicalNonemptyStringArray(policy.pathReservationCeiling)
-    && Array.isArray(policy.contractReservationCeiling)
-    && Array.isArray(policy.environmentReservationCeiling)
+    && policy.executionPowers.length <= 16
+    && policy.executionPowers.every((power) => canonicalText(power, 200))
+    && policy.executionPowers.includes("child:derive")
+    && policy.executionPowers.every((power) => ["child:derive", "child:reserve", "child:dispatch"].includes(power))
+    && isCanonicalNonemptyStringArray(pathCeiling) && pathCeiling.length <= 3_000
+    && pathCeiling.every(safePath)
+    && canonicalRecords(contractCeiling, (claim) => {
+      const record = parentMissionRecord(claim)
+      return exactParentMissionKeys(record, ["contractIdentity", "revisionIdentity", "role"])
+        && canonicalText(record.contractIdentity, 200) && canonicalText(record.revisionIdentity, 200)
+        && ["producer", "consumer"].includes(record.role)
+    }, (claim) => JSON.stringify({
+      contractIdentity: claim.contractIdentity,
+      revisionIdentity: claim.revisionIdentity,
+      role: claim.role,
+    }))
+    && canonicalRecords(environmentCeiling, (claim) => {
+      const record = parentMissionRecord(claim)
+      return exactParentMissionKeys(record, ["environmentIdentity", "access"])
+        && canonicalText(record.environmentIdentity, 200)
+        && ["exclusive", "shared-read"].includes(record.access)
+    }, (claim) => JSON.stringify({
+      environmentIdentity: claim.environmentIdentity,
+      access: claim.access,
+    }))
     && exactParentMissionKeys(hardWalls, DECOMPOSITION_HARD_WALL_KEYS)
     && DECOMPOSITION_HARD_WALL_KEYS.every((key) => hardWalls[key] === true)
 }

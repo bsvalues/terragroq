@@ -7,6 +7,7 @@ import {
   admitExternalParentMission,
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
   EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   externalParentMissionBindReceiptHash,
@@ -51,7 +52,7 @@ const decompositionPolicy = () => ({
     parentCompletionInferenceForbidden: true,
     crossBoundaryWideningForbidden: true,
   },
-})
+} as const)
 
 function admittedInput() {
   const preview = previewExternalParentMissionAdmission({
@@ -238,6 +239,55 @@ describe("external parent mission admission contract", () => {
       }],
       resolved: [],
     })
+
+    const policy = decompositionPolicy()
+    const decompositionLocator = {
+      worldId: "other-space",
+      missionKey: preview.missionKey,
+      bindReceiptId: bind.id,
+      bindReceiptHash: externalParentMissionBindReceiptHash(bind),
+      policy,
+    }
+    const policyDigest = externalParentMissionDecompositionPolicyDigest(decompositionLocator)
+    const decompositionRequest = {
+      version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+      ...decompositionLocator,
+      idempotencyKey: "parent-decomposition:1485",
+      confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+      confirmedPolicyDigest: policyDigest,
+    }
+    const contextDigest = "c".repeat(64)
+    const decomposition = {
+      id: 13,
+      userId: "owner",
+      idempotencyKey: decompositionRequest.idempotencyKey,
+      operation: EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+      outcomeKey: preview.missionKey,
+      requestHash: hashRecord(decompositionRequest),
+      requestBinding: decompositionRequest,
+      resultBinding: {
+        version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+        missionKey: preview.missionKey,
+        bindReceiptId: bind.id,
+        bindReceiptHash: decompositionLocator.bindReceiptHash,
+        policyDigest,
+        policy,
+        authorityContext: {
+          ownerUserId: "owner", worldId: "other-space", projectId: 4,
+          repository: "bsvalues/terrafusion_os_1.0", repositoryResourceId: 9,
+          workOrderId: 55, workOrderRef: "WO-55", grantId: 66, grantRef: "GRANT-66",
+          grantContentHash: contextDigest, grantExpiresAt: "2026-12-01T00:00:00.000Z",
+          authorityCeiling: "A2_WRITE_OWN", grantScopeDigest: contextDigest,
+          grantAllowedActionsDigest: contextDigest, grantBlockedActionsDigest: contextDigest,
+        },
+        state: "ACTIVE",
+        admittedBy: "owner",
+        admittedAt: "2026-09-07T12:30:00.000Z",
+      },
+      createdAt: new Date("2026-09-07T12:30:00.000Z"),
+    }
+    expect(resolveExternalParentMissionReceipts([bind, decomposition], { worldId: "other-space" }))
+      .toEqual({ integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] })
 
     const evidence = ["evidence:external-assessor-acceptance", "protected-main:abc"]
     const terminalRequest = {

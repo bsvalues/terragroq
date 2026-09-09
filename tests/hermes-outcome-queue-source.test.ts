@@ -197,7 +197,10 @@ function parentMissionWithDecompositionReceipt() {
     executionPowers: ["child:derive", "child:dispatch"],
     pathReservationCeiling: ["lib/outcome-queue/**", "tests/**"],
     contractReservationCeiling: [],
-    environmentReservationCeiling: [],
+    environmentReservationCeiling: [
+      { environmentIdentity: "a", access: "shared-read" },
+      { environmentIdentity: "z", access: "exclusive" },
+    ],
     hardWalls: {
       singleRepositoryPerChild: true,
       exactReservationSubset: true,
@@ -209,7 +212,7 @@ function parentMissionWithDecompositionReceipt() {
       parentCompletionInferenceForbidden: true,
       crossBoundaryWideningForbidden: true,
     },
-  }
+  } as const
   const locator = {
     worldId: "space-terrafusion",
     missionKey: bind.outcomeKey,
@@ -2180,7 +2183,7 @@ describe("transactional durable outcome queue source", () => {
       },
     })
 
-    const decomposition = receipts[1]
+    const decomposition = receipts[1] as any
     const forged = {
       ...decomposition,
       resultBinding: {
@@ -2196,6 +2199,41 @@ describe("transactional durable outcome queue source", () => {
       parentMissionReceipts: [receipts[0], forged],
     })
     await expect(acquireNextEligibleOutcome({ query: forgedQuery, ...acquireInput })).resolves.toMatchObject({
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+
+    const unsafePolicy = {
+      ...decomposition.requestBinding.policy,
+      pathReservationCeiling: ["../outside"],
+    }
+    const unsafePolicyDigest = externalParentMissionDecompositionPolicyDigest({
+      worldId: decomposition.requestBinding.worldId,
+      missionKey: decomposition.requestBinding.missionKey,
+      bindReceiptId: decomposition.requestBinding.bindReceiptId,
+      bindReceiptHash: decomposition.requestBinding.bindReceiptHash,
+      policy: unsafePolicy,
+    })
+    const unsafeRequest = {
+      ...decomposition.requestBinding,
+      policy: unsafePolicy,
+      confirmedPolicyDigest: unsafePolicyDigest,
+    }
+    const unsafeReceipt = {
+      ...decomposition,
+      requestHash: hashRecord(unsafeRequest),
+      requestBinding: unsafeRequest,
+      resultBinding: {
+        ...decomposition.resultBinding,
+        policy: unsafePolicy,
+        policyDigest: unsafePolicyDigest,
+      },
+    }
+    const unsafeQuery = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 2, approvalEligibleCount: 0 }],
+      parentMissionReceipts: [receipts[0], unsafeReceipt],
+    })
+    await expect(acquireNextEligibleOutcome({ query: unsafeQuery, ...acquireInput })).resolves.toMatchObject({
       reason: "PARENT_MISSION_BINDING_REQUIRED",
       parentMissions: { integrity: "BINDING_REQUIRED" },
     })

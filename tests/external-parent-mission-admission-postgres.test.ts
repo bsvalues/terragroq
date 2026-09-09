@@ -66,6 +66,16 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
         (id,"userId","projectId",type,"canonicalIdentity",label,relationship,"allowedOperations") VALUES
         (7,'owner',1,'repo','bsvalues/terrafusion_os_1.0','OS 1.0','primary-repo',ARRAY['read','write']),
         (8,'other',2,'repo','bsvalues/terrafusion_os_1.0','OS 1.0','primary-repo',ARRAY['read','write'])`)
+      await fixture.query(`INSERT INTO authority_grant
+        (id,"userId",ref,"workOrderId","grantedBy","grantedTo","authorityLevel",scope,"allowedActions","blockedActions",status,"expiresAt","contentHash")
+        VALUES (50,'owner','GRANT-DECOMPOSE',110,'owner','codex','A2_WRITE_OWN',$1,
+          ARRAY['lib/outcome-queue/**','tests/**'],ARRAY['terrafusion/**'],'active','2030-01-01T00:00:00Z',$2)`, [
+        JSON.stringify({ contracts: [], environments: [] }), "a".repeat(64),
+      ])
+      await fixture.query(`INSERT INTO work_order
+        (id,"userId",ref,title,"allowedFiles","forbiddenFiles",status,"authorityLevel","authorityGrantId",agent)
+        VALUES (110,'owner','WO-DECOMPOSE','Decompose parent mission',
+          ARRAY['lib/outcome-queue/**','tests/**'],ARRAY['terrafusion/**'],'active','A2_WRITE_OWN',50,'codex')`)
       const activeWorld = {
         ...createWorkingWorld({
           intent: "Continue the TerraFusion mission.",
@@ -96,7 +106,9 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
       vi.doMock("@/lib/db", () => ({ db: database, pool: fixture }))
       const {
         admitExternalParentMission,
+        admitExternalParentMissionDecomposition,
         previewExternalParentMissionAdmission,
+        previewExternalParentMissionDecompositionAdmission,
         readExternalParentMissionState,
         terminalExternalParentMission,
       } = await import("@/lib/environment/external-parent-mission-admission")
@@ -148,6 +160,57 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
       await fixture.query(`UPDATE project SET lifecycle='active' WHERE id=1`)
       await fixture.query(`UPDATE project_resource SET "canonicalIdentity"='bsvalues/terrafusion_os_1.0' WHERE id=7`)
 
+      const policy = {
+        version: "external-parent-mission-decomposition.v2" as const,
+        executionPowers: ["child:derive", "child:dispatch"],
+        pathReservationCeiling: ["lib/outcome-queue/**", "tests/**"],
+        contractReservationCeiling: [],
+        environmentReservationCeiling: [],
+        hardWalls: {
+          singleRepositoryPerChild: true as const,
+          exactReservationSubset: true as const,
+          noAuthorityEscalation: true as const,
+          childExpiryNoLaterThanParent: true as const,
+          deterministicChildIdentity: true as const,
+          atomicChildLineage: true as const,
+          rawProseAuthorityForbidden: true as const,
+          parentCompletionInferenceForbidden: true as const,
+          crossBoundaryWideningForbidden: true as const,
+        },
+      }
+      const decompositionPreview = await previewExternalParentMissionDecompositionAdmission("owner", {
+        mode: "DECOMPOSITION_PREVIEW",
+        worldId: "space-tf",
+        missionKey: admitted.binding.missionKey,
+        bindReceiptId: admitted.receiptId,
+        bindReceiptHash: admitted.bindReceiptHash,
+        policy,
+      })
+      const decompositionBody = {
+        mode: "DECOMPOSITION_ADMIT",
+        worldId: "space-tf",
+        missionKey: admitted.binding.missionKey,
+        bindReceiptId: admitted.receiptId,
+        bindReceiptHash: admitted.bindReceiptHash,
+        policy,
+        idempotencyKey: "external-parent:1485:decomposition",
+        confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+        confirmedPolicyDigest: decompositionPreview.policyDigest,
+      }
+      const decompositionConcurrent = await Promise.all([
+        admitExternalParentMissionDecomposition("owner", decompositionBody),
+        admitExternalParentMissionDecomposition("owner", decompositionBody),
+      ])
+      expect(decompositionConcurrent.map((entry) => entry.status).sort()).toEqual([
+        "DECOMPOSITION_ADMITTED", "DECOMPOSITION_ALREADY_ADMITTED",
+      ])
+      const decompositionReceiptId = decompositionConcurrent[0].receiptId
+      expect(decompositionConcurrent[1].receiptId).toBe(decompositionReceiptId)
+      await fixture.query(`UPDATE authority_grant SET status='revoked', "revokedAt"=clock_timestamp() WHERE id=50`)
+      await expect(admitExternalParentMissionDecomposition("owner", decompositionBody)).resolves.toMatchObject({
+        status: "DECOMPOSITION_ALREADY_ADMITTED", replayed: true, receiptId: decompositionReceiptId,
+      })
+
       const counts = (await fixture.query(`SELECT
         (SELECT count(*)::int FROM outcome_queue_mutation_receipt) receipts,
         (SELECT count(*)::int FROM goal) goals,
@@ -155,7 +218,7 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
         (SELECT count(*)::int FROM decision) decisions,
         (SELECT count(*)::int FROM authority_grant) grants,
         (SELECT count(*)::int FROM outcome_queue_item) outcomes`)).rows[0]
-      expect(counts).toEqual({ receipts: 1, goals: 0, work_orders: 0, decisions: 0, grants: 0, outcomes: 0 })
+      expect(counts).toEqual({ receipts: 2, goals: 0, work_orders: 1, decisions: 0, grants: 1, outcomes: 0 })
       expect((await fixture.query(`SELECT snapshot FROM working_world WHERE id='space-tf'`)).rows[0].snapshot)
         .toBe(beforeSnapshot)
       await expect(readExternalParentMissionState("owner")).resolves.toMatchObject({
@@ -230,7 +293,7 @@ runDatabase("external parent mission admission real PostgreSQL contract", { time
         (SELECT count(*)::int FROM authority_grant) grants,
         (SELECT count(*)::int FROM outcome_queue_item) outcomes`)).rows[0]
       expect(terminalCounts).toEqual({
-        receipts: 2, goals: 0, work_orders: 0, decisions: 0, grants: 0, outcomes: 0,
+        receipts: 3, goals: 0, work_orders: 1, decisions: 0, grants: 1, outcomes: 0,
       })
       expect((await fixture.query(`SELECT snapshot FROM working_world WHERE id='space-tf'`)).rows[0].snapshot)
         .toBe(beforeSnapshot)

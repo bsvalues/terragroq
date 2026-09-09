@@ -936,16 +936,14 @@ export async function previewExternalParentMissionDecompositionAdmission(
   }, { isolationLevel: "serializable" })
 }
 
-export async function admitExternalParentMissionDecomposition(
+async function admitExternalParentMissionDecompositionOnce(
   userId: string,
-  raw: unknown,
+  input: ExternalParentMissionDecompositionAdmissionInput,
 ): Promise<ExternalParentMissionDecompositionSuccess> {
-  const input = normalizeExternalParentMissionDecompositionAdmissionInput(raw)
   const requestBinding = decompositionRequestBinding(input)
   const requestHash = hashRecord(requestBinding)
   return db.transaction(async (transaction) => {
     await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:${input.missionKey}:decomposition`}))`)
-    const authorityContext = await resolveDecompositionAuthorityContext(transaction, userId, input)
     const idempotencyRows = await transaction.select().from(outcomeQueueMutationReceipt).where(and(
       eq(outcomeQueueMutationReceipt.userId, userId),
       eq(outcomeQueueMutationReceipt.idempotencyKey, input.idempotencyKey),
@@ -960,11 +958,9 @@ export async function admitExternalParentMissionDecomposition(
     }
     if (idempotencyRows[0]) {
       const receipt = idempotencyRows[0]
-      const result = record(receipt.resultBinding)
       if (receipt.operation !== EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION
         || receipt.outcomeKey !== input.missionKey || receipt.requestHash !== requestHash
         || !exactRecord(receipt.requestBinding, requestBinding) || !validDecompositionReceipt(receipt)
-        || !result || !exactRecord(result.authorityContext, authorityContext)
         || missionRows.length !== 1 || missionRows[0].id !== receipt.id) {
         throw new ExternalParentMissionAdmissionError("IDEMPOTENCY_CONFLICT")
       }
@@ -973,6 +969,7 @@ export async function admitExternalParentMissionDecomposition(
     if (missionRows[0]) {
       throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_ALREADY_BOUND")
     }
+    const authorityContext = await resolveDecompositionAuthorityContext(transaction, userId, input)
     const nowRows = await transaction.execute(sql`SELECT clock_timestamp() AS "now"`)
     const admittedAt = new Date(nowRows.rows[0]?.now as Date | string)
     const resultBinding = {
@@ -999,6 +996,21 @@ export async function admitExternalParentMissionDecomposition(
     }).returning()
     return decompositionResult(receipt, false)
   }, { isolationLevel: "serializable" })
+}
+
+export async function admitExternalParentMissionDecomposition(
+  userId: string,
+  raw: unknown,
+): Promise<ExternalParentMissionDecompositionSuccess> {
+  const input = normalizeExternalParentMissionDecompositionAdmissionInput(raw)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await admitExternalParentMissionDecompositionOnce(userId, input)
+    } catch (error) {
+      if (!(isSerializationFailure(error) || isUniqueConstraintFailure(error)) || attempt === 2) throw error
+    }
+  }
+  throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
 }
 
 function terminalState(receipt: ReceiptLike, bind: ReceiptLike): string | null {
@@ -1076,8 +1088,6 @@ export function resolveExternalParentMissionReceipts(
   for (const bind of binds) {
     const binding = (bind.resultBinding as { binding: ExternalParentMissionBinding }).binding
     const result = bind.resultBinding as { worldId: string }
-    if ((scope?.worldId !== undefined && result.worldId !== scope.worldId)
-      || (scope?.projectId !== undefined && binding.projectId !== scope.projectId)) continue
     const identity = {
       missionKey: binding.missionKey,
       externalRef: binding.externalRef,
@@ -1103,6 +1113,8 @@ export function resolveExternalParentMissionReceipts(
       ))) {
       return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
     }
+    if ((scope?.worldId !== undefined && result.worldId !== scope.worldId)
+      || (scope?.projectId !== undefined && binding.projectId !== scope.projectId)) continue
     if (candidates.length > 1) return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
     if (candidates.length === 0) {
       const decompositionResultBinding = decomposition ? record(decomposition.resultBinding) : null
@@ -1419,6 +1431,13 @@ function isSerializationFailure(error: unknown): boolean {
   const candidate = error as { code?: unknown; cause?: unknown }
   if (candidate.code === "40001" || candidate.code === "40P01") return true
   return candidate.cause !== error && isSerializationFailure(candidate.cause)
+}
+
+function isUniqueConstraintFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false
+  const candidate = error as { code?: unknown; cause?: unknown }
+  if (candidate.code === "23505") return true
+  return candidate.cause !== error && isUniqueConstraintFailure(candidate.cause)
 }
 
 export async function admitExternalParentMission(
