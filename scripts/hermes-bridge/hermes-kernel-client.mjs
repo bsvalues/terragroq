@@ -172,6 +172,15 @@ export function createHermesKernelClient({
   }
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    // For a Python invoker the interpreter is part of the trusted invocation contract too: an
+    // absolute-but-missing or directory pythonCommand otherwise passes connect() and only fails
+    // inside runTurn (recorded as an interruption after session state exists). Validate it here,
+    // on the resident host in remote mode, as a regular executable file before connected=true.
+    if (invokerKind === "python") {
+      const stat = fs.statSync(pythonCommand, { throwIfNoEntry: false })
+      if (!stat?.isFile() || stat.isSymbolicLink()) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+      if (process.platform !== "win32" && (stat.mode & 0o111) === 0) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    }
   }
   /**
    * Spec §4 item 6: the kernel's own deadline must fit inside the budget the host runner enforces.

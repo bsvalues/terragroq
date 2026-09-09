@@ -46,6 +46,10 @@ describe("remote resident model execution", () => {
     const f = fixture()
     const config = { ...f.config, invokerKind: "python" }
     const policy = JSON.parse(fs.readFileSync(config.policyPath, "utf8"))
+    // A worker is only ready on a qualified lane: no model tools, single concurrency, no cloud fallback.
+    // Qualify this fixture explicitly so the readiness predicate (and CodeRabbit review) sees a real ready case.
+    policy.execution = { ...policy.execution, allowedToolsets: [], maximumConcurrency: 1 }
+    policy.model = { ...policy.model, cloudFallbackAllowed: false }
     policy.daedalusInvoker = { expectedGpuUuid: "GPU-abcd", workerPath: config.invokerPath, modelPath: f.root, modelFiles: { "policy.json": "fixture" } }
     fs.writeFileSync(config.policyPath, JSON.stringify(policy))
     const digest = (file: string) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")

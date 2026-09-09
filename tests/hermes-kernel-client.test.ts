@@ -193,6 +193,10 @@ const okResult = (runId: string, json = fullTurnJson()) => ({
 describe("Hermes kernel client — runTurn", () => {
   it("uses only the explicit trusted Python executable and preserves the packet, timeout and evidence contract", async () => {
     const executable = path.resolve(os.tmpdir(), "trusted python", "python")
+    // connect() now validates the trusted interpreter as a real regular executable file, so the
+    // fixture must actually create it (contents are never read; the commandRunner is stubbed).
+    fs.mkdirSync(path.dirname(executable), { recursive: true })
+    fs.writeFileSync(executable, "#!fixture-python\n", { mode: 0o755 })
     const { client, calls, commandRunner, workspacePath, runtimeRoot, policyPath, invokerPath, commonDir } = fixture({ invokerKind: "python", pythonCommand: executable })
     commandRunner.mockImplementation(async (call: Call) => { calls.push(call); return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("--run-id") + 1])) })
     await client.connect()

@@ -484,11 +484,22 @@ function readProbe(declared) {
     const expectedIdentity = declared.identity;
     const observedIdentity = x.node.identity;
     if (!expectedIdentity?.machine_id_sha256) throw new Error('trusted machine identity pin is missing');
+    // A node may legitimately probe under more than one hostname (an mDNS short name vs the full
+    // machine name). The reviewed identity contract owns those aliases, so resolve the observed
+    // hostname through it: accept the declared seed hostname OR any alias the contract assigns to
+    // THIS node. Comparison stays case-insensitive as before; machine-id and source remain exact
+    // pins. An alias claimed by another node, or by no node, never matches here.
+    const acceptedHostnames = new Set([String(expectedIdentity.hostname).trim().toLowerCase()]);
+    for (const [alias, claimNode] of hostnameClaims) {
+      if (claimNode === declared.id) acceptedHostnames.add(alias);
+    }
+    const probeHostname = String(x.node.hostname).trim().toLowerCase();
+    const identityHostname = String(observedIdentity?.hostname).trim().toLowerCase();
     if (
-      String(x.node.hostname).trim().toLowerCase() !== String(expectedIdentity.hostname).trim().toLowerCase() ||
+      !acceptedHostnames.has(probeHostname) ||
       observedIdentity?.machine_id_sha256 !== expectedIdentity.machine_id_sha256 ||
       observedIdentity?.source !== expectedIdentity.source ||
-      String(observedIdentity?.hostname).trim().toLowerCase() !== String(expectedIdentity.hostname).trim().toLowerCase()
+      !acceptedHostnames.has(identityHostname)
     ) {
       throw new Error('trusted machine identity mismatch');
     }

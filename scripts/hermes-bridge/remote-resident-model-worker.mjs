@@ -25,6 +25,12 @@ export async function handleResidentRequest(request, { clientFactory = createHer
   if (method === "health") {
     const quarantined = [kernelQuarantinePath(config.runtimeRoot), path.join(path.dirname(config.policyPath), HERMES_KERNEL_QUARANTINE_MARKER)].some((file) => fs.existsSync(file))
     let ready = false, accepted = null, gpu = null
+    // A worker is only "ready" as a resident inference node when the lane is actually qualified:
+    // no model tools, single concurrency, and no cloud fallback. This mirrors the executionMode /
+    // agentToolsEnabled predicates so health can never report ready on an unqualified lane.
+    const laneQualified = config.invokerKind === "python" && Array.isArray(policy.execution?.allowedToolsets)
+      && policy.execution.allowedToolsets.length === 0 && policy.execution.maximumConcurrency === 1
+      && policy.model?.cloudFallbackAllowed === false
     if (config.invokerKind === "python" && policy.daedalusInvoker) {
       try {
         accepted = JSON.parse(fs.readFileSync(path.join(path.dirname(kernelQuarantinePath(config.runtimeRoot)), "daedalus-last-accepted.json"), "utf8"))
@@ -35,7 +41,7 @@ export async function handleResidentRequest(request, { clientFactory = createHer
           if (name && Number.isFinite(Number(memory)) && Number(memory) > 0) gpu = { uuid, name, vramBytes: Number(memory) * 1048576 }
         }
         const age = Date.now() - Date.parse(accepted.observedAt)
-        ready = !quarantined && accepted.kernelTurnAccepted === true && age >= 0 && age < 86400000 && gpu !== null
+        ready = laneQualified && !quarantined && accepted.kernelTurnAccepted === true && age >= 0 && age < 86400000 && gpu !== null
           && accepted.nodeId === config.nodeId && accepted.modelId === config.modelId
           && accepted.gpuUuid === gpu?.uuid && accepted.gpuUuid === policy.daedalusInvoker.expectedGpuUuid
           && accepted.policySha256 === digest(fs.readFileSync(config.policyPath))

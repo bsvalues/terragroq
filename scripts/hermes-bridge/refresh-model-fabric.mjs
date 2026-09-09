@@ -35,6 +35,7 @@ export async function refreshModelFabric(config, {
     if (error.code === "EEXIST") fail("IN_PROGRESS")
     throw error
   }
+  let primaryError
   try {
     const health = await backend.health()
     const response = await backend.runCommand({ workspacePath: backend.repositoryRoot, command: "bash",
@@ -81,5 +82,12 @@ export async function refreshModelFabric(config, {
     write(recommendationPath, JSON.stringify(recommendation))
     return { schemaVersion: 1, status: recommendation.status, nodeId: backend.nodeId, recommendation, recommendationPath,
       healthPath, probePath, snapshotPath, autonomousDispatch: false }
-  } finally { fs.unlinkSync(lockPath) }
+  } catch (error) { primaryError = error; throw error } finally {
+    // Release the refresh lock, but never let a failed unlink mask a real refresh failure: an
+    // in-flight refresh error is the primary signal and must propagate. Only surface a release
+    // failure when the body itself succeeded; otherwise the original error wins.
+    try { fs.unlinkSync(lockPath) } catch (releaseError) {
+      if (primaryError === undefined) fail("LOCK_RELEASE_FAILED")
+    }
+  }
 }

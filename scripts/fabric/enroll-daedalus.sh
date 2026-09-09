@@ -40,35 +40,60 @@ effective=$(/usr/sbin/sshd -T -C user=daedalus,host=hermes,addr=192.168.88.9)
 auth_paths=$(printf '%s\n' "$effective" | awk '$1 == "authorizedkeysfile" {$1=""; print}')
 [[ " $auth_paths " == *' .ssh/authorized_keys '* ]] || { echo 'Existing SSH policy uses a different authorized_keys path; refusing.' >&2; exit 2; }
 python3 - "$key_file" <<'PY'
-import os, pathlib, pwd, sys
+import os, pathlib, pwd, stat, sys
 account = pwd.getpwnam('daedalus')
 home = pathlib.Path(account.pw_dir)
 if home != pathlib.Path('/home/daedalus') or home.is_symlink():
     raise SystemExit('Unexpected DAEDALUS home; refusing.')
 directory = home / '.ssh'
 target = directory / 'authorized_keys'
-for path in (directory, target):
-    if path.is_symlink():
-        raise SystemExit('SSH path is a symlink; refusing.')
-    if path.exists() and path.stat().st_uid not in (0, account.pw_uid):
-        raise SystemExit('SSH path has an unexpected owner; refusing.')
-if target.exists() and (not target.is_file() or target.stat().st_nlink != 1):
-    raise SystemExit('Authorized keys must be a regular file without hard links.')
 key = pathlib.Path(sys.argv[1]).read_text().strip().split()
 entry = 'from="192.168.88.9",no-agent-forwarding,no-X11-forwarding,no-port-forwarding ' + ' '.join(key[:2]) + ' williamos-fabric@hermes'
-existing = target.read_text() if target.exists() else ''
-matches = [line for line in existing.splitlines() if key[1] in line.split() and not line.lstrip().startswith('#')]
-if matches and (len(matches) != 1 or matches[0] != entry):
-    raise SystemExit('Fabric key already has different options or duplicate entries; refusing to weaken or replace it.')
-directory.mkdir(mode=0o700, exist_ok=True)
-os.chown(directory, account.pw_uid, account.pw_gid)
-os.chmod(directory, 0o700)
-if not matches:
-    fd = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'a') as stream:
-        stream.write(('\n' if existing and not existing.endswith('\n') else '') + entry + '\n')
-os.chown(target, account.pw_uid, account.pw_gid)
-os.chmod(target, 0o600)
+
+# The daedalus account can replace its own ~/.ssh between validation and write; O_NOFOLLOW on the
+# final component alone does not stop a symlinked parent. Anchor the whole path to verified
+# directory descriptors: open the home dir, then .ssh relative to it, each O_DIRECTORY|O_NOFOLLOW,
+# then open authorized_keys relative to the verified .ssh descriptor and confirm by inode.
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+home_fd = os.open(str(home), DIR_FLAGS)
+try:
+    if os.fstat(home_fd).st_uid not in (0, account.pw_uid):
+        raise SystemExit('Home directory has an unexpected owner; refusing.')
+    try:
+        ssh_fd = os.open('.ssh', DIR_FLAGS, dir_fd=home_fd)
+    except FileNotFoundError:
+        os.mkdir('.ssh', mode=0o700, dir_fd=home_fd)
+        ssh_fd = os.open('.ssh', DIR_FLAGS, dir_fd=home_fd)
+    except OSError:
+        # A swapped .ssh (symlink or non-directory) fails O_DIRECTORY|O_NOFOLLOW here; refuse cleanly.
+        raise SystemExit('SSH path is a symlink or unexpected type; refusing.')
+    try:
+        ssh_stat = os.fstat(ssh_fd)
+        if not stat.S_ISDIR(ssh_stat.st_mode) or ssh_stat.st_uid not in (0, account.pw_uid):
+            raise SystemExit('SSH directory has an unexpected owner or type; refusing.')
+        os.fchown(ssh_fd, account.pw_uid, account.pw_gid)
+        os.fchmod(ssh_fd, 0o700)
+        target_fd = os.open('authorized_keys', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=ssh_fd)
+        try:
+            fst = os.fstat(target_fd)
+            if not stat.S_ISREG(fst.st_mode) or fst.st_nlink != 1:
+                raise SystemExit('Authorized keys must be a regular file without hard links.')
+            existing = os.pread(target_fd, fst.st_size, 0).decode()
+            matches = [line for line in existing.splitlines() if key[1] in line.split() and not line.lstrip().startswith('#')]
+            if matches and (len(matches) != 1 or matches[0] != entry):
+                raise SystemExit('Fabric key already has different options or duplicate entries; refusing to weaken or replace it.')
+            if not matches:
+                os.lseek(target_fd, 0, os.SEEK_END)
+                os.write(target_fd, (('\n' if existing and not existing.endswith('\n') else '') + entry + '\n').encode())
+            os.fchown(target_fd, account.pw_uid, account.pw_gid)
+            os.fchmod(target_fd, 0o600)
+        finally:
+            os.close(target_fd)
+    finally:
+        os.close(ssh_fd)
+finally:
+    os.close(home_fd)
 print('FABRIC_PUBLIC_KEY_ENROLLED')
 PY
 systemctl enable --now ssh
