@@ -40,7 +40,8 @@ const canonicalDigest = (value: unknown) => createHash("sha256")
 const runtimeCheckpointPayloadKeys = [
   "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
   "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
-  "mergeSha", "terminalCleanupRecoveryProofDigest", "executionBinding", "acquisitionKey",
+  "mergeSha", "terminalCleanupRecoveryProofDigest", "reviewRecoveryProofDigest",
+  "executionBinding", "acquisitionKey",
   "acquisitionFencingToken", "executionEpochDigest", "findingsSetDigest",
   "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
   "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",
@@ -331,6 +332,7 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
       },
       checkpoint: {
         sequence: 7, state: "CODEX_TURN_COMPLETED", detail: "structured #911 findings",
+        metadata: { reviewRecoveryProofDigest: "b".repeat(64) },
         findings: [
           {
             findingId: "FINDING-911-ORDINARY", sequence: 1,
@@ -356,6 +358,9 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     expect(recorded.every((row) => Number(row.metadata.sourceCheckpointId) > 0)).toBe(true)
     expect(recorded.every((row) => /^[0-9a-f]{64}$/.test(row.metadata.payloadDigest))).toBe(true)
     expect(new Set(recorded.map((row) => row.metadata.sourceCheckpointDigest)).size).toBe(1)
+    expect((await client.query(`SELECT metadata->>'reviewRecoveryProofDigest' AS digest
+      FROM governance_event WHERE id=$1`, [Number(recorded[0].metadata.sourceCheckpointId)])).rows)
+      .toEqual([{ digest: "b".repeat(64) }])
 
     const parentMergeSha = "9".repeat(40)
     const parentEvidenceRef = "EV-HERMES-4-1-8"

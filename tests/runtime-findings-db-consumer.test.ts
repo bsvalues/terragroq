@@ -30,6 +30,17 @@ const findingPayload = (value: any) => Object.fromEntries([
 const normalizedFinding = (value: any) => Object.fromEntries([
   "findingId", "sequence", "summary", "task", "paths", "effects",
 ].map((key) => [key, value[key]]))
+const checkpointPayload = (value: any) => Object.fromEntries([
+  "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
+  "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
+  "mergeSha", "terminalCleanupRecoveryProofDigest", "reviewRecoveryProofDigest",
+  "executionBinding", "acquisitionKey", "acquisitionFencingToken", "executionEpochDigest",
+  "findingsSetDigest", "workContractId", "workContractDigest", "workContractVersion",
+  "workContractRepository", "workContractLane", "authorizationDecisionId", "executionGrantRef",
+  "implementationGrantId", "implementationGrantRef", "projectionIssueNumber",
+  "projectionCompletionOwned", "deliveryAuthorityLevel", "deliveryAllowedActions", "commitAllowed",
+  "tagAllowed", "pushAllowed",
+].filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
 
 function sourceRow(overrides: Record<string, unknown> = {}) {
   const parentOutcomeKey = "goal:GOAL-0004"
@@ -296,11 +307,38 @@ function legacyNoProjectionLapsedRow() {
   return row
 }
 
+function rebindLegacyRepository(row: any, repository: string) {
+  const contractBody = { ...row.workContract, repository }
+  delete contractBody.digest
+  const workContract = { ...contractBody, digest: sha(contractBody) }
+  row.workContract = workContract
+  row.parentReceiptResultBinding = { ...row.parentReceiptResultBinding, workContract }
+  row.parentApprovalEvidence = row.parentApprovalEvidence.map((entry: string) => {
+    if (entry.startsWith("repo:")) return `repo:${repository}`
+    if (entry.startsWith("work-contract-digest:")) return `work-contract-digest:${workContract.digest}`
+    if (entry.startsWith("work-contract-json:")) return `work-contract-json:${JSON.stringify(workContract)}`
+    return entry
+  })
+  const checkpointBase = { ...row.checkpointMetadata,
+    workContractDigest: workContract.digest, workContractRepository: repository }
+  delete checkpointBase.payloadDigest
+  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointPayload(checkpointBase)) }
+  const findingMetadata = { ...row.findingMetadata,
+    workContractDigest: workContract.digest, workContractRepository: repository,
+    sourceCheckpointDigest: checkpointMetadata.payloadDigest }
+  delete findingMetadata.payloadDigest
+  findingMetadata.payloadDigest = sha(findingPayload(findingMetadata))
+  row.checkpointMetadata = checkpointMetadata
+  row.findingMetadata = findingMetadata
+  row.checkpointFindings = [findingMetadata]
+  return row
+}
+
 function rebindCheckpoint(row: any, mutate: (checkpoint: any) => void) {
   const checkpointBase = { ...row.checkpointMetadata }
   delete checkpointBase.payloadDigest
   mutate(checkpointBase)
-  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointBase) }
+  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointPayload(checkpointBase)) }
   const findingMetadata = {
     ...row.findingMetadata,
     sourceCheckpointDigest: checkpointMetadata.payloadDigest,
@@ -329,6 +367,9 @@ async function expectSourceLineageWall(row: any) {
 describe("native runtime finding database consumer", () => {
   it("terminalizes a valid legacy no-projection finding after its source authority lapses", async () => {
     const row = legacyNoProjectionLapsedRow()
+    // The live historical receipt was written after acceptedContractIds became an always-present
+    // producer field, but before this no-projection finding shape was consumed.
+    row.parentReceiptResultBinding.acceptedContractIds = []
     const writes: string[] = []
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       if (sql.includes("FROM governance_event finding")) return { rows: [row] }
@@ -355,6 +396,88 @@ describe("native runtime finding database consumer", () => {
     expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toHaveLength(1)
     expect(writes.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
       .toBe(false)
+  })
+
+  it("rejects a non-empty accepted-contract marker on default-contract legacy lineage", async () => {
+    const row = legacyNoProjectionLapsedRow()
+    row.parentReceiptResultBinding.acceptedContractIds = ["unverified-contract.v1"]
+
+    await expectSourceLineageWall(row)
+  })
+
+  it("terminalizes exact lapsed review-recovery checkpoint lineage without deriving work", async () => {
+    const row = rebindCheckpoint(legacyNoProjectionLapsedRow(), (checkpoint) => {
+      checkpoint.prNumber = 1134
+      checkpoint.headRefOid = "a".repeat(40)
+      checkpoint.reviewRecoveryProofDigest = "b".repeat(64)
+    })
+    row.parentReceiptResultBinding.acceptedContractIds = []
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("INSERT INTO")) {
+        writes.push(sql)
+        row.settlementId = 703
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_AUTHORITY_LAPSED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 703 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      lapsed: 1, queuedChildren: 0,
+      results: [{ disposition: "AUTHORITY_LAPSED", replayed: false }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toHaveLength(1)
+    expect(writes.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
+      .toBe(false)
+  })
+
+  it("terminalizes exact foreign-repository legacy lineage only after its authority lapses", async () => {
+    const row = rebindLegacyRepository(legacyNoProjectionLapsedRow(), "bsvalues/terrafusion_os_1.0")
+    row.parentReceiptResultBinding.acceptedContractIds = []
+    const writes: string[] = []
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.includes("INSERT INTO")) {
+        writes.push(sql)
+        row.settlementId = 704
+        row.settlementCount = 1
+        row.settlementEventType = "RUNTIME_FINDING_AUTHORITY_LAPSED"
+        row.settlementMetadata = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 704 }] }
+      }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({
+      lapsed: 1, queuedChildren: 0,
+      results: [{ disposition: "AUTHORITY_LAPSED", replayed: false }],
+    })
+    expect(writes.filter((sql) => sql.includes("'RUNTIME_FINDING_AUTHORITY_LAPSED'"))).toHaveLength(1)
+    expect(writes.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
+      .toBe(false)
+  })
+
+  it("rejects active foreign-repository lineage before creating child work", async () => {
+    const row = rebindLegacyRepository(legacyNoProjectionLapsedRow(), "bsvalues/terrafusion_os_1.0")
+    row.implementationGrantStatus = "active"
+    row.implementationGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentExecutionGrantStatus = "active"
+    row.parentExecutionGrantExpiresAt = new Date(2099, 0, 1, 0, 0, 0, 0)
+    row.parentReceiptResultBinding.expiresAt = "2099-01-01T00:00:00.000Z"
+
+    await expectSourceLineageWall(row)
   })
 
   it("replays a legacy no-projection owner-gated settlement without projection key drift", async () => {

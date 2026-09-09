@@ -50,7 +50,8 @@ function checkpointPayload(metadata) {
   for (const key of [
     "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
     "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
-    "mergeSha", "terminalCleanupRecoveryProofDigest", "executionBinding", "acquisitionKey",
+    "mergeSha", "terminalCleanupRecoveryProofDigest", "reviewRecoveryProofDigest",
+    "executionBinding", "acquisitionKey",
     "acquisitionFencingToken", "executionEpochDigest", "findingsSetDigest",
     "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
     "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",
@@ -266,6 +267,12 @@ function sourceFinding(row, nowMs) {
   const parentRequest = row?.parentReceiptRequestBinding
   const parentResult = row?.parentReceiptResultBinding
   const exactLiveAcceptance = isExactIssue911LiveAcceptanceContract(contract)
+  // Default-contract receipts predate acceptedContractIds, while newer producers persist the
+  // selected contract set even when it is empty. Both shapes are immutable historical truth. The
+  // optional field is accepted only for a non-acceptance contract and only when it is exactly [], so
+  // this compatibility cannot smuggle an unverified contract selection into legacy lineage.
+  const defaultContractMarkerPresent = !exactLiveAcceptance
+    && Object.hasOwn(parentResult ?? {}, "acceptedContractIds")
   const acceptanceProof = exactLiveAcceptance ? {
     receiptId: Number(row.parentIntakeReceiptId),
     requestHash: row.parentIntakeRequestHash,
@@ -389,7 +396,7 @@ function sourceFinding(row, nowMs) {
     || contract.id !== metadata.workContractId
     || contract.digest !== metadata.workContractDigest
     || digest(workContractPayload(contract)) !== contract.digest
-    || contract.version !== CONTRACT_VERSION || contract.repository !== REPOSITORY
+    || contract.version !== CONTRACT_VERSION || !safeText(contract.repository)
     || contract.lane !== metadata.workContractLane
     || !exactArray(contract.reservations, row.parentAllowedFiles)
     || !exactArray(validatorLabels(contract.validationCommands), row.parentValidators)
@@ -418,7 +425,9 @@ function sourceFinding(row, nowMs) {
       "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
       "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
       ...(exactLiveAcceptance ? ["acceptanceIntakeProof", "acceptedContractIds"] : []),
+      ...(defaultContractMarkerPresent ? ["acceptedContractIds"] : []),
     ].sort())
+    || (defaultContractMarkerPresent && canonicalJson(parentResult.acceptedContractIds) !== "[]")
     || (exactLiveAcceptance && (
       Number(row.parentIntakeReceiptCount) !== 1
       || Number(parentRequest?.projectId) !== 1
@@ -506,6 +515,12 @@ function sourceFinding(row, nowMs) {
     fail("FINDING_AUTHORITY_EXPIRED")
   }
   if (!activeAuthority && !lapsedAuthority) fail("FINDING_SOURCE_LINEAGE_WALL")
+  // This consumer may encounter exact historical findings from a target repository because HERMES
+  // shares the WilliamOS authority store. A closed parent with fully lapsed grants can be sealed as
+  // AUTHORITY_LAPSED without creating work or touching that repository. Active foreign-repository
+  // authority still fails closed: this WilliamOS runtime must not turn backlog consumption into an
+  // unrequested cross-repository dispatch lane.
+  if (contract.repository !== REPOSITORY && !lapsedAuthority) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
