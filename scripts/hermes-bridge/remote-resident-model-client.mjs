@@ -14,9 +14,11 @@ export function residentSshTransport({ host, workerPath, request, timeoutMs = 45
   if (typeof host !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(host)) throw new TypeError("host must be a safe SSH destination")
   if (typeof workerPath !== "string" || !workerPath.startsWith("/") || workerPath.includes("\0")) throw new TypeError("workerPath must be absolute")
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 24 * 60 * 60 * 1000) throw new TypeError("timeoutMs must be a bounded positive integer")
+  const nodeCommand = request?.config?.nodeCommand ?? "node"
+  if (typeof nodeCommand !== "string" || nodeCommand.includes("\0") || (nodeCommand !== "node" && !nodeCommand.startsWith("/"))) throw new TypeError("invalid remote nodeCommand")
   return new Promise((resolve, reject) => {
     const child = spawn("ssh", ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
-      host, `exec node ${quote(workerPath)}`], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
+      host, `exec ${quote(nodeCommand)} ${quote(workerPath)}`], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
     let stdout = "", stderr = "", size = 0, failed = false
     const fail = (error) => { if (failed) return; failed = true; clearTimeout(timer); child.kill(); reject(error) }
     // The kernel owns cleanup at its policy deadline; allow transport time after its budget.
@@ -82,13 +84,15 @@ export function createRemoteResidentClient({ host, workerPath, config, workspace
       try { output = JSON.parse(result.finalText) } catch { throw new Error("REMOTE_RESIDENT_RESULT_INVALID") }
       if (!validateAgainstTurnSchema(output, HERMES_TURN_OUTPUT_SCHEMA).ok) throw new Error("REMOTE_RESIDENT_RESULT_INVALID")
       const files = result.evidence.files
-      if (!files || Object.keys(files).sort().join(",") !== "packet.json,session.json,stdout.txt"
+      const expectedFiles = ["packet.json", "session.json", "stdout.txt", ...(config.invokerKind === "python" ? ["inference-request.json", "inference-result.json", "inference-stderr.txt"] : [])].sort().join(",")
+      if (!files || Object.keys(files).sort().join(",") !== expectedFiles
         || Object.values(files).some((value) => typeof value !== "string")
         || Buffer.byteLength(JSON.stringify(files)) > 8 * 1024 * 1024) throw new Error("REMOTE_RESIDENT_EVIDENCE_INVALID")
       let packet, session
       try { packet = JSON.parse(files["packet.json"]); session = JSON.parse(files["session.json"]) } catch { throw new Error("REMOTE_RESIDENT_EVIDENCE_INVALID") }
       const record = session.turns?.find((entry) => entry.turnId === result.turnId)
       const digest = (bytes) => createHash("sha256").update(bytes).digest("hex")
+      if (config.invokerKind === "python" && Object.entries(files).some(([name, bytes]) => result.evidence.sha256?.[name] !== digest(bytes))) throw new Error("REMOTE_RESIDENT_EVIDENCE_INVALID")
       if (packet.runId !== result.turnId || packet.model !== config.modelId || session.threadId !== result.threadId
         || session.workspacePath !== workspacePath || record?.harvested !== true
         || record.packetSha256 !== digest(files["packet.json"]) || record.stdoutSha256 !== digest(files["stdout.txt"])) {

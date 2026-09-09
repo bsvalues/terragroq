@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import crypto from "node:crypto"
 import { afterEach, describe, expect, it } from "vitest"
 import { RemoteResidentModelExecutionBackend, selectExecutionBackend } from "../scripts/hermes-bridge/execution-backend.mjs"
 import { createRemoteResidentClient, residentSshTransport } from "../scripts/hermes-bridge/remote-resident-model-client.mjs"
@@ -41,6 +42,27 @@ function fixture() {
 }
 
 describe("remote resident model execution", () => {
+  it("requires a successful current GPU probe and a matching accepted GPU identity for health readiness", async () => {
+    const f = fixture()
+    const config = { ...f.config, invokerKind: "python" }
+    const policy = JSON.parse(fs.readFileSync(config.policyPath, "utf8"))
+    policy.daedalusInvoker = { expectedGpuUuid: "GPU-abcd", workerPath: config.invokerPath, modelPath: f.root, modelFiles: { "policy.json": "fixture" } }
+    fs.writeFileSync(config.policyPath, JSON.stringify(policy))
+    const digest = (file: string) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+    const root = path.join(config.runtimeRoot, "hermes-kernel")
+    fs.mkdirSync(root, { recursive: true })
+    const accepted = { kernelTurnAccepted: true, observedAt: new Date().toISOString(), nodeId: config.nodeId, modelId: config.modelId,
+      policySha256: digest(config.policyPath), workerSha256: digest(config.invokerPath), invokerSha256: digest(config.invokerPath), gpuUuid: "GPU-abcd" }
+    const receipt = path.join(root, "daedalus-last-accepted.json")
+    fs.writeFileSync(receipt, JSON.stringify(accepted))
+    const check = (probe: any) => handleResidentRequest({ schemaVersion: 1, method: "health", config }, { commandRunner: async () => probe })
+    const valid = { code: 0, stdout: "GPU-abcd, RTX 3090, 24576\n" }
+    expect((await check(valid)).ready).toBe(true)
+    for (const probe of [{ ...valid, code: 1 }, { ...valid, timedOut: true }, { ...valid, stdout: "GPU-abcd, RTX 3090, NaN" },
+      { ...valid, stdout: "GPU-abcd, RTX 3090, 0" }]) expect((await check(probe)).ready).toBe(false)
+    fs.writeFileSync(receipt, JSON.stringify({ ...accepted, gpuUuid: "GPU-different" }))
+    expect((await check(valid)).ready).toBe(false)
+  })
   it("requires explicit remote paths and model identity, and never falls back to Codex", () => {
     expect(() => selectExecutionBackend({ WILLIAMOS_EXECUTOR: "remote-resident-model", WILLIAMOS_CODEX_EXEC_NODE: "aegis" })).toThrow()
     const backend = selectExecutionBackend({ WILLIAMOS_EXECUTOR: "remote-resident-model", WILLIAMOS_MODEL_EXEC_NODE: "daedalus",

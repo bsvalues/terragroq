@@ -652,7 +652,18 @@ function projectAegisCapabilityHealth(node) {
   };
 }
 
-const nodes = probedNodes.map(node => node.id === 'aegis' ? projectAegisCapabilityHealth(node) : node);
+function projectDaedalusCompute(node) {
+  const gate = nodeProbeGateReason(node);
+  const runtime = node.runtimes.find(runtime => runtime.kind === 'remote-resident-model' && ['healthy', 'running'].includes(runtime.state) && runtime.details?.models?.includes('Qwen/Qwen3-8B'));
+  const constrained = node.constraints?.some(value => value.startsWith('not-schedulable-'));
+  const ready = !gate && !constrained && Boolean(runtime);
+  const observed = node.evidence.observed_at;
+  const expires = new Date(Date.parse(observed) + dynamicTtl * 1000).toISOString();
+  return { ...node, capability_health: { ...node.capability_health,
+    compute: capabilityAxis(ready ? 'READY' : 'UNKNOWN', ready ? 'MODEL_WORKER_OBSERVED_READY' : gate ?? 'MODEL_RUNTIME_UNPROVEN', observed, expires, null, runtime?.details?.observation ?? null)
+  } };
+}
+const nodes = probedNodes.map(node => node.id === 'aegis' ? projectAegisCapabilityHealth(node) : node.id === 'daedalus' ? projectDaedalusCompute(node) : node);
 
 // Fail-closed semantic invariants.
 const errors = [];

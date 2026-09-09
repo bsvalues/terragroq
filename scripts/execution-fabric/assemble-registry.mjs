@@ -13,7 +13,7 @@ const canonicalSeedPath = path.join(repositoryRoot, 'config', 'execution-fabric'
 const canonicalSchemaPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'registry.schema.json');
 const canonicalIdentityContractPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'node-identity-contract.json');
 const corePath = path.join(scriptDirectory, 'assemble-registry-core.mjs');
-const expectedSeedSha256 = 'ca396b08ce1f8a2871f7a7a8d1e915668d11c97aeb709c49ed550eb9771f345b';
+const expectedSeedSha256 = 'a9ef6ab1f28cf1202e0605148dbb2b8d162a1515ad45ff88387e40036ac9f4d1';
 const expectedSchemaSha256 = '3b1647ea39f37f936a18c4ec9127d5dba7bac490647ba11a5a098b4bcd7ff11f';
 // The identity contract now owns the node roster, the hostname aliases and per-node authority. It is
 // pinned here for the same reason the seed is: an unreviewed edit to authority must stop assembly,

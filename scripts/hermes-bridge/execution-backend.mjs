@@ -271,7 +271,7 @@ export class AegisExecutionBackend extends ExecutionBackend {
 
 /** Remote workspace mechanics with the resident kernel, never a nested Codex provider. */
 export class RemoteResidentModelExecutionBackend extends AegisExecutionBackend {
-  constructor({ nodeId, modelId, kernelPolicyPath, kernelInvokerPath, evidenceRoot, transport = residentSshTransport, ...options } = {}) {
+  constructor({ nodeId, modelId, kernelPolicyPath, kernelInvokerPath, invokerKind = "powershell", pythonCommand, nodeCommand = "node", evidenceRoot, transport = residentSshTransport, ...options } = {}) {
     for (const key of ["runtimeRoot", "repositoryRoot"]) {
       if (!requiredString(options[key], key).startsWith("/")) throw new TypeError(`${key} must be an absolute POSIX path`)
     }
@@ -285,6 +285,12 @@ export class RemoteResidentModelExecutionBackend extends AegisExecutionBackend {
     this.modelId = requiredString(modelId, "modelId")
     this.kernelPolicyPath = kernelPolicyPath
     this.kernelInvokerPath = kernelInvokerPath
+    if (!["powershell", "python"].includes(invokerKind)) throw new TypeError("unsupported invokerKind")
+    if (invokerKind === "python" && !requiredString(pythonCommand, "pythonCommand").startsWith("/")) throw new TypeError("pythonCommand must be an absolute POSIX path")
+    this.invokerKind = invokerKind
+    this.pythonCommand = pythonCommand
+    if (nodeCommand !== "node" && !requiredString(nodeCommand, "nodeCommand").startsWith("/")) throw new TypeError("nodeCommand must be node or an absolute POSIX path")
+    this.nodeCommand = nodeCommand
     this.evidenceRoot = path.resolve(requiredString(evidenceRoot, "evidenceRoot"))
     this.transport = transport
     this.workerPath = path.posix.join(this.repositoryRoot, "scripts/hermes-bridge/remote-resident-model-worker.mjs")
@@ -292,7 +298,7 @@ export class RemoteResidentModelExecutionBackend extends AegisExecutionBackend {
 
   get remoteConfig() {
     return { nodeId: this.nodeId, modelId: this.modelId, runtimeRoot: this.runtimeRoot, repositoryRoot: this.repositoryRoot,
-      policyPath: this.kernelPolicyPath, invokerPath: this.kernelInvokerPath }
+      policyPath: this.kernelPolicyPath, invokerPath: this.kernelInvokerPath, invokerKind: this.invokerKind, pythonCommand: this.pythonCommand, nodeCommand: this.nodeCommand }
   }
 
   async health() {
@@ -317,6 +323,8 @@ export function selectExecutionBackend(env = process.env) {
       runtimeRoot: env.WILLIAMOS_MODEL_RUNTIME_ROOT, repositoryRoot: env.WILLIAMOS_MODEL_REPOSITORY_ROOT,
       kernelPolicyPath: env.WILLIAMOS_MODEL_POLICY_PATH, kernelInvokerPath: env.WILLIAMOS_MODEL_INVOKER_PATH,
       evidenceRoot: env.WILLIAMOS_MODEL_EVIDENCE_ROOT,
+      invokerKind: env.WILLIAMOS_MODEL_INVOKER_KIND ?? "powershell", pythonCommand: env.WILLIAMOS_MODEL_PYTHON,
+      nodeCommand: env.WILLIAMOS_MODEL_NODE_COMMAND ?? "node",
     })
   }
   // Explicit opt-in, checked first and matched exactly. WILLIAMOS_CODEX_EXEC_NODE selects

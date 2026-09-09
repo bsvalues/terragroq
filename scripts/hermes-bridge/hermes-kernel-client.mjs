@@ -94,10 +94,19 @@ export function createHermesKernelClient({
   timeoutMs = 45 * 60 * 1000,
   now = () => new Date(),
   powershellCommand = process.platform === "win32" ? "powershell" : "pwsh",
+  invokerKind = "powershell",
+  pythonCommand,
   randomUUID = () => crypto.randomUUID(),
 } = {}) {
   requiredString(workspacePath, "workspacePath"); requiredString(runtimeRoot, "runtimeRoot")
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
+  // These are trusted host configuration, never fields from the model packet.
+  // Python is an explicit alternative for a separately qualified Linux invoker.
+  if (!["powershell", "python"].includes(invokerKind)) throw new TypeError("invokerKind must be powershell or python")
+  if (invokerKind === "python") {
+    if (!path.isAbsolute(requiredString(pythonCommand, "pythonCommand"))) throw new TypeError("pythonCommand must be an absolute executable path")
+    if (!path.isAbsolute(requiredString(invokerPath, "invokerPath"))) throw new TypeError("invokerPath must be absolute for Python")
+  }
   const threadsRoot = kernelThreadsRoot(runtimeRoot)
   const worktreesRoot = path.join(path.resolve(runtimeRoot), "worktrees")
   const quarantinePath = kernelQuarantinePath(runtimeRoot)
@@ -401,11 +410,15 @@ export function createHermesKernelClient({
       const ignoredBefore = await ignoredPaths(workspaceReal, turnTimeoutMs)
       let result
       try {
+        const invocation = invokerKind === "python"
+          ? { command: pythonCommand, args: ["-I", invokerPath,
+              "--packet-path", packetPath, "--policy-path", policyPath, "--workspace-path", workspaceReal, "--run-id", runId,
+              "--quarantine-path", quarantinePath, "--state-path", statePath] }
+          : { command: powershellCommand, args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+              "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
+              "-QuarantinePath", quarantinePath, "-StatePath", statePath] }
         result = await commandRunner({
-          command: powershellCommand,
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-            "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
-            "-QuarantinePath", quarantinePath, "-StatePath", statePath],
+          ...invocation,
           cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
         })
       } catch (error) {

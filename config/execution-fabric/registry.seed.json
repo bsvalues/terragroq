@@ -200,8 +200,8 @@
       "hostname": "daedalus-ThinkStation-P620",
       "identity": {
         "hostname": "daedalus-ThinkStation-P620",
-        "machine_id_sha256": null,
-        "source": null
+        "machine_id_sha256": "cc4b1b2b7b646030b222edd2e24ef3711c3621af06b21555355fef718889effb",
+        "source": "linux-machine-id-sha256"
       },
       "role": "resident-gpu-model-and-repository-worker",
       "availability_class": "resident",
