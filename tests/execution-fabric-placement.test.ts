@@ -22,6 +22,8 @@ function clone<T>(value: T): T {
 
 function observedRegistry(): JsonObject {
   const registry = clone(seed)
+  // Keep declared additions inside this historical fixture clock without promoting them to observed.
+  registry.nodes.find((node: JsonObject) => node.id === "daedalus").evidence.observed_at = evaluatedAt
   const observedTimes: Record<string, string> = {
     omen: "2026-08-10T03:37:39.527Z",
     "hermes-node": "2026-08-10T03:37:41.325Z",
@@ -71,6 +73,44 @@ function expectRejected(result: JsonObject, detail: string) {
 }
 
 describe("Execution Fabric recommendation-only placement", () => {
+  function readyDaedalus() {
+    const registry = observedRegistry()
+    const node = registry.nodes.find((entry: JsonObject) => entry.id === "daedalus")
+    node.evidence = { ...node.evidence, confidence: "observed", observed_at: evaluatedAt, ttl_seconds: 300 }
+    node.capability_health.compute = { ...node.capability_health.compute, state: "READY", observed_at: evaluatedAt, expires_at: "2026-08-10T03:43:05.166Z" }
+    node.gpus = [{ id: "gpu0", vendor: "NVIDIA", model: "test RTX 3090", vram_bytes: 25769803776 }]
+    node.runtimes = [{ id: "model-worker", kind: "remote-resident-model", state: "healthy", details: { models: ["Qwen/Qwen3-8B"] } }]
+    return registry
+  }
+
+  it("recommends Daedalus only with fresh health and the required model roster", () => {
+    const registry = readyDaedalus()
+    expect(recommendation("qwen3-8b-resident-inference", registry).recommendation).toMatchObject({ node_id: "daedalus", dispatch_allowed: false })
+    registry.nodes.find((node: JsonObject) => node.id === "daedalus").runtimes[0].details.models = ["other-model"]
+    const result = recommendation("qwen3-8b-resident-inference", registry)
+    expect(result.recommendation).toBeNull()
+    expect(result.ineligible_nodes.find((node: JsonObject) => node.node_id === "daedalus").reasons).toContainEqual(expect.objectContaining({ code: "MODEL_ROSTER_INELIGIBLE" }))
+  })
+
+  it("does not combine a healthy wrong-model runtime with a stopped correct-model runtime", () => {
+    const registry = readyDaedalus()
+    const node = registry.nodes.find((entry: JsonObject) => entry.id === "daedalus")
+    node.runtimes.push({ ...clone(node.runtimes[0]), id: "stopped-model", state: "stopped" })
+    node.runtimes[0].details.models = []
+    expect(recommendation("qwen3-8b-resident-inference", registry).recommendation).toBeNull()
+    expect(recommendation("qwen3-8b-resident-inference").recommendation).toBeNull()
+  })
+
+  it("rejects stale compute and absent model rosters even when node evidence is fresh", () => {
+    const registry = readyDaedalus()
+    const node = registry.nodes.find((entry: JsonObject) => entry.id === "daedalus")
+    node.capability_health.compute.expires_at = "2026-08-10T03:38:00.000Z"
+    expect(recommendation("qwen3-8b-resident-inference", registry).recommendation).toBeNull()
+    const missing = readyDaedalus()
+    delete missing.nodes.find((entry: JsonObject) => entry.id === "daedalus").runtimes[0].details.models
+    expect(recommendation("qwen3-8b-resident-inference", missing).recommendation).toBeNull()
+  })
+
   it("keeps the workload catalog generic and recommendation-only", () => {
     expect(catalog).toMatchObject({
       schema_version: "0.1-placement-workloads",
@@ -81,10 +121,11 @@ describe("Execution Fabric recommendation-only placement", () => {
       "gpu-local-inference",
       "authoritative-state-operation",
       "interactive-development",
+      "qwen3-8b-resident-inference",
     ])
 
     const source = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/recommend-placement.mjs"), "utf8")
-    for (const nodeId of ["omen", "hermes-node", "atlas", "aegis", "azure"]) {
+    for (const nodeId of ["omen", "hermes-node", "atlas", "aegis", "azure", "daedalus"]) {
       expect(source).not.toContain(`"${nodeId}"`)
     }
     expect(source).not.toMatch(/\b(dispatch|scheduleWorkload|placeWorkload|activateScheduler)\s*\(/)
