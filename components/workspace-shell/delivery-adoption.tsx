@@ -372,6 +372,7 @@ export function DeliveryAdoption({
     setExpectedHeadInput("")
     targetRef.current = null
     attemptRef.current = null
+    setPreview(null)
     setAuthorization(null)
     setSeal(null)
     setCopyStatus(null)
@@ -444,6 +445,7 @@ export function DeliveryAdoption({
           <strong className="text-[#d8e2d4]">Prior issued seal retained as immutable history</strong>
           <span>PR #{priorSeal.preview.pullRequest} · <span className="break-all font-mono">{priorSeal.preview.headSha}</span></span>
           <span>Seal {compact(priorSeal.seal.adoptionHash)} · not reused for the new target</span>
+          <textarea aria-label="Prior complete WilliamOS delivery seal block" readOnly value={priorSeal.seal.sealBlock} rows={5} className="mt-1 w-full resize-y rounded border border-[#344033] bg-[#090c09] p-2 font-mono text-[10px] leading-4 text-[#aebaa9]" />
         </div> : null}
         {preview ? (
           <div className="grid gap-3">

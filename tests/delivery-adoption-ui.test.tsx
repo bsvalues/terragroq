@@ -387,6 +387,8 @@ describe("prospective delivery adoption UI", () => {
     expect((screen.getByLabelText("Expected exact head SHA") as HTMLInputElement).value).toBe("")
     expect(screen.getByLabelText("Prior issued delivery seal").textContent).toContain(headSha)
     expect(screen.getByLabelText("Prior issued delivery seal").textContent).toContain("not reused for the new target")
+    expect((screen.getByLabelText("Prior complete WilliamOS delivery seal block") as HTMLTextAreaElement).value).toBe(sealBlock)
+    expect(screen.queryByText(`${sealedPaths.length} exact changed paths`)).toBeNull()
     expect(fetchMock).toHaveBeenCalledOnce()
 
     await user.type(screen.getByLabelText("Expected exact head SHA"), nextHead)
