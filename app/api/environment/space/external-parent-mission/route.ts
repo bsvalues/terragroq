@@ -1,7 +1,9 @@
 import {
   admitExternalParentMission,
+  admitExternalParentMissionDecomposition,
   ExternalParentMissionAdmissionError,
   previewExternalParentMissionAdmission,
+  previewExternalParentMissionDecompositionAdmission,
   terminalExternalParentMission,
 } from "@/lib/environment/external-parent-mission-admission"
 import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
@@ -26,6 +28,9 @@ const CONFLICTS = new Set([
   "PARENT_MISSION_AUTHORITY_REVOKED",
   "PARENT_MISSION_ALREADY_TERMINAL",
   "PARENT_MISSION_TERMINAL_EVIDENCE_UNVERIFIED",
+  "PARENT_MISSION_DECOMPOSITION_INVALID",
+  "PARENT_MISSION_DECOMPOSITION_ALREADY_BOUND",
+  "PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE",
 ])
 
 export async function POST(request: Request): Promise<Response> {
@@ -48,6 +53,15 @@ export async function POST(request: Request): Promise<Response> {
     if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
       && (parsed.value as Record<string, unknown>).mode === "PREVIEW") {
       return reply(previewExternalParentMissionAdmission(parsed.value))
+    }
+    if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+      && (parsed.value as Record<string, unknown>).mode === "DECOMPOSITION_PREVIEW") {
+      return reply(await previewExternalParentMissionDecompositionAdmission(session.user.id, parsed.value))
+    }
+    if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
+      && (parsed.value as Record<string, unknown>).mode === "DECOMPOSITION_ADMIT") {
+      const result = await admitExternalParentMissionDecomposition(session.user.id, parsed.value)
+      return reply(result, result.replayed ? 200 : 201)
     }
     if (parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
       && (parsed.value as Record<string, unknown>).mode === "TERMINAL") {

@@ -2,16 +2,22 @@ import { and, eq, sql } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import {
+  authorityGrant,
   outcomeQueueMutationReceipt,
   project,
   projectResource,
+  workOrder,
   workingWorld,
 } from "@/lib/db/schema"
 import { resolveSpaceRepositoryIdentities } from "@/lib/environment/space-outcome-assimilation"
 import { validateWorkingWorld } from "@/lib/environment/working-world"
 import { hashRecord } from "@/lib/governance/hash"
+import { grantCovers, isGrantActive } from "@/lib/governance/authority"
+import { authorityGrantFactsFromNormalizedRow } from "@/lib/environment/space-outcome-assimilation"
 import {
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
@@ -22,6 +28,8 @@ import {
 
 export {
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
@@ -62,6 +70,92 @@ export type ExternalParentMissionTerminalInput = Readonly<{
   terminalState: "SATISFIED" | "REVOKED"
   terminalEvidenceRefs: readonly string[]
   idempotencyKey: string
+}>
+
+export type ExternalParentMissionDecompositionPolicy = Readonly<{
+  version: typeof EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+  executionPowers: readonly string[]
+  pathReservationCeiling: readonly string[]
+  contractReservationCeiling: readonly Readonly<{
+    contractIdentity: string
+    revisionIdentity: string
+    role: "producer" | "consumer"
+  }>[]
+  environmentReservationCeiling: readonly Readonly<{
+    environmentIdentity: string
+    access: "exclusive" | "shared-read"
+  }>[]
+  hardWalls: Readonly<{
+    singleRepositoryPerChild: true
+    exactReservationSubset: true
+    noAuthorityEscalation: true
+    childExpiryNoLaterThanParent: true
+    deterministicChildIdentity: true
+    atomicChildLineage: true
+    rawProseAuthorityForbidden: true
+    parentCompletionInferenceForbidden: true
+    crossBoundaryWideningForbidden: true
+  }>
+}>
+
+export type ExternalParentMissionDecompositionPreviewInput = Readonly<{
+  mode: "DECOMPOSITION_PREVIEW"
+  worldId: string
+  missionKey: string
+  bindReceiptId: number
+  bindReceiptHash: string
+  policy: ExternalParentMissionDecompositionPolicy
+}>
+
+export type ExternalParentMissionDecompositionAdmissionInput = Readonly<{
+  mode: "DECOMPOSITION_ADMIT"
+  worldId: string
+  missionKey: string
+  bindReceiptId: number
+  bindReceiptHash: string
+  idempotencyKey: string
+  confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION"
+  confirmedPolicyDigest: string
+  policy: ExternalParentMissionDecompositionPolicy
+}>
+
+export type ExternalParentMissionDecompositionAuthorityContext = Readonly<{
+  ownerUserId: string
+  worldId: string
+  projectId: number
+  repository: string
+  repositoryResourceId: number
+  workOrderId: number
+  workOrderRef: string
+  grantId: number
+  grantRef: string
+  grantContentHash: string
+  grantExpiresAt: string
+  authorityCeiling: "A2_WRITE_OWN"
+  grantScopeDigest: string
+  grantAllowedActionsDigest: string
+  grantBlockedActionsDigest: string
+}>
+
+export type ExternalParentMissionDecompositionPreview = Readonly<{
+  status: "READY_FOR_DECOMPOSITION_CONFIRMATION"
+  missionKey: string
+  bindReceiptId: number
+  bindReceiptHash: string
+  policy: ExternalParentMissionDecompositionPolicy
+  policyDigest: string
+  authorityContext: ExternalParentMissionDecompositionAuthorityContext
+}>
+
+export type ExternalParentMissionDecompositionSuccess = Readonly<{
+  status: "DECOMPOSITION_ADMITTED" | "DECOMPOSITION_ALREADY_ADMITTED"
+  replayed: boolean
+  receiptId: number
+  missionKey: string
+  bindReceiptId: number
+  bindReceiptHash: string
+  policyDigest: string
+  authorityContext: ExternalParentMissionDecompositionAuthorityContext
 }>
 
 export type ExternalParentMissionBinding = Readonly<{
@@ -110,6 +204,12 @@ export type ExternalParentMissionState = Readonly<{
     worldId: string
     projectId: number
     repository: string
+    decomposition?: Readonly<{
+      receiptId: number
+      policy: ExternalParentMissionDecompositionPolicy
+      policyDigest: string
+      authorityContext: ExternalParentMissionDecompositionAuthorityContext
+    }>
   }>[]
   resolved: readonly Readonly<{
     missionKey: string
@@ -132,6 +232,9 @@ export type ExternalParentMissionAdmissionFailureCode =
   | "PARENT_MISSION_AUTHORITY_REVOKED"
   | "PARENT_MISSION_ALREADY_TERMINAL"
   | "PARENT_MISSION_TERMINAL_EVIDENCE_UNVERIFIED"
+  | "PARENT_MISSION_DECOMPOSITION_INVALID"
+  | "PARENT_MISSION_DECOMPOSITION_ALREADY_BOUND"
+  | "PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE"
 
 export class ExternalParentMissionAdmissionError extends Error {
   constructor(public readonly code: ExternalParentMissionAdmissionFailureCode) {
@@ -195,6 +298,98 @@ function normalizeRepository(value: unknown): string {
     throw new Error("EXTERNAL_PARENT_MISSION_INVALID")
   }
   return repository
+}
+
+const DECOMPOSITION_HARD_WALL_KEYS = [
+  "singleRepositoryPerChild",
+  "exactReservationSubset",
+  "noAuthorityEscalation",
+  "childExpiryNoLaterThanParent",
+  "deterministicChildIdentity",
+  "atomicChildLineage",
+  "rawProseAuthorityForbidden",
+  "parentCompletionInferenceForbidden",
+  "crossBoundaryWideningForbidden",
+] as const
+
+function reservationPath(value: string): boolean {
+  return !value.startsWith("/") && !value.startsWith("//") && !/^[A-Za-z]:/.test(value)
+    && !value.split("/").some((segment) => segment === "..")
+}
+
+function normalizeDecompositionPolicy(value: unknown): ExternalParentMissionDecompositionPolicy {
+  const input = record(value)
+  if (!input) throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  exactKeys(input, [
+    "version", "executionPowers", "pathReservationCeiling", "contractReservationCeiling",
+    "environmentReservationCeiling", "hardWalls",
+  ], "PARENT_MISSION_DECOMPOSITION_INVALID")
+  if (input.version !== EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  }
+  const executionPowers = strings(input.executionPowers, "PARENT_MISSION_DECOMPOSITION_INVALID", 16, 200)
+  const pathReservationCeiling = strings(input.pathReservationCeiling, "PARENT_MISSION_DECOMPOSITION_INVALID", 3_000, 1_000)
+    .map((path) => path.replace(/\\/g, "/"))
+  if (!pathReservationCeiling.every(reservationPath)) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  }
+  const contractReservationCeiling = Array.isArray(input.contractReservationCeiling)
+    ? input.contractReservationCeiling.map((candidate) => {
+        const claim = record(candidate)
+        if (!claim) throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+        exactKeys(claim, ["contractIdentity", "revisionIdentity", "role"], "PARENT_MISSION_DECOMPOSITION_INVALID")
+        if (claim.role !== "producer" && claim.role !== "consumer") {
+          throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+        }
+        return {
+          contractIdentity: text(claim.contractIdentity, "PARENT_MISSION_DECOMPOSITION_INVALID", 200),
+          revisionIdentity: text(claim.revisionIdentity, "PARENT_MISSION_DECOMPOSITION_INVALID", 200),
+          role: claim.role as "producer" | "consumer",
+        }
+      })
+    : null
+  const environmentReservationCeiling = Array.isArray(input.environmentReservationCeiling)
+    ? input.environmentReservationCeiling.map((candidate) => {
+        const claim = record(candidate)
+        if (!claim) throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+        exactKeys(claim, ["environmentIdentity", "access"], "PARENT_MISSION_DECOMPOSITION_INVALID")
+        if (claim.access !== "exclusive" && claim.access !== "shared-read") {
+          throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+        }
+        return {
+          environmentIdentity: text(claim.environmentIdentity, "PARENT_MISSION_DECOMPOSITION_INVALID", 200),
+          access: claim.access as "exclusive" | "shared-read",
+        }
+      })
+    : null
+  if (!contractReservationCeiling || contractReservationCeiling.length > 64
+    || !environmentReservationCeiling || environmentReservationCeiling.length > 64) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  }
+  const hardWalls = record(input.hardWalls)
+  if (!hardWalls || !hasExactKeys(hardWalls, DECOMPOSITION_HARD_WALL_KEYS)
+    || DECOMPOSITION_HARD_WALL_KEYS.some((key) => hardWalls[key] !== true)) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  }
+  const contracts = [...contractReservationCeiling].sort((left, right) =>
+    compareCanonicalStrings(JSON.stringify(left), JSON.stringify(right)))
+  const environments = [...environmentReservationCeiling].sort((left, right) =>
+    compareCanonicalStrings(JSON.stringify(left), JSON.stringify(right)))
+  if (new Set(contracts.map((claim) => JSON.stringify(claim))).size !== contracts.length
+    || new Set(environments.map((claim) => JSON.stringify(claim))).size !== environments.length) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_INVALID")
+  }
+  const normalizedHardWalls = Object.fromEntries(
+    DECOMPOSITION_HARD_WALL_KEYS.map((key) => [key, true]),
+  ) as ExternalParentMissionDecompositionPolicy["hardWalls"]
+  return {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    executionPowers,
+    pathReservationCeiling: [...new Set(pathReservationCeiling)].sort(compareCanonicalStrings),
+    contractReservationCeiling: contracts,
+    environmentReservationCeiling: environments,
+    hardWalls: normalizedHardWalls,
+  }
 }
 
 export function normalizeExternalParentMission(raw: unknown): ExternalParentMission {
@@ -283,6 +478,84 @@ export function normalizeExternalParentMissionAdmissionInput(raw: unknown): Exte
     confirmedProvenanceDigest: input.confirmedProvenanceDigest,
     externalParentMission,
   }
+}
+
+function normalizeDecompositionLocator(input: Record<string, unknown>) {
+  const worldId = text(input.worldId, "REQUEST_FIELDS_INVALID", 200)
+  const missionKey = text(input.missionKey, "REQUEST_FIELDS_INVALID", 200)
+  const bindReceiptHash = text(input.bindReceiptHash, "REQUEST_FIELDS_INVALID", 64)
+  if (!/^external-parent:[0-9a-f]{64}$/.test(missionKey)
+    || !Number.isSafeInteger(input.bindReceiptId) || Number(input.bindReceiptId) <= 0
+    || !/^[0-9a-f]{64}$/.test(bindReceiptHash)) {
+    throw new Error("REQUEST_FIELDS_INVALID")
+  }
+  return {
+    worldId,
+    missionKey,
+    bindReceiptId: Number(input.bindReceiptId),
+    bindReceiptHash,
+    policy: normalizeDecompositionPolicy(input.policy),
+  }
+}
+
+export function normalizeExternalParentMissionDecompositionPreviewInput(
+  raw: unknown,
+): ExternalParentMissionDecompositionPreviewInput {
+  const input = record(raw)
+  if (!input) throw new Error("REQUEST_FIELDS_INVALID")
+  exactKeys(input, [
+    "mode", "worldId", "missionKey", "bindReceiptId", "bindReceiptHash", "policy",
+  ], "REQUEST_FIELDS_INVALID")
+  if (input.mode !== "DECOMPOSITION_PREVIEW") throw new Error("REQUEST_FIELDS_INVALID")
+  return { mode: "DECOMPOSITION_PREVIEW", ...normalizeDecompositionLocator(input) }
+}
+
+export function normalizeExternalParentMissionDecompositionAdmissionInput(
+  raw: unknown,
+): ExternalParentMissionDecompositionAdmissionInput {
+  const input = record(raw)
+  if (!input) throw new Error("REQUEST_FIELDS_INVALID")
+  exactKeys(input, [
+    "mode", "worldId", "missionKey", "bindReceiptId", "bindReceiptHash", "idempotencyKey",
+    "confirmation", "confirmedPolicyDigest", "policy",
+  ], "REQUEST_FIELDS_INVALID")
+  if (input.mode !== "DECOMPOSITION_ADMIT") throw new Error("REQUEST_FIELDS_INVALID")
+  const normalized = normalizeDecompositionLocator(input)
+  const idempotencyKey = text(input.idempotencyKey, "REQUEST_FIELDS_INVALID", 200)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$/.test(idempotencyKey)
+    || input.confirmation !== "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION"
+    || typeof input.confirmedPolicyDigest !== "string"
+    || !/^[0-9a-f]{64}$/.test(input.confirmedPolicyDigest)) {
+    throw new Error("CONFIRMATION_REQUIRED")
+  }
+  const policyDigest = externalParentMissionDecompositionPolicyDigest(normalized)
+  if (input.confirmedPolicyDigest !== policyDigest) {
+    throw new ExternalParentMissionAdmissionError("CONFIRMATION_STALE")
+  }
+  return {
+    mode: "DECOMPOSITION_ADMIT",
+    ...normalized,
+    idempotencyKey,
+    confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+    confirmedPolicyDigest: input.confirmedPolicyDigest,
+  }
+}
+
+export function externalParentMissionDecompositionPolicyDigest(input: Readonly<{
+  worldId: string
+  missionKey: string
+  bindReceiptId: number
+  bindReceiptHash: string
+  policy: ExternalParentMissionDecompositionPolicy
+}>): string {
+  return hashRecord({
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    worldId: input.worldId,
+    missionKey: input.missionKey,
+    bindReceiptId: input.bindReceiptId,
+    bindReceiptHash: input.bindReceiptHash,
+    policy: input.policy,
+  })
 }
 
 export function normalizeExternalParentMissionTerminalInput(raw: unknown): ExternalParentMissionTerminalInput {
@@ -427,6 +700,319 @@ function validBindReceipt(receipt: ReceiptLike): boolean {
     && Number(result.repositoryResourceId) > 0
 }
 
+type AdmissionTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+function scopeClaims(scope: string | null): Readonly<{
+  contracts: readonly unknown[]
+  environments: readonly unknown[]
+}> {
+  if (!scope) return { contracts: [], environments: [] }
+  try {
+    const parsed = record(JSON.parse(scope))
+    return {
+      contracts: Array.isArray(parsed?.contracts) ? parsed.contracts : [],
+      environments: Array.isArray(parsed?.environments) ? parsed.environments : [],
+    }
+  } catch {
+    return { contracts: [], environments: [] }
+  }
+}
+
+function claimsAreSubset(requested: readonly unknown[], ceiling: readonly unknown[]): boolean {
+  const allowed = new Set(ceiling.map((claim) => JSON.stringify(claim)))
+  return requested.every((claim) => allowed.has(JSON.stringify(claim)))
+}
+
+async function resolveDecompositionAuthorityContext(
+  transaction: AdmissionTransaction,
+  userId: string,
+  input: Readonly<{
+    worldId: string
+    missionKey: string
+    bindReceiptId: number
+    bindReceiptHash: string
+    policy: ExternalParentMissionDecompositionPolicy
+  }>,
+): Promise<ExternalParentMissionDecompositionAuthorityContext> {
+  const bindRows = await transaction.select().from(outcomeQueueMutationReceipt).where(and(
+    eq(outcomeQueueMutationReceipt.userId, userId),
+    eq(outcomeQueueMutationReceipt.id, input.bindReceiptId),
+    eq(outcomeQueueMutationReceipt.operation, EXTERNAL_PARENT_MISSION_BIND_OPERATION),
+    eq(outcomeQueueMutationReceipt.outcomeKey, input.missionKey),
+  )).limit(2).for("update")
+  if (bindRows.length !== 1 || !validBindReceipt(bindRows[0])
+    || externalParentMissionBindReceiptHash(bindRows[0]) !== input.bindReceiptHash) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+  }
+  const bind = bindRows[0]
+  const bindResult = bind.resultBinding as Record<string, unknown>
+  const binding = bindResult.binding as ExternalParentMissionBinding
+  if (bind.userId !== userId || bindResult.worldId !== input.worldId) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+  }
+  const terminals = await transaction.select().from(outcomeQueueMutationReceipt).where(and(
+    eq(outcomeQueueMutationReceipt.userId, userId),
+    eq(outcomeQueueMutationReceipt.operation, EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION),
+    eq(outcomeQueueMutationReceipt.outcomeKey, input.missionKey),
+  )).limit(2).for("update")
+  if (terminals.length > 0) {
+    if (terminals.length !== 1 || !terminalState(terminals[0], bind)) {
+      throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+    }
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_AUTHORITY_REVOKED")
+  }
+  const worlds = await transaction.select().from(workingWorld).where(and(
+    eq(workingWorld.userId, userId), eq(workingWorld.id, input.worldId),
+  )).limit(1).for("update")
+  if (worlds.length !== 1) throw new ExternalParentMissionAdmissionError("WORLD_NOT_FOUND")
+  const world = validateWorkingWorld(JSON.parse(worlds[0].snapshot))
+  if (world.spine.projectId !== binding.projectId || !world.spine.workOrderId) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE")
+  }
+  const repositories = await resolveSpaceRepositoryIdentities(world.resources)
+  if (!repositories.includes(binding.repository)) {
+    throw new ExternalParentMissionAdmissionError("PROJECT_REPOSITORY_MISMATCH")
+  }
+  const resources = await transaction.select().from(projectResource).where(and(
+    eq(projectResource.userId, userId),
+    eq(projectResource.id, Number(bindResult.repositoryResourceId)),
+    eq(projectResource.projectId, binding.projectId),
+    eq(projectResource.type, "repo"),
+    eq(projectResource.canonicalIdentity, binding.repository),
+  )).limit(2).for("update")
+  const works = await transaction.select().from(workOrder).where(and(
+    eq(workOrder.userId, userId), eq(workOrder.id, world.spine.workOrderId),
+  )).limit(2).for("update")
+  if (resources.length !== 1 || works.length !== 1 || works[0].status !== "active"
+    || !works[0].authorityGrantId || !works[0].ref) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE")
+  }
+  const grants = await transaction.select().from(authorityGrant).where(and(
+    eq(authorityGrant.userId, userId), eq(authorityGrant.id, works[0].authorityGrantId),
+  )).limit(2).for("update")
+  const grant = grants[0]
+  if (grants.length !== 1 || !grant || grant.workOrderId !== works[0].id
+    || grant.grantedTo !== "codex" || !grant.ref || !grant.contentHash || !grant.expiresAt
+    || !isGrantActive(authorityGrantFactsFromNormalizedRow(grant)).ok
+    || !grantCovers(authorityGrantFactsFromNormalizedRow(grant), "A2_WRITE_OWN").ok
+    || !input.policy.executionPowers.includes("child:derive")
+    || input.policy.executionPowers.some((power) => ![
+      "child:derive", "child:reserve", "child:dispatch",
+    ].includes(power))
+    || input.policy.pathReservationCeiling.some((path) =>
+      !works[0].allowedFiles.includes(path) || !grant.allowedActions.includes(path))) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE")
+  }
+  const ceilings = scopeClaims(grant.scope)
+  if (!claimsAreSubset(input.policy.contractReservationCeiling, ceilings.contracts)
+    || !claimsAreSubset(input.policy.environmentReservationCeiling, ceilings.environments)) {
+    throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_AUTHORITY_INELIGIBLE")
+  }
+  return {
+    ownerUserId: userId,
+    worldId: input.worldId,
+    projectId: binding.projectId,
+    repository: binding.repository,
+    repositoryResourceId: resources[0].id,
+    workOrderId: works[0].id,
+    workOrderRef: works[0].ref,
+    grantId: grant.id,
+    grantRef: grant.ref,
+    grantContentHash: grant.contentHash,
+    grantExpiresAt: grant.expiresAt.toISOString(),
+    authorityCeiling: "A2_WRITE_OWN",
+    grantScopeDigest: hashRecord(grant.scope),
+    grantAllowedActionsDigest: hashRecord(grant.allowedActions),
+    grantBlockedActionsDigest: hashRecord(grant.blockedActions),
+  }
+}
+
+function decompositionRequestBinding(input: ExternalParentMissionDecompositionAdmissionInput) {
+  return {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    worldId: input.worldId,
+    missionKey: input.missionKey,
+    bindReceiptId: input.bindReceiptId,
+    bindReceiptHash: input.bindReceiptHash,
+    idempotencyKey: input.idempotencyKey,
+    confirmation: input.confirmation,
+    confirmedPolicyDigest: input.confirmedPolicyDigest,
+    policy: input.policy,
+  }
+}
+
+function validDecompositionReceipt(receipt: ReceiptLike): boolean {
+  const request = record(receipt.requestBinding)
+  const result = record(receipt.resultBinding)
+  const context = record(result?.authorityContext)
+  if (!request || !result || !context) return false
+  let policy: ExternalParentMissionDecompositionPolicy
+  try { policy = normalizeDecompositionPolicy(request.policy) } catch { return false }
+  const policyDigest = externalParentMissionDecompositionPolicyDigest({
+    worldId: String(request.worldId),
+    missionKey: String(request.missionKey),
+    bindReceiptId: Number(request.bindReceiptId),
+    bindReceiptHash: String(request.bindReceiptHash),
+    policy,
+  })
+  return receipt.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION
+    && hasExactKeys(request, [
+      "version", "worldId", "missionKey", "bindReceiptId", "bindReceiptHash", "idempotencyKey",
+      "confirmation", "confirmedPolicyDigest", "policy",
+    ])
+    && hasExactKeys(result, [
+      "version", "missionKey", "bindReceiptId", "bindReceiptHash", "policyDigest", "policy",
+      "authorityContext", "state", "admittedBy", "admittedAt",
+    ])
+    && hasExactKeys(context, [
+      "ownerUserId", "worldId", "projectId", "repository", "repositoryResourceId",
+      "workOrderId", "workOrderRef", "grantId", "grantRef", "grantContentHash",
+      "grantExpiresAt", "authorityCeiling", "grantScopeDigest",
+      "grantAllowedActionsDigest", "grantBlockedActionsDigest",
+    ])
+    && request.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && request.confirmation === "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION"
+    && request.confirmedPolicyDigest === policyDigest
+    && request.idempotencyKey === receipt.idempotencyKey
+    && receipt.outcomeKey === request.missionKey
+    && receipt.requestHash === hashRecord(request)
+    && result.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && result.missionKey === request.missionKey
+    && Number(result.bindReceiptId) === Number(request.bindReceiptId)
+    && result.bindReceiptHash === request.bindReceiptHash
+    && result.policyDigest === policyDigest
+    && exactRecord(result.policy, policy)
+    && result.state === "ACTIVE"
+    && result.admittedBy === receipt.userId
+    && context.ownerUserId === receipt.userId
+    && context.worldId === request.worldId
+    && Number.isSafeInteger(Number(context.projectId)) && Number(context.projectId) > 0
+    && typeof context.repository === "string" && isCanonicalGitHubRepositoryIdentity(context.repository)
+    && Number.isSafeInteger(Number(context.repositoryResourceId)) && Number(context.repositoryResourceId) > 0
+    && Number.isSafeInteger(Number(context.workOrderId)) && Number(context.workOrderId) > 0
+    && typeof context.workOrderRef === "string" && context.workOrderRef.length > 0
+    && Number.isSafeInteger(Number(context.grantId)) && Number(context.grantId) > 0
+    && typeof context.grantRef === "string" && context.grantRef.length > 0
+    && typeof context.grantContentHash === "string" && /^[0-9a-f]{64}$/.test(context.grantContentHash)
+    && typeof context.grantExpiresAt === "string" && Number.isFinite(Date.parse(context.grantExpiresAt))
+    && context.authorityCeiling === "A2_WRITE_OWN"
+    && [context.grantScopeDigest, context.grantAllowedActionsDigest, context.grantBlockedActionsDigest]
+      .every((digest) => typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest))
+    && typeof result.admittedAt === "string"
+    && Number.isFinite(Date.parse(result.admittedAt))
+}
+
+function decompositionResult(receipt: ReceiptLike, replayed: boolean): ExternalParentMissionDecompositionSuccess {
+  const result = receipt.resultBinding as Record<string, unknown>
+  return {
+    status: replayed ? "DECOMPOSITION_ALREADY_ADMITTED" : "DECOMPOSITION_ADMITTED",
+    replayed,
+    receiptId: receipt.id,
+    missionKey: String(result.missionKey),
+    bindReceiptId: Number(result.bindReceiptId),
+    bindReceiptHash: String(result.bindReceiptHash),
+    policyDigest: String(result.policyDigest),
+    authorityContext: result.authorityContext as ExternalParentMissionDecompositionAuthorityContext,
+  }
+}
+
+export async function previewExternalParentMissionDecompositionAdmission(
+  userId: string,
+  raw: unknown,
+): Promise<ExternalParentMissionDecompositionPreview> {
+  const input = normalizeExternalParentMissionDecompositionPreviewInput(raw)
+  return db.transaction(async (transaction) => {
+    await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:${input.missionKey}:decomposition`}))`)
+    const authorityContext = await resolveDecompositionAuthorityContext(transaction, userId, input)
+    return {
+      status: "READY_FOR_DECOMPOSITION_CONFIRMATION",
+      missionKey: input.missionKey,
+      bindReceiptId: input.bindReceiptId,
+      bindReceiptHash: input.bindReceiptHash,
+      policy: input.policy,
+      policyDigest: externalParentMissionDecompositionPolicyDigest(input),
+      authorityContext,
+    }
+  }, { isolationLevel: "serializable" })
+}
+
+async function admitExternalParentMissionDecompositionOnce(
+  userId: string,
+  input: ExternalParentMissionDecompositionAdmissionInput,
+): Promise<ExternalParentMissionDecompositionSuccess> {
+  const requestBinding = decompositionRequestBinding(input)
+  const requestHash = hashRecord(requestBinding)
+  return db.transaction(async (transaction) => {
+    await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:${input.missionKey}:decomposition`}))`)
+    const idempotencyRows = await transaction.select().from(outcomeQueueMutationReceipt).where(and(
+      eq(outcomeQueueMutationReceipt.userId, userId),
+      eq(outcomeQueueMutationReceipt.idempotencyKey, input.idempotencyKey),
+    )).limit(2).for("update")
+    const missionRows = await transaction.select().from(outcomeQueueMutationReceipt).where(and(
+      eq(outcomeQueueMutationReceipt.userId, userId),
+      eq(outcomeQueueMutationReceipt.operation, EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION),
+      eq(outcomeQueueMutationReceipt.outcomeKey, input.missionKey),
+    )).limit(2).for("update")
+    if (idempotencyRows.length > 1 || missionRows.length > 1) {
+      throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+    }
+    if (idempotencyRows[0]) {
+      const receipt = idempotencyRows[0]
+      if (receipt.operation !== EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION
+        || receipt.outcomeKey !== input.missionKey || receipt.requestHash !== requestHash
+        || !exactRecord(receipt.requestBinding, requestBinding) || !validDecompositionReceipt(receipt)
+        || missionRows.length !== 1 || missionRows[0].id !== receipt.id) {
+        throw new ExternalParentMissionAdmissionError("IDEMPOTENCY_CONFLICT")
+      }
+      return decompositionResult(receipt, true)
+    }
+    if (missionRows[0]) {
+      throw new ExternalParentMissionAdmissionError("PARENT_MISSION_DECOMPOSITION_ALREADY_BOUND")
+    }
+    const authorityContext = await resolveDecompositionAuthorityContext(transaction, userId, input)
+    const nowRows = await transaction.execute(sql`SELECT clock_timestamp() AS "now"`)
+    const admittedAt = new Date(nowRows.rows[0]?.now as Date | string)
+    const resultBinding = {
+      version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+      missionKey: input.missionKey,
+      bindReceiptId: input.bindReceiptId,
+      bindReceiptHash: input.bindReceiptHash,
+      policyDigest: input.confirmedPolicyDigest,
+      policy: input.policy,
+      authorityContext,
+      state: "ACTIVE",
+      admittedBy: userId,
+      admittedAt: admittedAt.toISOString(),
+    }
+    const [receipt] = await transaction.insert(outcomeQueueMutationReceipt).values({
+      userId,
+      idempotencyKey: input.idempotencyKey,
+      operation: EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+      outcomeKey: input.missionKey,
+      requestHash,
+      requestBinding,
+      resultBinding,
+      createdAt: admittedAt,
+    }).returning()
+    return decompositionResult(receipt, false)
+  }, { isolationLevel: "serializable" })
+}
+
+export async function admitExternalParentMissionDecomposition(
+  userId: string,
+  raw: unknown,
+): Promise<ExternalParentMissionDecompositionSuccess> {
+  const input = normalizeExternalParentMissionDecompositionAdmissionInput(raw)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await admitExternalParentMissionDecompositionOnce(userId, input)
+    } catch (error) {
+      if (!(isSerializationFailure(error) || isUniqueConstraintFailure(error)) || attempt === 2) throw error
+    }
+  }
+  throw new ExternalParentMissionAdmissionError("PARENT_MISSION_BINDING_INVALID")
+}
+
 function terminalState(receipt: ReceiptLike, bind: ReceiptLike): string | null {
   const request = record(receipt.requestBinding)
   const result = record(receipt.resultBinding)
@@ -466,6 +1052,7 @@ export function resolveExternalParentMissionReceipts(
 ): ExternalParentMissionState {
   const binds = receipts.filter((receipt) => receipt.operation === EXTERNAL_PARENT_MISSION_BIND_OPERATION)
   const terminals = receipts.filter((receipt) => receipt.operation === EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION)
+  const decompositions = receipts.filter((receipt) => receipt.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION)
   if (binds.some((receipt) => !validBindReceipt(receipt))) {
     return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
   }
@@ -481,8 +1068,18 @@ export function resolveExternalParentMissionReceipts(
   if (terminals.some((terminal) => !byMission.has(terminal.outcomeKey ?? ""))) {
     return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
   }
+  if (decompositions.some((receipt) => !validDecompositionReceipt(receipt)
+    || !byMission.has(receipt.outcomeKey ?? ""))) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
   const unresolved: Array<{
     missionKey: string; externalRef: string; goalRef: string; worldId: string; projectId: number; repository: string
+    decomposition?: Readonly<{
+      receiptId: number
+      policy: ExternalParentMissionDecompositionPolicy
+      policyDigest: string
+      authorityContext: ExternalParentMissionDecompositionAuthorityContext
+    }>
   }> = []
   const resolved: Array<{
     missionKey: string; externalRef: string; goalRef: string; worldId: string; projectId: number; repository: string
@@ -491,8 +1088,6 @@ export function resolveExternalParentMissionReceipts(
   for (const bind of binds) {
     const binding = (bind.resultBinding as { binding: ExternalParentMissionBinding }).binding
     const result = bind.resultBinding as { worldId: string }
-    if ((scope?.worldId !== undefined && result.worldId !== scope.worldId)
-      || (scope?.projectId !== undefined && binding.projectId !== scope.projectId)) continue
     const identity = {
       missionKey: binding.missionKey,
       externalRef: binding.externalRef,
@@ -502,9 +1097,42 @@ export function resolveExternalParentMissionReceipts(
       repository: binding.repository,
     }
     const candidates = terminals.filter((receipt) => receipt.outcomeKey === bind.outcomeKey)
+    const decompositionCandidates = decompositions.filter((receipt) => receipt.outcomeKey === bind.outcomeKey)
+    if (decompositionCandidates.length > 1) return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    const decomposition = decompositionCandidates[0]
+    const decompositionRequest = decomposition ? record(decomposition.requestBinding) : null
+    const decompositionResult = decomposition ? record(decomposition.resultBinding) : null
+    const decompositionContext = decompositionResult ? record(decompositionResult.authorityContext) : null
+    if (decomposition && (Number(decompositionRequest?.bindReceiptId) !== bind.id
+      || decompositionRequest?.bindReceiptHash !== externalParentMissionBindReceiptHash(bind)
+      || decompositionContext?.worldId !== result.worldId
+      || Number(decompositionContext?.projectId) !== binding.projectId
+      || decompositionContext?.repository !== binding.repository
+      || Number(decompositionContext?.repositoryResourceId) !== Number(
+        (bind.resultBinding as Record<string, unknown>).repositoryResourceId,
+      ))) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    if ((scope?.worldId !== undefined && result.worldId !== scope.worldId)
+      || (scope?.projectId !== undefined && binding.projectId !== scope.projectId)) continue
     if (candidates.length > 1) return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
     if (candidates.length === 0) {
-      unresolved.push(identity)
+      const decompositionResultBinding = decomposition ? record(decomposition.resultBinding) : null
+      const decompositionPolicy = decompositionResultBinding?.policy as ExternalParentMissionDecompositionPolicy | undefined
+      const decompositionAuthorityContext = decompositionResultBinding?.authorityContext as ExternalParentMissionDecompositionAuthorityContext | undefined
+      unresolved.push({
+        ...identity,
+        ...(decomposition && decompositionResultBinding && decompositionPolicy && decompositionAuthorityContext
+          ? {
+              decomposition: {
+                receiptId: decomposition.id,
+                policy: decompositionPolicy,
+                policyDigest: String(decompositionResultBinding.policyDigest),
+                authorityContext: decompositionAuthorityContext,
+              },
+            }
+          : {}),
+      })
       continue
     }
     const state = terminalState(candidates[0], bind)
@@ -525,7 +1153,7 @@ export async function readExternalParentMissionState(
 ): Promise<ExternalParentMissionState> {
   const receipts = await db.select().from(outcomeQueueMutationReceipt).where(and(
     eq(outcomeQueueMutationReceipt.userId, userId),
-    sql`${outcomeQueueMutationReceipt.operation} IN (${EXTERNAL_PARENT_MISSION_BIND_OPERATION}, ${EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION})`,
+    sql`${outcomeQueueMutationReceipt.operation} IN (${EXTERNAL_PARENT_MISSION_BIND_OPERATION}, ${EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION}, ${EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION})`,
   ))
   // Validate the complete owner ledger before applying a caller scope. A malformed mission in a
   // different Space is still an integrity failure; scoping may select, never hide, bad authority.
@@ -803,6 +1431,13 @@ function isSerializationFailure(error: unknown): boolean {
   const candidate = error as { code?: unknown; cause?: unknown }
   if (candidate.code === "40001" || candidate.code === "40P01") return true
   return candidate.cause !== error && isSerializationFailure(candidate.cause)
+}
+
+function isUniqueConstraintFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false
+  const candidate = error as { code?: unknown; cause?: unknown }
+  if (candidate.code === "23505") return true
+  return candidate.cause !== error && isUniqueConstraintFailure(candidate.cause)
 }
 
 export async function admitExternalParentMission(

@@ -6,9 +6,16 @@ vi.mock("@/lib/db", () => ({ db: { transaction: seams.transaction } }))
 import {
   admitExternalParentMission,
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   externalParentMissionBindReceiptHash,
+  externalParentMissionDecompositionPolicyDigest,
+  externalParentMissionProvenanceDigest,
+  normalizeExternalParentMission,
+  normalizeExternalParentMissionDecompositionAdmissionInput,
+  normalizeExternalParentMissionDecompositionPreviewInput,
   normalizeExternalParentMissionAdmissionInput,
   terminalExternalParentMission,
   previewExternalParentMissionAdmission,
@@ -27,6 +34,25 @@ const mission = () => ({
   terminalConditions: ["External assessor acceptance", "All 39 counties proven"],
   authorityEvidence: ["owner-directive:issue-1485", "github:bsvalues/terrafusion_os_1.0#1485"],
 })
+
+const decompositionPolicy = () => ({
+  version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  executionPowers: ["child:derive", "child:dispatch"],
+  pathReservationCeiling: ["lib/outcome-queue/**", "tests/**"],
+  contractReservationCeiling: [],
+  environmentReservationCeiling: [],
+  hardWalls: {
+    singleRepositoryPerChild: true,
+    exactReservationSubset: true,
+    noAuthorityEscalation: true,
+    childExpiryNoLaterThanParent: true,
+    deterministicChildIdentity: true,
+    atomicChildLineage: true,
+    rawProseAuthorityForbidden: true,
+    parentCompletionInferenceForbidden: true,
+    crossBoundaryWideningForbidden: true,
+  },
+} as const)
 
 function admittedInput() {
   const preview = previewExternalParentMissionAdmission({
@@ -106,6 +132,46 @@ describe("external parent mission admission contract", () => {
     })).toThrow("EXTERNAL_PARENT_MISSION_INVALID")
   })
 
+  it("keeps v1 immutable and normalizes a separate exact v2 decomposition packet", () => {
+    const normalizedMission = normalizeExternalParentMission(mission())
+    expect(externalParentMissionProvenanceDigest(normalizedMission)).toBe(hashRecord({
+      version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+      externalParentMission: normalizedMission,
+    }))
+    expect(normalizedMission).not.toHaveProperty("decompositionAuthority")
+
+    const previewInput = normalizeExternalParentMissionDecompositionPreviewInput({
+      mode: "DECOMPOSITION_PREVIEW",
+      worldId: "space-terrafusion",
+      missionKey: `external-parent:${"a".repeat(64)}`,
+      bindReceiptId: 135,
+      bindReceiptHash: "b".repeat(64),
+      policy: decompositionPolicy(),
+    })
+    const policyDigest = externalParentMissionDecompositionPolicyDigest(previewInput)
+    expect(normalizeExternalParentMissionDecompositionAdmissionInput({
+      ...previewInput,
+      mode: "DECOMPOSITION_ADMIT",
+      idempotencyKey: "parent-decomposition:1485",
+      confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+      confirmedPolicyDigest: policyDigest,
+    })).toMatchObject({ policy: decompositionPolicy(), confirmedPolicyDigest: policyDigest })
+
+    expect(() => normalizeExternalParentMissionDecompositionPreviewInput({
+      ...previewInput,
+      workOrderId: 99,
+    })).toThrow("REQUEST_FIELDS_INVALID")
+    expect(() => normalizeExternalParentMissionDecompositionPreviewInput({
+      ...previewInput,
+      policy: { ...decompositionPolicy(), hardWalls: { ...decompositionPolicy().hardWalls, noAuthorityEscalation: false } },
+    })).toThrow("PARENT_MISSION_DECOMPOSITION_INVALID")
+    expect(() => normalizeExternalParentMission({
+      ...mission(),
+      decompositionAuthority: decompositionPolicy(),
+    })).toThrow("EXTERNAL_PARENT_MISSION_INVALID")
+  })
+
+
   it("classifies one exact unresolved bind and a separately hash-bound terminal receipt", () => {
     const input = normalizeExternalParentMissionAdmissionInput(admittedInput())
     const preview = previewExternalParentMissionAdmission({
@@ -173,6 +239,55 @@ describe("external parent mission admission contract", () => {
       }],
       resolved: [],
     })
+
+    const policy = decompositionPolicy()
+    const decompositionLocator = {
+      worldId: "other-space",
+      missionKey: preview.missionKey,
+      bindReceiptId: bind.id,
+      bindReceiptHash: externalParentMissionBindReceiptHash(bind),
+      policy,
+    }
+    const policyDigest = externalParentMissionDecompositionPolicyDigest(decompositionLocator)
+    const decompositionRequest = {
+      version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+      ...decompositionLocator,
+      idempotencyKey: "parent-decomposition:1485",
+      confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+      confirmedPolicyDigest: policyDigest,
+    }
+    const contextDigest = "c".repeat(64)
+    const decomposition = {
+      id: 13,
+      userId: "owner",
+      idempotencyKey: decompositionRequest.idempotencyKey,
+      operation: EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+      outcomeKey: preview.missionKey,
+      requestHash: hashRecord(decompositionRequest),
+      requestBinding: decompositionRequest,
+      resultBinding: {
+        version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+        missionKey: preview.missionKey,
+        bindReceiptId: bind.id,
+        bindReceiptHash: decompositionLocator.bindReceiptHash,
+        policyDigest,
+        policy,
+        authorityContext: {
+          ownerUserId: "owner", worldId: "other-space", projectId: 4,
+          repository: "bsvalues/terrafusion_os_1.0", repositoryResourceId: 9,
+          workOrderId: 55, workOrderRef: "WO-55", grantId: 66, grantRef: "GRANT-66",
+          grantContentHash: contextDigest, grantExpiresAt: "2026-12-01T00:00:00.000Z",
+          authorityCeiling: "A2_WRITE_OWN", grantScopeDigest: contextDigest,
+          grantAllowedActionsDigest: contextDigest, grantBlockedActionsDigest: contextDigest,
+        },
+        state: "ACTIVE",
+        admittedBy: "owner",
+        admittedAt: "2026-09-07T12:30:00.000Z",
+      },
+      createdAt: new Date("2026-09-07T12:30:00.000Z"),
+    }
+    expect(resolveExternalParentMissionReceipts([bind, decomposition], { worldId: "other-space" }))
+      .toEqual({ integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] })
 
     const evidence = ["evidence:external-assessor-acceptance", "protected-main:abc"]
     const terminalRequest = {
