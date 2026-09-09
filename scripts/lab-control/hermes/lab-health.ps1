@@ -11,6 +11,9 @@ function Bump($sev){ if($sev -eq "fail"){$script:overall="fail"; return}; if($se
 function P($sev,$msg){ if($sev -ne "ok"){ $script:problems += $msg } }
 function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$HermesDomain){
   New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+  $currentPath = Join-Path $OutputRoot 'lab-health.json'
+  $previousOverall = $null
+  try { $previousOverall = [string](Get-Content -LiteralPath $currentPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).overall } catch {}
   $obj = [ordered]@{
     schema='hermes-native-health/1'
     timestamp=(Get-Date -Format o)
@@ -18,15 +21,13 @@ function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$Herm
     problems=@($Problems)
     domains=[ordered]@{ hermes=$HermesDomain }
   }
-  $obj | ConvertTo-Json -Depth 8 -Compress | Out-File (Join-Path $OutputRoot 'lab-health.json') -Encoding utf8
+  $obj | ConvertTo-Json -Depth 8 -Compress | Out-File $currentPath -Encoding utf8
   $obj | ConvertTo-Json -Depth 8 -Compress | Add-Content (Join-Path $OutputRoot 'health-history.jsonl')
-  if($Overall -ne 'ok'){
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $Overall.ToUpper(), ($Problems -join '; ')
+  if($Overall -ne $previousOverall -and ($null -ne $previousOverall -or $Overall -ne 'ok')){
+    $severity = if($Overall -eq 'fail'){'FAIL'}elseif($Overall -eq 'warn'){'WARN'}else{'RECOVERY'}
+    $message = if($Overall -eq 'ok'){"Native HERMES health recovered from $previousOverall"}else{($Problems -join '; ')}
+    $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $severity, $message
     $line | Add-Content (Join-Path $OutputRoot 'alerts.log')
-    $ntfy = "$env:HERMES_NTFY_TOPIC"
-    if(-not $LocalOnly -and $OutputRoot -eq 'C:\HermesLab\hermes' -and $ntfy){
-      try { Invoke-RestMethod -Uri "https://ntfy.sh/$ntfy" -Method Post -Body "LAB $($Overall.ToUpper()): $($Problems -join '; ')" -Headers @{Title="Lab needs attention"; Priority="high"} -TimeoutSec 10 } catch {}
-    }
   }
 }
 
@@ -178,7 +179,7 @@ elseif($ollamaState -eq 'EMPTY_CATALOGUE'){ "  Ollama  : responding but knows NO
 else { "  Ollama  : endpoint unavailable or ownership unproven   [FAIL]"; Bump 'fail'; P 'fail' 'Ollama canonical endpoint down' }
 try { $r=Invoke-WebRequest http://localhost:3000/health -TimeoutSec 6 -UseBasicParsing; "  OpenWebUI: HTTP $($r.StatusCode)   [OK]" } catch { "  OpenWebUI: not responding   [WARN]"; Bump "warn"; P "warn" "Open WebUI down" }
 
-foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"))){
+foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"),@("Model-sync","HermesModelForgeSync"))){
   $i=Get-ScheduledTaskInfo -TaskName $t[1]
   if($i){
     $res=$i.LastTaskResult

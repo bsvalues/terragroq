@@ -91,16 +91,17 @@ if($loopbackListenerExact){ $listenerPid = $ollamaListeners[0].Pid }
 $ownerExact = $owner -and [string]$owner.schema -eq 'hermes-ollama-owner-state/1' -and [string]$owner.owner -eq 'WilliamOS-HERMES-Ollama' -and [string]$owner.state -eq 'SERVING' -and [string]$owner.listen -eq '127.0.0.1:11434' -and $null -ne $ownerAgeSeconds -and $ownerAgeSeconds -ge -60 -and $ownerAgeSeconds -le 120 -and $loopbackListenerExact -and $null -ne $listenerPid -and [string]$owner.pid -eq [string]$listenerPid -and [string]$owner.executable -eq 'D:\HermesServices\ollama\v0.9.2\ollama.exe' -and [string]$owner.models -eq 'G:\HermesData\ollama\models' -and [string]$owner.gpuUuid -eq 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2' -and [string]$owner.powerCapWatts -eq '150'
 $p40 = $null
 try {
-  $rows = @(& nvidia-smi.exe --query-gpu=name,uuid,driver_model.current,temperature.gpu,power.limit,memory.used,memory.total,ecc.errors.uncorrected.volatile.total,ecc.errors.uncorrected.aggregate.total --format=csv,noheader,nounits 2>$null)
+  $rows = @(& nvidia-smi.exe --query-gpu=name,uuid,driver_model.current,temperature.gpu,power.limit,memory.used,memory.total,ecc.errors.corrected.volatile.total,ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total --format=csv,noheader,nounits 2>$null)
   foreach ($row in $rows) {
     $parts = @($row -split ',\s*')
-    if ($parts.Count -ge 9 -and $parts[0] -match 'Tesla P40') {
-      $p40 = [ordered]@{ name=$parts[0]; uuid=$parts[1]; driverModel=$parts[2]; tempC=$parts[3]; powerLimitW=$parts[4]; memoryUsedMb=$parts[5]; memoryTotalMb=$parts[6]; uncorrectedVolatile=$parts[7]; uncorrectedAggregate=$parts[8] }
+    if ($parts.Count -ge 11 -and $parts[0] -match 'Tesla P40') {
+      $p40 = [ordered]@{ name=$parts[0]; uuid=$parts[1]; driverModel=$parts[2]; tempC=$parts[3]; powerLimitW=$parts[4]; memoryUsedMb=$parts[5]; memoryTotalMb=$parts[6]; correctedVolatile=$parts[7]; uncorrectedVolatile=$parts[8]; correctedAggregate=$parts[9]; uncorrectedAggregate=$parts[10] }
     }
   }
 } catch {}
 $goldenPresent = $models -contains $GoldenModel
-$p40Healthy = $null -ne $p40 -and $p40.driverModel -eq 'TCC' -and [double]$p40.powerLimitW -ge 149 -and [double]$p40.powerLimitW -le 151 -and [int]$p40.uncorrectedVolatile -eq 0 -and [int]$p40.uncorrectedAggregate -eq 0
+$p40CountersPresent = $null -ne $p40 -and [string]$p40.correctedVolatile -match '^\d+$' -and [string]$p40.uncorrectedVolatile -match '^\d+$' -and [string]$p40.correctedAggregate -match '^\d+$' -and [string]$p40.uncorrectedAggregate -match '^\d+$'
+$p40Healthy = $null -ne $p40 -and $p40CountersPresent -and $p40.driverModel -eq 'TCC' -and [double]$p40.powerLimitW -ge 149 -and [double]$p40.powerLimitW -le 151 -and [int]$p40.uncorrectedVolatile -eq 0 -and [int]$p40.uncorrectedAggregate -eq 0
 $inferenceState = if ($ollamaError -or -not $ownerExact -or -not $goldenPresent -or -not $p40Healthy) { 'CRITICAL' } else { 'HEALTHY' }
 $domains.inference = Domain $inferenceState ($(if($inferenceState -eq 'HEALTHY'){'P40 inference is serving correctly'}else{'Inference proof is not green'})) @(
   Fact 'Ollama' $(if($ollamaError){"Unavailable ($ollamaError)"}else{"Serving $($models.Count) models"})
@@ -108,6 +109,7 @@ $domains.inference = Domain $inferenceState ($(if($inferenceState -eq 'HEALTHY')
   Fact 'Owner' $(if($ownerExact){'WilliamOS-HERMES-Ollama | fresh'}else{'Canonical owner unproven'})
   Fact 'Listener' $(if($listenerPid){"Loopback-only 127.0.0.1:11434 | pid $listenerPid"}else{'Missing'})
   Fact 'P40' $(if($p40){"$($p40.tempC) C | $($p40.powerLimitW) W cap | $($p40.driverModel)"}else{'Unavailable'})
+  Fact 'P40 ECC telemetry' $(if($p40CountersPresent){"present | corrected counters informational | uncorrected $($p40.uncorrectedVolatile)/$($p40.uncorrectedAggregate)"}else{'Missing or malformed'})
 )
 
 # Protection: generation, task results, and an actual restore receipt for that generation.
@@ -116,10 +118,11 @@ $latestProof = Get-ChildItem -LiteralPath $RecoveryRoot -Filter 'hermes-recovery
 $generation = if($latestProof){$latestProof.Name -replace '^hermes-recovery-proof-|\.tar\.gz$',''}else{$null}
 $backupTask = Get-TaskFact 'HermesVolumeBackup'
 $syncTask = Get-TaskFact 'HermesCrossNodeBackupSync'
+$modelSyncTask = Get-TaskFact 'HermesModelForgeSync'
 $proofAgeHours = if($latestProof){ [math]::Round(($observedAt - $latestProof.LastWriteTimeUtc).TotalHours, 1) }else{ $null }
 $restoreAge = if($receipt -and $receipt.PSObject.Properties['verifiedAt']){try{($observedAt - ([datetime]$receipt.verifiedAt).ToUniversalTime()).TotalHours}catch{$null}}else{$null}
 $restoreCurrent = $null -ne $restoreAge -and $restoreAge -ge (-1.0/60) -and $restoreAge -le 36 -and $receipt -and [string]$receipt.schema -eq 'hermes-offhost-restore-receipt/1' -and [string]$receipt.generation -eq $generation -and [string]$receipt.status -eq 'PASS'
-$protectionHealthy = $generation -and $proofAgeHours -le 36 -and $backupTask.result -eq 0 -and $syncTask.result -eq 0 -and $restoreCurrent
+$protectionHealthy = $generation -and $proofAgeHours -le 36 -and $backupTask.result -eq 0 -and $syncTask.result -eq 0 -and $modelSyncTask.result -eq 0 -and $restoreCurrent
 $domains.protection = Domain ($(if($protectionHealthy){'HEALTHY'}else{'DEGRADED'})) ($(if($protectionHealthy){'Off-host recovery is proven'}else{'Recovery proof needs attention'})) @(
   Fact 'Generation' $(if($generation){$generation}else{'Missing'})
   Fact 'Local proof age' $(if($null -ne $proofAgeHours){"$proofAgeHours hours"}else{'Unknown'})
@@ -127,15 +130,17 @@ $domains.protection = Domain ($(if($protectionHealthy){'HEALTHY'}else{'DEGRADED'
   Fact 'Restore freshness' $(if($null -ne $restoreAge -and $restoreAge -ge (-1.0/60) -and $restoreAge -le 36){'FRESH'}else{'STALE / UNAVAILABLE'})
   Fact 'Backup task' $(if($null -eq $backupTask.result){'Unreadable'}else{"Result $($backupTask.result)"})
   Fact 'Cross-node task' $(if($null -eq $syncTask.result){'Unreadable'}else{"Result $($syncTask.result)"})
+  Fact 'Model replica task' $(if($null -eq $modelSyncTask.result){'Unreadable'}else{"Result $($modelSyncTask.result)"})
   Fact 'Off-host restore' $(if($restoreCurrent){'Verified matching generation'}elseif($receipt){"Older verified generation: $($receipt.generation) | $($receipt.status)"}else{'No current receipt'})
 )
 
-# Storage: the three declared roles. Low C: is visible and cannot be hidden by a healthy G:.
+# Storage: the three declared roles. D: now holds legacy rollback material, not the serving model
+# store or Docker data, so it has a smaller safety floor than the active C:/G: roles.
 $c = Get-DriveFact 'C'; $d = Get-DriveFact 'D'; $g = Get-DriveFact 'G'
-$storageState = if($null -eq $c.freeGb -or $null -eq $d.freeGb -or $null -eq $g.freeGb){'CRITICAL'}elseif($c.freeGb -lt 10 -or $d.freeGb -lt 10 -or $g.freeGb -lt 25){'CRITICAL'}elseif($c.freeGb -lt 25 -or $d.freeGb -lt 40){'DEGRADED'}else{'HEALTHY'}
+$storageState = if($null -eq $c.freeGb -or $null -eq $d.freeGb -or $null -eq $g.freeGb){'CRITICAL'}elseif($c.freeGb -lt 10 -or $d.freeGb -lt 5 -or $g.freeGb -lt 25){'CRITICAL'}elseif($c.freeGb -lt 25 -or $d.freeGb -lt 15 -or $g.freeGb -lt 75){'DEGRADED'}else{'HEALTHY'}
 $domains.storage = Domain $storageState ($(if($storageState -eq 'HEALTHY'){'Storage roles have safe headroom'}elseif($storageState -eq 'CRITICAL'){'A storage role is at immediate risk'}else{'System storage needs relief'})) @(
   Fact 'C: system' $(if($null -ne $c.freeGb){"$($c.freeGb) GB free"}else{'Unavailable'})
-  Fact 'D: appliance data' $(if($null -ne $d.freeGb){"$($d.freeGb) GB free"}else{'Unavailable'})
+  Fact 'D: legacy rollback' $(if($null -ne $d.freeGb){"$($d.freeGb) GB free | not serving"}else{'Unavailable'})
   Fact 'G: workbench / replicas' $(if($null -ne $g.freeGb){"$($g.freeGb) GB free | $($g.label)"}else{'Unavailable'})
 )
 
@@ -149,20 +154,45 @@ $doctrine = Read-Json $DoctrineResultPath @('schema','status','code','observedAt
 $doctrineAge = if($doctrine){try{($observedAt - ([datetime]$doctrine.evaluatedAt).ToUniversalTime()).TotalSeconds}catch{$null}}else{$null}
 $doctrineFresh = $doctrine -and [string]$doctrine.schema -eq 'hermes-doctrine-result/1' -and $null -ne $doctrineAge -and $doctrineAge -ge -60 -and $doctrineAge -le 600 -and $doctrine.freshness.state -eq 'FRESH'
 $ingressDrift = @()
+$exposureDrift = @()
 if($doctrineFresh -and $doctrine.PSObject.Properties['drift'] -and $doctrine.drift -and $doctrine.drift.PSObject.Properties['listeners'] -and $doctrine.drift.listeners){
-  foreach($kind in @('changed','missing','unexpected')) { if($doctrine.drift.listeners.PSObject.Properties[$kind]){ $ingressDrift += @($doctrine.drift.listeners.$kind) } }
+  foreach($kind in @('changed','missing','unexpected')) {
+    if(-not $doctrine.drift.listeners.PSObject.Properties[$kind]){continue}
+    foreach($item in @($doctrine.drift.listeners.$kind)){
+      $ingressDrift += $item
+      if($kind -eq 'changed' -and $item.PSObject.Properties['observed'] -and $item.PSObject.Properties['declared']){
+        $declaredAddress=[string]$item.declared.address; $observedAddress=[string]$item.observed.address
+        if($declaredAddress -in @('127.0.0.1','::1') -and $observedAddress -in @('0.0.0.0','::')){$exposureDrift += $item}
+      } elseif($kind -eq 'unexpected' -and $item.PSObject.Properties['observed'] -and [string]$item.observed.address -in @('0.0.0.0','::')) {
+        $exposureDrift += $item
+      }
+    }
+  }
 }
-# Doctrine currently inventories listeners, not exact firewall rules. A clean listener inventory
-# cannot prove full firewall conformance, and unrelated task/container drift is not security failure.
+# Exact live firewall rules remain the authority for containment. In particular, Windows' stock RDP
+# allow rules may not stay broadly enabled when RDP is declared as an OMEN/Tailscale-only recovery path.
+$firewallRuleProbeSucceeded = $false
+$allFirewallRules = @()
+try { $allFirewallRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop); $firewallRuleProbeSucceeded = $true } catch {}
+$broadRdpRules = @($allFirewallRules | Where-Object {
+  $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $_.DisplayGroup -eq 'Remote Desktop'
+})
+$containmentRules = @($allFirewallRules | Where-Object {
+  $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Group -eq 'WilliamOS HERMES Appliance V1 Security Containment'
+})
 $ingressCount = @($ingressDrift | Where-Object { $null -ne $_ }).Count
-$securityState = if(($profiles.Count -gt 0 -and -not $profilesHealthy) -or ($containedServices.Count -gt 0 -and -not $servicesContained) -or $ingressCount -gt 0){'CRITICAL'}else{'UNKNOWN'}
+$exposureCount = @($exposureDrift | Where-Object { $null -ne $_ }).Count
+$firewallReadable = $profiles.Count -eq 3 -and $firewallRuleProbeSucceeded
+$securityState = if(($profiles.Count -gt 0 -and -not $profilesHealthy) -or ($containedServices.Count -gt 0 -and -not $servicesContained) -or $exposureCount -gt 0 -or $broadRdpRules.Count -gt 0){'CRITICAL'}elseif($firewallReadable -and $servicesContained -and $containmentRules.Count -ge 3){'HEALTHY'}else{'UNKNOWN'}
 $domains.security = Domain $securityState ($(if($securityState -eq 'HEALTHY'){'Ingress remains contained'}elseif($securityState -eq 'CRITICAL'){'Security containment has drifted'}else{'Exact firewall evidence is unavailable'})) @(
   Fact 'Firewall profiles' $(if($profilesHealthy){'Enabled | inbound block'}else{'Not safely observed'})
   Fact 'Apache / Device Portal' $(if($servicesContained){'Stopped | disabled'}else{'Containment drift'})
-  Fact 'Listener evidence' $(if($doctrineFresh){"Fresh | $ingressCount discrepancies"}else{'Missing or stale'})
-  Fact 'Ingress discrepancies' $(if($ingressCount){(@($ingressDrift | ForEach-Object { if($_.PSObject.Properties['key']){[string]$_.key}else{'Unidentified listener discrepancy'} }) -join '; ')}else{'None in available listener evidence'})
+  Fact 'Listener evidence' $(if($doctrineFresh){"Fresh | $ingressCount doctrine discrepancies | $exposureCount exposure discrepancies"}else{'Missing or stale'})
+  Fact 'Exposure discrepancies' $(if($exposureCount){(@($exposureDrift | ForEach-Object { if($_.PSObject.Properties['key']){[string]$_.key}else{'Unidentified listener exposure'} }) -join '; ')}else{'None in available listener evidence'})
+  Fact 'Restricted RDP' $(if(-not $firewallReadable){'Firewall rules unreadable'}elseif($broadRdpRules.Count){"FAILED | $($broadRdpRules.Count) broad Remote Desktop allow rules enabled"}else{'No broad Remote Desktop allow rules'})
+  Fact 'Containment rules' $(if($firewallReadable){"$($containmentRules.Count) enabled inbound rules"}else{'Unavailable'})
   Fact 'Listener observed' $(if($doctrine){[string]$doctrine.observedAt}else{'Unavailable'})
-  Fact 'Exact firewall rules' 'Not covered by current doctrine inventory'
+  Fact 'Exact firewall rules' $(if($firewallReadable){'Observed from ActiveStore'}else{'Unavailable'})
 )
 
 $doctrineState = if(-not $doctrineFresh){'UNKNOWN'}elseif([string]$doctrine.status -eq 'PASS'){'HEALTHY'}elseif([string]$doctrine.status -eq 'FAIL'){'CRITICAL'}else{'UNKNOWN'}
@@ -188,10 +218,10 @@ $sourceTimes = @{
   inference = $(if($owner){$owner.observedAt}else{$null})
   protection = $(if($latestProof){$latestProof.LastWriteTimeUtc.ToString('o')}else{$null})
   doctrine = $(if($doctrine){$doctrine.observedAt}else{$null})
-  storage = $observedAt.ToString('o'); security = $observedAt.ToString('o'); workbench = $observedAt.ToString('o')
+  storage = $observedAt.ToString('o'); security = $(if($doctrine){$doctrine.observedAt}else{$observedAt.ToString('o')}); workbench = $observedAt.ToString('o')
 }
 foreach($name in $domains.Keys){
-  $bound = if($name -eq 'appliance'){$NativeHealthMaxAgeSeconds}elseif($name -eq 'protection'){129600}elseif($name -eq 'doctrine'){600}else{300}
+  $bound = if($name -eq 'appliance'){$NativeHealthMaxAgeSeconds}elseif($name -eq 'protection'){129600}elseif($name -in @('doctrine','security')){600}else{300}
   $stamp = $sourceTimes[$name]
   $age = if($stamp){try{($observedAt - ([datetime]$stamp).ToUniversalTime()).TotalSeconds}catch{$null}}else{$null}
   $fresh = $null -ne $age -and $age -ge -60 -and $age -le $bound
@@ -207,7 +237,7 @@ $overall = if($domainStates -contains 'CRITICAL'){'CRITICAL'}elseif($domainState
 $alerts = @()
 if(Test-Path -LiteralPath $NativeAlertsPath -PathType Leaf){
   foreach($line in @(Get-Content -LiteralPath $NativeAlertsPath -Tail 1000 -ErrorAction SilentlyContinue)){
-    if($line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) \[(WARN|FAIL)\] (.+)$'){
+    if($line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) \[(WARN|FAIL|RECOVERY)\] (.+)$'){
       try { $alertTime = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() } catch { continue }
       if($alertTime -ge $observedAt.AddHours(-48) -and $alertTime -le $observedAt.AddMinutes(1)){
         $alerts += [ordered]@{ observedAt=$alertTime.ToString('o'); severity=$Matches[2]; message=$Matches[3] }

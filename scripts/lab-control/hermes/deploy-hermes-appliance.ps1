@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory=$true)][string]$SourceRoot,
   [Parameter(Mandatory=$true)][string]$ExpectedCommit,
   [string]$EvidenceRoot = 'G:\lab-backups\hermes-appliance-releases',
+  [string]$ProtectedRollbackRoot = 'C:\ProgramData\Hermes\release-rollback',
   [switch]$PlanOnly
 )
 # Bounded appliance file rollout. No WilliamOS application, firewall, doctrine baseline,
@@ -36,6 +37,8 @@ $relativeFiles = @(
 $plan = @()
 $inferenceChanged = $false
 $ownerRestartAttempted = $false
+$composeChanged = $false
+$composeApplyAttempted = $false
 foreach ($relative in $relativeFiles) {
   $source = Join-Path $SourceRoot ('scripts/lab-control/' + $relative)
   & git -C $SourceRoot ls-files --error-unmatch -- ('scripts/lab-control/' + $relative) | Out-Null
@@ -56,15 +59,46 @@ foreach ($relative in $relativeFiles) {
     if($relative -eq 'hermes/ollama-service/hermes-ollama-service.ps1') {
       $inferenceChanged = -not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash
     }
+    if($relative -eq 'hermes/docker-compose.yml') {
+      $composeChanged = -not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash
+    }
   }
 }
 if ($PlanOnly) { $plan | Select-Object target,sha256 | ConvertTo-Json; return }
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'APPLIANCE_DEPLOY_REQUIRES_WINDOWS_ELEVATION' }
-$release = Join-Path $EvidenceRoot ((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ') + '-' + $head.Substring(0,12))
-New-Item -ItemType Directory -Path $release -Force | Out-Null
+$releaseId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ') + '-' + $head.Substring(0,12)
+foreach($root in @($EvidenceRoot,$ProtectedRollbackRoot)) {
+  if((Test-Path -LiteralPath $root) -and ((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw "REPARSE_RELEASE_ROOT $root"}
+  New-Item -ItemType Directory -Path $root -Force | Out-Null
+}
+$release = Join-Path $ProtectedRollbackRoot $releaseId
+$evidenceRelease = Join-Path $EvidenceRoot $releaseId
+if(Test-Path -LiteralPath $release){throw 'ROLLBACK_RELEASE_ALREADY_EXISTS'}
+New-Item -ItemType Directory -Path $release | Out-Null
+$acl = New-Object Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true,$false)
+$inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+$propagate = [Security.AccessControl.PropagationFlags]::None
+foreach($identity in @('NT AUTHORITY\SYSTEM','BUILTIN\Administrators')) {
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl',$inherit,$propagate,'Allow')))
+}
+Set-Acl -LiteralPath $release -AclObject $acl
+New-Item -ItemType Directory -Path $evidenceRelease -Force | Out-Null
 $receipt = [ordered]@{schema='hermes-appliance-release/1';commit=$head;startedAt=[DateTime]::UtcNow.ToString('o');status='STARTED';files=$plan}
 $receiptPath = Join-Path $release 'release.json'
-function Save-Receipt { $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding UTF8 }
+$evidenceReceiptPath = Join-Path $evidenceRelease 'release.json'
+function Save-Receipt {
+  $json = $receipt | ConvertTo-Json -Depth 8
+  $json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
+  $json | Set-Content -LiteralPath $evidenceReceiptPath -Encoding UTF8
+}
+function Invoke-Compose([string]$Action) {
+  $composePath = 'C:\HermesLab\hermes\docker-compose.yml'
+  if($Action -eq 'validate') { & docker compose -f $composePath config --quiet }
+  elseif($Action -eq 'apply') { & docker compose -f $composePath up -d }
+  else { throw "UNKNOWN_COMPOSE_ACTION $Action" }
+  if($LASTEXITCODE -ne 0){throw "DOCKER_COMPOSE_$($Action.ToUpperInvariant())_FAILED exit=$LASTEXITCODE"}
+}
 function Restart-InferenceOwner {
   $owner=Get-Content -LiteralPath 'C:\ProgramData\Hermes\inference\current-owner.json' -Raw | ConvertFrom-Json
   if($owner.owner -ne 'WilliamOS-HERMES-Ollama' -or $owner.executable -ne 'D:\HermesServices\ollama\v0.9.2\ollama.exe') {throw 'UNEXPECTED_INFERENCE_OWNER'}
@@ -90,7 +124,12 @@ Save-Receipt
 $index=0
 foreach ($entry in $plan) {
   $entry | Add-Member -NotePropertyName backup -NotePropertyValue (Join-Path $release ("$index.before"))
-  if ($entry.existed) { Copy-Item -LiteralPath $entry.target -Destination $entry.backup; if ((Get-FileHash $entry.target).Hash -ne (Get-FileHash $entry.backup).Hash) { throw 'ROLLBACK_COPY_MISMATCH' } }
+  if ($entry.existed) {
+    Copy-Item -LiteralPath $entry.target -Destination $entry.backup
+    $backupHash=(Get-FileHash -LiteralPath $entry.backup).Hash
+    if ((Get-FileHash -LiteralPath $entry.target).Hash -ne $backupHash) { throw 'ROLLBACK_COPY_MISMATCH' }
+    $entry | Add-Member -NotePropertyName backupSha256 -NotePropertyValue $backupHash
+  }
   $index++
 }
 Save-Receipt
@@ -105,6 +144,15 @@ try {
     Copy-Item -LiteralPath $entry.source -Destination $entry.target -Force
     if ((Get-FileHash -LiteralPath $entry.target).Hash -ne $entry.sha256) { throw "INSTALLED_HASH_MISMATCH $($entry.target)" }
   }
+  if($composeChanged){
+    Invoke-Compose 'validate'
+    $composeApplyAttempted=$true
+    Invoke-Compose 'apply'
+    $running=@(& docker compose -f 'C:\HermesLab\hermes\docker-compose.yml' ps --status running --services)
+    if($LASTEXITCODE -ne 0){throw "DOCKER_COMPOSE_VERIFY_FAILED exit=$LASTEXITCODE"}
+    $missing=@('postgres','redis','open-webui','portainer' | Where-Object {$running -notcontains $_})
+    if($missing.Count){throw "DOCKER_COMPOSE_SERVICES_MISSING $($missing -join ',')"}
+  }
   if($inferenceChanged) {$ownerRestartAttempted=$true;Restart-InferenceOwner}
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\ProgramData\Hermes\console\collect-hermes-console-status.ps1' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'COLLECTOR_FAILED' }
@@ -118,17 +166,21 @@ try {
   Start-ScheduledTask -TaskName 'HermesConsoleStatus'
   Start-ScheduledTask -TaskName 'HermesDoctrineCheck'
   $receipt.status='DEPLOYED';$receipt.completedAt=[DateTime]::UtcNow.ToString('o');Save-Receipt
-  Write-Output "APPLIANCE_DEPLOYED commit=$head files=$($plan.Count) receipt=$receiptPath"
+  Write-Output "APPLIANCE_DEPLOYED commit=$head files=$($plan.Count) receipt=$evidenceReceiptPath"
 } catch {
   $failure=$_.Exception.Message
   $rollbackErrors=@()
   Stop-ScheduledTask -TaskName 'HermesConsole' -ErrorAction SilentlyContinue
   foreach($entry in $plan) {
     try {
-      if($entry.existed) {Copy-Item -LiteralPath $entry.backup -Destination $entry.target -Force}
+      if($entry.existed) {
+        if((Get-FileHash -LiteralPath $entry.backup).Hash -ne $entry.backupSha256){throw 'ROLLBACK_SOURCE_HASH_MISMATCH'}
+        Copy-Item -LiteralPath $entry.backup -Destination $entry.target -Force
+      }
       elseif(Test-Path -LiteralPath $entry.target -PathType Leaf) {Remove-Item -LiteralPath $entry.target -Force}
     } catch {$rollbackErrors += $_.Exception.Message}
   }
+  if($composeApplyAttempted){try {Invoke-Compose 'validate';Invoke-Compose 'apply'} catch {$rollbackErrors += $_.Exception.Message}}
   if($ownerRestartAttempted) {try {Restart-InferenceOwner} catch {$rollbackErrors += $_.Exception.Message}}
   foreach($task in @('HermesConsole','HermesConsoleStatus')) {try {Start-ScheduledTask -TaskName $task} catch {$rollbackErrors += $_.Exception.Message}}
   $receipt.status=if($rollbackErrors.Count){'ROLLBACK_INCOMPLETE'}else{'ROLLED_BACK'}

@@ -56,7 +56,7 @@ export function validateHermesStatus(status, { now = new Date(), maxAgeSeconds =
   for (const alert of status.alerts) {
     if (!alert || typeof alert !== "object" || Array.isArray(alert)) throw new Error("HERMES_STATUS_ALERT_INVALID")
     asString(alert.observedAt, "HERMES_STATUS_ALERT_OBSERVED_AT")
-    if (!new Set(["WARN", "FAIL"]).has(alert.severity)) throw new Error("HERMES_STATUS_ALERT_SEVERITY_INVALID")
+    if (!new Set(["WARN", "FAIL", "RECOVERY"]).has(alert.severity)) throw new Error("HERMES_STATUS_ALERT_SEVERITY_INVALID")
     asString(alert.message, "HERMES_STATUS_ALERT_MESSAGE")
   }
   if (!status.activeWork || typeof status.activeWork !== "object") throw new Error("HERMES_STATUS_ACTIVE_WORK_INVALID")

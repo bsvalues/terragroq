@@ -18,7 +18,7 @@ test("collector survives partial evidence and distinguishes recovered health fro
     const alerts=join(root,"alerts.log")
     const now=new Date(); const pad=x=>String(x).padStart(2,"0")
     const stamp=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
-    writeFileSync(alerts, `${stamp} [WARN] Recovered test event\n2026-99-99 99:99 [FAIL] Invalid date\n`)
+    writeFileSync(alerts, `${stamp} [RECOVERY] Recovered test event\n2026-99-99 99:99 [FAIL] Invalid date\n`)
     const recovery=join(root,"backups"); mkdirSync(recovery)
     const output=join(root,"current.json")
     const collect=()=>{
@@ -40,6 +40,7 @@ test("collector survives partial evidence and distinguishes recovered health fro
     assert.equal(status.domains.doctrine.facts.find(f=>f.label==="Freshness").value,"Within 10 minutes")
     assert.equal(status.alerts.length,1)
     assert.equal(status.alerts[0].message,"Recovered test event")
+    assert.equal(status.alerts[0].severity,"RECOVERY")
     assert.equal(status.domains.appliance.facts.find(f=>f.label==="Evidence freshness").value,"FRESH")
     writeFileSync(health,JSON.stringify({timestamp:new Date(Date.now()-76*60*1000).toISOString(),domains:{hermes:{overall:"ok",problems:[]}}}))
     status=collect()

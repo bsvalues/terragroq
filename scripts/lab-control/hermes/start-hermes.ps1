@@ -33,15 +33,18 @@ if (-not (Test-Path ".\.env")) {
 if ($PullImages) {
     Write-Host "Pulling images (this REPLACES the running image identity with :latest)..." -ForegroundColor Yellow
     docker compose pull
+    if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_PULL_FAILED exit=$LASTEXITCODE" }
 } else {
     Write-Host "Using the images already present (pass -PullImages to update them)." -ForegroundColor Cyan
 }
 
 Write-Host "Starting stack..." -ForegroundColor Cyan
 docker compose up -d
+if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_UP_FAILED exit=$LASTEXITCODE" }
 
 Write-Host "`nStatus:" -ForegroundColor Green
 docker compose ps
+if ($LASTEXITCODE -ne 0) { throw "DOCKER_COMPOSE_STATUS_FAILED exit=$LASTEXITCODE" }
 
 Write-Host "`nOllama (Windows service, not a container):" -ForegroundColor Green
 $task = Get-ScheduledTask -TaskName "WilliamOS-HERMES-Ollama" -ErrorAction SilentlyContinue

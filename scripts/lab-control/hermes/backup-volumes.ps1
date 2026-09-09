@@ -117,7 +117,7 @@ $failed = New-Object System.Collections.Generic.List[string]
 # Existing named-volume backups. These remain local state snapshots; database restore truth is
 # established separately by the recovery target. A successful task may not mean merely "loop ended".
 $vols = @(
-  "hermes_pgdata","hermes_redisdata",
+  "hermes_pgdata","hermes_redisdata","hermes_webuidata","hermes_portainerdata",
   "terrafusion_final_build_20250615_051930_mongo_data",
   "terrafusion_final_build_20250615_051930_postgres_data",
   "terrafusion_final_build_20250615_051930_redis_data"
@@ -160,7 +160,12 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       'hermes/lab-health.ps1',
       'hermes/p40-guard.json',
       'hermes/p40-guard.ps1',
-      'hermes/start-hermes.ps1'
+      'hermes/start-hermes.ps1',
+      'hermes/deploy-hermes-appliance.ps1',
+      'hermes/morning-report.ps1',
+      'hermes/send-hermes-alert.ps1',
+      'hermes/terrafusion-report.ps1',
+      'hermes/verify-durability-after-reboot.ps1'
     )
     $optionalConfig = @(
       'hermes/.env.example',

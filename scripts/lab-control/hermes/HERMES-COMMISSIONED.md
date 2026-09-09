@@ -9,7 +9,7 @@ Reconciled September 9, 2026. Canonical appliance source is `scripts/lab-control
 - Docker Desktop WSL data: `G:\DockerDesktopWSL\disk\docker_data.vhdx`. Preserve the configured named volumes and secrets during deployment.
 - Appliance surface: standalone read-only HERMES Console at `127.0.0.1:3210`. HERMES appliance work is distinct from WilliamOS application development and deployment, as clarified by the owner on September 9. The existing inference task name is retained; no WilliamOS application files or services are part of this rollout.
 
-`hermes-ai.config.json`, `start-ollama.ps1`, `HermesOllamaServe`, `HermesOllamaWatchdog` and watchdog heartbeat authority are retired. Do not reinstall them. The archived acceptance scripts fail closed because their legacy assumptions cannot certify the current appliance.
+`hermes-ai.config.json`, `start-ollama.ps1`, `HermesOllamaServe`, `HermesOllamaWatchdog` and watchdog heartbeat authority are retired. Do not reinstall them. `hermes-acceptance.ps1` is the current read-only acceptance suite; `verify-durability-after-reboot.ps1` invokes that same suite with the post-deployment reboot gate rather than maintaining a second acceptance implementation.
 
 ## Recovery and deployment
 

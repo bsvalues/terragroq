@@ -574,7 +574,7 @@ describe("the staged collector remains read-only", () => {
     const source = fs.readFileSync(collectorPath, "utf8")
     const functionSource = source.match(/function Get-ProtectedModelStoreMountCollision[^\r\n]*\{[\s\S]*?^\}/m)?.[0]
     expect(functionSource).toBeTruthy()
-    const mounts = JSON.stringify([{ Type: "bind", Source: "D:\\HermesData\\ollama\\models", Destination: "/root/.ollama/models" }]).replaceAll("'", "''")
+    const mounts = JSON.stringify([{ Type: "bind", Source: GOLDEN.ollama.modelsPath, Destination: "/root/.ollama/models" }]).replaceAll("'", "''")
     const command = `$ProgressPreference = 'SilentlyContinue'\n${functionSource}\n$mounts = ConvertFrom-Json '${mounts}'\nGet-ProtectedModelStoreMountCollision $mounts`
     const classification = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { encoding: "utf8" }).trim()
 

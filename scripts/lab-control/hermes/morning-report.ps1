@@ -39,8 +39,10 @@ $prog = New-Object System.Collections.Generic.List[string]
 
 # 1a. Backups fresh + off-host  (WO #1031 / REC-1)
 $bkNewest = $null; $crossNewest = $null
-$bkProbe = Safe { Get-ChildItem 'G:\lab-backups\hermes-volumes' -ErrorAction Stop }
-$crossProbe = Safe { Get-ChildItem 'G:\lab-backups\crossnode\atlas' -ErrorAction Stop }
+$bkProbe = Safe { Get-ChildItem 'G:\lab-backups\hermes-volumes' -Filter 'hermes-recovery-proof-*.tar.gz' -File -ErrorAction Stop |
+  Where-Object { $_.Name -match '^hermes-recovery-proof-\d{8}_\d{6}\.tar\.gz$' } }
+$crossProbe = Safe { Get-ChildItem 'G:\lab-backups\crossnode\atlas' -Directory -ErrorAction Stop |
+  Where-Object { $_.Name -match '^\d{8}_\d{6}$' -and @(Get-ChildItem -LiteralPath $_.FullName -File -Recurse -ErrorAction Stop).Count -gt 0 } }
 if ($bkProbe) { $bkNewest = ($bkProbe | Measure-Object LastWriteTime -Maximum).Maximum }
 if ($crossProbe) { $crossNewest = ($crossProbe | Measure-Object LastWriteTime -Maximum).Maximum }
 if ($bkNewest) {
@@ -56,11 +58,9 @@ if ($crossNewest) {
   if ($cxAgeH -gt 48) { Add-Problem 'FAIL' "Off-host (Atlas) backup stale: $cxAgeH h - DR copy not current" }
 } else { $prog.Add("- **Off-host copy (Atlas):** NONE VISIBLE - no cross-node DR copy readable"); Add-Problem 'FAIL' 'No current off-host DR copy (single-chassis risk)' }
 
-# 1b. Alerting wired  (REC-3)
-$ntfy = Safe { [Environment]::GetEnvironmentVariable('HERMES_NTFY_TOPIC','Machine') }
-if (-not $ntfy) { $ntfy = Safe { [Environment]::GetEnvironmentVariable('HERMES_NTFY_TOPIC','User') } }
-if ($ntfy) { $prog.Add("- **Phone alerting (ntfy):** CONFIGURED; delivery and topic authorization not verified") }
-else { $prog.Add("- **Phone alerting (ntfy):** NOT WIRED - HERMES_NTFY_TOPIC unset"); Add-Problem 'DEGRADED' 'Push alerting not wired (failures surface only in local logs)' }
+# 1b. Native alert path. External transports are intentionally outside Appliance V1.
+$nativeAlertPath = Join-Path $HermesDir 'alerts.log'
+$prog.Add("- **Native alerts:** $(if(Test-Path -LiteralPath $nativeAlertPath -PathType Leaf){'ACTIVE - persistent alerts.log'}else{'READY - created on first warning/failure'})")
 
 # 1c. Golden stack still on the 13-yr-old 840  (STOR-2)
 # WO-HERMES-APPL-006B: the SERVING store location is the truth, not whether a path exists.
@@ -239,18 +239,6 @@ $latest = Join-Path $ReportDir 'hermes-morning-latest.md'
 $text = ($L -join "`r`n")
 Safe { Set-Content -Path $dated  -Value $text -Encoding UTF8 }
 Safe { Set-Content -Path $latest -Value $text -Encoding UTF8 }
-
-# --- alert on FAIL transition only (WO-HERMES-APPL-006A / #1031) ------------
-# Reads previous verdict from the prior heartbeat BEFORE overwriting it; sends
-# exactly one push when the verdict transitions INTO failed, and one RECOVERY
-# when it leaves failed.
-$prevVerdict = $null
-try { $prevVerdict = (Get-Content $Heartbeat -Raw -ErrorAction Stop | ConvertFrom-Json).verdict } catch { $prevVerdict = $null }
-if ($verdict -eq 'FAILED' -and $prevVerdict -ne 'FAILED') {
-  & (Join-Path $HermesDir 'send-hermes-alert.ps1') -Severity FAIL -Message ($fails -join '; ') -ReportPath $dated
-} elseif ($verdict -ne 'FAILED' -and $prevVerdict -eq 'FAILED') {
-  & (Join-Path $HermesDir 'send-hermes-alert.ps1') -Severity RECOVERY -Message "HERMES recovered: verdict $verdict ($($degs.Count) watch)" -ReportPath $dated
-}
 
 # Heartbeat proves the report ran (its own INV-4)
 $hb = [pscustomobject]@{ ts = $now.ToString('o'); verdict = $verdict; fails = $fails.Count; watch = $degs.Count; report = $dated } | ConvertTo-Json -Compress

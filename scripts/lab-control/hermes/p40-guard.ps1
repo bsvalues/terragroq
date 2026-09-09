@@ -306,11 +306,12 @@ function Invoke-GuardPass {
     Bump 'fail'; P 'fail' 'P40 thermal slowdown active -- airflow regression'
   } else { Say ("  Throttle: no thermal slowdown; SW power cap {0}   [OK]" -f $swP) }
 
-  $e = Q 'ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.volatile.total'
-  if($e[0] -match '^\d+$'){
-    if([int]$e[0] -gt 0){ Say ("  ECC     : {0} UNCORRECTED errors   [FAIL]" -f $e[0]); Bump 'fail'; P 'fail' "P40 $($e[0]) uncorrected ECC errors" }
-    else { Say ("  ECC     : 0 uncorrected, {0} corrected   [OK]" -f $e[1]) }
-  } else { Say '  ECC     : not reported' }
+  $e = Q 'ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.volatile.total,ecc.errors.uncorrected.aggregate.total,ecc.errors.corrected.aggregate.total'
+  $eccPresent = $e.Count -ge 4 -and @($e | Where-Object { $_ -notmatch '^\d+$' }).Count -eq 0
+  if($eccPresent){
+    if([int64]$e[0] -gt 0 -or [int64]$e[2] -gt 0){ Say ("  ECC     : uncorrected volatile={0}, aggregate={1}   [FAIL]" -f $e[0],$e[2]); Bump 'fail'; P 'fail' "P40 uncorrected ECC errors: volatile=$($e[0]) aggregate=$($e[2])" }
+    else { Say ("  ECC     : uncorrected 0/0; corrected volatile={0}, aggregate={1}   [OK]" -f $e[1],$e[3]) }
+  } else { Say '  ECC     : required counters not reported   [FAIL]'; Bump 'fail'; P 'fail' 'P40 corrected/uncorrected ECC telemetry unavailable' }
 
   Say ('-'*70)
   Say ("  OVERALL: {0}" -f $script:overall.ToUpper())
@@ -326,6 +327,11 @@ function Invoke-GuardPass {
     p40_chassis_delta_c = $(if($null -ne $amb){ $maxTemp - $amb } else { $null })
     baseline_equilibrium_c = $BaselineEquilibC; baseline_delta_c = $BaselineDeltaC
     thermal_slowdown = ($hwT -eq 'Active' -or $swT -eq 'Active')
+    ecc_telemetry_present = $eccPresent
+    ecc_uncorrected_volatile = $(if($eccPresent){[int64]$e[0]}else{$null})
+    ecc_corrected_volatile = $(if($eccPresent){[int64]$e[1]}else{$null})
+    ecc_uncorrected_aggregate = $(if($eccPresent){[int64]$e[2]}else{$null})
+    ecc_corrected_aggregate = $(if($eccPresent){[int64]$e[3]}else{$null})
     simulated = $simulated
     problems = $script:problems
   }
