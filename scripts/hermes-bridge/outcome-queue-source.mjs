@@ -2,6 +2,8 @@ import { createHash } from "node:crypto"
 
 import {
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
@@ -1803,7 +1805,8 @@ FROM "outcome_queue_mutation_receipt"
 WHERE "userId" = $1
   AND "operation" IN (
     'space.external_parent_mission.bind',
-    'space.external_parent_mission.terminal'
+    'space.external_parent_mission.terminal',
+    'space.external_parent_mission.decomposition.bind'
   )
 ORDER BY "id" ASC
 `,
@@ -4059,6 +4062,88 @@ function exactParentMissionKeys(value, keys) {
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
 }
 
+const DECOMPOSITION_HARD_WALL_KEYS = Object.freeze([
+  "singleRepositoryPerChild", "exactReservationSubset", "noAuthorityEscalation",
+  "childExpiryNoLaterThanParent", "deterministicChildIdentity", "atomicChildLineage",
+  "rawProseAuthorityForbidden", "parentCompletionInferenceForbidden", "crossBoundaryWideningForbidden",
+])
+
+function validDecompositionPolicy(value) {
+  const policy = parentMissionRecord(value)
+  const hardWalls = parentMissionRecord(policy?.hardWalls)
+  return exactParentMissionKeys(policy, [
+    "version", "executionPowers", "pathReservationCeiling", "contractReservationCeiling",
+    "environmentReservationCeiling", "hardWalls",
+  ])
+    && policy.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && isCanonicalNonemptyStringArray(policy.executionPowers)
+    && isCanonicalNonemptyStringArray(policy.pathReservationCeiling)
+    && Array.isArray(policy.contractReservationCeiling)
+    && Array.isArray(policy.environmentReservationCeiling)
+    && exactParentMissionKeys(hardWalls, DECOMPOSITION_HARD_WALL_KEYS)
+    && DECOMPOSITION_HARD_WALL_KEYS.every((key) => hardWalls[key] === true)
+}
+
+function validExternalParentMissionDecompositionReceipt(receipt) {
+  const request = parentMissionRecord(receipt?.requestBinding)
+  const result = parentMissionRecord(receipt?.resultBinding)
+  const context = parentMissionRecord(result?.authorityContext)
+  if (!request || !result || !context || !validDecompositionPolicy(request.policy)) return false
+  const policyDigest = requestHash({
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    worldId: request.worldId,
+    missionKey: request.missionKey,
+    bindReceiptId: request.bindReceiptId,
+    bindReceiptHash: request.bindReceiptHash,
+    policy: request.policy,
+  })
+  return receipt.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION
+    && exactParentMissionKeys(request, [
+      "version", "worldId", "missionKey", "bindReceiptId", "bindReceiptHash", "idempotencyKey",
+      "confirmation", "confirmedPolicyDigest", "policy",
+    ])
+    && exactParentMissionKeys(result, [
+      "version", "missionKey", "bindReceiptId", "bindReceiptHash", "policyDigest", "policy",
+      "authorityContext", "state", "admittedBy", "admittedAt",
+    ])
+    && exactParentMissionKeys(context, [
+      "ownerUserId", "worldId", "projectId", "repository", "repositoryResourceId",
+      "workOrderId", "workOrderRef", "grantId", "grantRef", "grantContentHash",
+      "grantExpiresAt", "authorityCeiling", "grantScopeDigest",
+      "grantAllowedActionsDigest", "grantBlockedActionsDigest",
+    ])
+    && request.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && request.confirmation === "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION"
+    && request.confirmedPolicyDigest === policyDigest
+    && request.idempotencyKey === receipt.idempotencyKey
+    && receipt.outcomeKey === request.missionKey
+    && receipt.requestHash === requestHash(request)
+    && result.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && result.missionKey === request.missionKey
+    && Number(result.bindReceiptId) === Number(request.bindReceiptId)
+    && result.bindReceiptHash === request.bindReceiptHash
+    && result.policyDigest === policyDigest
+    && canonicalJson(result.policy) === canonicalJson(request.policy)
+    && result.state === "ACTIVE"
+    && result.admittedBy === receipt.userId
+    && context.ownerUserId === receipt.userId
+    && context.worldId === request.worldId
+    && Number.isSafeInteger(Number(context.projectId)) && Number(context.projectId) > 0
+    && isCanonicalGitHubRepositoryIdentity(context.repository)
+    && Number.isSafeInteger(Number(context.repositoryResourceId)) && Number(context.repositoryResourceId) > 0
+    && Number.isSafeInteger(Number(context.workOrderId)) && Number(context.workOrderId) > 0
+    && typeof context.workOrderRef === "string" && context.workOrderRef.length > 0
+    && Number.isSafeInteger(Number(context.grantId)) && Number(context.grantId) > 0
+    && typeof context.grantRef === "string" && context.grantRef.length > 0
+    && typeof context.grantContentHash === "string" && /^[0-9a-f]{64}$/.test(context.grantContentHash)
+    && typeof context.grantExpiresAt === "string" && Number.isFinite(Date.parse(context.grantExpiresAt))
+    && context.authorityCeiling === "A2_WRITE_OWN"
+    && [context.grantScopeDigest, context.grantAllowedActionsDigest, context.grantBlockedActionsDigest]
+      .every((digest) => typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest))
+    && typeof result.admittedAt === "string"
+    && Number.isFinite(Date.parse(result.admittedAt))
+}
+
 function validExternalParentMissionBindReceipt(receipt) {
   const request = parentMissionRecord(receipt?.requestBinding)
   const result = parentMissionRecord(receipt?.resultBinding)
@@ -4190,6 +4275,7 @@ function validExternalParentMissionTerminalReceipt(receipt, bind) {
 function resolveExternalParentMissionReceipts(receipts = []) {
   const binds = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_BIND_OPERATION)
   const terminals = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION)
+  const decompositions = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION)
   if (binds.some((row) => !validExternalParentMissionBindReceipt(row))) {
     return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
   }
@@ -4202,11 +4288,29 @@ function resolveExternalParentMissionReceipts(receipts = []) {
   if ([...byMission.values()].some((rows) => rows.length !== 1)) {
     return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
   }
+  if (decompositions.some((row) => !validExternalParentMissionDecompositionReceipt(row)
+    || !byMission.has(row.outcomeKey))) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
   const unresolved = []
   const resolved = []
   for (const bind of binds) {
     const binding = bind.resultBinding.binding
     const candidates = terminals.filter((row) => row.outcomeKey === bind.outcomeKey)
+    const decompositionCandidates = decompositions.filter((row) => row.outcomeKey === bind.outcomeKey)
+    if (decompositionCandidates.length > 1) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    const decomposition = decompositionCandidates[0]
+    if (decomposition && (Number(decomposition.requestBinding.bindReceiptId) !== Number(bind.id)
+      || decomposition.requestBinding.bindReceiptHash !== externalParentMissionBindReceiptHash(bind)
+      || decomposition.resultBinding.authorityContext.worldId !== bind.resultBinding.worldId
+      || Number(decomposition.resultBinding.authorityContext.projectId) !== Number(binding.projectId)
+      || decomposition.resultBinding.authorityContext.repository !== binding.repository
+      || Number(decomposition.resultBinding.authorityContext.repositoryResourceId)
+        !== Number(bind.resultBinding.repositoryResourceId))) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
     if (candidates.length > 1) {
       return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
     }
@@ -4980,15 +5084,18 @@ export async function acquireNextEligibleOutcome({
     )
     let reason = noSelectionReason(reasonResult?.rows?.[0])
     let parentMissions = null
-    if (reason === "EMPTY_QUEUE" || reason === "ALL_OUTCOMES_TERMINAL") {
+    {
       const parentReceiptResult = await connection.query(
         OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts,
         [user],
       )
-      parentMissions = resolveExternalParentMissionReceipts(parentReceiptResult?.rows ?? [])
-      if (parentMissions.integrity === "BINDING_REQUIRED") {
+      const parentReceiptRows = parentReceiptResult?.rows ?? []
+      parentMissions = parentReceiptRows.length > 0
+        ? resolveExternalParentMissionReceipts(parentReceiptRows)
+        : null
+      if (parentMissions?.integrity === "BINDING_REQUIRED") {
         reason = "PARENT_MISSION_BINDING_REQUIRED"
-      } else if (parentMissions.unresolved.length > 0) {
+      } else if ((parentMissions?.unresolved.length ?? 0) > 0 && reason !== "ACTIVE_LEASE_HELD") {
         reason = "ORPHANED_ACTIVE_MISSION"
       }
     }

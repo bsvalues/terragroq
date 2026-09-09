@@ -60,12 +60,16 @@ import {
 import { hashRecord } from "@/lib/governance/hash"
 import {
   EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
   EXTERNAL_PARENT_MISSION_BIND_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
   EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
   isCanonicalGitHubRepositoryIdentity,
 } from "@/lib/outcome-queue/contract.mjs"
 import {
+  externalParentMissionBindReceiptHash,
+  externalParentMissionDecompositionPolicyDigest,
   externalParentMissionIdentity,
   externalParentMissionProvenanceDigest,
   normalizeExternalParentMission,
@@ -181,6 +185,83 @@ function parentMissionReceipts(
       state: terminalState,
       terminalEvidenceDigest: hashRecord(terminalRequest.terminalEvidenceRefs),
       terminalAt: now,
+    },
+  }]
+}
+
+function parentMissionWithDecompositionReceipt() {
+  const [bind] = parentMissionReceipts()
+  const bindReceiptHash = externalParentMissionBindReceiptHash(bind)
+  const policy = {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    executionPowers: ["child:derive", "child:dispatch"],
+    pathReservationCeiling: ["lib/outcome-queue/**", "tests/**"],
+    contractReservationCeiling: [],
+    environmentReservationCeiling: [],
+    hardWalls: {
+      singleRepositoryPerChild: true,
+      exactReservationSubset: true,
+      noAuthorityEscalation: true,
+      childExpiryNoLaterThanParent: true,
+      deterministicChildIdentity: true,
+      atomicChildLineage: true,
+      rawProseAuthorityForbidden: true,
+      parentCompletionInferenceForbidden: true,
+      crossBoundaryWideningForbidden: true,
+    },
+  }
+  const locator = {
+    worldId: "space-terrafusion",
+    missionKey: bind.outcomeKey,
+    bindReceiptId: bind.id,
+    bindReceiptHash,
+    policy,
+  }
+  const policyDigest = externalParentMissionDecompositionPolicyDigest(locator)
+  const requestBinding = {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    ...locator,
+    idempotencyKey: `decomposition:${bind.outcomeKey}`,
+    confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+    confirmedPolicyDigest: policyDigest,
+  }
+  const digest = "a".repeat(64)
+  const authorityContext = {
+    ownerUserId: userId,
+    worldId: "space-terrafusion",
+    projectId: 7,
+    repository: "bsvalues/terrafusion_os_1.0",
+    repositoryResourceId: 11,
+    workOrderId: 472,
+    workOrderRef: "WO-PARENT-DECOMPOSITION",
+    grantId: 73,
+    grantRef: "GRANT-PARENT-DECOMPOSITION",
+    grantContentHash: "b".repeat(64),
+    grantExpiresAt: "2026-12-01T00:00:00.000Z",
+    authorityCeiling: "A2_WRITE_OWN",
+    grantScopeDigest: digest,
+    grantAllowedActionsDigest: digest,
+    grantBlockedActionsDigest: digest,
+  }
+  return [bind, {
+    id: 103,
+    userId,
+    idempotencyKey: requestBinding.idempotencyKey,
+    operation: EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+    outcomeKey: bind.outcomeKey,
+    requestHash: hashRecord(requestBinding),
+    requestBinding,
+    resultBinding: {
+      version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+      missionKey: bind.outcomeKey,
+      bindReceiptId: bind.id,
+      bindReceiptHash,
+      policyDigest,
+      policy,
+      authorityContext,
+      state: "ACTIVE",
+      admittedBy: userId,
+      admittedAt: now,
     },
   }]
 }
@@ -1998,9 +2079,7 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
       OUTCOME_QUEUE_SQL.noSelectionReason,
-      ...(reason === "EMPTY_QUEUE" || reason === "ALL_OUTCOMES_TERMINAL"
-        ? [OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts]
-        : []),
+      OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts,
       ...(reason === "ACTIVE_LEASE_HELD"
         ? [OUTCOME_QUEUE_SQL.readActiveAcquisitionProof]
         : []),
@@ -2066,6 +2145,84 @@ describe("transactional durable outcome queue source", () => {
       [userId],
     )
   })
+
+  it("preserves the active parent when two unrelated suggested rows make the queue otherwise ineligible", async () => {
+    const receipts = parentMissionReceipts()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 2, approvalEligibleCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{ missionKey: receipts[0].outcomeKey }],
+      },
+    })
+  })
+
+  it("exposes an exact chained decomposition receipt and fails closed on authority-context drift", async () => {
+    const receipts = parentMissionWithDecompositionReceipt()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+    await expect(acquireNextEligibleOutcome({ query, ...acquireInput })).resolves.toMatchObject({
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{ missionKey: receipts[0].outcomeKey }],
+      },
+    })
+
+    const decomposition = receipts[1]
+    const forged = {
+      ...decomposition,
+      resultBinding: {
+        ...decomposition.resultBinding,
+        authorityContext: {
+          ...decomposition.resultBinding.authorityContext,
+          repository: "bsvalues/other-repository",
+        },
+      },
+    }
+    const forgedQuery = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: [receipts[0], forged],
+    })
+    await expect(acquireNextEligibleOutcome({ query: forgedQuery, ...acquireInput })).resolves.toMatchObject({
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+  })
+
+  it("fails closed when more than one active parent could own the next child", async () => {
+    const first = parentMissionReceipts()
+    const second = parentMissionReceipts(null, {
+      issueNumber: 1486,
+      externalRef: "github:bsvalues/terrafusion_os_1.0#1486",
+      goalRef: "GOAL-SECOND-PARENT",
+    }).map((receipt) => ({ ...receipt, id: Number(receipt.id) + 100 }))
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: [...first, ...second],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: { integrity: "VERIFIED", unresolved: [{}, {}] },
+    })
+  })
+
 
   it("accepts the admission canonical ordering and repository grammar without locale drift", async () => {
     const receipts = parentMissionReceipts(null, {
