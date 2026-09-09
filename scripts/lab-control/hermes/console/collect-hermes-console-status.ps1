@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$OutputPath = 'C:\ProgramData\Hermes\status\current.json',
+  # HermesLabHealth repeats hourly; allow 15 minutes for scheduling and probe completion.
+  [ValidateRange(1,86400)][int]$NativeHealthMaxAgeSeconds = 4500,
   [string]$NativeHealthPath = 'C:\HermesLab\hermes\lab-health.json',
   [string]$NativeAlertsPath = 'C:\HermesLab\hermes\alerts.log',
   [string]$CanonicalOwnerStatePath = 'C:\ProgramData\Hermes\inference\current-owner.json',
@@ -189,7 +191,7 @@ $sourceTimes = @{
   storage = $observedAt.ToString('o'); security = $observedAt.ToString('o'); workbench = $observedAt.ToString('o')
 }
 foreach($name in $domains.Keys){
-  $bound = if($name -eq 'protection'){129600}elseif($name -eq 'doctrine'){600}else{300}
+  $bound = if($name -eq 'appliance'){$NativeHealthMaxAgeSeconds}elseif($name -eq 'protection'){129600}elseif($name -eq 'doctrine'){600}else{300}
   $stamp = $sourceTimes[$name]
   $age = if($stamp){try{($observedAt - ([datetime]$stamp).ToUniversalTime()).TotalSeconds}catch{$null}}else{$null}
   $fresh = $null -ne $age -and $age -ge -60 -and $age -le $bound
