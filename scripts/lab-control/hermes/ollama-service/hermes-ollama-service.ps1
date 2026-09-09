@@ -43,7 +43,7 @@ $ErrorActionPreference = 'Continue'
 # image identity on every documented start. A service that re-resolved its own version at boot would
 # reintroduce exactly that defect in a new place, so the version is a literal path.
 $OllamaExe = 'D:\HermesServices\ollama\v0.9.2\ollama.exe'
-$ModelsDir = 'D:\HermesData\ollama\models'
+$ModelsDir = 'G:\HermesData\ollama\models'  # WO-HERMES-APPL-006B
 $Listen = '127.0.0.1:11434'
 $P40Uuid = 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2'
 $PowerCapWatts = 150
@@ -73,12 +73,51 @@ $ServeLog = Join-Path $LogRoot 'hermes-ollama-serve.log'
 # separate files because `Start-Process` cannot redirect both streams to one, and conflating them
 # was never the point -- keeping them out of the lifecycle log was.
 $ServeOutLog = Join-Path $LogRoot 'hermes-ollama-serve.out.log'
+$OwnerStateRoot = 'C:\ProgramData\Hermes\inference'
+$OwnerStatePath = Join-Path $OwnerStateRoot 'current-owner.json'
 
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
 function Write-Log([string]$Level, [string]$Message) {
     $line = "{0} {1} {2}" -f (Get-Date).ToUniversalTime().ToString('o'), $Level, $Message
     Add-Content -Path $LogFile -Value $line
     Write-Output $line
+}
+function Write-OwnerState([string]$State, [int]$ServePid, [int]$ModelCount = 0, [string]$Reason = '') {
+    try {
+        if (-not (Test-Path -LiteralPath $OwnerStateRoot -PathType Container)) {
+            throw "protected owner-state directory missing: $OwnerStateRoot"
+        }
+        $rootItem = Get-Item -LiteralPath $OwnerStateRoot -Force
+        if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "protected owner-state directory is a reparse point"
+        }
+        $record = [ordered]@{
+            schema = 'hermes-ollama-owner-state/1'
+            owner = 'WilliamOS-HERMES-Ollama'
+            state = $State
+            observedAt = (Get-Date).ToUniversalTime().ToString('o')
+            pid = $ServePid
+            taskPid = $PID
+            executable = $OllamaExe
+            models = $ModelsDir
+            listen = $Listen
+            gpuUuid = $P40Uuid
+            powerCapWatts = $PowerCapWatts
+            modelCount = $ModelCount
+            reason = $Reason
+        }
+        $temporary = Join-Path $OwnerStateRoot (".current-owner.{0}.tmp" -f $PID)
+        [IO.File]::WriteAllText(
+            $temporary,
+            (($record | ConvertTo-Json -Compress) + "`n"),
+            (New-Object Text.UTF8Encoding($false))
+        )
+        Move-Item -LiteralPath $temporary -Destination $OwnerStatePath -Force
+        return $true
+    } catch {
+        Write-Log FATAL "owner-state write failed: $($_.Exception.Message)" | Out-Null
+        return $false
+    }
 }
 
 Write-Log INFO "startup exe=$OllamaExe models=$ModelsDir listen=$Listen gpu=$P40Uuid runner=$LlmLibrary"
@@ -257,9 +296,28 @@ Write-Log INFO "ollama serve started pid=$($serve.Id) as a child of this task (p
 # `ExitCode` reads back as $null once the process is gone -- which the first live test of this file
 # produced, and which `exit $null` turns into exit 0.
 $null = $serve.Handle
-$serve.WaitForExit()
+if (-not (Write-OwnerState -State 'STARTING' -ServePid $serve.Id)) {
+    Stop-Process -Id $serve.Id -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+while (-not $serve.HasExited) {
+    $state = 'STARTING'; $modelCount = 0; $reason = 'endpoint not ready'
+    try {
+        $tags = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 8 -ErrorAction Stop
+        $modelCount = @($tags.models).Count
+        if ($modelCount -gt 0) { $state = 'SERVING'; $reason = '' }
+        else { $reason = 'empty model catalogue' }
+    } catch { $reason = $_.Exception.GetType().Name }
+    if (-not (Write-OwnerState -State $state -ServePid $serve.Id -ModelCount $modelCount -Reason $reason)) {
+        Stop-Process -Id $serve.Id -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    if ($serve.WaitForExit(15000)) { break }
+    $serve.Refresh()
+}
 $rc = $serve.ExitCode
 if ($null -eq $rc) { $rc = 1 }
+Write-OwnerState -State 'FAILED' -ServePid $serve.Id -Reason "ollama serve exited rc=$rc" | Out-Null
 
 # A SERVER THAT STOPS IS AN OUTAGE, WHATEVER CODE IT STOPPED WITH. This task's contract is that it
 # runs for exactly as long as inference is available, so reaching this line at all is a failure --

@@ -155,8 +155,8 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       'hermes/backup-volumes.ps1',
       'hermes/crossnode-sync.ps1',
       'hermes/crossnode-sync-lib.ps1',
+      'hermes/verify-offhost-restore.ps1',
       'hermes/docker-compose.yml',
-      'hermes/hermes-ai.config.json',
       'hermes/lab-health.ps1',
       'hermes/p40-guard.json',
       'hermes/p40-guard.ps1',
@@ -168,13 +168,9 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       'hermes/hermes-acceptance.ps1',
       'hermes/hermes-placement.json',
       'hermes/hermes-placement-readiness.ps1',
-      'hermes/install-hermes-ai-durability.ps1',
       'hermes/install-p40-watch.ps1',
-      'hermes/repair-durability-tasks.ps1',
-      'hermes/start-ollama.ps1',
       'hermes/sync-models-to-forge.ps1',
       'hermes/test-crossnode-sync-receipt.ps1',
-      'hermes/verify-durability-after-reboot.ps1',
       'aegis/backup-v1.sh'
     )
     $configInventory = New-Object System.Collections.Generic.List[object]
@@ -185,11 +181,12 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       $record = Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage -Optional
       if ($null -ne $record) { $configInventory.Add($record) }
     }
-    $ollamaServiceRoot = Join-Path $HermesLabRoot 'hermes\ollama-service'
-    if (Test-Path -LiteralPath $ollamaServiceRoot -PathType Container) {
+    foreach ($recoveryDirectory in @('hermes\ollama-service','hermes\console','hermes\doctrine')) {
+      $recoveryDirectoryRoot = Join-Path $HermesLabRoot $recoveryDirectory
+      if (-not (Test-Path -LiteralPath $recoveryDirectoryRoot -PathType Container)) { continue }
       $sourceRootPrefix = [IO.Path]::GetFullPath($HermesLabRoot).TrimEnd('\') + '\'
-      foreach ($file in Get-ChildItem -LiteralPath $ollamaServiceRoot -File -Recurse -Force | Sort-Object FullName) {
-        if ($file.Extension -notin @('.ps1', '.json', '.md')) { continue }
+      foreach ($file in Get-ChildItem -LiteralPath $recoveryDirectoryRoot -File -Recurse -Force | Sort-Object FullName) {
+        if ($file.Extension -notin @('.ps1', '.json', '.md', '.mjs', '.js', '.css', '.html')) { continue }
         $fullName = [IO.Path]::GetFullPath($file.FullName)
         if (-not $fullName.StartsWith($sourceRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
           throw "RECOVERY_CONFIG_PATH_ESCAPE path=$fullName"
@@ -225,6 +222,9 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
 # cross-node transport necessarily carries and hashes it with the generation.
 $stage = Join-Path $env:TEMP "hermes-recovery-$stamp-$([guid]::NewGuid().ToString('N'))"
 try {
+  if ($failed.Count -gt 0) {
+    throw "RECOVERY_GENERATION_INCOMPLETE failed=$($failed -join ',')"
+  }
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   $canaryId = [guid]::NewGuid().ToString('D').ToLowerInvariant()
   $canaryPath = Join-Path $stage 'recovery-canary.txt'
