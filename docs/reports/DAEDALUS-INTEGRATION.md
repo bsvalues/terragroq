@@ -74,6 +74,8 @@ Targeted verification: 47 tests pass across the new remote protocol suite and th
 
 ## Verification and admission boundary
 
-The focused registry, placement, projection and execution/kernel suites passed (260 tests total across six suites); enrollment shell syntax also passed. The Node-only Vitest configuration supplies the repository alias and omits UI plugins because these suites do not render UI. No live Daedalus model execution is included in those results.
+The focused registry, placement, projection and execution/kernel suites passed (259 tests total across six suites); enrollment shell syntax also passed. The Node-only Vitest configuration supplies the repository alias and omits UI plugins because these suites do not render UI. No live Daedalus model execution is included in those results.
 
 The legacy shadow placement/admission allowlists are unchanged and do not admit Daedalus. They must not be treated as the dispatch route for this integration. Machine identity enrollment, a compatible qualified Linux invoker, live health ingestion, safe retry/reconciliation and the running supervisor handoff remain open acceptance work.
+
+`PR #1185` is a draft. Its delivery-seal check reports `FAILED_CONTEXT_NOT_PROVEN` because no WilliamOS-issued Space-assignment delivery seal exists. No client-authored seal or bypass was used; merge is not ready.
