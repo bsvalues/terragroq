@@ -53,7 +53,7 @@ param(
   # nothing written on either side. This is what lets the repair be proven while ATLAS is down.
   [switch]$ResolveOnly,
   # The canonical Ollama service definition -- the file that actually decides which store is live.
-  [string]$ServiceScript = "C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1",
+  [string]$ServiceScript = "C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1",
   # The non-destructive manifest installer this script sends to ATLAS. A parameter only so its
   # absence refusal can be exercised; there is no delete-and-replace fallback behind it. Resolved
   # below rather than here: Windows PowerShell 5.1 binds parameter defaults before $PSScriptRoot

@@ -13,7 +13,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$TaskName = 'WilliamOS-HERMES-Ollama',
-    [string]$ScriptPath = 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1',
+    [string]$ScriptPath = 'C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1',
     # How often the task re-fires to check that the one owner is still there. A firing is a no-op
     # while the service is healthy (MultipleInstances = IgnoreNew) and a recovery when it is not.
     [int]$RecheckMinutes = 2,

@@ -363,14 +363,15 @@ $startup = @(Get-CimInstance Win32_StartupCommand -ErrorAction Stop | Where-Obje
 $startup = Complete-Subprobe 'startup.launch-paths' $startup
 
 Enter-OwnershipSubprobe 'file.launch-paths' 'OBSERVE' 'filesystem' 'Get-ChildItem/Select-String'
-$searchRoots = @('C:\HermesLab', 'C:\ProgramData\WilliamOS') | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+$searchRoots = @('C:\HermesLab', 'C:\ProgramData\Hermes\runtime', 'C:\ProgramData\WilliamOS') | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
 $extensions = @('.ps1', '.psm1', '.cmd', '.bat', '.json', '.yml', '.yaml', '.xml')
 $launcherFiles = @()
 foreach ($file in @(Get-ChildItem -LiteralPath $searchRoots -Recurse -File -ErrorAction Stop | Where-Object { $_.Extension -in $extensions })) {
   $matches = @(Select-String -LiteralPath $file.FullName -Pattern 'ollama\.exe|ollama\s+serve|WilliamOS-HERMES-Ollama|docker(?:\.exe)?\s+(?:compose\s+up|start|run).*ollama|start-ollama|ollama.*(?:watchdog|recover|restart)' -AllMatches -ErrorAction Stop)
   if ($matches.Count -eq 0) { continue }
   $normalized = $file.FullName.Replace('/', '\')
-  $classification = if ($normalized -ieq 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1') { 'CANONICAL_OWNER' }
+  $classification = if ($normalized -ieq 'C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1') { 'CANONICAL_OWNER' }
+    elseif ($normalized -ieq 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1') { 'SOURCE_PROJECTION' }
     elseif ($normalized -match '(?i)install-hermes-ollama-service\.ps1$') { 'RECOVERY_CALLER' }
     elseif ($normalized -match '(?i)(?:core-online|start-hermes|model-pull|start-ollama|durability)\.ps1$') { 'LEGACY_DISABLED' }
     else { 'UNDECLARED' }

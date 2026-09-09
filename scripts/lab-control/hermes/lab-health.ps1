@@ -2,7 +2,8 @@
 param(
   [string]$OllamaBaseUrl = 'http://127.0.0.1:11434',
   [string]$CanonicalOwnerStatePath = 'C:\ProgramData\Hermes\inference\current-owner.json',
-  [string]$OutputRoot = 'C:\HermesLab\hermes',
+  [string]$OutputRoot = 'C:\ProgramData\Hermes\health',
+  [string]$P40StateRoot = 'C:\ProgramData\Hermes\p40',
   [switch]$LocalOnly
 )
 $ErrorActionPreference = "SilentlyContinue"
@@ -10,7 +11,8 @@ $script:overall = "ok"; $script:problems = @()
 function Bump($sev){ if($sev -eq "fail"){$script:overall="fail"; return}; if($sev -eq "warn" -and $script:overall -ne "fail"){$script:overall="warn"} }
 function P($sev,$msg){ if($sev -ne "ok"){ $script:problems += $msg } }
 function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$HermesDomain){
-  New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+  New-Item -ItemType Directory -Force -Path $OutputRoot -ErrorAction Stop | Out-Null
+  if((Get-Item -LiteralPath $OutputRoot -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'HERMES_HEALTH_ROOT_REPARSE_POINT'}
   $currentPath = Join-Path $OutputRoot 'lab-health.json'
   $previousOverall = $null
   try { $previousOverall = [string](Get-Content -LiteralPath $currentPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).overall } catch {}
@@ -21,8 +23,13 @@ function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$Herm
     problems=@($Problems)
     domains=[ordered]@{ hermes=$HermesDomain }
   }
-  $obj | ConvertTo-Json -Depth 8 -Compress | Out-File $currentPath -Encoding utf8
-  $obj | ConvertTo-Json -Depth 8 -Compress | Add-Content (Join-Path $OutputRoot 'health-history.jsonl')
+  $json = $obj | ConvertTo-Json -Depth 8 -Compress
+  $temporary = Join-Path $OutputRoot ('.lab-health.' + [guid]::NewGuid().ToString('n') + '.tmp')
+  try {
+    [IO.File]::WriteAllText($temporary,($json+"`n"),[Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $currentPath -Force -ErrorAction Stop
+  } finally {Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}
+  Add-Content -LiteralPath (Join-Path $OutputRoot 'health-history.jsonl') -Value $json -Encoding UTF8 -ErrorAction Stop
   if($Overall -ne $previousOverall -and ($null -ne $previousOverall -or $Overall -ne 'ok')){
     $severity = if($Overall -eq 'fail'){'FAIL'}elseif($Overall -eq 'warn'){'WARN'}else{'RECOVERY'}
     $message = if($Overall -eq 'ok'){"Native HERMES health recovered from $previousOverall"}else{($Problems -join '; ')}
@@ -131,8 +138,8 @@ $cpu=(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).
 # a second set of thermal and power thresholds.
 $guard = Join-Path $PSScriptRoot 'p40-guard.ps1'
 if(Test-Path -LiteralPath $guard){
-  $null = & $guard -Quiet 2>&1; $grc = $LASTEXITCODE
-  $gj = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'p40-guard.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+  $null = & $guard -Quiet -StateRoot $P40StateRoot 2>&1; $grc = $LASTEXITCODE
+  $gj = Get-Content -LiteralPath (Join-Path $P40StateRoot 'p40-guard.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
   $gs = switch($grc){ 2 {'fail'} 1 {'warn'} default {'ok'} }
   Bump $gs
   if($gj){

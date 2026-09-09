@@ -76,10 +76,18 @@ param(
 
   [int]$HistoryEverySec = 600,      # in -Watch, append history at most this often unless not-ok
   [int]$HistoryMaxMB = 8,
-  [switch]$Quiet
+  [switch]$Quiet,
+  [string]$StateRoot = 'C:\ProgramData\Hermes\p40'
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+try {
+  $null = New-Item -ItemType Directory -Path $StateRoot -Force -ErrorAction Stop
+  if((Get-Item -LiteralPath $StateRoot -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'P40_STATE_ROOT_REPARSE_POINT'}
+} catch {
+  if(-not $Quiet){Write-Host "  P40 state root unavailable: $($_.Exception.Message)   [FAIL]"}
+  exit 2
+}
 $script:overall = 'ok'; $script:problems = @()
 function Bump($sev){ if($sev -eq 'fail'){$script:overall='fail'; return}; if($sev -eq 'warn' -and $script:overall -ne 'fail'){$script:overall='warn'} }
 function P($sev,$msg){ if($sev -ne 'ok'){ $script:problems += $msg } }
@@ -150,7 +158,7 @@ function Invoke-Shed($why){
 function Get-BaselineTrend {
   # "Materially worse than the commissioned baseline" cannot be seen in a 12 s window -- it is a
   # trend. Use this guard's own history: the median of recent HIGH-load observations.
-  $hist = Join-Path $PSScriptRoot 'p40-guard-history.jsonl'
+  $hist = Join-Path $StateRoot 'p40-guard-history.jsonl'
   if(-not (Test-Path -LiteralPath $hist)){ return $null }
   $hot = @()
   Get-Content -LiteralPath $hist -Tail 200 | ForEach-Object {
@@ -353,13 +361,13 @@ function Invoke-GuardPass {
     $text | Set-Content -LiteralPath $tmp -Encoding ASCII
     Move-Item -LiteralPath $tmp -Destination $path -Force
   }
-  Publish (Join-Path $PSScriptRoot 'p40-guard.json') $json
-  if($Watch){ Publish (Join-Path $PSScriptRoot 'p40-watch.heartbeat') $json }
+  Publish (Join-Path $StateRoot 'p40-guard.json') $json
+  if($Watch){ Publish (Join-Path $StateRoot 'p40-watch.heartbeat') $json }
 
   # History is throttled in -Watch mode. A 30 s watcher would otherwise append ~2,880 records a day
   # forever, and this host has already lost 117 GB once to a log nobody was rotating. Anything that
   # is not OK is always recorded; healthy samples are kept at a coarse interval.
-  $hist = Join-Path $PSScriptRoot 'p40-guard-history.jsonl'
+  $hist = Join-Path $StateRoot 'p40-guard-history.jsonl'
   $writeHist = $true
   if($Watch -and $script:overall -eq 'ok'){
     $writeHist = ($null -eq $script:lastHist) -or (((Get-Date) - $script:lastHist).TotalSeconds -ge $HistoryEverySec)

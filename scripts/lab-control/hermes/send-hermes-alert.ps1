@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory=$true)][ValidateSet('FAIL','WARN','RECOVERY')][string]$Severity,
   [Parameter(Mandatory=$true)][string]$Message,
   [string]$ReportPath = '',
-  [string]$AlertPath = 'C:\HermesLab\hermes\alerts.log'
+  [string]$AlertPath = 'C:\ProgramData\Hermes\health\alerts.log'
 )
 $ErrorActionPreference = 'Stop'
 

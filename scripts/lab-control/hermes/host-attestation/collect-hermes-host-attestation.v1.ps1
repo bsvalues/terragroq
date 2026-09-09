@@ -501,12 +501,12 @@ Add-Fact 'operations.heartbeats' 'operations' 'Process table and HERMES heartbea
     $created = if ($_.CreationDate -is [DateTime]) { ([DateTime]$_.CreationDate).ToUniversalTime() } elseif ($_.CreationDate) { [Management.ManagementDateTimeConverter]::ToDateTime([string]$_.CreationDate).ToUniversalTime() } else { $null }
     [ordered]@{ pid = [int]$_.ProcessId; name = [string]$_.Name; exe = Protect-Text ([string]$_.ExecutablePath); startedAt = if ($created) { $created.ToString('o') } else { $null } }
   })
-  $heartbeatRoot = 'C:\HermesLab\hermes'
-  $heartbeats = if (Test-Path -LiteralPath $heartbeatRoot) {
-    @(Get-ChildItem -LiteralPath $heartbeatRoot -File -Force | Where-Object { $_.Name -match '(?i)heartbeat|health|watch|guard' } | ForEach-Object {
+  $heartbeatRoots = @('C:\ProgramData\Hermes\health','C:\ProgramData\Hermes\p40','G:\HermesReports')
+  $heartbeats = @($heartbeatRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | ForEach-Object {
+    Get-ChildItem -LiteralPath $_ -File -Force | Where-Object { $_.Name -match '(?i)heartbeat|health|watch|guard' } | ForEach-Object {
       [ordered]@{ path = Protect-Text $_.FullName; writtenAt = $_.LastWriteTimeUtc.ToString('o'); bytes = [int64]$_.Length }
-    })
-  } else { @() }
+    }
+  })
   [ordered]@{ processes = $processes; heartbeatFiles = $heartbeats }
 } @('credential-shaped process paths are replaced before binding')
 
@@ -647,7 +647,7 @@ Add-Fact 'inference.gpus' 'inference' 'NVIDIA management interface' 'nvidia-smi 
 }
 
 Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, deployed service, live owner/listener, startup evidence, and catalog' 'Compare deployed/repository service scripts; inspect WilliamOS-HERMES-Ollama task and PID-owned loopback listener; read allow-listed server-config/API fields' 'VOLATILE' {
-  $servicePath = 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1'
+  $servicePath = 'C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1'
   $repositoryServicePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'ollama-service\hermes-ollama-service.ps1'
   if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf) -or -not (Test-Path -LiteralPath $repositoryServicePath -PathType Leaf)) {
     return [ordered]@{ __truth = 'UNKNOWN'; __value = $null }
@@ -793,7 +793,7 @@ Add-Fact 'inference.dockerContainers' 'inference' 'Docker Engine read-only CLI' 
 }
 
 Add-Fact 'inference.guardBaseline' 'inference' 'Standing P40 guard state' 'Read allow-listed p40-guard.json health and commissioned baseline fields' 'VOLATILE' {
-  $guardPath = 'C:\HermesLab\hermes\p40-guard.json'
+  $guardPath = 'C:\ProgramData\Hermes\p40\p40-guard.json'
   if (-not (Test-Path -LiteralPath $guardPath -PathType Leaf)) {
     return [ordered]@{ __truth = 'UNKNOWN'; __value = $null }
   }

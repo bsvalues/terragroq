@@ -9,13 +9,15 @@
    - Facts that need elevation are reported as NEEDS-ELEVATION, never guessed.
 
   Output: G:\HermesReports\hermes-morning-YYYYMMDD.md  (+ hermes-morning-latest.md)
-  Heartbeat: C:\HermesLab\hermes\morning-report.heartbeat  (next to the other heartbeats)
+  Heartbeat: G:\HermesReports\morning-report.heartbeat
 #>
 
 $ErrorActionPreference = 'Continue'
 $HermesDir   = 'C:\HermesLab\hermes'
 $ReportDir   = 'G:\HermesReports'
-$Heartbeat   = Join-Path $HermesDir 'morning-report.heartbeat'
+$HealthStateRoot = 'C:\ProgramData\Hermes\health'
+$P40StateRoot = 'C:\ProgramData\Hermes\p40'
+$Heartbeat   = Join-Path $ReportDir 'morning-report.heartbeat'
 $ClaudeExe   = 'C:\Users\bs\.local\bin\claude.exe'
 $EnableAnalystBrief = $false     # OFF: headless claude can't refresh OAuth in a scheduled context.
                                  # The deterministic report is complete + authoritative. Flip to $true
@@ -59,7 +61,7 @@ if ($crossNewest) {
 } else { $prog.Add("- **Off-host copy (Atlas):** NONE VISIBLE - no cross-node DR copy readable"); Add-Problem 'FAIL' 'No current off-host DR copy (single-chassis risk)' }
 
 # 1b. Native alert path. External transports are intentionally outside Appliance V1.
-$nativeAlertPath = Join-Path $HermesDir 'alerts.log'
+$nativeAlertPath = Join-Path $HealthStateRoot 'alerts.log'
 $prog.Add("- **Native alerts:** $(if(Test-Path -LiteralPath $nativeAlertPath -PathType Leaf){'ACTIVE - persistent alerts.log'}else{'READY - created on first warning/failure'})")
 
 # 1c. Golden stack still on the 13-yr-old 840  (STOR-2)
@@ -113,8 +115,8 @@ foreach ($d in 'C','D','G') {
 
 # P40 - prefer the guard's own fresh telemetry, fall back to nvidia-smi
 $p40 = $null; $capOK = $null
-$p40json = Safe { Get-Content (Join-Path $HermesDir 'p40-watch.heartbeat') -Raw -ErrorAction Stop | ConvertFrom-Json }
-$p40age = AgeMin (Join-Path $HermesDir 'p40-watch.heartbeat')
+$p40json = Safe { Get-Content (Join-Path $P40StateRoot 'p40-watch.heartbeat') -Raw -ErrorAction Stop | ConvertFrom-Json }
+$p40age = AgeMin (Join-Path $P40StateRoot 'p40-watch.heartbeat')
 if ($p40json -and $p40age -ne $null -and $p40age -le 10) {
   $temp = Safe { [double]$p40json.temp_c }; $cap = Safe { [int]$p40json.power_limit_w }; $load = $p40json.load_class; $delta = $p40json.p40_chassis_delta_c
   $vitals.Add("- **Tesla P40:** ${temp}C (chassis delta ${delta}C), cap ${cap}W, load $load, thermal-slowdown $($p40json.thermal_slowdown) (guard telemetry, $p40age min old)")
@@ -142,8 +144,8 @@ if ($bind) { $bad = @($bind) | Where-Object { $_ -notin '127.0.0.1','::1' }
 # Heartbeat freshness (supervision alive?)
 foreach ($hb in @(
   @{ n='ollama-owner';    f='..\..\ProgramData\Hermes\inference\current-owner.json'; max=20 },
-  @{ n='p40-watch';       f='p40-watch.heartbeat';       max=10 },
-  @{ n='lab-health';      f='lab-health.json';           max=90 })) {
+  @{ n='p40-watch';       p=(Join-Path $P40StateRoot 'p40-watch.heartbeat'); max=10 },
+  @{ n='lab-health';      p=(Join-Path $HealthStateRoot 'lab-health.json');  max=90 })) {
   if ($hb.n -eq 'ollama-owner') {
     $ownerState = Safe { Get-Content 'C:\ProgramData\Hermes\inference\current-owner.json' -Raw -ErrorAction Stop | ConvertFrom-Json }
     if (-not $ownerState) { $vitals.Add("- **ollama-owner state:** MISSING"); Add-Problem 'FAIL' 'ollama owner-state missing - supervision may be down' }
@@ -156,14 +158,14 @@ foreach ($hb in @(
     }
     continue
   }
-  $age = AgeMin (Join-Path $HermesDir $hb.f)
+  $age = AgeMin $hb.p
   if ($age -eq $null) { $vitals.Add("- **$($hb.n) heartbeat:** MISSING"); Add-Problem 'FAIL' "$($hb.n) heartbeat missing" }
   elseif ($age -gt $hb.max) { $vitals.Add("- **$($hb.n) heartbeat:** STALE ($age min, expected <$($hb.max))"); Add-Problem 'FAIL' "$($hb.n) heartbeat stale ($age min) - supervision may be down" }
   else { $vitals.Add("- **$($hb.n) heartbeat:** fresh ($age min)") }
 }
 
 # lab-health.json standing verdict + problems
-$lh = Safe { Get-Content (Join-Path $HermesDir 'lab-health.json') -Raw -ErrorAction Stop | ConvertFrom-Json }
+$lh = Safe { Get-Content (Join-Path $HealthStateRoot 'lab-health.json') -Raw -ErrorAction Stop | ConvertFrom-Json }
 if ($lh) {
   $vitals.Add("- **lab-health verdict:** $($lh.overall)")
   if ($lh.problems) { foreach ($p in $lh.problems) { $vitals.Add("    - standing: $p"); if ($lh.overall -eq 'fail') { Add-Problem 'FAIL' "lab-health: $p" } else { Add-Problem 'DEGRADED' "lab-health: $p" } } }

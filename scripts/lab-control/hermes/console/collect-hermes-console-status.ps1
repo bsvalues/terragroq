@@ -3,8 +3,8 @@ param(
   [string]$OutputPath = 'C:\ProgramData\Hermes\status\current.json',
   # HermesLabHealth repeats hourly; allow 15 minutes for scheduling and probe completion.
   [ValidateRange(1,86400)][int]$NativeHealthMaxAgeSeconds = 4500,
-  [string]$NativeHealthPath = 'C:\HermesLab\hermes\lab-health.json',
-  [string]$NativeAlertsPath = 'C:\HermesLab\hermes\alerts.log',
+  [string]$NativeHealthPath = 'C:\ProgramData\Hermes\health\lab-health.json',
+  [string]$NativeAlertsPath = 'C:\ProgramData\Hermes\health\alerts.log',
   [string]$CanonicalOwnerStatePath = 'C:\ProgramData\Hermes\inference\current-owner.json',
   [string]$RecoveryRoot = 'G:\lab-backups\hermes-volumes',
   [string]$DoctrineResultPath = 'C:\ProgramData\Hermes\doctrine\current-result.json',

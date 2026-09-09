@@ -79,10 +79,45 @@ describe("HERMES appliance source convergence", () => {
     expect(source).toContain("Invoke-Compose 'validate'")
     expect(source).toContain("Invoke-Compose 'apply'")
     expect(source).toContain("DOCKER_COMPOSE_SERVICES_MISSING")
+    expect(source).toContain("compose-image-pins.json")
+    expect(source).toContain("DOCKER_COMPOSE_IMAGE_DRIFT")
+    expect(source).toContain("Assert-ComposeImages")
     expect(source).toContain("C:\\ProgramData\\Hermes\\release-rollback")
+    expect(source).toContain("hermes-appliance-release/2")
     expect(source).toContain("$acl.SetAccessRuleProtection($true,$false)")
     expect(source).toContain("ROLLBACK_SOURCE_HASH_MISMATCH")
+    expect(source).toContain("STAGED_SOURCE_HASH_MISMATCH")
+    expect(source).toContain("STAGED_PAYLOAD_HASH_MISMATCH")
+    expect(source).toContain("Copy-Item -LiteralPath $entry.staged -Destination $entry.target -Force")
+    expect(source).not.toContain("Copy-Item -LiteralPath $entry.source -Destination $entry.target -Force")
+    expect(source).not.toContain("$evidenceReceiptPath")
+    expect(source).not.toContain("$EvidenceRoot")
     expect(source).not.toContain("Copy-Item -LiteralPath $entry.backup -Destination $entry.target -Force}")
+    expect(source).toContain("C:\\ProgramData\\Hermes\\runtime")
+    expect(source).toContain("$privilegedTaskScripts")
+    expect(source).toContain("Export-ScheduledTask")
+    expect(source).toContain("Set-ScheduledTask -TaskName $taskEntry.name -Action $taskEntry.newAction")
+    expect(source).toContain("Register-ScheduledTask -TaskName $taskEntry.name -Xml")
+    expect(source).toContain("deployedXmlSha256")
+    expect(source).toContain("UNEXPECTED_CONSOLE_TASK_ACTION")
+    expect(source).toContain("UNEXPECTED_COLLECTOR_TASK_ACTION")
+    expect(source).toContain("NATIVE_HEALTH_FAILED")
+    expect(source).toContain("SetSecurityDescriptorSddlForm")
+    expect(source).toContain("ROLLBACK_PROTECTED_DIRECTORY_SCOPE_REFUSED")
+    expect(source).toContain("historicalTrust='LEGACY_USER_WRITABLE'")
+    expect(source).toContain("LEGACY_STATE_IMPORT_HASH_MISMATCH")
+    for (const diagnostic of ["collect-hermes-host-attestation.v1.ps1", "bind-hermes-host-attestation.v1.mjs", "stage-hermes-host-attestation.v1.ps1", "diagnose-hermes-ollama-ownership.ps1", "bind-hermes-ollama-ownership.v1.mjs", "stage-hermes-ollama-ownership.v1.ps1"]) {
+      expect(source).toContain(diagnostic)
+    }
+  })
+
+  it("keeps privileged runtime and authoritative health state outside user-writable HermesLab", () => {
+    expect(read("lab-health.ps1")).toContain("C:\\ProgramData\\Hermes\\health")
+    expect(read("p40-guard.ps1")).toContain("C:\\ProgramData\\Hermes\\p40")
+    expect(read("console/collect-hermes-console-status.ps1")).toContain("C:\\ProgramData\\Hermes\\health\\lab-health.json")
+    expect(read("doctrine/run-hermes-doctrine.ps1")).toContain("C:\\Program Files\\nodejs\\node.exe")
+    expect(read("doctrine/run-hermes-doctrine.ps1")).not.toContain("AppData\\Local\\hermes\\node\\node.exe")
+    expect(read("ollama-service/install-hermes-ollama-service.ps1")).toContain("C:\\ProgramData\\Hermes\\runtime\\ollama-service\\hermes-ollama-service.ps1")
   })
 
   it("backs up every current core Compose volume and every deployed recovery script", () => {
@@ -93,6 +128,14 @@ describe("HERMES appliance source convergence", () => {
     for (const file of ["deploy-hermes-appliance.ps1", "morning-report.ps1", "send-hermes-alert.ps1", "terrafusion-report.ps1", "verify-durability-after-reboot.ps1"]) {
       expect(source).toContain(`'hermes/${file}'`)
     }
+    expect(source).toContain("Copy-ProtectedTaskDefinition")
+    expect(source).toContain("RECOVERY_DEPLOYED_RELEASE_ABSENT")
+    expect(source).toContain("RECOVERY_DEPLOYMENT_TRANSACTION_UNRESOLVED")
+    expect(source).toContain("deployedXmlSha256")
+    expect(source).toContain("'hermes\\host-attestation'")
+    expect(source).toContain("Copy-ProtectedRecoveryFile")
+    expect(source).toContain("protected-state/doctrine/doctrine.json")
+    expect(source).toContain("protected-state/health/alerts.log")
   })
 
   it("has one current acceptance suite and reuses it after reboot", () => {

@@ -116,17 +116,44 @@ $ntfyUser=[Environment]::GetEnvironmentVariable('HERMES_NTFY_TOPIC','User')
 $ntfyMachine=[Environment]::GetEnvironmentVariable('HERMES_NTFY_TOPIC','Machine')
 $nativeOnly=[string]::IsNullOrWhiteSpace($ntfyUser) -and [string]::IsNullOrWhiteSpace($ntfyMachine)
 Add-Check 'native-only-alerting' $nativeOnly $(if($nativeOnly){'external ntfy transport is inactive'}else{'HERMES_NTFY_TOPIC remains configured'})
-Add-Check 'native-alert-path' (Test-Path -LiteralPath 'C:\HermesLab\hermes\alerts.log' -PathType Leaf) 'C:\HermesLab\hermes\alerts.log'
+Add-Check 'native-alert-path' (Test-Path -LiteralPath 'C:\ProgramData\Hermes\health\alerts.log' -PathType Leaf) 'C:\ProgramData\Hermes\health\alerts.log'
 
 $release=$null
+$releaseDirectory=$null
 if(Test-Path -LiteralPath $ProtectedReleaseRoot -PathType Container){
   foreach($candidate in Get-ChildItem -LiteralPath $ProtectedReleaseRoot -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending){
     $receipt=Read-Json (Join-Path $candidate.FullName 'release.json')
-    if((Has-Properties $receipt @('status','commit','completedAt')) -and [string]$receipt.status -eq 'DEPLOYED'){$release=$receipt;break}
+    if((Has-Properties $receipt @('status','commit','completedAt')) -and [string]$receipt.status -eq 'DEPLOYED'){$release=$receipt;$releaseDirectory=$candidate.FullName;break}
   }
 }
-$releaseValid=(Has-Properties $release @('commit','completedAt')) -and [string]$release.commit -match '^[0-9a-f]{40}$'
+$releaseValid=(Has-Properties $release @('schema','commit','completedAt','files','tasks')) -and [string]$release.schema -eq 'hermes-appliance-release/2' -and [string]$release.commit -match '^[0-9a-f]{40}$'
 Add-Check 'protected-deployment-receipt' ([bool]$releaseValid) $(if($releaseValid){"commit=$($release.commit) completed=$($release.completedAt)"}else{'no protected DEPLOYED release receipt'})
+$runtimeIntegrity=$false
+$runtimeDetail='protected runtime receipt unavailable'
+if($releaseValid){
+  try{
+    $runtimeRoot='C:\ProgramData\Hermes\runtime'
+    $runtimeFiles=@($release.files|Where-Object{[IO.Path]::GetFullPath([string]$_.target).StartsWith($runtimeRoot+'\',[StringComparison]::OrdinalIgnoreCase)})
+    $taskRecords=@($release.tasks)
+    $expectedTaskNames=@('HermesLabHealth','HermesP40Guard','HermesP40Watch','HermesDoctrineCheck','WilliamOS-HERMES-Ollama')
+    $actualTaskNames=@($taskRecords|ForEach-Object{[string]$_.name}|Sort-Object)
+    $sortedExpectedTaskNames=@($expectedTaskNames|Sort-Object)
+    if($runtimeFiles.Count -lt 1 -or $taskRecords.Count -ne $expectedTaskNames.Count -or ($actualTaskNames -join '|') -ne ($sortedExpectedTaskNames -join '|')){throw 'RUNTIME_RECEIPT_INCOMPLETE'}
+    foreach($file in $runtimeFiles){
+      if([string]$file.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or -not (Test-Path -LiteralPath ([string]$file.target) -PathType Leaf) -or (Get-FileHash -LiteralPath ([string]$file.target) -Algorithm SHA256).Hash -ine [string]$file.sha256){throw 'RUNTIME_FILE_HASH_MISMATCH'}
+    }
+    $releasePrefix=[IO.Path]::GetFullPath($releaseDirectory).TrimEnd('\')+'\'
+    foreach($taskRecord in $taskRecords){
+      $xmlPath=[IO.Path]::GetFullPath([string]$taskRecord.deployedXml)
+      if(-not $xmlPath.StartsWith($releasePrefix,[StringComparison]::OrdinalIgnoreCase) -or [string]$taskRecord.deployedXmlSha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $xmlPath -Algorithm SHA256).Hash -ine [string]$taskRecord.deployedXmlSha256){throw 'RUNTIME_TASK_XML_INVALID'}
+      [xml]$taskXml=Get-Content -LiteralPath $xmlPath -Raw -ErrorAction Stop
+      $arguments=[string]$taskXml.Task.Actions.Exec.Arguments
+      if($arguments -inotmatch [regex]::Escape([string]$taskRecord.runtimePath)){throw 'RUNTIME_TASK_NOT_BOUND'}
+    }
+    $runtimeIntegrity=$true;$runtimeDetail="$($runtimeFiles.Count) protected files | $($taskRecords.Count) SYSTEM task bindings"
+  }catch{$runtimeDetail=$_.Exception.Message}
+}
+Add-Check 'protected-runtime-integrity' $runtimeIntegrity $runtimeDetail
 if($RequirePostDeploymentReboot){
   $rebootAfterDeploy=$false
   if($releaseValid -and $boot){try{$rebootAfterDeploy=$boot -gt ([datetime]$release.completedAt).ToUniversalTime()}catch{}}

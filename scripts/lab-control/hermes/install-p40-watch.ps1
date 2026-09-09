@@ -15,7 +15,12 @@
 # Self-healing: Task Scheduler restarts the watcher if the process exits, because a safety layer
 # that silently stops being there is worse than one that was never installed.
 [CmdletBinding()]
-param([switch]$Uninstall, [int]$IntervalS = 30)
+param(
+  [switch]$Uninstall,
+  [int]$IntervalS = 30,
+  [string]$GuardPath = 'C:\ProgramData\Hermes\runtime\p40-guard.ps1',
+  [string]$StateRoot = 'C:\ProgramData\Hermes\p40'
+)
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -34,11 +39,11 @@ if($Uninstall){
   exit 0
 }
 
-$guard = Join-Path $here 'p40-guard.ps1'
+$guard = $GuardPath
 if(-not (Test-Path -LiteralPath $guard -PathType Leaf)){ throw "missing $guard" }
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-  -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`" -Watch -WatchIntervalS {1} -Quiet" -f $guard,$IntervalS)
+  -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`" -Watch -WatchIntervalS {1} -Quiet -StateRoot `"{2}`"" -f $guard,$IntervalS,$StateRoot)
 
 # ExecutionTimeLimit Zero: this task IS the watcher, it is meant to run forever.
 # RestartCount/Interval: if it dies, bring it back rather than losing the safety layer silently.
@@ -60,7 +65,7 @@ $got = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if(-not $got){ Write-Host "  $TaskName did NOT register." -ForegroundColor Red; exit 2 }
 Write-Host ("  {0} : registered (AtStartup, SYSTEM, every {1}s, restart-on-failure)" -f $TaskName,$IntervalS)
 
-$beat = Join-Path $here 'p40-watch.heartbeat'
+$beat = Join-Path $StateRoot 'p40-watch.heartbeat'
 if(Test-Path $beat){ Remove-Item $beat -Force }
 
 Start-ScheduledTask -TaskName $TaskName
@@ -74,7 +79,7 @@ while((Get-Date) -lt $deadline){
     Write-Host ''
     Write-Host 'Installed and confirmed live.'
     Write-Host 'Verify any time from an UNELEVATED shell with the heartbeat, not the task list:'
-    Write-Host '  Get-Content C:\HermesLab\hermes\p40-watch.heartbeat'
+    Write-Host "  Get-Content $beat"
     exit 0
   }
   Start-Sleep -Seconds 2

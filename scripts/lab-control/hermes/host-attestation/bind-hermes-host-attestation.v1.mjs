@@ -646,7 +646,7 @@ function inferenceDrift(facts) {
   if (!object(ollama.value.task) || ollama.value.task.name !== "WilliamOS-HERMES-Ollama" || !rootTaskPath(ollama.value.task) || ollama.value.task.state !== "Running"
     || !object(ollama.value.task.principal) || String(ollama.value.task.principal.user).toUpperCase() !== "SYSTEM"
     || String(ollama.value.task.principal.runLevel).toLowerCase() !== "highest"
-    || !exactPowerShellAction(ollama.value.task, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1"])
+    || !exactPowerShellAction(ollama.value.task, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\ollama-service\\hermes-ollama-service.ps1"])
     || !exactActiveTriggers(ollama.value.task, [["MSFT_TaskBootTrigger"], ["MSFT_TaskTimeTrigger", "PT2M"]], ollama.freshness.observedAt)) return true
   const declaredNames = Object.keys(GOLDEN.containers)
   if (declaredNames.some((name) => containers.value.filter((container) => container.name === name).length !== 1)) return true
@@ -659,12 +659,12 @@ function inferenceDrift(facts) {
     || !Array.isArray(container.inferenceCollisionReasons) || container.inferenceCollisionReasons.length !== 0)) return true
   const expectedGuards = {
     HermesP40Guard: {
-      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\p40-guard.ps1", "-Quiet"],
+      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\p40-guard.ps1", "-Quiet", "-StateRoot", "C:\\ProgramData\\Hermes\\p40"],
       state: ["Ready", "Running"],
       triggers: [["MSFT_TaskBootTrigger"], ["MSFT_TaskTimeTrigger", "PT1H"]],
     },
     HermesP40Watch: {
-      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\p40-guard.ps1", "-Watch", "-WatchIntervalS", "30", "-Quiet"],
+      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\p40-guard.ps1", "-Watch", "-WatchIntervalS", "30", "-Quiet", "-StateRoot", "C:\\ProgramData\\Hermes\\p40"],
       state: ["Running"],
       triggers: [["MSFT_TaskBootTrigger"]],
     },
