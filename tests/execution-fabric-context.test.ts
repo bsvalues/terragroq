@@ -43,6 +43,19 @@ describe("IF-04 ContextPackage compiler", () => {
     expect(b.digest).not.toBe(a.digest)
   })
 
+  it("the digest is stable even when compiledAt is omitted (same source set, two compiles)", () => {
+    const noTs = { ...options }
+    delete noTs.compiledAt
+    const a = compileContextPackage(sources, noTs)
+    const b = compileContextPackage(sources, noTs)
+    expect(a.digest).toBe(b.digest) // compiledAt is provenance metadata, not identity
+  })
+
+  it("a credential in an excluded class is still refused (exclusion is never a detection bypass)", () => {
+    const hidden = [{ sourceRef: "leak.md", kind: "doc", text: "token=abc123supersecretvalue", classification: "S4" }]
+    expect(() => compileContextPackage(hidden, { ...options, excludedClasses: ["S4"] })).toThrow(/CONTEXT_CREDENTIAL_DETECTED/)
+  })
+
   it("credentials in any source are refused, never packaged", () => {
     const withSecret = [{ sourceRef: "leak/secret.md", kind: "document", text: "here is the key: password=abc123supersecret" }]
     expect(() => compileContextPackage(withSecret, options)).toThrow(/CONTEXT_CREDENTIAL_DETECTED/)
