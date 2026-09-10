@@ -1494,6 +1494,7 @@ ${String(error?.output ?? "").slice(-12000)}
       }
       const baseSha = (await run("git", ["rev-parse", "origin/main"], { cwd: repositoryPath })).stdout.trim()
       const { workspacePath } = await backend.prepareWorkspace({ branch: `codex/${workOrderId.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`, baseSha })
+      try {
       const context = []
       let totalBytes = 0
       for (const file of contextPaths.slice(0, 16)) {
@@ -1505,7 +1506,7 @@ ${String(error?.output ?? "").slice(-12000)}
         const type = (await backend.git({ workspacePath, args: ["cat-file", "-t", object], timeoutMs: 30_000 }))
         if (type.exitCode !== 0 || type.stdout.trim() !== "blob") throw new Error("ANALYSIS_CONTEXT_NOT_FILE")
         const content = (await backend.git({ workspacePath, args: ["show", object], timeoutMs: 30_000 })).stdout
-        if (Buffer.byteLength(content) > 65536 || content.includes("")) throw new Error("ANALYSIS_CONTEXT_INVALID")
+        if (Buffer.byteLength(content) > 65536 || content.includes("\0")) throw new Error("ANALYSIS_CONTEXT_INVALID")
         totalBytes += Buffer.byteLength(content)
         if (totalBytes > 12288) throw new Error("ANALYSIS_CONTEXT_TOO_LARGE")
         context.push({ path: file, content })
@@ -1539,6 +1540,12 @@ ${String(error?.output ?? "").slice(-12000)}
         return { result: "ANALYSIS_READY", findings, evidencePath: path.join(evidenceDir, "analysis.json") }
       } finally {
         client?.close()
+      }
+      } finally {
+        // The analysis worktree is scratch: evidence is already persisted under the HERMES evidence
+        // root before this point, so the remote tree is safe to drop. Cleanup is best-effort -- a
+        // leftover worktree is reconciled by the next dispatch's conflict wall, never silently kept.
+        try { await backend.cleanup({ workspacePath }) } catch { /* best effort */ }
       }
     },
 
