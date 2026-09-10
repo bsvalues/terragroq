@@ -141,11 +141,15 @@ def command_catalog() -> dict[str, Any]:
     commands = [_classify_command(row) for row in all_commands()]
     registry_count = len(commands)
     cli_count = count_cli_commands()
+    cli_known = cli_count is not None
     return {
         "ok": True,
         "registry_count": registry_count,
         "cli_count": cli_count,
-        "parity": registry_count == cli_count,
+        "cli_count_status": "OK" if cli_known else "UNKNOWN",
+        # Parity is only claimable when the CLI count was actually measured. An
+        # unmeasured count is not agreement, so it must not report parity.
+        "parity": cli_known and registry_count == cli_count,
         "groups": [
             {
                 "id": group_id,

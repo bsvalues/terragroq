@@ -25,6 +25,15 @@ REQUIRED_DIRS = [
     "05_Assessor_Office", "06_TerraFusion_Strategy", "07_Learning", "08_People",
     "09_Cases", "10_Ideas", "11_Projects", "12_Maps", "13_Templates",
     "20_Graphify", "30_MCP", "40_Scripts", "40_Search", "50_Dashboards", "60_Synthesis", "70_InboxProcessor", "80_DoctrinePromotion", "85_DecisionPromotion", "86_ConceptPromotion", "87_ProjectPromotion", "88_CortexMap", "89_ReviewCockpit", "91_GitGovernance", "92_BackupGovernance", "93_RestoreDrill", "94_PrivateRemoteStrategy", "95_ReleaseGovernance", "96_OperatingRoutine", "97_HumanReviewQueues", "98_OfficialAcceptance", "99_PostAcceptanceClosure", "100_MaintenanceRelease", "101_ExternalDriveBackup", "102_ObsidianWorkspace", "103_SchemaRegistry", "104_CommandRegistry", "105_RuntimeSmoke", "106_ProductionReadiness", "110_ControlCenter", "90_Exports", "99_Archive",
+    # Promotion draft queues the Control Center reads. The promotion engines
+    # create these on demand, but the scaffold must own them too, so that
+    # `init` satisfies the control-center smoke gate and `check` verifies them
+    # rather than leaving the product reading a path that does not exist.
+    "80_DoctrinePromotion/drafts",
+    "85_DecisionPromotion/drafts",
+    "86_ConceptPromotion/drafts",
+    "87_ProjectPromotion/project_drafts",
+    "87_ProjectPromotion/work_order_drafts",
 ]
 
 ORPHAN_EXCLUDE_DIRS = {
