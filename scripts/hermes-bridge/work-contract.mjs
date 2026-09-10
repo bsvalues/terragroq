@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 export const HERMES_WORK_CONTRACT_VERSION = "hermes-work-contract.v1"
+const DEFAULT_REPOSITORY = "bsvalues/terragroq"
 export const HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID = "selected-thread-latest-evidence.v1"
 export const HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID = "issue-911-runtime-reliability-evidence.v1"
 export const HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID = "issue-911-live-nonempty-acceptance.v1"
@@ -228,10 +229,14 @@ export function deriveHermesWorkContract(outcome) {
   // Exact key parity with the runtime's contract schema check (delivery, digest, id, lane,
   // repository, reservations, validationCommands, version) — no extra fields. The "derived-lane-"
   // id prefix IS the provenance marker.
+  // The repository is canonical state resolved from the Project graph, so a derived contract
+  // carries it rather than a literal. It defaults only for callers that predate the binding.
+  const repository = outcome.repository === undefined ? DEFAULT_REPOSITORY : outcome.repository
+  if (typeof repository !== "string" || repository.length === 0) return null
   const contract = Object.freeze({
     version: HERMES_WORK_CONTRACT_VERSION,
     id: `derived-lane-${outcome.lane}.v1`,
-    repository: "bsvalues/terragroq",
+    repository,
     lane: outcome.lane,
     reservations: policy.reservations,
     validationCommands: policy.validationCommands,
@@ -277,6 +282,11 @@ export function resolveHermesWorkContract(outcome) {
         : ISSUE_911_RELIABILITY_EVIDENCE
       : null
   if (!registered || outcome.authority !== "A2_WRITE_OWN") return null
+  // A pre-registered contract is exact: its id, reservations and digest are bound to one
+  // repository. Applying it elsewhere would claim reviewed paths that do not exist there, so a
+  // different repository must fall through to governed lane derivation instead.
+  const repository = outcome.repository === undefined ? DEFAULT_REPOSITORY : outcome.repository
+  if (typeof repository !== "string" || repository !== registered.repository) return null
   for (const field of [outcome.title, outcome.objective]) {
     if (field != null && normalizeIntent(field) !== command) return null
   }
