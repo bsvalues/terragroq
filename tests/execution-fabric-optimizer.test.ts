@@ -89,3 +89,41 @@ describe("IF-11 cost normalization + explainable output", () => {
     }
   })
 })
+
+describe("IF-11 remediation: cost/score input hardening (CodeRabbit findings)", () => {
+  it("an unknown or non-finite cost gets the WORST score, never the best", () => {
+    expect(normalizeCost({ measured: {} })).toBe(0) // missing cost
+    expect(normalizeCost({ measured: { costPerCallUsd: NaN } })).toBe(0)
+    expect(normalizeCost({ measured: { costPerCallUsd: -1 } })).toBe(0)
+    expect(normalizeCost({ measured: { costPerCallUsd: Infinity } })).toBe(0)
+    // a candidate with unknown cost can never outrank one with proven low cost
+    const unknownCost = { ...remote, measured: freshMeasured({ qualityScore: 1.0, costPerCallUsd: undefined }) }
+    const result = optimize(req, [local, unknownCost], policy)
+    expect(result.selected.candidateId).toBe("daedalus-qwen")
+  })
+
+  it("stale measured data zeroes ALL measured inputs, not just quality", () => {
+    const stale = { ...remote, measured: freshMeasured({ qualityScore: 1.0, costPerCallUsd: 0.001, measuredAt: "2026-09-10T16:00:00Z" }) }
+    const result = optimize(req, [local, stale], policy)
+    const c = result.considered.find((x) => x.candidateId === "omen-qwen")
+    expect(c.fresh).toBe(false)
+    expect(c.inputs.quality).toBe(0)
+    expect(c.inputs.costValue).toBe(0)
+    expect(c.inputs.queuePenalty).toBe(0)
+  })
+
+  it("the IF-06 spend limit excludes an over-limit candidate from ranking", () => {
+    const pricey = { ...remote, measured: freshMeasured({ costPerCallUsd: 0.50 }) }
+    const result = optimize({ ...req, maxCostPerCallUsd: 0.10 }, [local, pricey], policy)
+    expect(result.selected.candidateId).toBe("daedalus-qwen")
+    expect(result.overSpendLimit.some((o) => o.candidateId === "omen-qwen")).toBe(true)
+  })
+
+  it("NaN / Infinity / negative score inputs are not trusted", () => {
+    const nanQuality = { ...remote, measured: freshMeasured({ qualityScore: NaN }) }
+    const negQueue = { ...remote, measured: freshMeasured({ qualityScore: 0.5, queueDelayMs: -500 }) }
+    const result = optimize(req, [local, nanQuality, negQueue], policy)
+    // neither bad-input candidate beats the clean local one
+    expect(result.selected.candidateId).toBe("daedalus-qwen")
+  })
+})
