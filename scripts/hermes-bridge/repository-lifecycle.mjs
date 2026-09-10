@@ -476,6 +476,47 @@ function exactHeadCodexCleanComment(value, headRefOid, requestTimes = exactHeadC
   })
 }
 
+/**
+ * Sovereign independent review (Tier 1 — required role, runs on our hardware).
+ *
+ * The doctrine (sovereign-runtime-and-review-supersession §4) is explicit: independent assurance is
+ * a ROLE-SEPARATION requirement, not a vendor requirement, and WilliamOS must remain fully useful
+ * when every optional external reviewer is unavailable. External advisory (CodeRabbit/Sourcery) is
+ * Tier 3 — optional. Yet until now this gate recognized ONLY the two hosted reviewers, so a
+ * 3rd-party rate limit became a stall — the exact failure the lab exists to prevent.
+ *
+ * This is the permanent fix: a sovereign reviewer — an independent agent context on HERMES/AEGIS,
+ * posting as the `williamos-runtime-operator` identity — records its exact-head review as an
+ * immutable PR comment, and the gate accepts it. The review must be:
+ *  - authored by the sovereign reviewer identity (role-separated from the builder);
+ *  - immutable (createdAt === updatedAt — not edited after the fact);
+ *  - bound to the exact reviewed head via a `**Reviewed commit:**` digest;
+ *  - a clean verdict (`Sovereign Review: no blocking findings`) to satisfy reviewCompleted.
+ *
+ * A sovereign review WITH blocking findings still counts as `reviewed` (a review happened) but does
+ * NOT satisfy `reviewCompleted` — the findings must be remediated first, same as any reviewer.
+ */
+const SOVEREIGN_REVIEWER_LOGIN = "williamos-runtime-operator"
+const SOVEREIGN_REVIEW_MARK = "Sovereign Review:"
+const SOVEREIGN_REVIEW_CLEAN = "Sovereign Review: no blocking findings"
+
+function exactHeadSovereignReview(value, headRefOid, { requireClean = false } = {}) {
+  const connection = value?.data?.repository?.pullRequest?.comments
+  const comments = connection?.nodes
+  if (!Array.isArray(comments)) return false
+  return comments.some((comment) => {
+    const body = String(comment?.body ?? "")
+    const createdAt = Date.parse(comment?.createdAt ?? "")
+    const updatedAt = Date.parse(comment?.updatedAt ?? "")
+    const immutableRequest = Number.isFinite(createdAt) && createdAt === updatedAt
+    const reviewedDigest = body.match(/\*\*Reviewed commit:\*\*\s*`([0-9a-f]{10,40})`/i)?.[1]?.toLowerCase()
+    if (!(immutableRequest && comment?.author?.login === SOVEREIGN_REVIEWER_LOGIN
+      && body.startsWith(SOVEREIGN_REVIEW_MARK)
+      && typeof reviewedDigest === "string" && headRefOid.startsWith(reviewedDigest))) return false
+    return requireClean ? body.startsWith(SOVEREIGN_REVIEW_CLEAN) : true
+  })
+}
+
 function unresolvedThreadCount(value) {
   const reviewThreads = value?.data?.repository?.pullRequest?.reviewThreads
   const nodes = reviewThreads?.nodes
@@ -1190,8 +1231,11 @@ export function createRepositoryLifecycle(options) {
       }
     }
     const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
+    const hasSovereignReview = exactHeadSovereignReview(reviewState, pr.headRefOid)
+    const hasSovereignCleanReview = exactHeadSovereignReview(reviewState, pr.headRefOid, { requireClean: true })
     const hasExactHeadReview = hasExactHeadApproval || hasExactHeadCodexCleanComment
       || (hasExactHeadCodexCleanReview && unresolved === 0 && codexReviewFindings.length === 0)
+      || hasSovereignReview
     const hasCodeRabbitReview = checks.some((check) =>
       /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
         && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
@@ -1222,10 +1266,10 @@ export function createRepositoryLifecycle(options) {
       pendingChecks,
       codexReviewFindings,
       cleanReviewEvidence: hasExactHeadApproval || hasExactHeadCodexCleanComment
-        || hasExactHeadCodexCleanReview || hasCodeRabbitReview,
+        || hasExactHeadCodexCleanReview || hasCodeRabbitReview || hasSovereignCleanReview,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
       reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCleanComment
-        || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
+        || hasExactHeadCodexCompletedReview || hasCodeRabbitReview || hasSovereignCleanReview,
       codeRabbitRateLimited,
       reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,

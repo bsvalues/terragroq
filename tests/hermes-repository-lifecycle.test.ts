@@ -1134,6 +1134,81 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("accepts a sovereign independent review (Tier 1) so a 3rd-party rate limit is not a stall", async () => {
+    // No CodeRabbit SUCCESS check, no codex-connector clean review — both external reviewers are
+    // unavailable (rate-limited). The seal must NOT stall: an immutable exact-head review from the
+    // sovereign reviewer identity (williamos-runtime-operator) satisfies reviewed + reviewCompleted.
+    const reviewedAt = "2026-09-10T14:00:00.000Z"
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "vitest (deterministic suite)", state: "SUCCESS" },
+          { context: "production build (next build)", state: "SUCCESS" },
+        ],
+        reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        {
+          author: { login: "williamos-runtime-operator" },
+          body: `Sovereign Review: no blocking findings\n\n**Reviewed commit:** \`${sha.slice(0, 40)}\``,
+          isMinimized: false,
+          createdAt: reviewedAt,
+          updatedAt: reviewedAt, // immutable
+        },
+      ])) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: true,
+      reviewCompleted: true,
+    })
+  })
+
+  it("a sovereign review WITH blocking findings is reviewed but NOT reviewCompleted", async () => {
+    const reviewedAt = "2026-09-10T14:00:00.000Z"
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        {
+          author: { login: "williamos-runtime-operator" },
+          body: `Sovereign Review: blocking findings\n\n- src/x.ts: unvalidated input\n\n**Reviewed commit:** \`${sha.slice(0, 40)}\``,
+          isMinimized: false,
+          createdAt: reviewedAt,
+          updatedAt: reviewedAt,
+        },
+      ])) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: true,
+      reviewCompleted: false, // blocking findings must be remediated first
+    })
+  })
+
+  it("an edited (non-immutable) sovereign review is not trusted", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        {
+          author: { login: "williamos-runtime-operator" },
+          body: `Sovereign Review: no blocking findings\n\n**Reviewed commit:** \`${sha.slice(0, 40)}\``,
+          isMinimized: false,
+          createdAt: "2026-09-10T14:00:00.000Z",
+          updatedAt: "2026-09-10T14:05:00.000Z", // edited after the fact -> not immutable -> rejected
+        },
+      ])) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      reviewed: false,
+      reviewCompleted: false,
+    })
+  })
+
   it("uses the latest completed run for one named check context", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
