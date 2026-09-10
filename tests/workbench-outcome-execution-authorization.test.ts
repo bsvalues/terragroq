@@ -60,16 +60,15 @@ describe("Workbench outcome execution authorization", () => {
       resources: [{ ...snapshot.resources[0], canonicalIdentity: "bsvalues/terrafusion_os_1.0" }],
     }
     const assessment = assessWorkbenchOutcomeExecution(input, terrafusion)
-    // It must clear every repository gate; whether the rest of this fixture is eligible is a
-    // separate question this case deliberately does not assert.
-    expect(assessment.reason).not.toBe("REPOSITORY_UNAVAILABLE")
-    expect(assessment.reason).not.toBe("REPOSITORY_AMBIGUOUS")
-    expect(assessment.reason).not.toBe("REPOSITORY_EXECUTION_TARGET_UNAVAILABLE")
-    if (assessment.eligible) {
-      expect(assessment.repository).toBe("bsvalues/terrafusion_os_1.0")
-      // Assessment and work contract must never disagree about where work happens.
-      expect(assessment.workContract.repository).toBe("bsvalues/terrafusion_os_1.0")
-    }
+    // The whole point of the binding is that this fixture IS executable. Asserting only that the
+    // repository gates were cleared let POLICY_INELIGIBLE pass silently: the projection layer
+    // admitted terrafusion_os_1.0 while the bridge policy and work-contract derivation still
+    // permitted and stamped terragroq alone, so every such assessment was refused downstream.
+    expect(assessment.eligible).toBe(true)
+    if (!assessment.eligible) return
+    expect(assessment.repository).toBe("bsvalues/terrafusion_os_1.0")
+    // Assessment and work contract must never disagree about where work happens.
+    expect(assessment.workContract.repository).toBe("bsvalues/terrafusion_os_1.0")
   })
 
   it("keeps the assessment and the work contract on the same repository", () => {

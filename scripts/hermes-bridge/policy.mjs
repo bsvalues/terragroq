@@ -1,6 +1,18 @@
 import { resolveHermesWorkContract } from "./work-contract.mjs"
 
-const ALLOWED_REPOSITORY = "bsvalues/terragroq"
+/**
+ * Repositories the resident kernel may execute in (#1015).
+ *
+ * Mirrors the workbench admission boundary (`EXECUTION_PROVISIONED_REPOSITORIES`). A Project row
+ * naming a repository is a declaration, not provisioned authority: only repositories we have a
+ * governed checkout, credentials and delivery path for belong here. Widening this set is an
+ * authority decision, not a configuration detail.
+ */
+export const PROVISIONED_REPOSITORIES = Object.freeze([
+  "bsvalues/terragroq",
+  "bsvalues/terrafusion_os_1.0",
+])
+const ALLOWED_REPOSITORY = PROVISIONED_REPOSITORIES[0]
 const ALLOWED_ACTORS = new Set(["bsvalues"])
 const ALLOWED_LANES = new Set(["docs", "ui", "read_model"])
 const ALLOWED_RISKS = new Set(["low", "R0", "R1"])
@@ -77,7 +89,7 @@ export function evaluateOutcomePolicy({
   standingAuthority = false,
 } = {}) {
   if (!enabled || killSwitch) return deny("KILL_SWITCH_ACTIVE")
-  if (repository !== ALLOWED_REPOSITORY) return deny("REPOSITORY_NOT_ALLOWED")
+  if (!PROVISIONED_REPOSITORIES.includes(repository)) return deny("REPOSITORY_NOT_ALLOWED")
   if (!ALLOWED_ACTORS.has(actor)) return deny("ACTOR_NOT_ALLOWED")
   if (!outcome || typeof outcome !== "object") return deny("OUTCOME_INVALID")
   if (!ALLOWED_LANES.has(outcome.lane) && !exactVerifiedOperatorObjective(outcome)) {

@@ -350,6 +350,9 @@ export function assessWorkbenchOutcomeExecution(
     risk: goal.risk,
     authority: goal.authority,
     acceptedContractIds: goalContractIds,
+    // The resolved repository, so the contract can never disagree with the assessment about where
+    // the work happens (#1015).
+    repository,
   })
   const policy = evaluateCanonicalOutcomePolicy({
     outcome: {
