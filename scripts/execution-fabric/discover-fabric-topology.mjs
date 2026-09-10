@@ -92,9 +92,17 @@ if (process.argv[1] && import.meta.url === new URL(import.meta.url).href && proc
     }
   }
   const linksFile = process.argv[4]
-  const links = linksFile && fs.existsSync(linksFile)
-    ? fs.readFileSync(linksFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
-    : []
+  // Parse each link record independently: one malformed or partially-written record is preserved as
+  // FAILED evidence and never aborts the whole compilation (a snapshot with one bad link is still a
+  // snapshot; a thrown parse is no snapshot at all).
+  let links = []
+  if (linksFile && fs.existsSync(linksFile)) {
+    for (const line of fs.readFileSync(linksFile, "utf8").split("\n")) {
+      if (!line.trim()) continue
+      try { links.push(JSON.parse(line)) }
+      catch { links.push({ id: "unparseable-record", fromNodeId: "unknown", toNodeId: "unknown", transportClass: "unknown", trustClass: "unknown", freshnessState: "FAILED", evidenceRef: linksFile }) }
+    }
+  }
   const snapshot = buildTopologySnapshot({ probes, links })
   process.stdout.write(JSON.stringify(snapshot, null, 2) + "\n")
 }

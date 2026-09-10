@@ -37,11 +37,12 @@ payload="$tmp/payload.bin"
 head -c 67108864 /dev/urandom > "$payload" 2>/dev/null || dd if=/dev/urandom of="$payload" bs=1M count=64 2>/dev/null
 bytes=$(stat -c %s "$payload" 2>/dev/null || stat -f %z "$payload")
 start=$(date +%s.%N)
-scp -o BatchMode=yes -o ConnectTimeout=10 -q "$payload" "$target_alias:/dev/null" 2>/dev/null || true
+scp_status=0
+scp -o BatchMode=yes -o ConnectTimeout=10 -q "$payload" "$target_alias:/dev/null" 2>/dev/null || scp_status=$?
 end=$(date +%s.%N)
 elapsed=$(awk -v a="$start" -v b="$end" 'BEGIN{d=b-a; if(d<=0)d=0.0001; print d}')
 bw=""
-if command -v awk >/dev/null; then
+if (( scp_status == 0 )) && command -v awk >/dev/null; then
   bw=$(awk -v by="$bytes" -v e="$elapsed" 'BEGIN{printf "%d", (e>0)? by/e : 0}')
 fi
 
