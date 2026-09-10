@@ -1115,6 +1115,101 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("accepts a cryptographically signed sovereign review attestation (Tier 1) — signature is the trust root", async () => {
+    // No CodeRabbit SUCCESS, no codex-connector clean review — external reviewers unavailable.
+    // A signed WILLIAMOS_SOVEREIGN_REVIEW attestation, carried in an immutable PR comment and
+    // verified against the SEPARATE reviewer trust ring, satisfies reviewed + reviewCompleted.
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
+    const kp = generateSovereignReviewerKeypair()
+    const attestation = signSovereignReview({
+      reviewerRole: "INDEPENDENT_CODE_REVIEWER", reviewerContextId: "aegis-reviewer-1", builderContextId: "hermes-builder-9",
+      repository: "bsvalues/terragroq", pullRequest: 77, reviewedHeadSha: sha, verdict: "CLEAN",
+      findingsDigest: "sha256:" + "a".repeat(64), requirementsDigest: "sha256:" + "b".repeat(64), testEvidenceDigest: "sha256:" + "c".repeat(64),
+    }, sovereignReviewerSigningKeyFromBase64(kp.privateKeyBase64))
+    const reviewedAt = "2026-09-10T15:00:00.000Z"
+    const carrier = "```williamos-sovereign-review\n" + JSON.stringify(attestation) + "\n```"
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { context: "vitest (deterministic suite)", state: "SUCCESS" },
+          { context: "production build (next build)", state: "SUCCESS" },
+        ],
+        reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        { author: { login: "bsvalues" }, body: carrier, isMinimized: false, createdAt: reviewedAt, updatedAt: reviewedAt },
+      ])) }),
+    })
+    const origEnv = process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+    process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = JSON.stringify({ [kp.keyId]: kp.publicKeyBase64 })
+    try {
+      await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, reviewCompleted: true })
+    } finally {
+      if (origEnv === undefined) delete process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+      else process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = origEnv
+    }
+  })
+
+  it("rejects a sovereign attestation signed by a key outside the reviewer trust ring", async () => {
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
+    const signingKp = generateSovereignReviewerKeypair() // the key that signs
+    const ringKp = generateSovereignReviewerKeypair()     // a DIFFERENT key in the ring
+    const attestation = signSovereignReview({
+      reviewerRole: "INDEPENDENT_CODE_REVIEWER", reviewerContextId: "aegis-reviewer-1", builderContextId: "hermes-builder-9",
+      repository: "bsvalues/terragroq", pullRequest: 77, reviewedHeadSha: sha, verdict: "CLEAN",
+      findingsDigest: "sha256:" + "a".repeat(64), requirementsDigest: "sha256:" + "b".repeat(64), testEvidenceDigest: "sha256:" + "c".repeat(64),
+    }, sovereignReviewerSigningKeyFromBase64(signingKp.privateKeyBase64))
+    const reviewedAt = "2026-09-10T15:00:00.000Z"
+    const carrier = "```williamos-sovereign-review\n" + JSON.stringify(attestation) + "\n```"
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        { author: { login: "bsvalues" }, body: carrier, isMinimized: false, createdAt: reviewedAt, updatedAt: reviewedAt },
+      ])) }),
+    })
+    const origEnv = process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+    process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = JSON.stringify({ [ringKp.keyId]: ringKp.publicKeyBase64 }) // ring lacks the signing key
+    try {
+      await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: false, reviewCompleted: false })
+    } finally {
+      if (origEnv === undefined) delete process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+      else process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = origEnv
+    }
+  })
+
+  it("a sovereign attestation with BLOCKING_FINDINGS is reviewed but NOT reviewCompleted", async () => {
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
+    const kp = generateSovereignReviewerKeypair()
+    const attestation = signSovereignReview({
+      reviewerRole: "INDEPENDENT_CODE_REVIEWER", reviewerContextId: "aegis-reviewer-1", builderContextId: "hermes-builder-9",
+      repository: "bsvalues/terragroq", pullRequest: 77, reviewedHeadSha: sha, verdict: "BLOCKING_FINDINGS",
+      findingsDigest: "sha256:" + "d".repeat(64), requirementsDigest: "sha256:" + "b".repeat(64), testEvidenceDigest: "sha256:" + "c".repeat(64),
+    }, sovereignReviewerSigningKeyFromBase64(kp.privateKeyBase64))
+    const reviewedAt = "2026-09-10T15:00:00.000Z"
+    const carrier = "```williamos-sovereign-review\n" + JSON.stringify(attestation) + "\n```"
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState([], [
+        { author: { login: "bsvalues" }, body: carrier, isMinimized: false, createdAt: reviewedAt, updatedAt: reviewedAt },
+      ])) }),
+    })
+    const origEnv = process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+    process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = JSON.stringify({ [kp.keyId]: kp.publicKeyBase64 })
+    try {
+      await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({ reviewed: true, reviewCompleted: false })
+    } finally {
+      if (origEnv === undefined) delete process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+      else process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON = origEnv
+    }
+  })
+
   it("reports completed red checks as bounded remediation evidence", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({

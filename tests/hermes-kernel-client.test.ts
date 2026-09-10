@@ -191,6 +191,40 @@ const okResult = (runId: string, json = fullTurnJson()) => ({
 })
 
 describe("Hermes kernel client — runTurn", () => {
+  it("uses only the explicit trusted Python executable and preserves the packet, timeout and evidence contract", async () => {
+    const executable = path.resolve(os.tmpdir(), "trusted python", "python")
+    // connect() now validates the trusted interpreter as a real regular executable file, so the
+    // fixture must actually create it (contents are never read; the commandRunner is stubbed).
+    fs.mkdirSync(path.dirname(executable), { recursive: true })
+    fs.writeFileSync(executable, "#!fixture-python\n", { mode: 0o755 })
+    const { client, calls, commandRunner, workspacePath, runtimeRoot, policyPath, invokerPath, commonDir } = fixture({ invokerKind: "python", pythonCommand: executable })
+    commandRunner.mockImplementation(async (call: Call) => { calls.push(call); return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("--run-id") + 1])) })
+    await client.connect()
+    const threadId = await client.startThread()
+    const turn = await client.runTurn({ threadId, prompt: "Deliver WO-1", timeoutMs: 1800 * 1000,
+      // A model/caller packet cannot change the trusted invoker.
+      invokerKind: "powershell", pythonCommand: "untrusted" } as any)
+    expect(turn.finalText).toBe(fullTurnJson())
+    const call = calls.find((entry) => entry.command === executable)!
+    expect(call.args).toEqual(["-I", invokerPath,
+      "--packet-path", expect.any(String), "--policy-path", policyPath,
+      "--workspace-path", fs.realpathSync(workspacePath), "--run-id", turn.turnId,
+      "--quarantine-path", kernelQuarantinePath(runtimeRoot), "--state-path", expect.any(String)])
+    expect(call.credentialAccess).toBe(false)
+    expect(call.timeoutMs).toBe(1800 * 1000)
+    expect(calls.some((entry) => entry.command === "powershell")).toBe(false)
+    expect(JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8")).turns[0].harvested).toBe(true)
+  })
+
+  it("fails closed on unknown invoker kinds, relative Python executables, or absent qualification", async () => {
+    expect(() => fixture({ invokerKind: "shell" })).toThrow("invokerKind")
+    expect(() => fixture({ invokerKind: "python" })).toThrow("pythonCommand")
+    expect(() => fixture({ invokerKind: "python", pythonCommand: "python3" })).toThrow("absolute")
+    const f = fixture({ invokerKind: "python", pythonCommand: path.resolve(os.tmpdir(), "python") })
+    patchPolicy(f.policyPath, (p) => { p.promotion.satisfiedEvidence.IMAGE_BUILD_PROVEN = null })
+    await expect(f.client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN" })
+    expect(f.calls).toEqual([])
+  })
   it("builds a v2 packet with the verbatim prompt plus the output-contract epilogue", () => {
     const policy = { workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"] } }
     const packet = buildKernelPacket({ policy, prompt: "Do the thing.", workspacePath: "D:\\w", runId: "run-1", statePath: "D:\\s" })

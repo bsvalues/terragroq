@@ -518,12 +518,14 @@ describe("Invariant 13 - a transport role never overrides the owner-directed rol
 
 describe("the node identity contract replaces three copies rather than adding a fourth", () => {
   it("is the only place the roster and the hostname aliases are written", () => {
-    expect(canonicalNodeIds(contract)).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure"])
+    expect(canonicalNodeIds(contract)).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure", "daedalus"])
     expect(canonicalNodeIdForHostname(contract, "OMEN")).toBe("omen")
     expect(canonicalNodeIdForHostname(contract, "hermes")).toBe("hermes-node")
     expect(canonicalNodeIdForHostname(contract, "HERMES-NODE")).toBe("hermes-node")
     expect(canonicalNodeIdForHostname(contract, "atlas.lan")).toBe("atlas")
     expect(canonicalNodeIdForHostname(contract, "aegis")).toBe("aegis")
+    expect(canonicalNodeIdForHostname(contract, "DAEDALUS")).toBe("daedalus")
+    expect(canonicalNodeIdForHostname(contract, "daedalus-ThinkStation-P620")).toBe("daedalus")
   })
 
   it("refuses an unrecognised hostname rather than guessing", () => {

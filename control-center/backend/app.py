@@ -54,7 +54,9 @@ from copilot import loop, memory as _memory_mod, llm, briefing
 MEMORY = _memory_mod.Memory()
 PENDING: dict = {}  # Paused turns keyed by call_id
 
-app = FastAPI(title="WilliamOS Control Center", version="1.0.0")
+_VERSION = state_reader.get_version_info()
+
+app = FastAPI(title="WilliamOS Control Center", version=_VERSION["version"])
 
 app.add_middleware(
     CORSMiddleware,
@@ -170,7 +172,16 @@ class WorkOrderComposeRequest(BaseModel):
 
 @app.get("/api/status")
 def api_status():
-    return {"status": "ok", "version": "1.0.0", "engine": "WilliamOS v1.2.0"}
+    # Version is resolved from one source of truth (the git tag), not restated as
+    # a literal here. Previously this returned "1.0.0" while the app object said
+    # 1.0.0, the engine string said v1.2.0, and the real latest tag was v1.3.1.
+    v = state_reader.get_version_info()
+    return {
+        "status": "ok",
+        "version": v["version"],
+        "version_source": v["version_source"],
+        "engine": f"WilliamOS {v['version']}",
+    }
 
 
 @app.get("/api/home")

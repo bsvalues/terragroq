@@ -98,6 +98,51 @@
         "higher_gpu_vram": false
       },
       "storage_semantics": "none"
+    },
+    {
+      "id": "qwen3-8b-resident-inference",
+      "title": "Qwen3-8B resident inference",
+      "description": "Route to a freshly observed resident model worker that reports Qwen/Qwen3-8B in its healthy runtime roster. Model qualification and bounded dispatch remain separate execution gates.",
+      "requirements": {
+        "capabilities_all": [
+          "local-llm-inference"
+        ],
+        "health_axes_all": [
+          "compute"
+        ],
+        "authority_all": [
+          "local-llm-inference",
+          "bounded-execution"
+        ],
+        "runtimes_all": [
+          {
+            "kind": "remote-resident-model",
+            "states": [
+              "healthy",
+              "running"
+            ],
+            "models_all": [
+              "Qwen/Qwen3-8B"
+            ]
+          }
+        ],
+        "minimum_cpu_threads": null,
+        "minimum_gpu_vram_bytes": 25769803776,
+        "excluded_authority": [
+          "authoritative-durable-state"
+        ],
+        "observed_evidence_required": true,
+        "fresh_evidence_required": true
+      },
+      "preferences": {
+        "capabilities": [],
+        "availability_order": [
+          "resident"
+        ],
+        "higher_cpu_threads": false,
+        "higher_gpu_vram": true
+      },
+      "storage_semantics": "scratch-only"
     }
   ]
 }
