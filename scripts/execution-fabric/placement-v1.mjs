@@ -36,7 +36,8 @@ function withinLocalBoundary(candidate) {
  * array means the candidate cleared every gate. Hard gates run before any scoring.
  *
  * candidate: { candidateId, model, runtime, compute, capabilityEvidence?, capacity?, runtimeState }
- * requirement: { capability, contextClass, estimatedTokens, contextMaxTokens }
+ * requirement: { capability, contextClass, estimatedTokens, contextMaxTokens?, requiredVramBytes? }
+ *   contextMaxTokens (optional) tightens the effective context limit below the candidate's window.
  */
 export function hardGate(candidate, requirement, policy) {
   const refusals = []
@@ -62,17 +63,37 @@ export function hardGate(candidate, requirement, policy) {
     refusals.push(PLACEMENT_REFUSALS.UNHEALTHY_RUNTIME)
   }
 
-  // Stale capacity — a capacity observation older than the TTL is refused.
+  // Stale capacity — a capacity observation that is missing, non-numeric, older than the TTL, or
+  // future-dated (negative age) is refused. The gate is fail-closed: an unprovable clock never
+  // reads as "fresh".
   const observedAt = candidate.capacity?.observedAt ? Date.parse(candidate.capacity.observedAt) : NaN
-  if (!candidate.capacity || Number.isNaN(observedAt) || (policy.nowMs - observedAt) > CAPACITY_TTL_MS) {
+  const nowMs = typeof policy.nowMs === "number" && Number.isFinite(policy.nowMs) ? policy.nowMs : NaN
+  const ageMs = Number.isNaN(observedAt) || Number.isNaN(nowMs) ? NaN : nowMs - observedAt
+  if (!candidate.capacity || Number.isNaN(ageMs) || ageMs < 0 || ageMs > CAPACITY_TTL_MS) {
     refusals.push(PLACEMENT_REFUSALS.STALE_CAPACITY)
-  } else if (typeof candidate.capacity.freeVramBytes === "number" && typeof requirement.requiredVramBytes === "number" && candidate.capacity.freeVramBytes < requirement.requiredVramBytes) {
-    refusals.push(PLACEMENT_REFUSALS.CAPACITY_INSUFFICIENT)
+  } else {
+    // Capacity sufficiency is fail-closed: a requirement that names a VRAM need can only be met by
+    // a candidate that PROVES a numeric free-VRAM figure meeting it. Absent or non-numeric = refused.
+    if (typeof requirement.requiredVramBytes === "number") {
+      if (typeof candidate.capacity.freeVramBytes !== "number" || !Number.isFinite(candidate.capacity.freeVramBytes) || candidate.capacity.freeVramBytes < requirement.requiredVramBytes) {
+        refusals.push(PLACEMENT_REFUSALS.CAPACITY_INSUFFICIENT)
+      }
+    }
   }
 
-  // Context too large — the requirement's tokens must fit the candidate's context window.
-  if (typeof requirement.estimatedTokens === "number" && typeof candidate.model?.contextMaxTokens === "number" && requirement.estimatedTokens > candidate.model.contextMaxTokens) {
-    refusals.push(PLACEMENT_REFUSALS.CONTEXT_TOO_LARGE)
+  // Context too large — fail-closed: when the requirement names an estimated token count, the
+  // candidate must PROVE its own context window fits it. The requirement's contextMaxTokens is a
+  // contractual budget that can only TIGHTEN the limit below the candidate's proven window — it
+  // never substitutes for the candidate's own window (an unprovable candidate window is refused).
+  if (typeof requirement.estimatedTokens === "number") {
+    const candidateLimit = typeof candidate.model?.contextMaxTokens === "number" && Number.isFinite(candidate.model.contextMaxTokens) ? candidate.model.contextMaxTokens : NaN
+    const requirementLimit = typeof requirement.contextMaxTokens === "number" && Number.isFinite(requirement.contextMaxTokens) ? requirement.contextMaxTokens : NaN
+    if (Number.isNaN(candidateLimit)) {
+      refusals.push(PLACEMENT_REFUSALS.CONTEXT_TOO_LARGE)
+    } else {
+      const effectiveLimit = Number.isNaN(requirementLimit) ? candidateLimit : Math.min(candidateLimit, requirementLimit)
+      if (requirement.estimatedTokens > effectiveLimit) refusals.push(PLACEMENT_REFUSALS.CONTEXT_TOO_LARGE)
+    }
   }
 
   return refusals
@@ -118,8 +139,10 @@ export function evaluatePlacement(requirement, candidates, policy) {
     throw err
   }
 
-  // Deterministic ordering: score desc, then candidateId asc.
-  const ranked = [...eligible].sort((a, b) => (b.score - a.score) || String(a.candidateId).localeCompare(String(b.candidateId)))
+  // Deterministic ordering: score desc, then candidateId asc using a locale-independent
+  // code-unit comparison so equal scores resolve identically under any ICU/locale config.
+  const cmpId = (a, b) => (String(a.candidateId) < String(b.candidateId) ? -1 : String(a.candidateId) > String(b.candidateId) ? 1 : 0)
+  const ranked = [...eligible].sort((a, b) => (b.score - a.score) || cmpId(a, b))
   const winner = ranked[0]
   const winnerCandidate = candidates.find((c) => c.candidateId === winner.candidateId)
 
@@ -128,5 +151,41 @@ export function evaluatePlacement(requirement, candidates, policy) {
     selected: winnerCandidate,
     fallbackCandidateIds: ranked.slice(1).map((c) => c.candidateId),
     reason: `Selected ${winner.candidateId}: highest score (${winner.score}) among ${eligible.length} hard-gate-eligible candidate(s); ${considered.length - eligible.length} refused by hard gate.`,
+  }
+}
+
+/**
+ * Enforce the IF-06 hard gates over a recommendation produced by the existing recommendation-only
+ * engine. This is the production wiring: the recommendation-only path still proposes candidates,
+ * but this gate REFUSES the recommendation whenever the selected candidate (or any candidate the
+ * caller marks as eligible) fails a hard gate. The hard gate always beats the recommendation's
+ * own ranking.
+ *
+ * recommendation: output of recommend-placement.evaluatePlacement (recommendation-only substrate)
+ * candidatesByNodeId: map of nodeId -> IF-06 candidate descriptor for hard-gate evaluation
+ * requirement: the IF-06 InferenceRequirement
+ */
+export function enforceHardGateOnRecommendation(recommendation, candidatesByNodeId, requirement, policy) {
+  if (!recommendation || typeof recommendation !== "object") throw new Error("PLACEMENT_RECOMMENDATION_INVALID")
+  const recommendedNodeId = recommendation?.recommendation?.nodeId ?? recommendation?.recommendation?.node_id ?? null
+  const violations = []
+
+  for (const [nodeId, candidate] of Object.entries(candidatesByNodeId ?? {})) {
+    const refusals = hardGate(candidate, requirement, policy)
+    if (refusals.length > 0) {
+      // A candidate the recommendation path treated as eligible but the hard gate refuses.
+      const wasRecommended = recommendedNodeId === nodeId
+      violations.push({ nodeId, refusals, wasRecommended })
+    }
+  }
+
+  const recommendedRefusal = violations.find((v) => v.wasRecommended)
+  return {
+    allowed: !recommendedRefusal,
+    recommendedNodeId,
+    violations,
+    refusal: recommendedRefusal ?? null,
+    // Any hard-gate-refused candidate is removed from eligibility regardless of the recommendation.
+    eligibleAfterGate: Object.keys(candidatesByNodeId ?? {}).filter((nodeId) => !violations.some((v) => v.nodeId === nodeId)),
   }
 }
