@@ -1304,6 +1304,7 @@ export const CapabilityEvidenceSchema = z
     verdict: CapabilityVerdictSchema,
     modelArtifactId: IdentifierSchema,
     runtimeId: IdentifierSchema,
+    runtimeRevision: ImmutableRevisionSchema,
     runtimeConfigDigest: DigestSchema,
     computeResourceClass: IdentifierSchema,
     evaluationId: IdentifierSchema,
@@ -1311,8 +1312,17 @@ export const CapabilityEvidenceSchema = z
     measuredAt: TimestampSchema,
     metrics: z.record(z.union([z.number(), z.string(), z.boolean(), z.null()])),
     promotedBy: IdentifierSchema.optional(),
+    subjectIdentity: IdentifierSchema.optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    // A PROVEN verdict is only meaningful with an independent promoter: the evidence must name
+    // promotedBy, and that promoter may not be the subject identity being measured.
+    if (value.verdict === "PROVEN") {
+      if (!value.promotedBy) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "PROVEN evidence requires promotedBy (independent promotion)" })
+      if (value.subjectIdentity && value.promotedBy === value.subjectIdentity) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "PROVEN evidence cannot be self-attested by the subject" })
+    }
+  })
 
 /**
  * IF-05 — one run of an evaluation task against a subject binding. The runner records metrics; the
@@ -1327,6 +1337,7 @@ export const EvaluationRunSchema = z
       .object({
         modelArtifactId: IdentifierSchema,
         runtimeId: IdentifierSchema,
+        runtimeRevision: ImmutableRevisionSchema,
         runtimeConfigDigest: DigestSchema,
         computeResourceClass: IdentifierSchema,
       })
@@ -1336,6 +1347,19 @@ export const EvaluationRunSchema = z
     ranAt: TimestampSchema,
     evaluatorRef: NonEmptyStringSchema,
     evidenceRef: NonEmptyStringSchema,
+  })
+  .strict()
+
+/**
+ * IF-05 — the result of scoping prior evidence against a current binding. This is a REPORT, not a
+ * mutated evidence object: the original evidence is never rewritten, and the report names exactly
+ * which binding field changed so the caller can act on it.
+ */
+export const ScopedEvidenceReportSchema = z
+  .object({
+    evidence: CapabilityEvidenceSchema,
+    inScope: z.boolean(),
+    scopeReason: z.enum(["model-revision-changed", "runtime-changed", "runtime-config-changed", "compute-class-changed"]).nullable(),
   })
   .strict()
 
