@@ -3,6 +3,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+import { verifySovereignReview } from "../../lib/governance/sovereign-review.ts"
+
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
 export const HERMES_BASE_BRANCH = "main"
 
@@ -474,6 +476,44 @@ function exactHeadCodexCleanComment(value, headRefOid, requestTimes = exactHeadC
       && headRefOid.startsWith(reviewedDigest)
       && requestTimes.some((requestTime) => requestTime <= createdAt)
   })
+}
+
+/**
+ * Extract and cryptographically verify a sovereign review attestation for the exact head.
+ *
+ * The attestation SERVICE posts the signed artifact as an immutable PR comment (a reference
+ * carrier, not the trust root). The trust root is the Ed25519 signature, verified here against the
+ * SEPARATE sovereign-reviewer public trust ring (`WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON` /
+ * `SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON`), with hard domain separation: the artifact must be
+ * WILLIAMOS_SOVEREIGN_REVIEW, the key must be in the reviewer ring (disjoint from the delivery-seal
+ * ring), the head must match, and reviewer context must differ from builder context. A forged or
+ * tampered comment fails signature verification; a comment from the wrong key fails the ring check.
+ */
+function exactHeadSovereignAttestation(value, headRefOid, options = {}) {
+  const connection = value?.data?.repository?.pullRequest?.comments
+  const comments = connection?.nodes
+  if (!Array.isArray(comments)) return null
+  let ring = options.sovereignReviewerPublicKeys
+  if (!ring) {
+    const raw = process.env.WILLIAMOS_SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON ?? process.env.SOVEREIGN_REVIEWER_PUBLIC_KEYS_JSON
+    if (!raw) return null
+    try { ring = JSON.parse(raw) } catch { return null }
+  }
+  for (const comment of comments) {
+    const body = String(comment?.body ?? "")
+    const createdAt = Date.parse(comment?.createdAt ?? "")
+    const updatedAt = Date.parse(comment?.updatedAt ?? "")
+    // The carrier comment must be immutable (not edited after posting).
+    if (!(Number.isFinite(createdAt) && createdAt === updatedAt)) continue
+    const match = body.match(/```williamos-sovereign-review\s*\n([\s\S]*?)\n```/i)
+    if (!match) continue
+    let attestation
+    try { attestation = JSON.parse(match[1]) } catch { continue }
+    if (attestation?.payload?.reviewedHeadSha?.toLowerCase() !== headRefOid.toLowerCase()) continue
+    const result = verifySovereignReview(attestation, ring)
+    if (result.valid) return result
+  }
+  return null
 }
 
 function unresolvedThreadCount(value) {
@@ -1190,8 +1230,16 @@ export function createRepositoryLifecycle(options) {
       }
     }
     const codeRabbitRateLimited = rateLimitedCodeRabbitContexts.size > 0
+    // Sovereign independent review (Tier 1): a cryptographically signed attestation produced by the
+    // trusted review-attestation service on HERMES/AEGIS. The signature is the trust root, verified
+    // against the SEPARATE sovereign-reviewer trust ring — never a GitHub username, never the
+    // delivery-seal key. Domain separation is enforced by the artifact type + the reviewer ring.
+    const sovereignAttestation = exactHeadSovereignAttestation(reviewState, pr.headRefOid, options)
+    const hasSovereignReview = sovereignAttestation?.valid === true
+    const hasSovereignCleanReview = hasSovereignReview && sovereignAttestation.payload?.verdict === "CLEAN"
     const hasExactHeadReview = hasExactHeadApproval || hasExactHeadCodexCleanComment
       || (hasExactHeadCodexCleanReview && unresolved === 0 && codexReviewFindings.length === 0)
+      || hasSovereignReview
     const hasCodeRabbitReview = checks.some((check) =>
       /coderabbit/i.test(checkName(check)) && checkState(check) === "SUCCESS"
         && !rateLimitedCodeRabbitContexts.has(checkName(check).toLowerCase()))
@@ -1222,10 +1270,10 @@ export function createRepositoryLifecycle(options) {
       pendingChecks,
       codexReviewFindings,
       cleanReviewEvidence: hasExactHeadApproval || hasExactHeadCodexCleanComment
-        || hasExactHeadCodexCleanReview || hasCodeRabbitReview,
+        || hasExactHeadCodexCleanReview || hasCodeRabbitReview || hasSovereignCleanReview,
       reviewed: hasExactHeadReview || hasCodeRabbitReview,
       reviewCompleted: hasExactHeadApproval || hasExactHeadCodexCleanComment
-        || hasExactHeadCodexCompletedReview || hasCodeRabbitReview,
+        || hasExactHeadCodexCompletedReview || hasCodeRabbitReview || hasSovereignCleanReview,
       codeRabbitRateLimited,
       reviewRequested: requestTimes.length > 0,
       unresolvedThreadCount: unresolved,
