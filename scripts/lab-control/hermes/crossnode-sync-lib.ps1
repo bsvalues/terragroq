@@ -536,3 +536,68 @@ function Write-AtomicUtf8File {
         }
     }
 }
+
+function Assert-RecoveryArtifactName {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $clean = $Name.Trim()
+    # A manifest is data recovered from an archive; it may not steer a local or remote path.
+    $unsafe = (-not $clean) -or ($clean -ne $Name) -or ($clean -match '[\\/:]') -or ($clean -match '\.\.') `
+        -or ($clean -match '[\x00-\x1f]') -or ($clean -match '[<>"|?*]') -or ($clean -match '[. ]$') `
+        -or ($clean -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)')
+    if ($unsafe) {
+        throw "UNSAFE_RECOVERY_ARTIFACT_NAME name=$Name"
+    }
+    return $clean
+}
+
+function Assert-ManifestRecoveryArtifacts {
+    <#
+    Every artifact the manifest records is required to actually recover the appliance, so every one
+    must be proven present and intact -- not only the small archives a readback happens to download.
+    The local archive is hashed in place and the replica is compared by digest over SSH, so the proof
+    covers whole volume backups without transferring them.
+
+    $GetRemoteSha256 is injected so this invariant is testable without a live replica: it receives the
+    remote path and returns the replica's SHA-256 for it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()]$Manifest,
+        [Parameter(Mandatory = $true)][string]$LocalRoot,
+        [Parameter(Mandatory = $true)][string]$RemoteRoot,
+        [Parameter(Mandatory = $true)][scriptblock]$GetRemoteSha256
+    )
+
+    if ($null -eq $Manifest -or $null -eq $Manifest.artifacts) {
+        throw 'RECOVERY_MANIFEST_ARTIFACTS_EMPTY'
+    }
+    $artifacts = @($Manifest.artifacts)
+    if ($artifacts.Count -eq 0) { throw 'RECOVERY_MANIFEST_ARTIFACTS_EMPTY' }
+
+    $root = $RemoteRoot.TrimEnd('/')
+    $verified = New-Object System.Collections.Generic.List[string]
+    foreach ($artifact in $artifacts) {
+        $name = Assert-RecoveryArtifactName ([string]$artifact.name)
+        if ($verified.Contains($name)) { throw "RECOVERY_MANIFEST_ARTIFACT_DUPLICATE name=$name" }
+        $expected = ([string]$artifact.sha256).ToLowerInvariant()
+        if ($expected -notmatch '^[a-f0-9]{64}$') { throw "RECOVERY_MANIFEST_ARTIFACT_HASH_INVALID name=$name" }
+
+        $localPath = Join-Path $LocalRoot $name
+        if (-not (Test-Path -LiteralPath $localPath -PathType Leaf)) {
+            throw "RECOVERY_ARTIFACT_LOCAL_MISSING name=$name"
+        }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $localPath).Hash.ToLowerInvariant() -ne $expected) {
+            throw "RECOVERY_ARTIFACT_LOCAL_HASH_MISMATCH name=$name"
+        }
+        if ([int64](Get-Item -LiteralPath $localPath).Length -ne [int64]$artifact.bytes) {
+            throw "RECOVERY_ARTIFACT_SIZE_MISMATCH name=$name"
+        }
+
+        $remoteHash = ([string](& $GetRemoteSha256 ($root + '/' + $name))).Trim().ToLowerInvariant()
+        if ($remoteHash -notmatch '^[a-f0-9]{64}$') { throw "REMOTE_HASH_INVALID name=$name" }
+        if ($remoteHash -ne $expected) { throw "REMOTE_ARTIFACT_HASH_MISMATCH name=$name" }
+
+        $verified.Add($name)
+    }
+    return $verified.ToArray()
+}

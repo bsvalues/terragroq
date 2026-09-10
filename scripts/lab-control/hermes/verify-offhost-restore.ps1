@@ -70,6 +70,17 @@ try {
   $manifest = Get-Content -LiteralPath (Join-Path $proofDir 'recovery-manifest.json') -Raw | ConvertFrom-Json
   if ($manifest.schema -ne 'hermes-recovery-generation/1' -or $manifest.run -ne $generation) { throw 'RECOVERY_GENERATION_MISMATCH' }
   Assert-Hash (Join-Path $proofDir 'recovery-canary.txt') $manifest.canary.sha256
+  # Certify the whole generation, not only the two archives this readback downloads: the volume
+  # archives are what recovery actually restores, so a receipt that reports PASS without them is how
+  # a missing or corrupt replica volume goes unnoticed. Digests are compared over SSH, which keeps the
+  # proof complete without transferring whole backups.
+  $remoteHasher = {
+    param([Parameter(Mandatory = $true)][string]$RemotePath)
+    $lines = @(Invoke-CheckedNative -FilePath 'ssh' -ArgumentList ($sshOptions + @($atlas, "sha256sum -- $RemotePath")))
+    if ($lines.Count -ne 1 -or $lines[0] -notmatch '^([a-fA-F0-9]{64})\s') { throw 'REMOTE_HASH_INVALID' }
+    return $matches[1]
+  }.GetNewClosure()
+  $verifiedArtifacts = @(Assert-ManifestRecoveryArtifacts -Manifest $manifest -LocalRoot $backupRoot -RemoteRoot '/home/bs/from-hermes' -GetRemoteSha256 $remoteHasher)
   $configRecords = @($manifest.artifacts | Where-Object { $_.role -eq 'hermes-appliance-config' -and $_.name -eq $configName })
   if ($configRecords.Count -ne 1) { throw 'CONFIG_MANIFEST_INVALID' }
   Assert-Hash (Join-Path $stage $configName) $configRecords[0].sha256
@@ -95,7 +106,7 @@ try {
     verifiedAt = [datetime]::UtcNow.ToString('o'); proofSha256 = $hashes[$latest.Name]; configSha256 = $hashes[$configName]
     canarySha256 = $manifest.canary.sha256; canaryId = $manifest.canary.id; inventoryFileCount = @($inventory.files).Count
     evidencePath = $stage
-    verification = [ordered]@{ remoteHashesMatched = $true; proofExtracted = $true; canaryMatched = $true; configExtracted = $true; configInventoryMatched = $true }
+    verification = [ordered]@{ remoteHashesMatched = $true; proofExtracted = $true; canaryMatched = $true; configExtracted = $true; configInventoryMatched = $true; recoveryArtifactsVerified = $verifiedArtifacts.Count }
   }
   $receiptPath = Join-Path $backupRoot 'hermes-latest-restore-receipt.json'
   $temporary = Join-Path $backupRoot ('.restore-receipt-' + [guid]::NewGuid().ToString('N') + '.tmp')
