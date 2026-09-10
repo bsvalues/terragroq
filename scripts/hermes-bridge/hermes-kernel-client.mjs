@@ -94,10 +94,19 @@ export function createHermesKernelClient({
   timeoutMs = 45 * 60 * 1000,
   now = () => new Date(),
   powershellCommand = process.platform === "win32" ? "powershell" : "pwsh",
+  invokerKind = "powershell",
+  pythonCommand,
   randomUUID = () => crypto.randomUUID(),
 } = {}) {
   requiredString(workspacePath, "workspacePath"); requiredString(runtimeRoot, "runtimeRoot")
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
+  // These are trusted host configuration, never fields from the model packet.
+  // Python is an explicit alternative for a separately qualified Linux invoker.
+  if (!["powershell", "python"].includes(invokerKind)) throw new TypeError("invokerKind must be powershell or python")
+  if (invokerKind === "python") {
+    if (!path.isAbsolute(requiredString(pythonCommand, "pythonCommand"))) throw new TypeError("pythonCommand must be an absolute executable path")
+    if (!path.isAbsolute(requiredString(invokerPath, "invokerPath"))) throw new TypeError("invokerPath must be absolute for Python")
+  }
   const threadsRoot = kernelThreadsRoot(runtimeRoot)
   const worktreesRoot = path.join(path.resolve(runtimeRoot), "worktrees")
   const quarantinePath = kernelQuarantinePath(runtimeRoot)
@@ -163,6 +172,15 @@ export function createHermesKernelClient({
   }
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    // For a Python invoker the interpreter is part of the trusted invocation contract too: an
+    // absolute-but-missing or directory pythonCommand otherwise passes connect() and only fails
+    // inside runTurn (recorded as an interruption after session state exists). Validate it here,
+    // on the resident host in remote mode, as a regular executable file before connected=true.
+    if (invokerKind === "python") {
+      const stat = fs.statSync(pythonCommand, { throwIfNoEntry: false })
+      if (!stat?.isFile() || stat.isSymbolicLink()) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+      if (process.platform !== "win32" && (stat.mode & 0o111) === 0) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    }
   }
   /**
    * Spec §4 item 6: the kernel's own deadline must fit inside the budget the host runner enforces.
@@ -401,11 +419,15 @@ export function createHermesKernelClient({
       const ignoredBefore = await ignoredPaths(workspaceReal, turnTimeoutMs)
       let result
       try {
+        const invocation = invokerKind === "python"
+          ? { command: pythonCommand, args: ["-I", invokerPath,
+              "--packet-path", packetPath, "--policy-path", policyPath, "--workspace-path", workspaceReal, "--run-id", runId,
+              "--quarantine-path", quarantinePath, "--state-path", statePath] }
+          : { command: powershellCommand, args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+              "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
+              "-QuarantinePath", quarantinePath, "-StatePath", statePath] }
         result = await commandRunner({
-          command: powershellCommand,
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-            "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
-            "-QuarantinePath", quarantinePath, "-StatePath", statePath],
+          ...invocation,
           cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
         })
       } catch (error) {

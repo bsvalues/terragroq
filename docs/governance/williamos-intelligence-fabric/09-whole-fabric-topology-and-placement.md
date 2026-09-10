@@ -10,6 +10,7 @@ The resident topology to reconcile from current truth is:
 - AEGIS — heavy development/data worker and repository/build/test execution target;
 - ATLAS — durable WilliamOS state, RAG, evidence, database and data-local services;
 - OMEN — owner cockpit/client and opportunistic accelerator only; never a required resident dependency;
+- DAEDALUS — owner-designated resident GPU model/repository worker (P620/RTX 3090); HERMES retains coordination and ATLAS retains durable state. Admission requires verified machine identity, fresh health/model roster and bounded execution evidence. See [Daedalus integration status](../../reports/DAEDALUS-INTEGRATION.md).
 - future elastic/private remote compute — ephemeral work-owned capacity.
 
 These roles are owner-directed architectural intent, but exact hardware/runtime/link facts MUST be re-proven from current live evidence before placement.
@@ -24,6 +25,8 @@ Every fabric node/resource MUST declare a dependency class independent of capabi
 - `EPHEMERAL` — provisioned for bounded work and destroyed after settlement.
 
 OMEN MUST be treated as `OPPORTUNISTIC` for compute placement. Closing, sleeping, rebooting, disconnecting, or taking OMEN off-site removes a candidate; it does not create a resident-system failure.
+
+DAEDALUS is `RESIDENT_OPTIONAL`: Qwen3-8B can remain on its qualified GPU host. Loss of this worker removes its placement eligibility; it does not relocate canonical control/state or make the cockpit unavailable. Its source registration alone does not establish operational readiness.
 
 ## 2. FabricLink
 

@@ -195,7 +195,8 @@ function validateWorkload(workload) {
     if (!isObject(runtime) || typeof runtime.kind !== "string" || runtime.kind.trim() === "") {
       fail(`${workload.id}.requirements.runtimes_all[${index}] is invalid`)
     }
-    exactKeys(runtime, ["kind", "states"], `${workload.id}.requirements.runtimes_all[${index}]`)
+    exactKeys(runtime, ["kind", "states", ...(Object.hasOwn(runtime, "models_all") ? ["models_all"] : [])], `${workload.id}.requirements.runtimes_all[${index}]`)
+    if (Object.hasOwn(runtime, "models_all")) stringArray(runtime.models_all, `${workload.id}.requirements.runtimes_all[${index}].models_all`)
     stringArray(runtime.states, `${workload.id}.requirements.runtimes_all[${index}].states`)
     if (runtime.states.some((state) => !HEALTHY_RUNTIME_STATES.has(state))) {
       fail(`${workload.id}: runtime states may only be healthy or running`)
@@ -456,9 +457,17 @@ function evaluateNode(node, workload, evaluatedAt) {
       "RUNTIME_STATE_INELIGIBLE", runtimeRequirement.kind, runtimeRequirement.states, observedStates,
       [`nodes.${node.id}.runtimes.${runtimeRequirement.kind}`],
     ))
+    const requiredModels = runtimeRequirement.models_all ?? []
+    if (requiredModels.length && !matching.some((runtime) =>
+      runtimeRequirement.states.includes(runtime.state) &&
+      requiredModels.every((model) => runtime.details?.models?.includes(model)))) reasons.push(reason(
+      "MODEL_ROSTER_INELIGIBLE", runtimeRequirement.kind, requiredModels,
+      matching.filter((runtime) => runtimeRequirement.states.includes(runtime.state)).flatMap((runtime) => runtime.details?.models ?? []),
+      [`nodes.${node.id}.runtimes.${runtimeRequirement.kind}.details.models`],
+    ))
     evidenceUsed.push(evidenceRef(
       `nodes.${node.id}.runtimes.${runtimeRequirement.kind}`,
-      matching.map((runtime) => ({ id: runtime.id, state: runtime.state })),
+      matching.map((runtime) => ({ id: runtime.id, state: runtime.state, ...(requiredModels.length ? { models: runtime.details?.models ?? [] } : {}) })),
     ))
   }
 

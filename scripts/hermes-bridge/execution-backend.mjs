@@ -4,6 +4,7 @@ import path from "node:path"
 import { CodexAppServerClient } from "./app-server-client.mjs"
 import { createHermesKernelClient, HERMES_KERNEL_INVOKER_RELATIVE, HERMES_KERNEL_POLICY_RELATIVE } from "./hermes-kernel-client.mjs"
 import { createCommandRunner } from "./repository-lifecycle.mjs"
+import { createRemoteResidentClient, residentSshTransport } from "./remote-resident-model-client.mjs"
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
@@ -268,7 +269,64 @@ export class AegisExecutionBackend extends ExecutionBackend {
   }
 }
 
+/** Remote workspace mechanics with the resident kernel, never a nested Codex provider. */
+export class RemoteResidentModelExecutionBackend extends AegisExecutionBackend {
+  constructor({ nodeId, modelId, kernelPolicyPath, kernelInvokerPath, invokerKind = "powershell", pythonCommand, nodeCommand = "node", evidenceRoot, transport = residentSshTransport, ...options } = {}) {
+    for (const key of ["runtimeRoot", "repositoryRoot"]) {
+      if (!requiredString(options[key], key).startsWith("/")) throw new TypeError(`${key} must be an absolute POSIX path`)
+    }
+    for (const [key, value] of Object.entries({ kernelPolicyPath, kernelInvokerPath })) {
+      if (!requiredString(value, key).startsWith("/")) throw new TypeError(`${key} must be an absolute POSIX path`)
+    }
+    super(options)
+    if (!/^[a-z][a-z0-9-]*$/.test(nodeId ?? "")) throw new TypeError("nodeId must be a canonical node identity")
+    this.isResidentModel = true
+    this.nodeId = nodeId
+    this.modelId = requiredString(modelId, "modelId")
+    this.kernelPolicyPath = kernelPolicyPath
+    this.kernelInvokerPath = kernelInvokerPath
+    if (!["powershell", "python"].includes(invokerKind)) throw new TypeError("unsupported invokerKind")
+    if (invokerKind === "python" && !requiredString(pythonCommand, "pythonCommand").startsWith("/")) throw new TypeError("pythonCommand must be an absolute POSIX path")
+    this.invokerKind = invokerKind
+    this.pythonCommand = pythonCommand
+    if (nodeCommand !== "node" && !requiredString(nodeCommand, "nodeCommand").startsWith("/")) throw new TypeError("nodeCommand must be node or an absolute POSIX path")
+    this.nodeCommand = nodeCommand
+    this.evidenceRoot = path.resolve(requiredString(evidenceRoot, "evidenceRoot"))
+    this.transport = transport
+    this.workerPath = path.posix.join(this.repositoryRoot, "scripts/hermes-bridge/remote-resident-model-worker.mjs")
+  }
+
+  get remoteConfig() {
+    return { nodeId: this.nodeId, modelId: this.modelId, runtimeRoot: this.runtimeRoot, repositoryRoot: this.repositoryRoot,
+      policyPath: this.kernelPolicyPath, invokerPath: this.kernelInvokerPath, invokerKind: this.invokerKind, pythonCommand: this.pythonCommand, nodeCommand: this.nodeCommand }
+  }
+
+  async health() {
+    const response = await this.transport({ host: this.host, workerPath: this.workerPath, timeoutMs: 15_000,
+      request: { schemaVersion: 1, method: "health", config: this.remoteConfig } })
+    if (response?.schemaVersion !== 1 || response?.ok !== true || response.result?.nodeId !== this.nodeId) throw new Error("REMOTE_RESIDENT_HEALTH_FAILED")
+    return response.result
+  }
+
+  async runCodexClient({ workspacePath, timeoutMs } = {}) {
+    const workspace = path.posix.resolve(requiredString(workspacePath, "workspacePath"))
+    if (path.posix.dirname(workspace) !== path.posix.join(this.runtimeRoot, "worktrees")) throw new Error("workspacePath is outside the owned worktree root")
+    return createRemoteResidentClient({ host: this.host, workerPath: this.workerPath, config: this.remoteConfig,
+      workspacePath: workspace, timeoutMs, evidenceRoot: this.evidenceRoot, transport: this.transport })
+  }
+}
+
 export function selectExecutionBackend(env = process.env) {
+  if (env?.WILLIAMOS_EXECUTOR === "remote-resident-model") {
+    return new RemoteResidentModelExecutionBackend({
+      host: env.WILLIAMOS_MODEL_EXEC_NODE, nodeId: env.WILLIAMOS_MODEL_NODE_ID, modelId: env.WILLIAMOS_MODEL_ID,
+      runtimeRoot: env.WILLIAMOS_MODEL_RUNTIME_ROOT, repositoryRoot: env.WILLIAMOS_MODEL_REPOSITORY_ROOT,
+      kernelPolicyPath: env.WILLIAMOS_MODEL_POLICY_PATH, kernelInvokerPath: env.WILLIAMOS_MODEL_INVOKER_PATH,
+      evidenceRoot: env.WILLIAMOS_MODEL_EVIDENCE_ROOT,
+      invokerKind: env.WILLIAMOS_MODEL_INVOKER_KIND ?? "powershell", pythonCommand: env.WILLIAMOS_MODEL_PYTHON,
+      nodeCommand: env.WILLIAMOS_MODEL_NODE_COMMAND ?? "node",
+    })
+  }
   // Explicit opt-in, checked first and matched exactly. WILLIAMOS_CODEX_EXEC_NODE selects
   // WHERE Codex runs; this selects WHETHER Codex runs at all, so it cannot be folded into it.
   // Nothing sets this variable today, so existing deployments keep their current backend.

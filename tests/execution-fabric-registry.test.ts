@@ -390,7 +390,7 @@ describe("Execution Fabric registry schema and identity", () => {
     const ids = (canonicalSeed.nodes as JsonObject[]).map((node) => node.id)
     const aegis = nodeById(canonicalSeed, "aegis")
 
-    expect(ids).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure"])
+    expect(ids).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure", "daedalus"])
     expect(ids).not.toContain("t5810-2")
     expect(aegis).toMatchObject({
       hostname: "aegis",
