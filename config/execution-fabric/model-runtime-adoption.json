@@ -1,0 +1,123 @@
+{
+  "schema": "williamos-if03-model-runtime-adoption/1",
+  "recordedAt": "2026-09-10T09:45:00Z",
+  "note": "Represents the existing, already-running resident model path exactly. This is a recording of current truth, not a change to it: no new model download, no behavior change, the promoted DAEDALUS policy remains the authority for its contained worker path.",
+  "modelArtifacts": [
+    {
+      "family": "Qwen3",
+      "repository": "Qwen/Qwen3-8B",
+      "source": "huggingface",
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+      "immutableIdentity": "Qwen/Qwen3-8B@b968826d9c46dd6066d109eabc6255188de91218",
+      "alias": "daedalus-local-qwen3-8b",
+      "architecture": "qwen3",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "apache-2.0",
+        "evidenceRef": "hf://Qwen/Qwen3-8B/LICENSE",
+        "commercialUse": "ALLOWED",
+        "redistribution": "ALLOWED"
+      },
+      "quantization": {
+        "disclosure": "DISCLOSED",
+        "format": "bfloat16"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 32768
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "ACTIVE",
+      "admissionEvidence": {
+        "kind": "CAPABILITY_EVIDENCE_BINDING",
+        "modelImmutableIdentity": "Qwen/Qwen3-8B@b968826d9c46dd6066d109eabc6255188de91218",
+        "capability": {
+          "id": "bounded-read-only-inference",
+          "version": "1"
+        },
+        "runtime": {
+          "id": "daedalus-hf-transformers",
+          "version": "5.16.1"
+        },
+        "runtimeConfigurationDigest": "sha256:9d1732a3905c5ae3716e1c3ac484a47c906146f88c78839163bedeab327f8dc1",
+        "computeClass": "NVIDIA_AMPERE_RTX3090_24GB",
+        "evaluationId": "evaluation.daedalus-qwen3-8b.promotion.20260910",
+        "verdict": "PROVEN",
+        "evidenceRef": "C:/HermesLab/daedalus/evidence/placement/health.json; promotion receipt sha256:746e37b2904cd313870c0c88132b044fbd75340e1b230fd951f515eb9ed82331",
+        "measuredAt": "2026-09-10T05:04:56Z",
+        "promotedBy": "agent.hermes.independent-review"
+      },
+      "id": "qwen3-8b-daedalus",
+      "createdAt": "2026-09-10T09:45:00Z"
+    }
+  ],
+  "runtimes": [
+    {
+      "kind": "SPECIALIST",
+      "version": "5.16.1",
+      "buildIdentity": "python-venv daedalus-gpu; transformers 5.16.1; torch 2.12.1+cu130; CUDA 13.0; driver 595.84",
+      "artifact": {
+        "kind": "NATIVE_BINARY",
+        "binaryDigest": "sha256:fe39241ce07c309d68d9152d88e08b008c147a24a92d67b3fbd79bd92378a016"
+      },
+      "endpointClass": "CLI",
+      "lifecycle": "HEALTHY",
+      "features": [
+        "offline-inference",
+        "bfloat16",
+        "pinned-model-hashes",
+        "no-tool-passthrough"
+      ],
+      "observedAt": "2026-09-10T09:45:00Z",
+      "id": "daedalus-hf-transformers"
+    },
+    {
+      "kind": "OLLAMA",
+      "version": "0.9.2",
+      "buildIdentity": "local Ollama on HERMES, OpenAI-compatible proxy at 127.0.0.1:11434",
+      "artifact": {
+        "kind": "NATIVE_BINARY",
+        "binaryDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "endpointClass": "OPENAI_COMPATIBLE",
+      "lifecycle": "HEALTHY",
+      "features": [
+        "openai-compatible",
+        "local-serving"
+      ],
+      "observedAt": "2026-09-10T09:45:00Z",
+      "id": "hermes-ollama"
+    }
+  ],
+  "runtimeCapabilities": [
+    {
+      "runtimeVersion": "5.16.1",
+      "hardwarePlatform": "NVIDIA_AMPERE_RTX3090",
+      "feature": "offline-inference",
+      "verdict": "PROVEN",
+      "evidenceRef": "C:/HermesLab/daedalus/evidence/placement/health.json; 10 completed bounded work-order receipts",
+      "observedAt": "2026-09-10T05:04:56Z",
+      "runtimeId": "daedalus-hf-transformers"
+    },
+    {
+      "runtimeVersion": "5.16.1",
+      "hardwarePlatform": "NVIDIA_AMPERE_RTX3090",
+      "feature": "no-tool-passthrough",
+      "verdict": "PROVEN",
+      "evidenceRef": "daedalus model-policy.json pins allowedToolsets=[] and cloudFallbackAllowed=false; health.agentToolsEnabled=false",
+      "observedAt": "2026-09-10T05:04:56Z",
+      "runtimeId": "daedalus-hf-transformers"
+    }
+  ],
+  "policyProvenance": {
+    "policyWorkOrderId": "WO-DAEDALUS-MODEL-FABRIC",
+    "providerId": "daedalus-local-qwen3-8b",
+    "promotionStatus": "PROMOTED",
+    "policySha256": "sha256:9d1732a3905c5ae3716e1c3ac484a47c906146f88c78839163bedeab327f8dc1",
+    "sourceOfTruth": "daedalus ~/.local/share/williamos-daedalus/config/model-policy.json",
+    "note": "The promoted resident-model policy is mapped into registry provenance here; it remains the authority for its contained worker path. This record does not supersede it."
+  }
+}
