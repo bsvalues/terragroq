@@ -1278,4 +1278,69 @@ export type FabricLink = z.infer<typeof FabricLinkSchema>
 export type FabricNodeObservation = z.infer<typeof FabricNodeObservationSchema>
 export type FabricTopologySnapshot = z.infer<typeof FabricTopologySnapshotSchema>
 
+
+export const CapabilityVerdictSchema = z.enum([
+  "UNKNOWN",
+  "SUPPORTED",
+  "MEASURED",
+  "PROVEN",
+  "DEGRADED",
+  "FAILED",
+  "RETIRED",
+])
+
+/**
+ * IF-05 — capability evidence for a model/runtime binding.
+ *
+ * A measured or proven verdict binds an exact model artifact, runtime, runtime configuration digest,
+ * compute class, and evaluation run. `promotedBy` records the independent identity that promoted the
+ * binding; the promotion engine (scripts/execution-fabric/eval-lab.mjs) refuses promotion when the
+ * subject model/lane would mark itself proven while expanding production eligibility.
+ */
+export const CapabilityEvidenceSchema = z
+  .object({
+    id: IdentifierSchema,
+    capability: NonEmptyStringSchema,
+    verdict: CapabilityVerdictSchema,
+    modelArtifactId: IdentifierSchema,
+    runtimeId: IdentifierSchema,
+    runtimeConfigDigest: DigestSchema,
+    computeResourceClass: IdentifierSchema,
+    evaluationId: IdentifierSchema,
+    evidenceRef: NonEmptyStringSchema,
+    measuredAt: TimestampSchema,
+    metrics: z.record(z.union([z.number(), z.string(), z.boolean(), z.null()])),
+    promotedBy: IdentifierSchema.optional(),
+  })
+  .strict()
+
+/**
+ * IF-05 — one run of an evaluation task against a subject binding. The runner records metrics; the
+ * verdict is computed by the promotion engine, never asserted by the subject under measurement.
+ */
+export const EvaluationRunSchema = z
+  .object({
+    id: IdentifierSchema,
+    taskId: IdentifierSchema,
+    capability: NonEmptyStringSchema,
+    subject: z
+      .object({
+        modelArtifactId: IdentifierSchema,
+        runtimeId: IdentifierSchema,
+        runtimeConfigDigest: DigestSchema,
+        computeResourceClass: IdentifierSchema,
+      })
+      .strict(),
+    metrics: z.record(z.union([z.number(), z.string(), z.boolean(), z.null()])),
+    outcome: z.enum(["PASS", "FAIL", "ERROR"]),
+    ranAt: TimestampSchema,
+    evaluatorRef: NonEmptyStringSchema,
+    evidenceRef: NonEmptyStringSchema,
+  })
+  .strict()
+
+export type CapabilityVerdict = z.infer<typeof CapabilityVerdictSchema>
+export type CapabilityEvidence = z.infer<typeof CapabilityEvidenceSchema>
+export type EvaluationRun = z.infer<typeof EvaluationRunSchema>
+
 export type InferenceReceipt = z.infer<typeof InferenceReceiptSchema>
