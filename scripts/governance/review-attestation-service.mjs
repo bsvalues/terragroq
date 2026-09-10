@@ -1,6 +1,6 @@
 import crypto from "node:crypto"
 
-import { signSovereignReview, sovereignReviewerSigningKeyFromBase64 } from "../../lib/governance/sovereign-review.ts"
+import { signSovereignReview, sovereignReviewerSigningKeyFromBase64 } from "../../lib/governance/sovereign-review.mjs"
 
 /**
  * Trusted sovereign-review attestation service.

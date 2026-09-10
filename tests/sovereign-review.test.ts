@@ -6,7 +6,7 @@ import {
   signSovereignReview,
   sovereignReviewerSigningKeyFromBase64,
   verifySovereignReview,
-} from "@/lib/governance/sovereign-review"
+} from "@/lib/governance/sovereign-review.mjs"
 import { deliverySigningKeyFromBase64 } from "@/lib/governance/delivery-seal"
 
 const kp = generateSovereignReviewerKeypair()

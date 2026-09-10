@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { verifySovereignReview } from "../../lib/governance/sovereign-review.ts"
+import { verifySovereignReview } from "../../lib/governance/sovereign-review.mjs"
 
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
 export const HERMES_BASE_BRANCH = "main"

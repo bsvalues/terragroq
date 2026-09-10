@@ -1119,7 +1119,7 @@ describe("Hermes repository lifecycle", () => {
     // No CodeRabbit SUCCESS, no codex-connector clean review — external reviewers unavailable.
     // A signed WILLIAMOS_SOVEREIGN_REVIEW attestation, carried in an immutable PR comment and
     // verified against the SEPARATE reviewer trust ring, satisfies reviewed + reviewCompleted.
-    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review")
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
     const kp = generateSovereignReviewerKeypair()
     const attestation = signSovereignReview({
       reviewerRole: "INDEPENDENT_CODE_REVIEWER", reviewerContextId: "aegis-reviewer-1", builderContextId: "hermes-builder-9",
@@ -1152,7 +1152,7 @@ describe("Hermes repository lifecycle", () => {
   })
 
   it("rejects a sovereign attestation signed by a key outside the reviewer trust ring", async () => {
-    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review")
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
     const signingKp = generateSovereignReviewerKeypair() // the key that signs
     const ringKp = generateSovereignReviewerKeypair()     // a DIFFERENT key in the ring
     const attestation = signSovereignReview({
@@ -1182,7 +1182,7 @@ describe("Hermes repository lifecycle", () => {
   })
 
   it("a sovereign attestation with BLOCKING_FINDINGS is reviewed but NOT reviewCompleted", async () => {
-    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review")
+    const { generateSovereignReviewerKeypair, signSovereignReview, sovereignReviewerSigningKeyFromBase64 } = await import("@/lib/governance/sovereign-review.mjs")
     const kp = generateSovereignReviewerKeypair()
     const attestation = signSovereignReview({
       reviewerRole: "INDEPENDENT_CODE_REVIEWER", reviewerContextId: "aegis-reviewer-1", builderContextId: "hermes-builder-9",
