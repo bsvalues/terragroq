@@ -46,7 +46,7 @@
         "computeClass": "NVIDIA_AMPERE_RTX3090_24GB",
         "evaluationId": "evaluation.daedalus-qwen3-8b.promotion.20260910",
         "verdict": "PROVEN",
-        "evidenceRef": "C:/HermesLab/daedalus/evidence/placement/health.json; promotion receipt sha256:746e37b2904cd313870c0c88132b044fbd75340e1b230fd951f515eb9ed82331",
+        "evidenceRef": "local://daedalus/home/daedalus/Documents/Codex/2026-09-09/you/outputs/bakeoff005/Qwen3-8B/model configDigest:sha256:f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30 ; placement health C:/HermesLab/daedalus/evidence/placement/health.json ; promotion receipt sha256:746e37b2904cd313870c0c88132b044fbd75340e1b230fd951f515eb9ed82331",
         "measuredAt": "2026-09-10T05:04:56Z",
         "promotedBy": "agent.hermes.independent-review"
       },
@@ -119,5 +119,12 @@
     "policySha256": "sha256:9d1732a3905c5ae3716e1c3ac484a47c906146f88c78839163bedeab327f8dc1",
     "sourceOfTruth": "daedalus ~/.local/share/williamos-daedalus/config/model-policy.json",
     "note": "The promoted resident-model policy is mapped into registry provenance here; it remains the authority for its contained worker path. This record does not supersede it."
+  },
+  "localPresence": {
+    "modelKey": "qwen3-8b-daedalus",
+    "host": "daedalus",
+    "path": "/home/daedalus/Documents/Codex/2026-09-09/you/outputs/bakeoff005/Qwen3-8B/model",
+    "configDigest": "sha256:f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30",
+    "verifiedAt": "2026-09-10T09:50:00Z"
   }
 }
