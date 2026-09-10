@@ -482,6 +482,194 @@ describe("Hermes bridge CLI", () => {
     expect(cycle).toHaveBeenCalledTimes(3)
   })
 
+  it("does not convert an unresolved parent mission into a successful queue drain", async () => {
+    const parentMissions = {
+      integrity: "VERIFIED",
+      unresolved: [{
+        missionKey: `external-parent:${"c".repeat(64)}`,
+        externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+        goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        worldId: "space-terrafusion",
+        projectId: 2,
+        repository: "bsvalues/terrafusion_os_1.0",
+      }],
+      resolved: [],
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "child-1" })
+      .mockResolvedValueOnce({
+        result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+        reasonCode: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+      })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, maxOutcomes: 3 }))
+      .resolves.toEqual({
+        result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+        reasonCode: "ORPHANED_ACTIVE_MISSION",
+        parentMissions,
+        settled: [{ result: "COMPLETE", outcomeId: "child-1" }],
+      })
+    expect(cycle).toHaveBeenCalledTimes(2)
+  })
+
+  it("continues draining when finding consumption queues a child after a parent wall", async () => {
+    const calls: string[] = []
+    const consumeRuntimeFindings = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("findings:backlog"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-wall"); return { queuedChildren: 1 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-child"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-final-wall"); return { queuedChildren: 0 } })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("cycle:wall"); return parentWall })
+      .mockImplementationOnce(async () => { calls.push("cycle:child"); return { result: "COMPLETE", outcomeId: "derived" } })
+      .mockImplementationOnce(async () => { calls.push("cycle:final-wall"); return parentWall })
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, maxOutcomes: 3,
+    })).resolves.toEqual({
+      ...parentWall,
+      settled: [{ result: "COMPLETE", outcomeId: "derived" }],
+    })
+    expect(calls).toEqual([
+      "findings:backlog", "cycle:wall", "findings:post-wall", "cycle:child",
+      "findings:post-child", "cycle:final-wall", "findings:post-final-wall",
+    ])
+  })
+
+  it("drains a child from a mixed finding batch before presenting its Primary decision", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      sourceKind: "RUNTIME_FINDING",
+      requestDigest: "f".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:mixed-batch",
+    }
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+      .mockResolvedValueOnce(pending)
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+      .mockResolvedValueOnce({ gated: 1, queuedChildren: 1 })
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce(parentWall)
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "derived" })
+      .mockResolvedValueOnce(parentWall)
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, consumeDecision, maxOutcomes: 3,
+    })).resolves.toEqual(pending)
+    expect(cycle).toHaveBeenCalledTimes(3)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+  })
+
+  it("rechecks a verified replayed child before returning a stale parent wall", async () => {
+    const replayedChild = {
+      disposition: "DERIVED",
+      replayed: true,
+      outcomeKey: `runtime-finding:91:${"a".repeat(64)}`,
+    }
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ queuedChildren: 0, results: [] })
+      .mockResolvedValue({ queuedChildren: 0, results: [replayedChild] })
+    const parentWall = {
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }
+    const cycle = vi.fn()
+      .mockResolvedValueOnce(parentWall)
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "replayed-derived" })
+      .mockResolvedValueOnce(parentWall)
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, maxOutcomes: 3,
+    })).resolves.toEqual({
+      ...parentWall,
+      settled: [{ result: "COMPLETE", outcomeId: "replayed-derived" }],
+    })
+    expect(cycle).toHaveBeenCalledTimes(3)
+  })
+
+  it("presents an existing Primary decision before an unresolved parent mission wall", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      outcomeId: 77,
+      requestDigest: "e".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact",
+    }
+    const consumeDecision = vi.fn(async () => pending)
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+    }))
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledOnce()
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
+  it("presents a newly gated Primary decision before an unresolved parent mission wall", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      sourceKind: "RUNTIME_FINDING",
+      requestDigest: "f".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:new-gate",
+    }
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+      .mockResolvedValueOnce(pending)
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ gated: 0 })
+      .mockResolvedValueOnce({ gated: 1 })
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_BINDING_REQUIRED",
+      reasonCode: "PARENT_MISSION_BINDING_REQUIRED",
+    }))
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, consumeDecision,
+    })).resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
+  it("exits the real cycle command nonzero for an unresolved parent mission wall", async () => {
+    const close = vi.fn(async () => {})
+    const cycle = vi.fn(async () => ({
+      result: "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+      reasonCode: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{
+          missionKey: `external-parent:${"d".repeat(64)}`,
+          externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+          goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+          worldId: "space-terrafusion",
+          projectId: 2,
+          repository: "bsvalues/terrafusion_os_1.0",
+        }],
+        resolved: [],
+      },
+    }))
+
+    await expect(runCli("cycle", {
+      createResidentOrchestrator: () => ({ cycle, close }),
+      consumeDecision: vi.fn(async () => ({ status: "NO_PENDING_PRIMARY_DECISION" })),
+    })).resolves.toBe(1)
+    expect(cycle).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it("consumes a Primary decision exactly once before the first queue cycle", async () => {
     const calls: string[] = []
     const consumeDecision = vi.fn(async () => {

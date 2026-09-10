@@ -1,42 +1,33 @@
-# terragroq / WilliamOS — reviewer-side half of the #831 pre-execution gate.
-#
-# Split out of ci.yml so it can subscribe to `edited`. The gate reads the receipt from the pull request
-# body, and the body is carried in the event payload: with ci.yml's bare `pull_request:` trigger the
-# default types are opened/synchronize/reopened, so correcting a wrong receipt produced no run at all
-# and a rerun replayed the same stale payload. The only way to turn the gate green was an empty commit,
-# which is a dead end dressed as a gate -- and this check is about to become required.
-#
-# The suite deliberately does NOT subscribe to `edited`: re-running 30 minutes of tests because someone
-# fixed a typo in a description would teach people to avoid editing descriptions.
-name: work context
+# GitHub observes and seals delivery; WilliamOS owns authority and assignments.
+name: WilliamOS delivery
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: work-context-${{ github.event.pull_request.number }}
+  group: williamos-delivery-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  work-context:
-    name: work context receipt (#831)
+  delivery-seal:
+    name: WilliamOS assignment delivery seal
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Acceptance criterion 8 of #831: reject a pull request carrying no valid receipt even when the
-    # tests are green. The route gate refuses unproven mutations made through the application; a lane
-    # committing straight to a branch never touches it, which is how most work actually arrives.
+    env:
+      # Public verification material only. WilliamOS holds the private signing key server-side.
+      WILLIAMOS_DELIVERY_SEAL_PUBLIC_KEYS_JSON: ${{ vars.WILLIAMOS_DELIVERY_SEAL_PUBLIC_KEYS_JSON }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # the receipt's anchor is a commit on main, which a shallow clone lacks
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Verify the declared work-context receipt
+      - name: Verify WilliamOS-issued assignment delivery seals
         run: node --no-warnings scripts/verify-pr-work-context.mjs

@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto"
 
 import {
+  EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_BIND_OPERATION,
+  EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
+  EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
+  compareCanonicalStrings,
+  isCanonicalGitHubRepositoryIdentity,
+  isCanonicalNonemptyStringArray,
   LEGAL_OUTCOME_TRANSITIONS,
   mapLegacyLifecycleState,
   NO_SELECTION_REASONS,
@@ -1789,6 +1798,17 @@ WHERE "outcome_queue_item"."lifecycleState" = 'suggested'
   AND "outcome_queue_item"."approvalState" = 'unapproved'
   AND "outcome_queue_item"."authorityState" = 'unverified'
 RETURNING *
+`,
+  readExternalParentMissionReceipts: `
+SELECT "id", "userId", "idempotencyKey", "operation", "outcomeKey", "requestHash", "requestBinding", "resultBinding"
+FROM "outcome_queue_mutation_receipt"
+WHERE "userId" = $1
+  AND "operation" IN (
+    'space.external_parent_mission.bind',
+    'space.external_parent_mission.terminal',
+    'space.external_parent_mission.decomposition.bind'
+  )
+ORDER BY "id" ASC
 `,
   read: `
 SELECT ${QUEUE_COLUMNS},
@@ -4033,6 +4053,333 @@ function noSelectionReason(row = {}) {
   return "NO_ELIGIBLE_OUTCOME"
 }
 
+function parentMissionRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null
+}
+
+function exactParentMissionKeys(value, keys) {
+  return value !== null
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+}
+
+const DECOMPOSITION_HARD_WALL_KEYS = Object.freeze([
+  "singleRepositoryPerChild", "exactReservationSubset", "noAuthorityEscalation",
+  "childExpiryNoLaterThanParent", "deterministicChildIdentity", "atomicChildLineage",
+  "rawProseAuthorityForbidden", "parentCompletionInferenceForbidden", "crossBoundaryWideningForbidden",
+])
+
+function validDecompositionPolicy(value) {
+  const policy = parentMissionRecord(value)
+  const hardWalls = parentMissionRecord(policy?.hardWalls)
+  const pathCeiling = policy?.pathReservationCeiling
+  const contractCeiling = policy?.contractReservationCeiling
+  const environmentCeiling = policy?.environmentReservationCeiling
+  const canonicalText = (text, max) => typeof text === "string" && text.length > 0
+    && text.length <= max && text.trim() === text && !text.includes("\0")
+  const safePath = (text) => canonicalText(text, 1_000) && !text.includes("\\") && !text.startsWith("/")
+    && !text.startsWith("//") && !/^[A-Za-z]:/.test(text)
+    && !text.split("/").some((segment) => segment === "..")
+  const canonicalRecords = (values, validator, sortKey) => Array.isArray(values) && values.length <= 64
+    && values.every(validator)
+    && values.every((entry, index) => index === 0
+      || compareCanonicalStrings(sortKey(values[index - 1]), sortKey(entry)) < 0)
+  return exactParentMissionKeys(policy, [
+    "version", "executionPowers", "pathReservationCeiling", "contractReservationCeiling",
+    "environmentReservationCeiling", "hardWalls",
+  ])
+    && policy.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && isCanonicalNonemptyStringArray(policy.executionPowers)
+    && policy.executionPowers.length <= 16
+    && policy.executionPowers.every((power) => canonicalText(power, 200))
+    && policy.executionPowers.includes("child:derive")
+    && policy.executionPowers.every((power) => ["child:derive", "child:reserve", "child:dispatch"].includes(power))
+    && isCanonicalNonemptyStringArray(pathCeiling) && pathCeiling.length <= 3_000
+    && pathCeiling.every(safePath)
+    && canonicalRecords(contractCeiling, (claim) => {
+      const record = parentMissionRecord(claim)
+      return exactParentMissionKeys(record, ["contractIdentity", "revisionIdentity", "role"])
+        && canonicalText(record.contractIdentity, 200) && canonicalText(record.revisionIdentity, 200)
+        && ["producer", "consumer"].includes(record.role)
+    }, (claim) => JSON.stringify({
+      contractIdentity: claim.contractIdentity,
+      revisionIdentity: claim.revisionIdentity,
+      role: claim.role,
+    }))
+    && canonicalRecords(environmentCeiling, (claim) => {
+      const record = parentMissionRecord(claim)
+      return exactParentMissionKeys(record, ["environmentIdentity", "access"])
+        && canonicalText(record.environmentIdentity, 200)
+        && ["exclusive", "shared-read"].includes(record.access)
+    }, (claim) => JSON.stringify({
+      environmentIdentity: claim.environmentIdentity,
+      access: claim.access,
+    }))
+    && exactParentMissionKeys(hardWalls, DECOMPOSITION_HARD_WALL_KEYS)
+    && DECOMPOSITION_HARD_WALL_KEYS.every((key) => hardWalls[key] === true)
+}
+
+function validExternalParentMissionDecompositionReceipt(receipt) {
+  const request = parentMissionRecord(receipt?.requestBinding)
+  const result = parentMissionRecord(receipt?.resultBinding)
+  const context = parentMissionRecord(result?.authorityContext)
+  if (!request || !result || !context || !validDecompositionPolicy(request.policy)) return false
+  const policyDigest = requestHash({
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    worldId: request.worldId,
+    missionKey: request.missionKey,
+    bindReceiptId: request.bindReceiptId,
+    bindReceiptHash: request.bindReceiptHash,
+    policy: request.policy,
+  })
+  return receipt.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION
+    && exactParentMissionKeys(request, [
+      "version", "worldId", "missionKey", "bindReceiptId", "bindReceiptHash", "idempotencyKey",
+      "confirmation", "confirmedPolicyDigest", "policy",
+    ])
+    && exactParentMissionKeys(result, [
+      "version", "missionKey", "bindReceiptId", "bindReceiptHash", "policyDigest", "policy",
+      "authorityContext", "state", "admittedBy", "admittedAt",
+    ])
+    && exactParentMissionKeys(context, [
+      "ownerUserId", "worldId", "projectId", "repository", "repositoryResourceId",
+      "workOrderId", "workOrderRef", "grantId", "grantRef", "grantContentHash",
+      "grantExpiresAt", "authorityCeiling", "grantScopeDigest",
+      "grantAllowedActionsDigest", "grantBlockedActionsDigest",
+    ])
+    && request.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && request.confirmation === "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION"
+    && request.confirmedPolicyDigest === policyDigest
+    && request.idempotencyKey === receipt.idempotencyKey
+    && receipt.outcomeKey === request.missionKey
+    && receipt.requestHash === requestHash(request)
+    && result.version === EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION
+    && result.missionKey === request.missionKey
+    && Number(result.bindReceiptId) === Number(request.bindReceiptId)
+    && result.bindReceiptHash === request.bindReceiptHash
+    && result.policyDigest === policyDigest
+    && canonicalJson(result.policy) === canonicalJson(request.policy)
+    && result.state === "ACTIVE"
+    && result.admittedBy === receipt.userId
+    && context.ownerUserId === receipt.userId
+    && context.worldId === request.worldId
+    && Number.isSafeInteger(Number(context.projectId)) && Number(context.projectId) > 0
+    && isCanonicalGitHubRepositoryIdentity(context.repository)
+    && Number.isSafeInteger(Number(context.repositoryResourceId)) && Number(context.repositoryResourceId) > 0
+    && Number.isSafeInteger(Number(context.workOrderId)) && Number(context.workOrderId) > 0
+    && typeof context.workOrderRef === "string" && context.workOrderRef.length > 0
+    && Number.isSafeInteger(Number(context.grantId)) && Number(context.grantId) > 0
+    && typeof context.grantRef === "string" && context.grantRef.length > 0
+    && typeof context.grantContentHash === "string" && /^[0-9a-f]{64}$/.test(context.grantContentHash)
+    && typeof context.grantExpiresAt === "string" && Number.isFinite(Date.parse(context.grantExpiresAt))
+    && context.authorityCeiling === "A2_WRITE_OWN"
+    && [context.grantScopeDigest, context.grantAllowedActionsDigest, context.grantBlockedActionsDigest]
+      .every((digest) => typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest))
+    && typeof result.admittedAt === "string"
+    && Number.isFinite(Date.parse(result.admittedAt))
+}
+
+function validExternalParentMissionBindReceipt(receipt) {
+  const request = parentMissionRecord(receipt?.requestBinding)
+  const result = parentMissionRecord(receipt?.resultBinding)
+  const binding = parentMissionRecord(result?.binding)
+  const mission = parentMissionRecord(request?.externalParentMission)
+  if (!request || !result || !binding || !mission) return false
+  if (!exactParentMissionKeys(mission, [
+    "source", "repository", "externalRef", "issueNumber", "goalRef", "loopRef",
+    "objective", "terminalConditions", "authorityEvidence",
+  ])) return false
+  if (mission.source !== "github"
+    || !isCanonicalGitHubRepositoryIdentity(mission.repository)
+    || !Number.isSafeInteger(mission.issueNumber) || mission.issueNumber <= 0
+    || mission.externalRef !== `github:${mission.repository}#${mission.issueNumber}`
+    || typeof mission.goalRef !== "string" || mission.goalRef.trim() === ""
+    || typeof mission.loopRef !== "string" || mission.loopRef.trim() === ""
+    || typeof mission.objective !== "string" || mission.objective.trim() === ""
+    || !isCanonicalNonemptyStringArray(mission.terminalConditions)
+    || !isCanonicalNonemptyStringArray(mission.authorityEvidence)) return false
+  const missionKey = `external-parent:${requestHash({
+    version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+    source: mission.source,
+    repository: mission.repository,
+    externalRef: mission.externalRef,
+    issueNumber: mission.issueNumber,
+    goalRef: mission.goalRef,
+  })}`
+  const provenanceDigest = requestHash({
+    version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+    externalParentMission: mission,
+  })
+  const canonicalBinding = {
+    version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+    source: mission.source,
+    repository: mission.repository,
+    externalRef: mission.externalRef,
+    issueNumber: mission.issueNumber,
+    goalRef: mission.goalRef,
+    projectId: Number(binding.projectId),
+    objectiveDigest: requestHash(mission.objective),
+    missionKey,
+  }
+  return receipt.operation === EXTERNAL_PARENT_MISSION_BIND_OPERATION
+    && receipt.outcomeKey === missionKey
+    && exactParentMissionKeys(request, [
+      "version", "worldId", "idempotencyKey", "confirmation", "confirmedProvenanceDigest",
+      "externalParentMission", "provenanceDigest", "missionKey",
+    ])
+    && request.version === EXTERNAL_PARENT_MISSION_BINDING_VERSION
+    && typeof request.worldId === "string" && request.worldId.trim() !== ""
+    && typeof request.idempotencyKey === "string" && request.idempotencyKey.trim() !== ""
+    && request.confirmation === "ADMIT_EXTERNAL_PARENT_MISSION"
+    && request.confirmedProvenanceDigest === provenanceDigest
+    && request.provenanceDigest === provenanceDigest
+    && request.missionKey === missionKey
+    && receipt.requestHash === requestHash(request)
+    && Number.isSafeInteger(canonicalBinding.projectId) && canonicalBinding.projectId > 0
+    && canonicalJson(binding) === canonicalJson(canonicalBinding)
+    && exactParentMissionKeys(result, [
+      "binding", "worldId", "repositoryResourceId", "loopRef", "terminalConditionsDigest",
+      "authorityEvidenceDigest", "authorityEvidenceRole", "authorityProvenance",
+      "provenanceDigest", "state", "admittedBy", "admittedAt",
+    ])
+    && result.worldId === request.worldId
+    && Number.isSafeInteger(Number(result.repositoryResourceId))
+    && Number(result.repositoryResourceId) > 0
+    && result.loopRef === mission.loopRef
+    && result.terminalConditionsDigest === requestHash(mission.terminalConditions)
+    && result.authorityEvidenceDigest === requestHash(mission.authorityEvidence)
+    && result.authorityEvidenceRole === "SUPPORTING_ONLY"
+    && result.provenanceDigest === provenanceDigest
+    && result.state === "ACTIVE"
+    && typeof receipt.userId === "string" && receipt.userId.trim() !== ""
+    && result.admittedBy === receipt.userId
+    && canonicalJson(result.authorityProvenance) === canonicalJson({
+      kind: "AUTHENTICATED_CONFIGURED_OWNER_ADMISSION",
+      ownerUserId: result.admittedBy,
+      confirmation: "ADMIT_EXTERNAL_PARENT_MISSION",
+      provenanceDigest,
+    })
+    && typeof result.admittedAt === "string"
+    && Number.isFinite(Date.parse(result.admittedAt))
+}
+
+function externalParentMissionBindReceiptHash(receipt) {
+  return requestHash({
+    operation: receipt.operation,
+    outcomeKey: receipt.outcomeKey,
+    requestHash: receipt.requestHash,
+    requestBinding: receipt.requestBinding,
+    resultBinding: receipt.resultBinding,
+  })
+}
+
+function validExternalParentMissionTerminalReceipt(receipt, bind) {
+  const request = parentMissionRecord(receipt?.requestBinding)
+  const result = parentMissionRecord(receipt?.resultBinding)
+  if (!request || !result) return false
+  const bindHash = externalParentMissionBindReceiptHash(bind)
+  return receipt.operation === EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION
+    && receipt.outcomeKey === bind.outcomeKey
+    && exactParentMissionKeys(request, [
+      "version", "missionKey", "bindReceiptId", "bindReceiptHash", "terminalState",
+      "terminalEvidenceRefs", "idempotencyKey",
+    ])
+    && request.version === EXTERNAL_PARENT_MISSION_TERMINAL_VERSION
+    && request.missionKey === bind.outcomeKey
+    && Number(request.bindReceiptId) === Number(bind.id)
+    && request.bindReceiptHash === bindHash
+    && ["SATISFIED", "REVOKED"].includes(request.terminalState)
+    && isCanonicalNonemptyStringArray(request.terminalEvidenceRefs)
+    && typeof request.idempotencyKey === "string" && request.idempotencyKey.trim() !== ""
+    && request.idempotencyKey === receipt.idempotencyKey
+    && receipt.requestHash === requestHash(request)
+    && exactParentMissionKeys(result, [
+      "version", "missionKey", "bindReceiptId", "bindReceiptHash", "state",
+      "terminalEvidenceDigest", "terminalAt",
+    ])
+    && result.version === EXTERNAL_PARENT_MISSION_TERMINAL_VERSION
+    && result.missionKey === request.missionKey
+    && Number(result.bindReceiptId) === Number(bind.id)
+    && result.bindReceiptHash === bindHash
+    && result.state === request.terminalState
+    && result.terminalEvidenceDigest === requestHash(request.terminalEvidenceRefs)
+    && typeof result.terminalAt === "string"
+    && Number.isFinite(Date.parse(result.terminalAt))
+}
+
+function resolveExternalParentMissionReceipts(receipts = []) {
+  const binds = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_BIND_OPERATION)
+  const terminals = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION)
+  const decompositions = receipts.filter((row) => row.operation === EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION)
+  if (binds.some((row) => !validExternalParentMissionBindReceipt(row))) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
+  const byMission = new Map()
+  for (const bind of binds) {
+    const rows = byMission.get(bind.outcomeKey) ?? []
+    rows.push(bind)
+    byMission.set(bind.outcomeKey, rows)
+  }
+  if ([...byMission.values()].some((rows) => rows.length !== 1)) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
+  if (decompositions.some((row) => !validExternalParentMissionDecompositionReceipt(row)
+    || !byMission.has(row.outcomeKey))) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
+  const unresolved = []
+  const resolved = []
+  for (const bind of binds) {
+    const binding = bind.resultBinding.binding
+    const candidates = terminals.filter((row) => row.outcomeKey === bind.outcomeKey)
+    const decompositionCandidates = decompositions.filter((row) => row.outcomeKey === bind.outcomeKey)
+    if (decompositionCandidates.length > 1) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    const decomposition = decompositionCandidates[0]
+    if (decomposition && (Number(decomposition.requestBinding.bindReceiptId) !== Number(bind.id)
+      || decomposition.requestBinding.bindReceiptHash !== externalParentMissionBindReceiptHash(bind)
+      || decomposition.resultBinding.authorityContext.worldId !== bind.resultBinding.worldId
+      || Number(decomposition.resultBinding.authorityContext.projectId) !== Number(binding.projectId)
+      || decomposition.resultBinding.authorityContext.repository !== binding.repository
+      || Number(decomposition.resultBinding.authorityContext.repositoryResourceId)
+        !== Number(bind.resultBinding.repositoryResourceId))) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    if (candidates.length > 1) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    if (candidates.length === 0) {
+      unresolved.push({
+        missionKey: binding.missionKey,
+        externalRef: binding.externalRef,
+        goalRef: binding.goalRef,
+        worldId: bind.resultBinding.worldId,
+        projectId: binding.projectId,
+        repository: binding.repository,
+      })
+      continue
+    }
+    if (!validExternalParentMissionTerminalReceipt(candidates[0], bind)) {
+      return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+    }
+    resolved.push({
+      missionKey: binding.missionKey,
+      externalRef: binding.externalRef,
+      goalRef: binding.goalRef,
+      worldId: bind.resultBinding.worldId,
+      projectId: binding.projectId,
+      repository: binding.repository,
+      terminalState: candidates[0].resultBinding.state,
+    })
+  }
+  if (terminals.some((row) => !byMission.has(row.outcomeKey))) {
+    return { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] }
+  }
+  unresolved.sort((left, right) => compareCanonicalStrings(left.missionKey, right.missionKey))
+  resolved.sort((left, right) => compareCanonicalStrings(left.missionKey, right.missionKey))
+  return { integrity: "VERIFIED", unresolved, resolved }
+}
+
 function compatibilityProjection(row) {
   const converted = row.status === "converted"
   const completed = converted && (
@@ -4769,7 +5116,23 @@ export async function acquireNextEligibleOutcome({
       OUTCOME_QUEUE_SQL.noSelectionReason,
       [at, user],
     )
-    const reason = noSelectionReason(reasonResult?.rows?.[0])
+    let reason = noSelectionReason(reasonResult?.rows?.[0])
+    let parentMissions = null
+    {
+      const parentReceiptResult = await connection.query(
+        OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts,
+        [user],
+      )
+      const parentReceiptRows = parentReceiptResult?.rows ?? []
+      parentMissions = parentReceiptRows.length > 0
+        ? resolveExternalParentMissionReceipts(parentReceiptRows)
+        : null
+      if (parentMissions?.integrity === "BINDING_REQUIRED") {
+        reason = "PARENT_MISSION_BINDING_REQUIRED"
+      } else if ((parentMissions?.unresolved.length ?? 0) > 0 && reason !== "ACTIVE_LEASE_HELD") {
+        reason = "ORPHANED_ACTIVE_MISSION"
+      }
+    }
     let contentionOutcome = null
     if (reason === "ACTIVE_LEASE_HELD") {
       const contention = await connection.query(
@@ -4787,6 +5150,7 @@ export async function acquireNextEligibleOutcome({
       replayed: false,
       reclaimed: false,
       reason,
+      ...(parentMissions ? { parentMissions } : {}),
     }, reason === "ACTIVE_LEASE_HELD" ? "LOSER" : "NO_SELECTION", contentionOutcome)
   } catch (error) {
     if (begun) {

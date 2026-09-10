@@ -338,7 +338,11 @@ def _add_folder_edges(
 def _add_link_edges(
     nodes: dict[str, dict], edges: list[dict], stem_to_id: dict[str, str],
 ) -> list[dict]:
-    for nid, node in nodes.items():
+    # Iterate a snapshot: this function ADDS external-link nodes to `nodes`, and a
+    # plain `nodes.items()` view raises `RuntimeError: dictionary changed size during
+    # iteration` the moment a note cites an http(s) URL. Newly added external nodes
+    # are terminal (they carry no links of their own), so they need no visit here.
+    for nid, node in list(nodes.items()):
         wiki_links = node.get("_wiki_links", [])
         for link_target in wiki_links:
             target_id = stem_to_id.get(link_target)

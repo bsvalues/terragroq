@@ -1,16 +1,18 @@
 import { spawn } from "node:child_process"
+import { StringDecoder } from "node:string_decoder"
 
 
 import { getSession } from "@/lib/session"
-import { resolveLoomOperation } from "@/lib/loom/operations"
+import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_OUTPUT_BYTES = 2_000_000
 
 /**
@@ -21,46 +23,83 @@ const MAX_OUTPUT_BYTES = 2_000_000
  * stream, the best a page can do is poll a summary. Here the operator sees the same bytes the machine
  * is producing, at the moment it produces them, and closing the tab kills the process.
  *
- * Safety comes from the catalogue, not from parsing: the request names an id, the argv is a constant
- * in this repository, and nothing is executed through a shell. There is no place for operator text to
- * become part of a command.
+ * Safety comes from the catalogue plus the bounded Project Terminal grammar. Fixed actions retain
+ * their constant argv. Typed read-only Git inspections are re-derived on the server from an
+ * individually allowlisted subcommand and flags. The executable is fixed, the operation id must
+ * match the derived command, and nothing is executed through a shell.
  */
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { operation?: unknown; confirmed?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown; projectKey?: unknown; repositoryKey?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion", undefined, body.repositoryKey)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
-  const resolution = resolveLoomOperation(body.operation, { confirmed: body.confirmed === true })
+  const terminalOperation = body.terminalCommand === undefined ? null : resolveProjectTerminalCommand(body.terminalCommand)
+  const resolution = terminalOperation
+    ? terminalOperation.id === body.operation
+      ? { ok: true, operation: terminalOperation }
+      : { ok: false, refusal: "UNKNOWN_OPERATION" as const }
+    : resolveLoomOperation(body.operation, { confirmed: body.confirmed === true })
+  if (body.terminalCommand !== undefined && !terminalOperation) {
+    return Response.json({ error: "UNSUPPORTED_TERMINAL_COMMAND" }, { status: 404 })
+  }
   if (!resolution.ok || !resolution.operation) {
     return Response.json({ error: resolution.refusal }, { status: resolution.refusal === "UNKNOWN_OPERATION" ? 404 : 409 })
   }
   const operation = resolution.operation
+  const operationArgs = operation.id === "tests.run" && projectBinding.binding.projectKey === "williamos"
+    ? [...operation.args, "--config", "vitest.ci.config.ts"]
+    : [...operation.args]
 
   // Reading repository state or tailing a log proves nothing and changes nothing; restarting the
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
   // could drift away from it.
   if (operation.mutating) {
-    const context = await requireWorkContext()
-    if (!context.ok) return workContextRefusal(context)
+    try {
+      await deriveSpaceMutationAuthority({
+        userId: session.user.id,
+        worldId: typeof body.worldId === "string" ? body.worldId : "",
+        binding: {
+          projectId: projectBinding.binding.projectId,
+          projectKey: projectBinding.binding.projectKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          spaceIdentity: projectBinding.binding.project.identity,
+        },
+        expected: { actor: "williamos", capability: operation.id },
+        target: { kind: "operation", operation: operation.id },
+      })
+    } catch (error) {
+      return Response.json({ error: error instanceof SpaceMutationAuthorityError ? error.code : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+        status: error instanceof SpaceMutationAuthorityError ? 403 : 503,
+      })
+    }
   }
 
   const command = operation.command === "node" ? process.execPath : operation.command
-  const child = spawn(command, [...operation.args], {
-    cwd: operation.scope === "project" ? PROJECT_ROOT : PROJECT_ROOT,
+  const child = spawn(command, operationArgs, {
+    cwd: projectRoot,
     shell: false,
     windowsHide: true,
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    env: { ...process.env, ...operation.env, NO_COLOR: "1", FORCE_COLOR: "0" },
   })
 
   let bytes = 0
   let settled = false
   const encoder = new TextEncoder()
+  const outputChannels = {
+    stdout: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+    stderr: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -76,6 +115,11 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        for (const channel of ["stdout", "stderr"] as const) {
+          const state = outputChannels[channel]
+          const text = state.redactor.push(state.decoder.end()) + state.redactor.end()
+          if (text) send({ type: channel, text })
+        }
         // Recorded on every exit path -- timeout, output cap, cancel, crash and success alike -- so
         // an operation cannot end without leaving a trace of how it ended.
         void recordLoomEnd({
@@ -88,12 +132,28 @@ export async function POST(request: Request) {
         try { controller.close() } catch { /* already closed */ }
       }
 
-      send({ type: "started", operation: operation.id, label: operation.label, mutating: operation.mutating })
+      send({
+        type: "started",
+        operation: operation.id,
+        label: operation.label,
+        mutating: operation.mutating,
+        repositoryKey: projectBinding.binding.repositoryKey,
+        repositoryIdentity: projectBinding.binding.repositoryIdentity,
+        repositoryMountKey: projectBinding.binding.repositoryMountKey,
+        observedRevision: projectBinding.binding.observedRevision,
+      })
       void recordLoomStart({
         userId: session.user.id,
         kind: "operation",
         subject: operation.id,
-        metadata: { scope: operation.scope, mutating: operation.mutating },
+        metadata: {
+          scope: operation.scope,
+          mutating: operation.mutating,
+          repositoryKey: projectBinding.binding.repositoryKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          repositoryMountKey: projectBinding.binding.repositoryMountKey,
+          observedRevision: projectBinding.binding.observedRevision,
+        },
       })
 
       // A runaway process must not be able to fill memory or run forever unattended.
@@ -110,7 +170,9 @@ export async function POST(request: Request) {
           finish({ type: "exit", code: null, reason: "OUTPUT_LIMIT" })
           return
         }
-        send({ type: channel, text: chunk.toString("utf8") })
+        const state = outputChannels[channel]
+        const text = state.redactor.push(state.decoder.write(chunk))
+        if (text) send({ type: channel, text })
       }
 
       child.stdout.on("data", forward("stdout"))

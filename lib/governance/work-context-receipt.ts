@@ -30,6 +30,9 @@ export interface WorkContextFacts {
   parentOutcome: string
   /** Paths this lane reserved. A mutation outside them is a scope collision, not a judgement call. */
   reservedPaths: readonly string[]
+  /** Exact server-owned Project and canonical repository, when this receipt may authorize repository effects. */
+  projectKey?: string
+  repository?: string
   /** Authority envelope the Work Order carries. */
   authorityLevel: string
   /** Digest of the controlling instruction chain as read, so a doctrine change invalidates the receipt. */
@@ -76,6 +79,8 @@ export interface WorkContextVerdict {
 }
 
 const NON_EMPTY = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0
+const PROJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 /**
  * Issue a receipt for a set of proven facts, refusing to issue one when a premise is missing.
@@ -103,6 +108,16 @@ export function issueWorkContextReceipt(facts: WorkContextFacts): WorkContextVer
   if (!Array.isArray(facts.reservedPaths) || facts.reservedPaths.length === 0) {
     return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "no path reservation declared" }
   }
+  const hasProjectKey = NON_EMPTY(facts.projectKey)
+  const hasRepository = NON_EMPTY(facts.repository)
+  if (hasProjectKey !== hasRepository
+    || (hasProjectKey && (!PROJECT_KEY.test(facts.projectKey!.trim()) || !REPOSITORY.test(facts.repository!.trim())))) {
+    return {
+      ok: false,
+      failure: "FAILED_CONTEXT_NOT_PROVEN",
+      detail: "project and repository binding must be declared together in canonical form",
+    }
+  }
   if (Array.isArray(facts.collisions) && facts.collisions.length > 0) {
     return { ok: false, failure: "FAILED_SCOPE_COLLISION", detail: facts.collisions.join(", ") }
   }
@@ -115,6 +130,12 @@ export function issueWorkContextReceipt(facts: WorkContextFacts): WorkContextVer
 }
 
 export function receiptToken(facts: WorkContextFacts): string {
+  const projectBinding = NON_EMPTY(facts.projectKey) && NON_EMPTY(facts.repository)
+    ? {
+        projectKey: facts.projectKey.trim().toLowerCase(),
+        repository: facts.repository.trim().toLowerCase(),
+      }
+    : {}
   return hashRecord({
     contract: WORK_CONTEXT_RECEIPT_VERSION,
     mainSha: facts.mainSha.trim().toLowerCase(),
@@ -126,6 +147,7 @@ export function receiptToken(facts: WorkContextFacts): string {
     topologySource: facts.topologySource,
     // Order must not change the token: a reservation is a set, not a sequence.
     reservedPaths: [...facts.reservedPaths].map((p) => p.trim()).sort(),
+    ...projectBinding,
     remainingParentAcceptance: facts.remainingParentAcceptance.trim(),
   })
 }

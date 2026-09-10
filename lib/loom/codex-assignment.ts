@@ -1,0 +1,600 @@
+import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
+import fs from "node:fs/promises"
+import path from "node:path"
+import { promisify } from "node:util"
+
+import { pool } from "@/lib/db"
+import { validateWorkingWorld, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
+import { authorityGrantFactsFromRow, grantCovers, isGrantActive } from "@/lib/governance/authority"
+import { hashRecord } from "@/lib/governance/hash"
+import { reservationCoversRequestedPath } from "@/lib/governance/work-context-gate"
+import { providedAuthorityRank, requiredAuthorityRank } from "@/lib/goal/taxonomy"
+import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
+import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+
+export const CODEX_ASSIGNMENT_VERSION = "loom-codex-assignment.v1" as const
+const MAX_TARGET_BYTES = 2_000_000
+const runFile = promisify(execFile)
+
+export type CodexAssignmentRecord = Readonly<{
+  world: WorkingWorldSnapshot
+  project: Readonly<{
+    id: number
+    key: string
+    repositoryResourceKey?: string
+    repositoryIdentity: string
+    repositoryMountKey?: string
+    observedRevision?: string | null
+  }>
+  outcome: Readonly<{
+    id: number
+    outcomeKey: string
+    lifecycleState: string
+    activeWorkOrderId: number | null
+    version: number
+  }>
+  workOrder: Readonly<{
+    id: number
+    ref: string | null
+    status: string
+    authorityLevel: string
+    authorityGrantId: number | null
+    agent: string | null
+    allowedFiles: readonly string[]
+    forbiddenFiles: readonly string[]
+    updatedAt: string
+  }>
+  grant: Readonly<{
+    id: number
+    ref: string | null
+    userId: string
+    workOrderId: number | null
+    grantedTo: string
+    status: string
+    authorityLevel: string
+    scope: string | null
+    allowedActions: readonly string[]
+    blockedActions: readonly string[]
+    expiresAt: string | Date | null
+    revokedAt: string | Date | null
+    contentHash: string | null
+    createdAt: string
+  }>
+}>
+
+export type CodexAssignmentTarget = Readonly<{
+  content: string
+  modifiedAt: string
+  digest: string
+}>
+
+export type CodexAssignment = Readonly<{
+  owner: string
+  worldId: string
+  projectRoot: string
+  outcomeKey: string
+  workOrderId: number
+  grantId: number
+  selectedPath: string
+  selectedFileRef: WorkspaceFileRef | null
+  allowed: readonly string[]
+  forbidden: readonly string[]
+  binding: Readonly<{
+    spaceRevision: number
+    outcomeId: number
+    outcomeVersion: number
+    workOrderRef: string | null
+    workOrderVersion: string
+    grantRef: string | null
+    grantVersion: string
+    reservationVersion: string
+    projectId: number
+    projectKey: string
+    repositoryResourceKey?: string
+    repositoryIdentity: string
+    repositoryMountKey?: string
+    observedRevision?: string | null
+    spaceIdentity: string | null
+  }>
+  assignmentHash: string
+  target: CodexAssignmentTarget
+}>
+
+export type CodexAssignmentDependencies = Readonly<{
+  loadRecord: (userId: string, worldId: string) => Promise<CodexAssignmentRecord | null>
+  inspectTarget: (projectRoot: string, selectedPath: string) => Promise<CodexAssignmentTarget>
+}>
+
+export type CodexAssignmentProjectBinding = Readonly<{
+  projectId: number
+  projectKey: string
+  repositoryResourceKey?: string
+  repositoryIdentity: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
+  spaceIdentity: string
+}>
+
+export class CodexAssignmentError extends Error {
+  readonly code: "CODEX_ASSIGNMENT_REFUSED" | "CODEX_ASSIGNMENT_STALE"
+
+  constructor(code: CodexAssignmentError["code"], message: string) {
+    super(message)
+    this.name = "CodexAssignmentError"
+    this.code = code
+  }
+}
+
+function refuse(detail: string): never {
+  throw new CodexAssignmentError("CODEX_ASSIGNMENT_REFUSED", detail)
+}
+
+function normalizedReservation(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean))].sort()
+}
+
+function selectedSpaceTarget(world: WorkingWorldSnapshot): Readonly<{ path: string; fileRef: WorkspaceFileRef | null }> {
+  if (!world.space || world.space.activePaneId === null) refuse("the owned Space has no active source pane")
+  const pane = world.space.panes.find((candidate) => candidate.id === world.space?.activePaneId)
+  const path = world.space.selection?.filePath ?? pane?.filePath ?? null
+  if (!path) refuse("the owned Space has no persisted selected file")
+  return { path, fileRef: world.space.selection?.fileRef ?? pane?.fileRef ?? null }
+}
+
+function assignmentSnapshot(input: {
+  owner: string
+  worldId: string
+  projectRoot: string
+  selectedPath: string
+  selectedFileRef: WorkspaceFileRef | null
+  record: CodexAssignmentRecord
+  allowed: readonly string[]
+  forbidden: readonly string[]
+  projectBinding: CodexAssignmentProjectBinding | null
+}) {
+  const { record } = input
+  return {
+    version: CODEX_ASSIGNMENT_VERSION,
+    owner: input.owner,
+    worldId: input.worldId,
+    projectRoot: input.projectRoot,
+    spaceRevision: record.world.space?.revision ?? null,
+    selectedPath: input.selectedPath,
+    selectedFileRef: input.selectedFileRef,
+    outcome: record.outcome,
+    workOrder: {
+      id: record.workOrder.id,
+      ref: record.workOrder.ref,
+      status: record.workOrder.status,
+      authorityLevel: record.workOrder.authorityLevel,
+      authorityGrantId: record.workOrder.authorityGrantId,
+      agent: record.workOrder.agent,
+      updatedAt: record.workOrder.updatedAt,
+    },
+    grant: {
+      id: record.grant.id,
+      ref: record.grant.ref,
+      userId: record.grant.userId,
+      workOrderId: record.grant.workOrderId,
+      grantedTo: record.grant.grantedTo,
+      status: record.grant.status,
+      authorityLevel: record.grant.authorityLevel,
+      scope: record.grant.scope,
+      expiresAt: record.grant.expiresAt instanceof Date
+        ? record.grant.expiresAt.toISOString()
+        : record.grant.expiresAt,
+      revokedAt: record.grant.revokedAt instanceof Date
+        ? record.grant.revokedAt.toISOString()
+        : record.grant.revokedAt,
+      contentHash: record.grant.contentHash,
+      createdAt: record.grant.createdAt,
+      allowedActions: normalizedReservation(record.grant.allowedActions),
+      blockedActions: normalizedReservation(record.grant.blockedActions),
+    },
+    reservation: { allowed: input.allowed, forbidden: input.forbidden },
+    project: input.projectBinding ?? record.project,
+  }
+}
+
+async function assertNoPathLinks(root: string, absolute: string): Promise<void> {
+  const relative = path.relative(path.resolve(root), absolute)
+  let cursor = path.resolve(root)
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, segment)
+    const entry = await fs.lstat(cursor)
+    if (entry.isSymbolicLink()) refuse("the selected target traverses a symbolic link")
+  }
+}
+
+export async function inspectCodexAssignmentTarget(
+  projectRoot: string,
+  selectedPath: string,
+): Promise<CodexAssignmentTarget> {
+  const lexical = resolveWorkspacePath(projectRoot, selectedPath)
+  if (!lexical.ok || !lexical.absolute || lexical.relative !== selectedPath.replace(/\\/g, "/").replace(/^\.\//, "")) {
+    refuse("the persisted selected path is not one canonical workspace-relative path")
+  }
+  let resolved
+  try {
+    resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.realpath)
+    await assertNoPathLinks(projectRoot, lexical.absolute)
+  } catch {
+    refuse("the selected target is missing or traverses a link")
+  }
+  if (!resolved.ok || resolved.absolute !== lexical.absolute || resolved.relative !== lexical.relative) {
+    refuse("the selected target does not resolve to its exact workspace path")
+  }
+  let current
+  try {
+    current = await fs.lstat(lexical.absolute)
+  } catch {
+    refuse("the selected target does not exist")
+  }
+  if (!current.isFile()) refuse("the selected target is not a regular file")
+  if (current.nlink !== 1) refuse("the selected target is hard-linked")
+  if (current.size > MAX_TARGET_BYTES) refuse("the selected target exceeds the V1 size limit")
+
+  let tracked = ""
+  try {
+    const result = await runFile("git", ["-C", projectRoot, "ls-files", "--stage", "-z", "--", selectedPath], {
+      encoding: "utf8",
+      maxBuffer: 1_000_000,
+      windowsHide: true,
+    })
+    tracked = result.stdout
+  } catch {
+    refuse("the selected target could not be verified against Git")
+  }
+  const entries = tracked.split("\0").filter(Boolean)
+  const match = entries.length === 1 ? /^(100644|100755) [0-9a-f]+ 0\t([\s\S]+)$/.exec(entries[0]) : null
+  if (!match || match[2].replace(/\\/g, "/") !== lexical.relative) {
+    refuse("the selected target is not one tracked regular file")
+  }
+
+  const bytes = await fs.readFile(lexical.absolute)
+  if (bytes.byteLength > MAX_TARGET_BYTES) refuse("the selected target exceeds the V1 size limit")
+  if (looksBinary(bytes)) refuse("the selected target is binary")
+  let content: string
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    refuse("the selected target is not valid UTF-8 text")
+  }
+  return {
+    content,
+    modifiedAt: current.mtime.toISOString(),
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  }
+}
+
+function iso(value: unknown): string {
+  if (value instanceof Date) return value.toISOString()
+  return String(value ?? "")
+}
+
+function sameNormalizedReservation(left: readonly string[], right: readonly string[]): boolean {
+  return JSON.stringify(normalizedReservation(left)) === JSON.stringify(normalizedReservation(right))
+}
+
+async function loadRecord(userId: string, worldId: string): Promise<CodexAssignmentRecord | null> {
+  const result = await pool.query(
+    `SELECT world."snapshot" AS "worldSnapshot",
+      project_row."id" AS "projectId", project_row."key" AS "projectKey",
+      project_resource."resourceKey" AS "repositoryResourceKey",
+      project_resource."canonicalIdentity" AS "repositoryIdentity",
+      outcome."id" AS "outcomeId", outcome."outcomeKey", outcome."lifecycleState",
+      outcome."activeWorkOrderId", outcome."version" AS "outcomeVersion",
+      work."id" AS "workOrderId", work."ref" AS "workOrderRef", work."status" AS "workOrderStatus",
+      work."authorityLevel" AS "workOrderAuthorityLevel", work."authorityGrantId",
+      work."agent" AS "workOrderAgent", work."allowedFiles", work."forbiddenFiles",
+      work."updatedAt" AS "workOrderUpdatedAt",
+      authority_row."id" AS "grantId", authority_row."ref" AS "grantRef",
+      authority_row."userId" AS "grantUserId", authority_row."workOrderId" AS "grantWorkOrderId",
+      authority_row."grantedTo", authority_row."status" AS "grantStatus",
+      authority_row."authorityLevel" AS "grantAuthorityLevel", authority_row."scope" AS "grantScope",
+      authority_row."allowedActions", authority_row."blockedActions",
+      authority_row."expiresAt", authority_row."revokedAt", authority_row."contentHash",
+      authority_row."createdAt" AS "grantCreatedAt"
+    FROM "working_world" world
+    LEFT JOIN "project" project_row
+      ON project_row."userId" = world."userId"
+      AND project_row."id" = (world."snapshot"::jsonb #>> '{spine,projectId}')::integer
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        world."snapshot"::jsonb #>> '{space,selection,fileRef,repositoryResourceKey}',
+        (
+          SELECT pane #>> '{fileRef,repositoryResourceKey}'
+          FROM jsonb_array_elements(COALESCE(world."snapshot"::jsonb #> '{space,panes}', '[]'::jsonb)) pane
+          WHERE pane ->> 'id' = world."snapshot"::jsonb #>> '{space,activePaneId}'
+          LIMIT 1
+        )
+      ) AS "repositoryResourceKey"
+    ) selected_repository ON true
+    LEFT JOIN "project_resource" project_resource
+      ON project_resource."userId" = project_row."userId"
+      AND project_resource."projectId" = project_row."id"
+      AND project_resource."type" = 'repo'
+      AND (
+        project_resource."resourceKey" = selected_repository."repositoryResourceKey"
+        OR (
+          selected_repository."repositoryResourceKey" IS NULL
+          AND project_resource."relationship" = 'primary-repo'
+        )
+      )
+    LEFT JOIN "outcome_queue_item" outcome
+      ON outcome."userId" = world."userId"
+      AND outcome."outcomeKey" = (world."snapshot"::jsonb #>> '{spine,outcomeKey}')
+    LEFT JOIN "work_order" work
+      ON work."userId" = world."userId" AND work."id" = outcome."activeWorkOrderId"
+    LEFT JOIN "authority_grant" authority_row
+      ON authority_row."userId" = world."userId" AND authority_row."id" = work."authorityGrantId"
+    WHERE world."userId" = $1 AND world."id" = $2
+    `,
+    [userId, worldId],
+  )
+  const row = result.rows[0] as Record<string, unknown> | undefined
+  if (!row) return null
+  if (result.rows.length !== 1 || !row.worldSnapshot || row.projectId == null
+    || row.projectKey == null || row.repositoryIdentity == null
+    || row.outcomeId == null || row.workOrderId == null || row.grantId == null) {
+    refuse("the owned Space is not bound to one active outcome, work order, and grant")
+  }
+  const parsedWorld = typeof row.worldSnapshot === "string" ? JSON.parse(row.worldSnapshot) : row.worldSnapshot
+  const world = validateWorkingWorld(parsedWorld)
+  const selected = selectedSpaceTarget(world)
+  return {
+    world,
+    project: {
+      id: Number(row.projectId),
+      key: String(row.projectKey),
+      ...(row.repositoryResourceKey == null ? {} : { repositoryResourceKey: String(row.repositoryResourceKey) }),
+      repositoryIdentity: String(row.repositoryIdentity),
+      ...(selected.fileRef ? {
+        repositoryMountKey: selected.fileRef.repositoryMountKey,
+        observedRevision: selected.fileRef.observedRevision,
+      } : {}),
+    },
+    outcome: {
+      id: Number(row.outcomeId),
+      outcomeKey: String(row.outcomeKey),
+      lifecycleState: String(row.lifecycleState),
+      activeWorkOrderId: row.activeWorkOrderId == null ? null : Number(row.activeWorkOrderId),
+      version: Number(row.outcomeVersion),
+    },
+    workOrder: {
+      id: Number(row.workOrderId),
+      ref: row.workOrderRef == null ? null : String(row.workOrderRef),
+      status: String(row.workOrderStatus),
+      authorityLevel: String(row.workOrderAuthorityLevel),
+      authorityGrantId: row.authorityGrantId == null ? null : Number(row.authorityGrantId),
+      agent: row.workOrderAgent == null ? null : String(row.workOrderAgent),
+      allowedFiles: Array.isArray(row.allowedFiles) ? row.allowedFiles as string[] : [],
+      forbiddenFiles: Array.isArray(row.forbiddenFiles) ? row.forbiddenFiles as string[] : [],
+      updatedAt: iso(row.workOrderUpdatedAt),
+    },
+    grant: {
+      id: Number(row.grantId),
+      ref: row.grantRef == null ? null : String(row.grantRef),
+      userId: String(row.grantUserId),
+      workOrderId: row.grantWorkOrderId == null ? null : Number(row.grantWorkOrderId),
+      grantedTo: String(row.grantedTo),
+      status: String(row.grantStatus),
+      authorityLevel: String(row.grantAuthorityLevel),
+      scope: row.grantScope == null ? null : String(row.grantScope),
+      allowedActions: Array.isArray(row.allowedActions) ? row.allowedActions as string[] : [],
+      blockedActions: Array.isArray(row.blockedActions) ? row.blockedActions as string[] : [],
+      expiresAt: row.expiresAt as string | Date | null,
+      revokedAt: row.revokedAt as string | Date | null,
+      contentHash: row.contentHash == null ? null : String(row.contentHash),
+      createdAt: iso(row.grantCreatedAt),
+    },
+  }
+}
+
+const productionDependencies: CodexAssignmentDependencies = {
+  loadRecord,
+  inspectTarget: inspectCodexAssignmentTarget,
+}
+
+async function deriveCodexAssignmentFromRootIdentity(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    projectRoot: string
+    targetProjectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
+  }>,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<CodexAssignment> {
+  const record = await dependencies.loadRecord(input.userId, input.worldId)
+  if (!record) refuse("the requested owned Space does not exist")
+  const selected = selectedSpaceTarget(record.world)
+  const selectedPath = selected.path
+  const selectedFileRef = selected.fileRef
+  if (record.world.spine.projectId !== record.project.id
+    || !record.project.key.trim()
+    || !record.project.repositoryIdentity.trim()) {
+    refuse("the owned Space is not bound to one canonical Project and primary repository")
+  }
+  if (input.projectBinding) {
+    const expectedResource = `williamos-workspace-root:v1:${input.projectBinding.spaceIdentity}`
+    if (record.project.id !== input.projectBinding.projectId
+      || record.project.key !== input.projectBinding.projectKey
+      || record.project.repositoryIdentity !== input.projectBinding.repositoryIdentity
+      || !record.world.resources.includes(expectedResource)) {
+      refuse("the owned Space is not bound to the verified TerraFusion Project and workspace resource")
+    }
+    if (selectedFileRef) {
+      if (!input.projectBinding.repositoryResourceKey
+        || !input.projectBinding.repositoryMountKey
+        || !input.projectBinding.observedRevision
+        || selectedFileRef.projectIdentity !== input.projectBinding.spaceIdentity
+        || selectedFileRef.repositoryResourceKey !== input.projectBinding.repositoryResourceKey
+        || selectedFileRef.repositoryResourceKey !== record.project.repositoryResourceKey
+        || selectedFileRef.repositoryMountKey !== input.projectBinding.repositoryMountKey
+        || selectedFileRef.observedRevision !== input.projectBinding.observedRevision
+        || selectedFileRef.path !== selectedPath
+        || selectedFileRef.worktreeKey !== null) {
+        refuse("the selected file is stale or belongs to a different verified repository mount")
+      }
+    } else if (input.projectBinding.repositoryResourceKey
+      && input.projectBinding.repositoryResourceKey !== "os-1"
+      && input.projectBinding.repositoryResourceKey !== "williamos") {
+      refuse("a legacy path-only selection can bind only to the primary repository")
+    }
+  }
+  if (record.world.spine.outcomeKey !== record.outcome.outcomeKey
+    || record.world.spine.workOrderId !== record.outcome.activeWorkOrderId
+    || record.outcome.activeWorkOrderId !== record.workOrder.id
+    || record.outcome.lifecycleState !== "active"
+    || record.workOrder.status !== "active") {
+    refuse("the owned Space is not bound to the active outcome and work order")
+  }
+  const allowed = normalizedReservation(record.workOrder.allowedFiles)
+  const forbidden = normalizedReservation(record.workOrder.forbiddenFiles)
+  if (record.workOrder.authorityGrantId !== record.grant.id
+    || record.grant.workOrderId !== record.workOrder.id
+    || record.grant.userId !== input.userId
+    || record.workOrder.agent?.toLowerCase() !== "codex"
+    || record.grant.grantedTo.trim().toLowerCase() !== "codex") {
+    refuse("the active grant is not the exact Codex implementation authority for this work order")
+  }
+  if (!sameNormalizedReservation(record.grant.allowedActions, allowed)
+    || !sameNormalizedReservation(record.grant.blockedActions, forbidden)) {
+    refuse("the active grant reservation does not match the active work order")
+  }
+  const grantFacts = authorityGrantFactsFromRow(record.grant as unknown as Record<string, unknown>)
+  if (!isGrantActive(grantFacts).ok
+    || providedAuthorityRank(record.workOrder.authorityLevel) < requiredAuthorityRank("A2_WRITE_OWN")
+    || !grantCovers(grantFacts, "A2_WRITE_OWN").ok
+    || !grantCovers(grantFacts, record.workOrder.authorityLevel as never).ok) {
+    refuse("the active grant does not cover A2 implementation authority for the work order")
+  }
+  if (allowed.length === 0 || !reservationCoversRequestedPath(selectedPath, allowed).ok) {
+    refuse("the selected file is outside the work order reservation")
+  }
+  if (forbidden.length > 0 && reservationCoversRequestedPath(selectedPath, forbidden).ok) {
+    refuse("the selected file is inside the forbidden reservation")
+  }
+  const target = await dependencies.inspectTarget(input.targetProjectRoot, selectedPath)
+  const assignmentHash = hashRecord(assignmentSnapshot({
+    owner: input.userId,
+    worldId: input.worldId,
+    projectRoot: input.projectRoot,
+    selectedPath,
+    selectedFileRef,
+    record,
+    allowed,
+    forbidden,
+    projectBinding: input.projectBinding ?? null,
+  }))
+  const reservationVersion = hashRecord({ allowed, forbidden })
+  return {
+    owner: input.userId,
+    worldId: input.worldId,
+    projectRoot: input.projectRoot,
+    outcomeKey: record.outcome.outcomeKey,
+    workOrderId: record.workOrder.id,
+    grantId: record.grant.id,
+    selectedPath,
+    selectedFileRef,
+    allowed,
+    forbidden,
+    binding: {
+      spaceRevision: record.world.space?.revision ?? 0,
+      outcomeId: record.outcome.id,
+      outcomeVersion: record.outcome.version,
+      workOrderRef: record.workOrder.ref,
+      workOrderVersion: record.workOrder.updatedAt,
+      grantRef: record.grant.ref,
+      grantVersion: record.grant.contentHash ?? record.grant.createdAt,
+      reservationVersion,
+      projectId: record.project.id,
+      projectKey: record.project.key,
+      ...(input.projectBinding?.repositoryResourceKey ? { repositoryResourceKey: input.projectBinding.repositoryResourceKey } : {}),
+      repositoryIdentity: record.project.repositoryIdentity,
+      ...(input.projectBinding?.repositoryMountKey ? { repositoryMountKey: input.projectBinding.repositoryMountKey } : {}),
+      ...(input.projectBinding?.observedRevision ? { observedRevision: input.projectBinding.observedRevision } : {}),
+      spaceIdentity: input.projectBinding?.spaceIdentity ?? null,
+    },
+    assignmentHash,
+    target,
+  }
+}
+
+export async function deriveCodexAssignment(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    projectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
+  }>,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<CodexAssignment> {
+  return deriveCodexAssignmentFromRootIdentity({
+    ...input,
+    targetProjectRoot: input.projectRoot,
+  }, dependencies)
+}
+
+/**
+ * Reconstruct the immutable assignment identity used before a configured checkout alias was
+ * resolved to its physical root. The caller must first prove both roots through the authenticated
+ * Project binding. Target inspection remains on that verified physical root, so this does not
+ * relax the workspace link boundary or grant execution through the alias.
+ */
+export async function deriveCodexAssignmentForVerifiedRootAlias(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    configuredProjectRoot: string
+    verifiedProjectRoot: string
+    projectBinding?: CodexAssignmentProjectBinding
+  }>,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<CodexAssignment> {
+  return deriveCodexAssignmentFromRootIdentity({
+    userId: input.userId,
+    worldId: input.worldId,
+    projectRoot: input.configuredProjectRoot,
+    targetProjectRoot: input.verifiedProjectRoot,
+    projectBinding: input.projectBinding,
+  }, dependencies)
+}
+
+export async function revalidateCodexAssignment(
+  assignment: CodexAssignment,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<void> {
+  let current: CodexAssignment
+  try {
+    current = await deriveCodexAssignment({
+      userId: assignment.owner,
+      worldId: assignment.worldId,
+      projectRoot: assignment.projectRoot,
+      ...(assignment.binding.spaceIdentity ? {
+        projectBinding: {
+          projectId: assignment.binding.projectId,
+          projectKey: assignment.binding.projectKey,
+          ...(assignment.binding.repositoryResourceKey ? { repositoryResourceKey: assignment.binding.repositoryResourceKey } : {}),
+          repositoryIdentity: assignment.binding.repositoryIdentity,
+          ...(assignment.binding.repositoryMountKey ? { repositoryMountKey: assignment.binding.repositoryMountKey } : {}),
+          ...(assignment.binding.observedRevision ? { observedRevision: assignment.binding.observedRevision } : {}),
+          spaceIdentity: assignment.binding.spaceIdentity,
+        },
+      } : {}),
+    }, dependencies)
+  } catch (error) {
+    if (error instanceof CodexAssignmentError) {
+      throw new CodexAssignmentError("CODEX_ASSIGNMENT_STALE", error.message)
+    }
+    throw error
+  }
+  if (current.assignmentHash !== assignment.assignmentHash
+    || current.selectedPath !== assignment.selectedPath
+    || current.target.digest !== assignment.target.digest
+    || current.target.modifiedAt !== assignment.target.modifiedAt) {
+    throw new CodexAssignmentError("CODEX_ASSIGNMENT_STALE", "the assignment authority or selected target changed")
+  }
+}

@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import path from "node:path"
+
 import { describe, expect, it } from "vitest"
 
 import { projectHomeQueueContinuity } from "@/components/dashboard/home-queue-continuity"
@@ -5,6 +8,10 @@ import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
 import { projectOutcomeQueueOperatorSurface } from "@/lib/outcome-queue/operator-surface"
 
 const NOW = "2026-07-28T12:00:00.000Z"
+const panel = fs.readFileSync(
+  path.join(process.cwd(), "components/dashboard/home-queue-continuity-panel.tsx"),
+  "utf8",
+)
 const ELIGIBILITY = {
   now: NOW,
   validApprovalDecisionIds: [100],
@@ -55,10 +62,46 @@ function outcome(overrides: Partial<OutcomeQueueRecord> = {}): OutcomeQueueRecor
   }
 }
 
-function project(queue: readonly OutcomeQueueRecord[]) {
+function project(
+  queue: readonly OutcomeQueueRecord[],
+  parentMissions?: {
+    integrity: "VERIFIED" | "BINDING_REQUIRED"
+    unresolved: readonly {
+      missionKey: string
+      externalRef: string
+      goalRef: string
+      worldId: string
+      projectId: number
+      repository: string
+    }[]
+    resolved: readonly {
+      missionKey: string
+      externalRef: string
+      goalRef: string
+      worldId: string
+      projectId: number
+      repository: string
+    }[]
+  },
+) {
   return projectHomeQueueContinuity(
-    projectOutcomeQueueOperatorSurface({ queue, ...ELIGIBILITY }),
+    projectOutcomeQueueOperatorSurface({ queue, ...ELIGIBILITY, parentMissions }),
   )
+}
+
+const ACTIVE_PARENT_MISSION = {
+  missionKey: "external-parent:washington-assessor-launch-v1",
+  externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+  goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+  worldId: "space-terrafusion-wal",
+  projectId: 7,
+  repository: "bsvalues/terrafusion_os_1.0",
+} as const
+
+const UNRESOLVED_PARENT = {
+  integrity: "VERIFIED" as const,
+  unresolved: [ACTIVE_PARENT_MISSION],
+  resolved: [],
 }
 
 describe("Home queue continuity", () => {
@@ -190,6 +233,105 @@ describe("Home queue continuity", () => {
       state: "ALL_TERMINAL",
       active: null,
       next: null,
+      blockerReason: null,
+    })
+  })
+
+  it("blocks an empty child queue on the exact unresolved parent mission identity", () => {
+    expect(project([], UNRESOLVED_PARENT)).toMatchObject({
+      state: "BLOCKED",
+      active: null,
+      next: null,
+      unresolvedParentMissions: [ACTIVE_PARENT_MISSION],
+      blockerReason:
+        "An active parent mission has no executable child outcome: "
+        + "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1 "
+        + "(github:bsvalues/terrafusion_os_1.0#1485; Space space-terrafusion-wal; "
+        + "project 7; bsvalues/terrafusion_os_1.0; external-parent:washington-assessor-launch-v1)",
+    })
+  })
+
+  it("retains every exact unresolved Space identity in the global empty-queue blocker", () => {
+    const secondMission = {
+      missionKey: "external-parent:second-space",
+      externalRef: "github:bsvalues/william-os-devops#1500",
+      goalRef: "GOAL-SECOND-ACTIVE-MISSION",
+      worldId: "space-williamos-second",
+      projectId: 9,
+      repository: "bsvalues/william-os-devops",
+    } as const
+    const continuity = project([], {
+      integrity: "VERIFIED",
+      unresolved: [ACTIVE_PARENT_MISSION, secondMission],
+      resolved: [],
+    })
+
+    expect(continuity.unresolvedParentMissions).toEqual([ACTIVE_PARENT_MISSION, secondMission])
+    expect(continuity.blockerReason).toContain("Space space-terrafusion-wal")
+    expect(continuity.blockerReason).toContain("Space space-williamos-second")
+    expect(continuity.blockerReason).toContain("github:bsvalues/terrafusion_os_1.0#1485")
+    expect(continuity.blockerReason).toContain("github:bsvalues/william-os-devops#1500")
+  })
+
+  it("preserves a nonterminal child state instead of misreporting the parent as orphaned", () => {
+    const continuity = project([outcome()], UNRESOLVED_PARENT)
+
+    expect(continuity).toMatchObject({
+      state: "READY",
+      next: {
+        identity: "GOAL-0006",
+        context: expect.stringContaining(
+          "Active parent mission: GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        ),
+      },
+      unresolvedParentMissions: [ACTIVE_PARENT_MISSION],
+      blockerReason: null,
+    })
+  })
+
+  it("retains the exact unresolved parent identity while a child is actively executing", () => {
+    const continuity = project([
+      outcome({
+        lifecycleState: "active",
+        lifecycleReason: "Builder lane is executing.",
+        executionBinding: "execution-parent-child",
+        leaseHolder: "codex:builder",
+        leaseToken: "lease-parent-child",
+        leaseExpiresAt: "2026-07-28T12:05:00.000Z",
+      }),
+    ], UNRESOLVED_PARENT)
+
+    expect(continuity).toMatchObject({
+      state: "ACTIVE",
+      active: {
+        identity: "GOAL-0006",
+        context: expect.stringContaining(
+          "Active parent mission: GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        ),
+      },
+      next: null,
+      unresolvedParentMissions: [ACTIVE_PARENT_MISSION],
+      blockerReason: "The active outcome holds a live lease",
+    })
+  })
+
+  it("renders the projected parent mission context through the mounted Home panel", () => {
+    expect(panel).toContain("continuity.active.context")
+    expect(panel).toContain("continuity.next.context")
+  })
+
+  it("preserves the settled empty-queue behavior when the parent mission is resolved", () => {
+    const continuity = project([], {
+      integrity: "VERIFIED",
+      unresolved: [],
+      resolved: [ACTIVE_PARENT_MISSION],
+    })
+
+    expect(continuity).toMatchObject({
+      state: "EMPTY",
+      active: null,
+      next: null,
+      unresolvedParentMissions: [],
       blockerReason: null,
     })
   })

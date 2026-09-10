@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "security": {
       "capabilities": ["remote-cockpit"],
-      "csp": "default-src 'none'; style-src 'self'; navigate-to https://192.168.88.9:3443"
+      "csp": "default-src 'none'; style-src 'self'; navigate-to https://williamos.lan:3443"
     }
   },
   "bundle": {

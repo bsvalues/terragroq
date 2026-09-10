@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest"
+import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
+import { EventEmitter } from "node:events"
 
 import { DEVICE_AUTH_HEADER, validateDeviceMutationOrigin } from "@/lib/device-auth/contract"
 import {
   DEVICE_HEADER,
   HERMES_HTTPS_HOST,
+  HERMES_HTTPS_LISTEN_HOSTS,
   HERMES_HTTPS_ORIGIN,
+  HERMES_HTTPS_OVERLAY_HOST,
   HERMES_HTTPS_PORT,
   HERMES_UPSTREAM_ORIGIN,
   buildDownstreamHeaders,
   buildTlsServerOptions,
   buildUpstreamHeaders,
+  createHermesHttpsProxy,
+  startHermesHttpsListeners,
   verifiedDeviceName,
 } from "@/scripts/hermes-https-proxy.mjs"
 
@@ -41,11 +47,71 @@ async function parseRawRequestHeaders(requestText: string) {
 }
 
 describe("HERMES HTTPS proxy boundary", () => {
-  it("is fixed to the approved HERMES listener and loopback-only upstream", () => {
-    expect(HERMES_HTTPS_ORIGIN).toBe("https://192.168.88.9:3443")
+  it("keeps williamos.lan as the canonical origin and never the raw overlay IP", () => {
+    expect(HERMES_HTTPS_ORIGIN).toBe("https://williamos.lan:3443")
+    expect(HERMES_HTTPS_ORIGIN).not.toContain(HERMES_HTTPS_OVERLAY_HOST)
     expect(HERMES_HTTPS_HOST).toBe("192.168.88.9")
     expect(HERMES_HTTPS_PORT).toBe(3443)
     expect(HERMES_UPSTREAM_ORIGIN).toBe("http://127.0.0.1:3100")
+  })
+
+  it("declares exactly the LAN and overlay listener addresses, no wildcard bind", () => {
+    expect(HERMES_HTTPS_LISTEN_HOSTS).toEqual(["192.168.88.9", "100.97.194.84"])
+    expect(HERMES_HTTPS_LISTEN_HOSTS).not.toContain("0.0.0.0")
+    expect(Object.isFrozen(HERMES_HTTPS_LISTEN_HOSTS)).toBe(true)
+  })
+
+  it("keeps LAN ready while a missing overlay degrades and retries independently", async () => {
+    const outputs: string[] = []
+    const errors: string[] = []
+    const retries: Array<() => void> = []
+    let created = 0
+    const createServer = () => {
+      const server = new EventEmitter() as EventEmitter & { listen: (port: number, host: string) => void }
+      created += 1
+      const attempt = created
+      server.listen = (port, host) => queueMicrotask(() => {
+        expect(port).toBe(3443)
+        if (host === HERMES_HTTPS_OVERLAY_HOST && attempt === 2) {
+          server.emit("error", Object.assign(new Error("missing address"), { code: "EADDRNOTAVAIL" }))
+        } else {
+          server.emit("listening")
+        }
+      })
+      return server
+    }
+
+    await startHermesHttpsListeners({
+      tlsMaterial: { pfx: Buffer.from("pfx"), passphrase: "x".repeat(32), clientCa: null },
+      createServer,
+      scheduleRetry: (callback: () => void) => { retries.push(callback); return 1 },
+      writeOut: (message: string) => outputs.push(message),
+      writeErr: (message: string) => errors.push(message),
+    })
+    await Promise.resolve()
+
+    expect(outputs.join("")).toContain(`HERMES_HTTPS_LISTENER_READY|HOST=${HERMES_HTTPS_HOST}`)
+    expect(outputs.join("")).toContain("HERMES_HTTPS_READY")
+    expect(errors.join("")).toContain(`HERMES_HTTPS_OVERLAY_DEGRADED|HOST=${HERMES_HTTPS_OVERLAY_HOST}|CODE=EADDRNOTAVAIL`)
+    expect(retries).toHaveLength(1)
+
+    retries[0]()
+    await Promise.resolve()
+    expect(outputs.join("")).toContain(`HERMES_HTTPS_LISTENER_READY|HOST=${HERMES_HTTPS_OVERLAY_HOST}`)
+  })
+
+  it("fails closed when the required LAN address cannot bind", async () => {
+    const createServer = () => {
+      const server = new EventEmitter() as EventEmitter & { listen: () => void }
+      server.listen = () => queueMicrotask(() => {
+        server.emit("error", Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
+      })
+      return server
+    }
+    await expect(startHermesHttpsListeners({
+      tlsMaterial: { pfx: Buffer.from("pfx"), passphrase: "x".repeat(32), clientCa: null },
+      createServer,
+    })).rejects.toThrow(`REQUIRED_LISTENER_FAILED:${HERMES_HTTPS_HOST}:EADDRINUSE`)
   })
 
   it("removes hop-by-hop headers and records the exact HTTPS forwarding boundary", () => {

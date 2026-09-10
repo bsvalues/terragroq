@@ -109,7 +109,21 @@ export async function resolveRealWorkspacePath(
 
 /** Directories that are never worth showing and would swamp the tree if they were. */
 export function isIgnoredEntry(name: string): boolean {
-  return WORKSPACE_IGNORED.has(name)
+  return WORKSPACE_IGNORED.has(name) || isSensitiveWorkspacePath(name)
+}
+
+/** Secret-bearing environment and private-key files are never available through the browser API. */
+export function isSensitiveWorkspacePath(relativePath: string): boolean {
+  const name = relativePath.replace(/\\/g, "/").split("/").filter(Boolean).at(-1)?.toLowerCase() ?? ""
+  if (name === ".env.example") return false
+  const environmentFile = name === ".env"
+    || name.endsWith(".env")
+    || name.startsWith(".env.")
+    || name.endsWith(".env.local")
+  if (environmentFile) return true
+  if (name.endsWith(".pub")) return false
+  return [".pem", ".key", ".p12", ".pfx"].some((extension) => name.endsWith(extension))
+    || /^id_(?:rsa|dsa|ecdsa|ed25519)(?:[._-].+)?$/.test(name)
 }
 
 /**

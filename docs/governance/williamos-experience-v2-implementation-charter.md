@@ -50,29 +50,29 @@ truth**. Neither branch is runtime truth without inspection.
 Primary experience contract:
 
 ```
-docs/governance/williamos-intelligence-fabric/20-williamos-experience-v2-personal-operating-environment.md
+docs/governance/williamos-intelligence-fabric/experience-v2/20-williamos-experience-v2-personal-operating-environment.md
 ```
 
 Build sequence (`#987`):
 
 ```
-docs/governance/williamos-intelligence-fabric/29-command-causality-personalization-and-build-sequence.md
+docs/governance/williamos-intelligence-fabric/experience-v2/29-command-causality-personalization-and-build-sequence.md
 ```
 
 Supporting controlling records, by issue:
 
 | Issue | Record |
 | --- | --- |
-| #978 | `20-williamos-experience-v2-personal-operating-environment.md` |
-| #979 | `21-context-compartment-and-settled-truth-reconciliation.md` |
-| #980 | `22-cache-data-gravity-and-derived-state-reconciliation.md` |
-| #981 | `23-attention-reentry-semantic-thread-reconciliation.md` |
-| #982 | `24-experience-v2-current-frontend-cutover-map.md` |
-| #983 | `25-native-overlay-and-shell-boundary.md` |
-| #984 | `26-experience-v2-visual-material-cross-device-contract.md` |
-| #985 | `27-system-object-graph-and-direct-operation.md` |
-| #986 | `28-operating-modes-and-policy-bundles.md` |
-| #987 | `29-command-causality-personalization-and-build-sequence.md` |
+| #978 | `docs/governance/williamos-intelligence-fabric/experience-v2/20-williamos-experience-v2-personal-operating-environment.md` |
+| #979 | `docs/governance/williamos-intelligence-fabric/experience-v2/21-context-compartment-and-settled-truth-reconciliation.md` |
+| #980 | `docs/governance/williamos-intelligence-fabric/experience-v2/22-cache-data-gravity-and-derived-state-reconciliation.md` |
+| #981 | `docs/governance/williamos-intelligence-fabric/experience-v2/23-attention-reentry-semantic-thread-reconciliation.md` |
+| #982 | `docs/governance/williamos-intelligence-fabric/experience-v2/24-experience-v2-current-frontend-cutover-map.md` |
+| #983 | `docs/governance/williamos-intelligence-fabric/experience-v2/25-native-overlay-and-shell-boundary.md` |
+| #984 | `docs/governance/williamos-intelligence-fabric/experience-v2/26-experience-v2-visual-material-cross-device-contract.md` |
+| #985 | `docs/governance/williamos-intelligence-fabric/experience-v2/27-system-object-graph-and-direct-operation.md` |
+| #986 | `docs/governance/williamos-intelligence-fabric/experience-v2/28-operating-modes-and-policy-bundles.md` |
+| #987 | `docs/governance/williamos-intelligence-fabric/experience-v2/29-command-causality-personalization-and-build-sequence.md` |
 
 Hard pre-execution guard for every child of this charter:
 
@@ -444,7 +444,9 @@ first Experience V2 journey.
 
 ## Required build order (#987)
 
-Follow the gates in `29-command-causality-personalization-and-build-sequence.md`. Do not skip ahead
+Follow the gates in
+`docs/governance/williamos-intelligence-fabric/experience-v2/29-command-causality-personalization-and-build-sequence.md`.
+Do not skip ahead
 because later work looks more visually satisfying.
 
 | Phase | Gate | Content |

@@ -230,8 +230,15 @@ describe("4. the world is persisted and restored", () => {
 
   it("restores the owned server Space before an addressed summon", () => {
     expect(shell).toContain('fetch("/api/environment/space"')
+    expect(shell).toContain('if (!response.ok || typeof payload.worldId !== "string" || !payload.space)')
+    expect(shell).toContain('const storageMode = payload.storage === "browser" ? "browser" : "server"')
+    expect(shell).toContain("let storedSpace = payload.space")
+    expect(shell).toContain('if (storageMode === "browser" && key)')
+    expect(shell).toContain("const restoredBase = qualifyLegacyWorkspaceFiles(")
+    expect(shell).toContain("normalizeSpace(storedSpace, defaultSpace(")
+    expect(shell).toContain("loadPreviewEvidenceSnapshot(payload.worldId, payload.project.identity)")
+    expect(shell).toContain("const restored = previewSurface ?")
     expect(shell).toContain("setWorldId(payload.worldId)")
-    expect(shell).toContain("const restored = normalizeSpace(payload.space, fallback, {")
     expect(shell).toContain("setSpace(restored)")
   })
 

@@ -52,6 +52,14 @@ describe("`/` is the working environment, not a dashboard home", () => {
     expect(root).not.toContain("WorkbenchShell")
   })
 
+  it("provisions canonical owner Projects before the working environment renders", () => {
+    const root = code("app/page.tsx")
+    const provision = root.indexOf("await ensureCanonicalOwnerProjects(userId)")
+    const render = root.indexOf("return <Desk")
+    expect(provision).toBeGreaterThan(-1)
+    expect(render).toBeGreaterThan(provision)
+  })
+
   it("mounts no legacy shell frame in the primary journey", () => {
     const root = code("app/page.tsx")
     for (const legacy of ["AppShell", "AppShellFrame", "ProjectExplorer", "Inspector", "ThreadTimeline"]) {
@@ -108,5 +116,16 @@ describe("the environment owns one world, and one input", () => {
     expect(shell).toContain("materializeSurfaces")
     expect(shell).toContain("InspectorSurfaceView")
     expect(shell).not.toContain("ProjectExplorer")
+  })
+
+  it("keeps William summonable without permanently reserving the desktop edge", () => {
+    const shell = code("components/workspace-shell/workspace-shell.tsx")
+    const william = code("components/workspace-shell/william-conversation-rail.tsx")
+    const spatial = source("components/workspace-shell/experience-spatial.module.css")
+    expect(shell).toContain("useState(false)")
+    expect(william).toContain("const drawerHidden = !open")
+    expect(william).toContain('aria-controls="william-conversation-drawer"')
+    expect(spatial).toMatch(/\.windowLayer\s*\{[^}]*inset:\s*89px\s+0\s+0/s)
+    expect(spatial).toMatch(/\.williamConversationRail\s*\{[^}]*z-index:\s*17000/s)
   })
 })

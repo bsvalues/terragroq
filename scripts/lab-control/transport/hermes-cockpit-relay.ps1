@@ -1,59 +1,71 @@
-# Cockpit reachability over the WilliamOS overlay -- RUNS ON HERMES. Idempotent; safe to re-run.
+# Verify that the obsolete HERMES cockpit portproxy is retired -- RUNS ON HERMES, elevated.
 #
-# WHY THIS EXISTS AT ALL
-# scripts/hermes-https-proxy.mjs binds HERMES_HTTPS_HOST = 192.168.88.9, a hardcoded LAN address, so
-# the cockpit listener answers on the LAN interface only and the overlay address cannot reach it.
-# Changing that constant is a control-plane code change owned by a different lane, so reachability is
-# solved outside the application instead.
-#
-# WHY A TCP RELAY AND NOT A REVERSE PROXY OR TUNNEL
-# portproxy forwards TCP and nothing else. The TLS handshake -- including the client certificate that
-# carries OMEN's device identity -- is negotiated end to end between the client and
-# hermes-https-proxy. Nothing here terminates, decrypts, or inspects TLS, so socket.authorized and the
-# x-williamos-device-cert header behave exactly as they do on the LAN.
-#
-# This is precisely why cloudflared must NOT be substituted here: it terminates TLS at the provider,
-# which would silently destroy the device-identity proof while every health check still returned 200.
+# The repository-owned HTTPS proxy now binds the LAN and Tailscale addresses directly. A retained
+# portproxy on the overlay address collides with that listener and can prevent an otherwise healthy
+# deployment from starting. This script audits the endpoint and direct listener, but deliberately
+# refuses to perform the migration itself: deploy-hermes-runtime.ps1 owns rollback capture and safe
+# retirement. Any different target on the same endpoint fails closed. The firewall is preserved.
+[CmdletBinding()]
+param(
+    [string]$Runtime = 'C:\HermesLab\williamos-runtime-64034e93-flat'
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$overlayAddress = '100.97.194.84'   # HERMES on the overlay
-$lanAddress     = '192.168.88.9'    # where hermes-https-proxy actually binds
+$overlayAddress = '100.97.194.84'
+$lanAddress     = '192.168.88.9'
 $port           = 3443
 $ruleName       = 'WilliamOS cockpit over Tailscale'
+$proxyPath      = [IO.Path]::GetFullPath((Join-Path $Runtime 'scripts\hermes-https-proxy.mjs')).TrimEnd('\')
 
-# netsh writes to the registry and returns 0 for "already absent", so delete-then-add is the
-# idempotent form. Errors are swallowed only on the delete.
-netsh interface portproxy delete v4tov4 listenaddress=$overlayAddress listenport=$port 2>&1 | Out-Null
-netsh interface portproxy add v4tov4 `
-    listenaddress=$overlayAddress listenport=$port `
-    connectaddress=$lanAddress connectport=$port 2>&1 | Out-Null
+function Test-ExpectedDirectOverlayListener {
+    $listeners = @(Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    $ownerProcessIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($ownerProcessIds.Count -ne 1) { return $false }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($ownerProcessIds[0])" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) { return $false }
+    $tokens = @([regex]::Matches($process.CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))') | ForEach-Object {
+        @($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) |
+            Where-Object { $_ } | Select-Object -First 1
+    })
+    if ($tokens.Count -lt 2 -or [IO.Path]::GetFileName($tokens[0]) -ine 'node.exe') { return $false }
+    try { return [IO.Path]::GetFullPath($tokens[1]).TrimEnd('\') -ieq $proxyPath } catch { return $false }
+}
 
-# Inbound allow scoped to the overlay address AND the Private profile. The Tailscale adapter is
-# Private; the Ethernet adapter is Public, so this does not open 3443 to the LAN, to a hotel network,
-# or to anything else. Both conditions matter -- either one alone is wider than intended.
-Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
-    -Protocol TCP -LocalPort $port -Profile Private -LocalAddress $overlayAddress | Out-Null
+$tailscale = @(Get-CimInstance Win32_Service -Filter "Name='Tailscale'" -ErrorAction SilentlyContinue)
+if ($tailscale.Count -ne 1 -or $tailscale[0].StartMode -ne 'Auto') {
+    throw 'TAILSCALE_NOT_AUTOMATIC: the HERMES Tailscale service must start automatically before the legacy relay is retired'
+}
+if ($tailscale[0].State -ne 'Running') {
+    throw 'TAILSCALE_NOT_RUNNING: the HERMES Tailscale service must be running before the legacy relay is retired'
+}
 
-# --- verify rather than assume ---
-# Match the address AND the port. Matching the address alone would pass on any entry that happens to
-# share it -- a relay pointing at the wrong port would verify clean, which is the exact false green
-# this script exists to prevent. netsh prints "listenAddress listenPort connectAddress connectPort".
-$relayPattern = "^\s*$([regex]::Escape($overlayAddress))\s+$port\s+$([regex]::Escape($lanAddress))\s+$port\s*$"
-$relay = @(netsh interface portproxy show v4tov4) -match $relayPattern
-if (-not $relay) { throw "RELAY_MISSING: no portproxy entry ${overlayAddress}:$port -> ${lanAddress}:$port" }
+$rows = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() })
+$listenPattern = "^\s*$([regex]::Escape($overlayAddress))\s+$port\s+(\S+)\s+(\d+)\s*$"
+$matches = @($rows | Select-String -Pattern $listenPattern)
+if ($matches.Count -gt 1) { throw "RELAY_AMBIGUOUS: multiple records claim ${overlayAddress}:$port" }
+if ($matches.Count -eq 1) {
+    $targetAddress = $matches[0].Matches[0].Groups[1].Value
+    $targetPort = [int]$matches[0].Matches[0].Groups[2].Value
+    if ($targetAddress -ne $lanAddress -or $targetPort -ne $port) {
+        throw "RELAY_FOREIGN: ${overlayAddress}:$port targets ${targetAddress}:$targetPort; refusing to remove it"
+    }
+    throw 'RELAY_MIGRATION_REQUIRES_DEPLOYMENT: use deploy-hermes-runtime.ps1 so the exact relay is captured for rollback before retirement'
+}
+
+$remaining = @(netsh interface portproxy show v4tov4 2>&1 | ForEach-Object { $_.ToString() }) -match $listenPattern
+if ($remaining) { throw "RELAY_RETIREMENT_FAILED: ${overlayAddress}:$port is still reserved by portproxy" }
+if (-not (Test-ExpectedDirectOverlayListener)) {
+    throw "DIRECT_LISTENER_NOT_PROVEN: the exact deployed WilliamOS proxy does not own ${overlayAddress}:$port"
+}
 
 $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if (-not $rule -or -not $rule.Enabled) { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }
+if (-not $rule -or [string]$rule.Enabled -ne 'True') { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }
+$portFilter = $rule | Get-NetFirewallPortFilter
+$addressFilter = $rule | Get-NetFirewallAddressFilter
+if ($rule.Profile -notmatch 'Private' -or $portFilter.Protocol -ne 'TCP' -or [string]$portFilter.LocalPort -ne [string]$port `
+    -or [string]$addressFilter.LocalAddress -ne $overlayAddress) {
+    throw "FIREWALL_RULE_WIDE: '$ruleName' does not remain scoped to ${overlayAddress}:$port on Private TCP"
+}
 
-# portproxy depends on iphlpsvc. If that service is not set to start automatically the relay is
-# silently gone after the next reboot -- exactly the class of failure this lab has already been bitten
-# by, where the mechanism reports success and protects nothing.
-$iphlp = Get-Service iphlpsvc
-if ($iphlp.StartType -ne 'Automatic') { throw "IPHLPSVC_NOT_AUTOMATIC: portproxy will not survive reboot (StartType=$($iphlp.StartType))" }
-
-$tailscale = Get-Service Tailscale -ErrorAction SilentlyContinue
-if (-not $tailscale -or $tailscale.StartType -ne 'Automatic') { throw 'TAILSCALE_NOT_AUTOMATIC: overlay will not come back after reboot' }
-
-'RELAY_CONFIGURED overlay={0}:{1} -> {2}:{1} profile=Private iphlpsvc=Automatic tailscale=Automatic' -f $overlayAddress, $port, $lanAddress
+'LEGACY_RELAY_RETIRED direct-listener={0}:{1} proxy={2} firewall=preserved' -f $overlayAddress, $port, $proxyPath

@@ -17,12 +17,15 @@ import styles from "./workspace-shell.module.css"
 
 const editorTheme = EditorView.theme({
   "&": { backgroundColor: "#0B0D10", color: "#D5D8DC", height: "100%" },
-  ".cm-content": { caretColor: "#D5D8DC", fontFamily: "var(--font-geist-mono)", fontSize: "12px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#B8794E" },
-  ".cm-gutters": { backgroundColor: "#111419", color: "#626A74", borderRight: "1px solid #2A3038" },
+  "&.cm-focused": { outline: "1px solid #6F91C8", outlineOffset: "-1px" },
+  ".cm-content": { caretColor: "#E3E6E9", fontFamily: "var(--font-geist-mono)", fontSize: "13px", lineHeight: "1.55" },
+  ".cm-line": { paddingLeft: "5px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#CC8D61", borderLeftWidth: "2px" },
+  ".cm-gutters": { backgroundColor: "#111419", color: "#747E89", borderRight: "1px solid #2A3038", fontSize: "11px" },
+  ".cm-gutterElement": { paddingLeft: "7px", paddingRight: "7px" },
   ".cm-activeLine": { backgroundColor: "#171B2199" },
-  ".cm-activeLineGutter": { backgroundColor: "#20252c", color: "#A7ADB5" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#34435b" },
+  ".cm-activeLineGutter": { backgroundColor: "#20252c", color: "#C0C6CD" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#3C506D" },
   ".cm-scroller": { overflow: "auto" },
 }, { dark: true })
 

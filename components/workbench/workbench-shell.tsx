@@ -186,7 +186,7 @@ function ProjectExplorer({
                       : "hover:bg-[var(--workbench-raised)]",
                   )}
                 >
-                  <span className="block truncate text-sm">{thread.title}</span>
+                  <span className="block truncate text-sm">{thread.title}{thread.runCount && thread.runCount > 1 ? ` · ${thread.runCountPartial ? `${thread.runCount}+` : thread.runCount} runs` : ""}</span>
                   <span className="mt-0.5 block font-mono text-[10px] text-[var(--workbench-muted)]">{stamp(thread.lastActivityAt)}</span>
                 </button>
               ))}
@@ -713,7 +713,12 @@ export function WorkbenchShell({
   ]
 
   return (
-    <WorkbenchContextProvider value={{ focusThread }}>
+    <WorkbenchContextProvider value={{
+      focusThread,
+      selectedProject: selectedProject
+        ? { id: selectedProject.id, key: selectedProject.key, name: selectedProject.name }
+        : null,
+    }}>
     <div className="flex h-[100dvh] min-h-0 bg-[var(--workbench-canvas)] text-[var(--workbench-text)]">
       <aside className="hidden w-[4.5rem] shrink-0 flex-col border-r border-[var(--workbench-hairline)] bg-[var(--workbench-canvas)] sm:flex">
         <Link href="/" aria-label="WilliamOS Home" className="workbench-focus grid h-14 place-items-center border-b border-[var(--workbench-hairline)]"><span className="grid size-7 place-items-center bg-[var(--workbench-text)] font-mono text-xs font-bold text-[var(--workbench-canvas)]">W</span></Link>

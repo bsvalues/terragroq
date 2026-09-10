@@ -29,6 +29,7 @@ const SUPERSEDED_ROUTES = {
   "/trace": "runtime-trace",
   "/activity": "activity",
   "/projects": "project",
+  "/hermes": "hermes",
   // No surface: the Line replaced chat outright. Chat is not something you open here.
   "/chat": null,
   // The two predecessor compositions (#919, #922). Collapsed, not kept beside the real one.
@@ -109,6 +110,7 @@ const SPOKEN_REQUESTS: Record<string, string> = {
   "runtime-trace": "show me the trace",
   activity: "show me the activity",
   project: "show me the projects",
+  hermes: "how is HERMES",
 }
 
 describe("a summon works as the first thing said, not only inside an existing world", () => {

@@ -13,6 +13,12 @@
  */
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
+import { validateCouncilHistory, type CouncilSession } from "@/lib/environment/council-session"
+import {
+  canonicalWorkspaceObjectKey,
+  parseWorkspaceFileRef,
+  type WorkspaceFileRef,
+} from "@/lib/projects/workspace-object-ref"
 
 export type SurfaceKind =
   | "browser" | "editor" | "diff" | "tests" | "terminal" | "trace" | "diagram" | "document" | "agent" | "data"
@@ -37,7 +43,24 @@ export type PendingDecision = Readonly<{
 
 export type ValidationMark = Readonly<{ ref: string; at: string }>
 
-export type SpaceWindowKind = "editor" | "running-app" | "line" | "inspector"
+export type WilliamJudgmentBasis = Readonly<{
+  key: string
+  label: string
+  value: string
+}>
+
+/** A model-authored opinion whose inspectable basis and provenance are retained with the world. */
+export type WilliamJudgment = Readonly<{
+  recommendation: string
+  rationale: string
+  basis: readonly WilliamJudgmentBasis[]
+  confidence: number
+  generatedAt: string
+  basisFingerprint: string
+  provenance: Readonly<{ provider: string; model: string }>
+}>
+
+export type SpaceWindowKind = "editor" | "running-app" | "tests" | "diff" | "terminal" | "line" | "inspector"
 
 type SpaceWindowBase = Readonly<{
   id: string
@@ -52,6 +75,23 @@ export type SpaceWindow =
       kind: "inspector"
       surfaceKind: SummonedSurface
       surfaceSubject: string
+      surfacePayload?: never
+    }>)
+  | (SpaceWindowBase & Readonly<{
+      kind: "inspector"
+      surfaceKind: "review"
+      /** Immutable workspace-relative source path captured when Review began. */
+      surfaceSubject: string
+      /** Canonical successful Claude result, rendered as plain text by the client. */
+      surfacePayload: string
+    }>)
+  | (SpaceWindowBase & Readonly<{
+      kind: "inspector"
+      surfaceKind: "execution-assignment"
+      /** Display label only; the exact assignment identity is inside the validated snapshot. */
+      surfaceSubject: string
+      /** Immutable, bounded assignment snapshot captured from the mounted world's persisted spine. */
+      surfacePayload: string
     }>)
   | (SpaceWindowBase & Readonly<{
       kind: Exclude<SpaceWindowKind, "inspector">
@@ -64,13 +104,20 @@ export type SpaceState = Readonly<{
   /** Client-authored monotonic state version; server rejects stale/equal saves. */
   revision: number
   windows: readonly SpaceWindow[]
+  /** Explicit repository membership for this outcome-centered Space. Legacy snapshots omit it. */
+  workingSetRepositoryKeys?: readonly string[]
+  /** Repository whose source tree was active when the Space was saved. */
+  activeRepositoryKey?: string | null
   openFiles: readonly string[]
+  /** Repository-qualified identity for each open file. Legacy snapshots omit this field. */
+  fileRefs?: readonly WorkspaceFileRef[]
   panes: readonly Readonly<{
     id: string
     filePath: string | null
+    fileRef?: WorkspaceFileRef | null
     selection?: Readonly<{ anchor: number; head: number }> | null
   }>[]
-  selection: Readonly<{ filePath: string; anchor: number; head: number }> | null
+  selection: Readonly<{ filePath: string; fileRef?: WorkspaceFileRef; anchor: number; head: number }> | null
   activeWindowId: string | null
   activePaneId: string | null
   /** Server-derived canonical running product URL; null means no truthful serving path is known. */
@@ -181,6 +228,10 @@ export type WorkingWorldSnapshot = Readonly<{
   lastRedValidation: ValidationMark | null
   /** Conversational position: the last few turns, oldest first, roles owner|williamos. */
   conversation: readonly Readonly<{ role: "owner" | "williamos"; content: string; at: string }>[]
+  /** William's latest real model judgment, distinct from deterministic safety facts in the UI. */
+  judgment: WilliamJudgment | null
+  /** Completed advisory Council sessions, newest bounded history persisted with this world. */
+  councilHistory: readonly CouncilSession[]
   /** Whether Hermes should continue this work unattended, and where it stands. */
   continuation: "active" | "paused" | "settled"
   /**
@@ -237,6 +288,8 @@ export function createWorkingWorld({
     lastGreenValidation: null,
     lastRedValidation: null,
     conversation: [],
+    judgment: null,
+    councilHistory: [],
     continuation: "active",
     pendingStartWork: null,
   }
@@ -252,7 +305,7 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   const allowed = new Set([
     "schemaVersion", "spine", "intent", "assumption", "resources", "branchHeads", "artifacts", "agentWork",
     "surfaces", "openConcerns", "unresolvedFailures", "pendingDecisions", "lastGreenValidation",
-    "lastRedValidation", "conversation", "continuation", "pendingStartWork",
+    "lastRedValidation", "conversation", "judgment", "councilHistory", "continuation", "pendingStartWork",
     "space",
   ])
   for (const key of Object.keys(snapshot)) {
@@ -268,6 +321,12 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   if (!WORLD_EXECUTION_STATES.has(String(spine.execution))) throw new Error("WORLD_SPINE_EXECUTION_UNKNOWN")
   if (!Array.isArray(spine.evidence)) throw new Error("WORLD_SPINE_EVIDENCE_MALFORMED")
 
+  // Additive migration for worlds saved before William's persistent judgment existed.
+  if (snapshot.judgment === undefined) snapshot.judgment = null
+  if (snapshot.judgment !== null) snapshot.judgment = validateWilliamJudgment(snapshot.judgment)
+  if (snapshot.councilHistory === undefined) snapshot.councilHistory = []
+  snapshot.councilHistory = validateCouncilHistory(snapshot.councilHistory)
+
   if (snapshot.space !== undefined) snapshot.space = validateSpaceState(snapshot.space)
   // The 2026-08-25 owner contract makes a Space's window geometry durable product state. Continue
   // rejecting layout-shaped keys everywhere else, while validating Space geometry explicitly.
@@ -277,8 +336,63 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   return snapshot as unknown as WorkingWorldSnapshot
 }
 
+function judgmentString(value: unknown, error: string, max: number): string {
+  if (typeof value !== "string" || value.trim() === "" || value.length > max || value.includes("\0")) {
+    throw new Error(error)
+  }
+  return value.trim()
+}
+
+/** Strict persistence boundary for inference-authored judgment data. */
+export function validateWilliamJudgment(raw: unknown): WilliamJudgment {
+  const judgment = record(raw, "WORLD_JUDGMENT_MALFORMED")
+  exactKeys(judgment, [
+    "recommendation", "rationale", "basis", "confidence", "generatedAt", "basisFingerprint", "provenance",
+  ], "WORLD_JUDGMENT_UNKNOWN_KEY")
+  const recommendation = judgmentString(judgment.recommendation, "WORLD_JUDGMENT_RECOMMENDATION_INVALID", 400)
+  const rationale = judgmentString(judgment.rationale, "WORLD_JUDGMENT_RATIONALE_INVALID", 1_200)
+  if (!Array.isArray(judgment.basis) || judgment.basis.length === 0 || judgment.basis.length > 8) {
+    throw new Error("WORLD_JUDGMENT_BASIS_INVALID")
+  }
+  const keys = new Set<string>()
+  const basis = judgment.basis.map((rawBasis) => {
+    const item = record(rawBasis, "WORLD_JUDGMENT_BASIS_MALFORMED")
+    exactKeys(item, ["key", "label", "value"], "WORLD_JUDGMENT_BASIS_UNKNOWN_KEY")
+    const key = judgmentString(item.key, "WORLD_JUDGMENT_BASIS_KEY_INVALID", 80)
+    if (keys.has(key)) throw new Error("WORLD_JUDGMENT_BASIS_DUPLICATE")
+    keys.add(key)
+    return {
+      key,
+      label: judgmentString(item.label, "WORLD_JUDGMENT_BASIS_LABEL_INVALID", 120),
+      value: judgmentString(item.value, "WORLD_JUDGMENT_BASIS_VALUE_INVALID", 500),
+    }
+  })
+  if (typeof judgment.confidence !== "number" || !Number.isFinite(judgment.confidence)
+    || judgment.confidence < 0 || judgment.confidence > 1) {
+    throw new Error("WORLD_JUDGMENT_CONFIDENCE_INVALID")
+  }
+  const generatedAt = judgmentString(judgment.generatedAt, "WORLD_JUDGMENT_TIME_INVALID", 40)
+  if (!Number.isFinite(Date.parse(generatedAt))) throw new Error("WORLD_JUDGMENT_TIME_INVALID")
+  const basisFingerprint = judgmentString(judgment.basisFingerprint, "WORLD_JUDGMENT_FINGERPRINT_INVALID", 64)
+  if (!/^[0-9a-f]{64}$/.test(basisFingerprint)) throw new Error("WORLD_JUDGMENT_FINGERPRINT_INVALID")
+  const provenance = record(judgment.provenance, "WORLD_JUDGMENT_PROVENANCE_MALFORMED")
+  exactKeys(provenance, ["provider", "model"], "WORLD_JUDGMENT_PROVENANCE_UNKNOWN_KEY")
+  return {
+    recommendation,
+    rationale,
+    basis,
+    confidence: judgment.confidence,
+    generatedAt,
+    basisFingerprint,
+    provenance: {
+      provider: judgmentString(provenance.provider, "WORLD_JUDGMENT_PROVIDER_INVALID", 120),
+      model: judgmentString(provenance.model, "WORLD_JUDGMENT_MODEL_INVALID", 200),
+    },
+  }
+}
+
 const SPACE_WINDOW_KINDS: ReadonlySet<string> = new Set<SpaceWindowKind>([
-  "editor", "running-app", "line", "inspector",
+  "editor", "running-app", "tests", "diff", "terminal", "line", "inspector",
 ])
 
 function record(value: unknown, error: string): Record<string, unknown> {
@@ -315,7 +429,7 @@ export function validateSpaceState(raw: unknown): SpaceState {
   const space = record(raw, "SPACE_MALFORMED")
   exactKeys(space, [
     "schemaVersion", "revision", "windows", "openFiles", "panes", "selection", "activeWindowId", "activePaneId",
-    "runningAppUrl",
+    "runningAppUrl", "fileRefs", "workingSetRepositoryKeys", "activeRepositoryKey",
   ], "SPACE_UNKNOWN_KEY")
   if (space.schemaVersion !== 1) throw new Error("SPACE_SCHEMA_UNKNOWN")
   if (!Number.isSafeInteger(space.revision) || (space.revision as number) < 0) {
@@ -325,11 +439,30 @@ export function validateSpaceState(raw: unknown): SpaceState {
   if (!Array.isArray(space.openFiles) || space.openFiles.length > 64) throw new Error("SPACE_OPEN_FILES_INVALID")
   if (!Array.isArray(space.panes) || space.panes.length > 16) throw new Error("SPACE_PANES_INVALID")
 
+  const repositoryKey = (value: unknown): string => {
+    if (typeof value !== "string" || value.length === 0 || value.length > 120
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)) {
+      throw new Error("SPACE_REPOSITORY_KEY_INVALID")
+    }
+    return value
+  }
+  const workingSetRepositoryKeys = space.workingSetRepositoryKeys === undefined ? undefined : (() => {
+    if (!Array.isArray(space.workingSetRepositoryKeys) || space.workingSetRepositoryKeys.length > 16) {
+      throw new Error("SPACE_WORKING_SET_REPOSITORIES_INVALID")
+    }
+    const keys = space.workingSetRepositoryKeys.map(repositoryKey)
+    if (new Set(keys).size !== keys.length) throw new Error("SPACE_WORKING_SET_REPOSITORIES_DUPLICATE")
+    return keys
+  })()
+  const activeRepositoryKey = space.activeRepositoryKey === undefined || space.activeRepositoryKey === null
+    ? space.activeRepositoryKey
+    : repositoryKey(space.activeRepositoryKey)
+
   const ids = new Set<string>()
   const windows = space.windows.map((rawWindow) => {
     const window = record(rawWindow, "SPACE_WINDOW_MALFORMED")
     exactKeys(window, [
-      "id", "kind", "title", "frame", "z", "minimized", "surfaceKind", "surfaceSubject",
+      "id", "kind", "title", "frame", "z", "minimized", "surfaceKind", "surfaceSubject", "surfacePayload",
     ], "SPACE_WINDOW_UNKNOWN_KEY")
     const id = boundedString(window.id, "SPACE_WINDOW_ID_INVALID", 120)
     if (ids.has(id)) throw new Error("SPACE_WINDOW_ID_DUPLICATE")
@@ -339,9 +472,18 @@ export function validateSpaceState(raw: unknown): SpaceState {
       if (window.surfaceKind === undefined || window.surfaceSubject === undefined) {
         throw new Error("SPACE_INSPECTOR_IDENTITY_REQUIRED")
       }
-      if (!isSummonedSurface(window.surfaceKind)) throw new Error("SPACE_INSPECTOR_SURFACE_KIND_INVALID")
-      boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
-    } else if (window.surfaceKind !== undefined || window.surfaceSubject !== undefined) {
+      if (window.surfaceKind === "review") {
+        workspaceRelativePath(window.surfaceSubject)
+        boundedString(window.surfacePayload, "SPACE_REVIEW_PAYLOAD_INVALID", 200_000)
+      } else if (window.surfaceKind === "execution-assignment") {
+        boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
+        boundedString(window.surfacePayload, "SPACE_EXECUTION_ASSIGNMENT_PAYLOAD_INVALID", 200_000)
+      } else {
+        if (!isSummonedSurface(window.surfaceKind)) throw new Error("SPACE_INSPECTOR_SURFACE_KIND_INVALID")
+        boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
+        if (window.surfacePayload !== undefined) throw new Error("SPACE_INSPECTOR_PAYLOAD_FORBIDDEN")
+      }
+    } else if (window.surfaceKind !== undefined || window.surfaceSubject !== undefined || window.surfacePayload !== undefined) {
       throw new Error("SPACE_CORE_WINDOW_IDENTITY_FORBIDDEN")
     }
     boundedString(window.title, "SPACE_WINDOW_TITLE_INVALID", 200)
@@ -364,17 +506,32 @@ export function validateSpaceState(raw: unknown): SpaceState {
   })
 
   const openFiles = space.openFiles.map(workspaceRelativePath)
+  const fileRefs = space.fileRefs === undefined ? undefined : (() => {
+    if (!Array.isArray(space.fileRefs) || space.fileRefs.length > 64) throw new Error("SPACE_FILE_REFS_INVALID")
+    const refs = space.fileRefs.map(parseWorkspaceFileRef)
+    const keys = refs.map(canonicalWorkspaceObjectKey)
+    if (new Set(keys).size !== keys.length) throw new Error("SPACE_FILE_REFS_DUPLICATE")
+    if (refs.length !== openFiles.length || refs.some((ref, index) => ref.path !== openFiles[index])) {
+      throw new Error("SPACE_FILE_REFS_MISMATCH")
+    }
+    return refs
+  })()
   const openFileSet = new Set(openFiles)
-  if (openFileSet.size !== openFiles.length) throw new Error("SPACE_OPEN_FILES_DUPLICATE")
+  if (openFileSet.size !== openFiles.length && fileRefs === undefined) throw new Error("SPACE_OPEN_FILES_DUPLICATE")
+  const openFileRefKeys = new Set(fileRefs?.map(canonicalWorkspaceObjectKey) ?? [])
   const paneIds = new Set<string>()
   const panes = space.panes.map((rawPane) => {
     const pane = record(rawPane, "SPACE_PANE_MALFORMED")
-    exactKeys(pane, ["id", "filePath", "selection"], "SPACE_PANE_UNKNOWN_KEY")
+    exactKeys(pane, ["id", "filePath", "fileRef", "selection"], "SPACE_PANE_UNKNOWN_KEY")
     const id = boundedString(pane.id, "SPACE_PANE_ID_INVALID", 120)
     if (paneIds.has(id)) throw new Error("SPACE_PANE_ID_DUPLICATE")
     paneIds.add(id)
     const filePath = pane.filePath === null ? null : workspaceRelativePath(pane.filePath)
     if (filePath !== null && !openFileSet.has(filePath)) throw new Error("SPACE_PANE_FILE_NOT_OPEN")
+    const fileRef = pane.fileRef === undefined || pane.fileRef === null ? pane.fileRef : parseWorkspaceFileRef(pane.fileRef)
+    if (fileRef && (fileRef.path !== filePath || !openFileRefKeys.has(canonicalWorkspaceObjectKey(fileRef)))) {
+      throw new Error("SPACE_PANE_FILE_REF_NOT_OPEN")
+    }
     let paneSelection: { anchor: number; head: number } | null | undefined
     if (pane.selection === null) {
       paneSelection = null
@@ -388,20 +545,34 @@ export function validateSpaceState(raw: unknown): SpaceState {
       }
       paneSelection = { anchor: rawPaneSelection.anchor as number, head: rawPaneSelection.head as number }
     }
-    return paneSelection === undefined ? { id, filePath } : { id, filePath, selection: paneSelection }
+    return {
+      id,
+      filePath,
+      ...(fileRef !== undefined ? { fileRef } : {}),
+      ...(paneSelection !== undefined ? { selection: paneSelection } : {}),
+    }
   })
 
   let selection: SpaceState["selection"] = null
   if (space.selection !== null) {
     const rawSelection = record(space.selection, "SPACE_SELECTION_MALFORMED")
-    exactKeys(rawSelection, ["filePath", "anchor", "head"], "SPACE_SELECTION_UNKNOWN_KEY")
+    exactKeys(rawSelection, ["filePath", "fileRef", "anchor", "head"], "SPACE_SELECTION_UNKNOWN_KEY")
     const filePath = workspaceRelativePath(rawSelection.filePath)
     if (!openFileSet.has(filePath)) throw new Error("SPACE_SELECTION_FILE_NOT_OPEN")
     if (!Number.isSafeInteger(rawSelection.anchor) || (rawSelection.anchor as number) < 0
       || !Number.isSafeInteger(rawSelection.head) || (rawSelection.head as number) < 0) {
       throw new Error("SPACE_SELECTION_INVALID")
     }
-    selection = { filePath, anchor: rawSelection.anchor as number, head: rawSelection.head as number }
+    const fileRef = rawSelection.fileRef === undefined ? undefined : parseWorkspaceFileRef(rawSelection.fileRef)
+    if (fileRef && (fileRef.path !== filePath || !openFileRefKeys.has(canonicalWorkspaceObjectKey(fileRef)))) {
+      throw new Error("SPACE_SELECTION_FILE_REF_NOT_OPEN")
+    }
+    selection = {
+      filePath,
+      ...(fileRef ? { fileRef } : {}),
+      anchor: rawSelection.anchor as number,
+      head: rawSelection.head as number,
+    }
   }
   if (space.activeWindowId !== null && (typeof space.activeWindowId !== "string" || !ids.has(space.activeWindowId))) {
     throw new Error("SPACE_ACTIVE_WINDOW_INVALID")
@@ -411,7 +582,11 @@ export function validateSpaceState(raw: unknown): SpaceState {
   }
   if (selection !== null) {
     const activePane = panes.find((pane) => pane.id === space.activePaneId)
-    if (!activePane || activePane.filePath !== selection.filePath) throw new Error("SPACE_SELECTION_NOT_ACTIVE")
+    if (!activePane || activePane.filePath !== selection.filePath
+      || (selection.fileRef && (!activePane.fileRef
+        || canonicalWorkspaceObjectKey(activePane.fileRef) !== canonicalWorkspaceObjectKey(selection.fileRef)))) {
+      throw new Error("SPACE_SELECTION_NOT_ACTIVE")
+    }
   }
   if (space.runningAppUrl !== null) {
     let url: URL
@@ -419,7 +594,16 @@ export function validateSpaceState(raw: unknown): SpaceState {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("SPACE_RUNNING_APP_URL_INVALID")
   }
 
-  return { ...space, windows, openFiles, panes, selection } as unknown as SpaceState
+  return {
+    ...space,
+    windows,
+    ...(workingSetRepositoryKeys !== undefined ? { workingSetRepositoryKeys } : {}),
+    ...(activeRepositoryKey !== undefined ? { activeRepositoryKey } : {}),
+    openFiles,
+    ...(fileRefs !== undefined ? { fileRefs } : {}),
+    panes,
+    selection,
+  } as unknown as SpaceState
 }
 
 function assertNoChrome(value: unknown, path: string): void {

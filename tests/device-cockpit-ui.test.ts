@@ -20,6 +20,24 @@ describe("device cockpit web integration", () => {
     expect(source).toContain("/sign-in")
     expect(source).not.toMatch(/[?&](token|session|credential)=/i)
   })
+  it("converts a proxy-verified TLS device into the existing owner session before native recovery", () => {
+    const source = read("app/device-bootstrap/page.tsx")
+    const header = source.indexOf('get("x-williamos-device-cert")')
+    const certificateSession = source.indexOf('redirect("/api/device-cert/session?next=/")')
+    const nativeBootstrap = source.indexOf("return <DeviceBootstrap />")
+    expect(header).toBeGreaterThan(-1)
+    expect(certificateSession).toBeGreaterThan(header)
+    expect(nativeBootstrap).toBeGreaterThan(certificateSession)
+  })
+  it("reuses a valid session instead of minting another row on every certificate-bearing startup", () => {
+    const source = read("app/api/device-cert/session/route.ts")
+    const existingSession = source.indexOf("await getSession()")
+    const createSession = source.indexOf("internalAdapter.createSession")
+    expect(existingSession).toBeGreaterThan(-1)
+    expect(createSession).toBeGreaterThan(existingSession)
+    expect(source).toContain("if (existingSession?.user.id === userId)")
+    expect(source.indexOf("resolveOwnerUserId")).toBeLessThan(existingSession)
+  })
   it("routes an authenticated credential-less Cockpit to explicit enrollment", async () => {
     const replace = vi.fn()
     await authenticateCockpit({

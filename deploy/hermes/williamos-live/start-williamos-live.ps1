@@ -39,8 +39,8 @@
   application answers 200 on /sign-in while being unable to reach its database, so the failure would
   look exactly like a healthy service. That is precisely how this went unnoticed for two days.
 
-  THE SECOND DEFECT THIS CLOSES (#1015). The application reads its workspace as
-  `process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()`. `.env.local` DECLARED that variable, but
+  THE SECOND DEFECT THIS CLOSES (#1015). The application reads the TerraFusion target workspace as
+  `process.env.WILLIAMOS_TERRAFUSION_ROOT`. `.env.local` DECLARED that variable, but
   nothing ever APPLIED it: a Next standalone server does not load `.env.local` into the environment
   of the already-running process for server-side reads, and this launcher exported only NODE_ENV,
   HOSTNAME, PORT and DATABASE_URL. So the fallback won and `process.cwd()` -- the deployed standalone
@@ -70,7 +70,10 @@ param(
   [int]$Port = 3100,
   [string]$BindHost = "127.0.0.1",
   [string]$FabricRoot,
-  # The governed workspace the cockpit edits. Declared in .env.local; this overrides it when a
+  # Existing HERMES trust root for the disposable Preview TLS endpoint. Node reads this only at
+  # process start through NODE_EXTRA_CA_CERTS; it is never a certificate-verification bypass.
+  [string]$WorkspaceAppCaPath = "C:\ProgramData\WilliamOS\williamos-preview-root-ca.pem",
+  # The TerraFusion workspace the cockpit edits. Declared in .env.local; this legacy-named switch overrides it when a
   # deployment needs to say so explicitly. Never defaulted to a literal here -- see the header.
   [string]$ProjectRoot
 )
@@ -137,9 +140,15 @@ function Deny-Boot {
   exit 1
 }
 
-$declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT" }
+$declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
+$declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
+$declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
+$declaredWorkspaceAppUrl = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_WORKSPACE_APP_URL"
+$declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
+$declaredLocalSetupEnabled = Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"
+$localSetupEnabled = if ($declaredLocalSetupEnabled -ieq "true") { "true" } else { "false" }
 if (-not $declaredRoot) {
-  Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_PROJECT_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it the application falls back to its own deployment directory and silently treats the bundle as the workspace."
+  Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
 }
 if (-not (Test-Path -LiteralPath $declaredRoot -PathType Container)) {
   Deny-Boot "PROJECT_ROOT_MISSING" "the declared workspace '$declaredRoot' does not exist."
@@ -167,8 +176,94 @@ $originRemote = Invoke-GitProbe -Directory $resolvedProjectRoot -GitArgs @("remo
 if ($originRemote.ExitCode -ne 0 -or -not $originRemote.Output) {
   Deny-Boot "PROJECT_ROOT_NO_ORIGIN_REMOTE" "'$resolvedProjectRoot' has no origin remote, so 'git fetch origin main' cannot run and no work-context receipt can be issued."
 }
+$canonicalTerraFusionRepository = "bsvalues/terrafusion_os_1.0"
+$normalizedOrigin = ("$($originRemote.Output)".Trim() -replace '\.git$', '')
+if ($normalizedOrigin -match '^git@github\.com:(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^https?://github\.com/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+} elseif ($normalizedOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
+  $normalizedOrigin = $Matches[1]
+}
+$normalizedOrigin = $normalizedOrigin.Trim('/').ToLowerInvariant()
+if ($normalizedOrigin -ne $canonicalTerraFusionRepository) {
+  Deny-Boot "PROJECT_ROOT_REPOSITORY_MISMATCH" "the declared workspace origin is not the canonical TerraFusion repository ($canonicalTerraFusionRepository)."
+}
 
 Write-Boot "BOOT_PROJECT_ROOT $resolvedProjectRoot"
+
+# -------------------------------------------------------------------------------------------------
+# Optional Core Seven secondary mounts. Each declaration is either absent (and therefore simply not
+# mounted) or is proven against the server-owned repository identity before Node can observe it.
+# The integrated OS 1.0 checkout above remains the required primary workspace and Preview source.
+# -------------------------------------------------------------------------------------------------
+
+$secondaryRepositoryDeclarations = @(
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_SOVEREIGN_OS_ROOT"; Repository = "bsvalues/terrafusion-os" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_FORGE_ROOT"; Repository = "bsvalues/terrafusion-forge" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_ATLAS_ROOT"; Repository = "bsvalues/terrafusion-atlas" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_DAIS_ROOT"; Repository = "bsvalues/terrafusion-dais" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_DOSSIER_ROOT"; Repository = "bsvalues/terrafusion-dossier" },
+  [pscustomobject]@{ Environment = "WILLIAMOS_TERRAFUSION_GPT_ROOT"; Repository = "bsvalues/terrafusion-gpt" }
+)
+$verifiedSecondaryRepositoryMounts = @()
+
+foreach ($secondary in $secondaryRepositoryDeclarations) {
+  # `.env.local` is the deployment declaration boundary for these mounts. Remove any value inherited
+  # from the scheduled-task process or machine before consulting that file, otherwise an absent key
+  # could leave an unvalidated ambient path visible to Node.
+  Remove-Item -Path "Env:$($secondary.Environment)" -ErrorAction SilentlyContinue
+  $declaredSecondaryRoot = Get-DeclaredEnvValue -File $envFile -Key $secondary.Environment
+  if (-not $declaredSecondaryRoot) {
+    # Secondary repositories are optional at boot. WilliamOS reports an absent mount truthfully;
+    # inventing a path or refusing the required OS 1.0 workspace would both be incorrect.
+    continue
+  }
+
+  if (-not (Test-Path -LiteralPath $declaredSecondaryRoot -PathType Container)) {
+    Deny-Boot "SECONDARY_ROOT_MISSING key=$($secondary.Environment)" "the configured secondary Core Seven root '$declaredSecondaryRoot' for $($secondary.Environment) does not exist."
+  }
+  $resolvedSecondaryRoot = (Resolve-Path -LiteralPath $declaredSecondaryRoot).ProviderPath.TrimEnd('\')
+  if ($resolvedSecondaryRoot -ieq $resolvedAppRoot) {
+    Deny-Boot "SECONDARY_ROOT_IS_APP_ROOT key=$($secondary.Environment)" "the configured secondary Core Seven root for $($secondary.Environment) resolves to the deployed WilliamOS bundle."
+  }
+
+  $secondaryTopLevel = Invoke-GitProbe -Directory $resolvedSecondaryRoot -GitArgs @("rev-parse", "--show-toplevel")
+  if ($secondaryTopLevel.ExitCode -ne 0 -or -not $secondaryTopLevel.Output) {
+    Deny-Boot "SECONDARY_ROOT_NOT_GOVERNED_WORKSPACE key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' is not inside a git work tree."
+  }
+  $normalizedSecondaryTopLevel = ($secondaryTopLevel.Output -replace '/', '\').TrimEnd('\')
+  if ($normalizedSecondaryTopLevel -ine $resolvedSecondaryRoot) {
+    Deny-Boot "SECONDARY_ROOT_NOT_WORKTREE_ROOT key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' is not the exact root of its git work tree (that root is '$normalizedSecondaryTopLevel')."
+  }
+
+  $secondaryOriginRemote = Invoke-GitProbe -Directory $resolvedSecondaryRoot -GitArgs @("remote", "get-url", "origin")
+  if ($secondaryOriginRemote.ExitCode -ne 0 -or -not $secondaryOriginRemote.Output) {
+    Deny-Boot "SECONDARY_ROOT_NO_ORIGIN_REMOTE key=$($secondary.Environment)" "the configured secondary Core Seven root '$resolvedSecondaryRoot' has no origin remote."
+  }
+  $normalizedSecondaryOrigin = ("$($secondaryOriginRemote.Output)".Trim() -replace '\.git$', '')
+  if ($normalizedSecondaryOrigin -match '^git@github\.com:(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^https?://github\.com/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^ssh://git@github\.com(?:\:22)?/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  } elseif ($normalizedSecondaryOrigin -match '^ssh://git@ssh\.github\.com(?::443)?/(.+)$') {
+    $normalizedSecondaryOrigin = $Matches[1]
+  }
+  $normalizedSecondaryOrigin = $normalizedSecondaryOrigin.Trim('/').ToLowerInvariant()
+  if ($normalizedSecondaryOrigin -ne $secondary.Repository) {
+    Deny-Boot "SECONDARY_ROOT_REPOSITORY_MISMATCH key=$($secondary.Environment)" "the configured secondary Core Seven root for $($secondary.Environment) is not the canonical repository $($secondary.Repository)."
+  }
+
+  $verifiedSecondaryRepositoryMounts += [pscustomobject]@{
+    Environment = $secondary.Environment
+    ResolvedRoot = $resolvedSecondaryRoot
+  }
+  Write-Boot "BOOT_SECONDARY_ROOT $($secondary.Environment) $resolvedSecondaryRoot"
+}
 
 # Resolve. stdout carries the connection string and is captured into a variable -- never a file, never
 # a log. stderr carries the resolver's redacted diagnostic, which IS recorded because it names the
@@ -225,13 +320,67 @@ Set-Location -LiteralPath $AppRoot
 $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
+$env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.
 $env:DATABASE_URL = $resolvedUrl
 # Same precedence, same reason: declared in .env.local, but only an already-present process variable
 # is actually read by the server, so applying it here is what makes the declaration take effect.
-$env:WILLIAMOS_PROJECT_ROOT = $resolvedProjectRoot
+$env:WILLIAMOS_TERRAFUSION_ROOT = $resolvedProjectRoot
+if ($declaredTerraFusionSpaceIdentity) {
+  $env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = $declaredTerraFusionSpaceIdentity
+}
+# The TerraFusion target and the WilliamOS source checkout have deliberately separate meanings.
+# Preserve the source-root declaration for system operations such as the sign-in fix; never alias
+# the validated TerraFusion target into this variable.
+if ($declaredWilliamOsRoot) {
+  $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
+}
+if ($declaredWilliamOsSpaceIdentity) {
+  $env:WILLIAMOS_PROJECT_SPACE_IDENTITY = $declaredWilliamOsSpaceIdentity
+}
+# Preview admission remains server-owned and fail-closed. The launcher only carries the explicitly
+# declared endpoint into the Node process; without this export, a valid .env.local declaration is
+# invisible to the standalone runtime and the real Preview disappears after every supervised restart.
+if ($declaredWorkspaceAppUrl) {
+  $env:WILLIAMOS_WORKSPACE_APP_URL = $declaredWorkspaceAppUrl
+} else {
+  Remove-Item -Path "Env:WILLIAMOS_WORKSPACE_APP_URL" -ErrorAction SilentlyContinue
+}
+# Server-side Preview admission fetches the configured application before any browser can frame it.
+# HERMES serves that disposable runtime with the already-provisioned local Preview CA. Windows trusts
+# it, but Node does not consult the Windows certificate store, so explicitly add that one CA to Node's
+# normal trust set. Never disable TLS verification, and never allow an inherited CA path to survive
+# when the configured Preview is not HTTPS.
+if ($declaredWorkspaceAppUrl -match '^https://') {
+  if (-not (Test-Path -LiteralPath $WorkspaceAppCaPath -PathType Leaf)) {
+    Deny-Boot "WORKSPACE_APP_CA_MISSING" "the HTTPS Preview trust root '$WorkspaceAppCaPath' is missing. WilliamOS cannot truthfully admit the configured Preview without verifying its certificate."
+  }
+  $env:NODE_EXTRA_CA_CERTS = (Resolve-Path -LiteralPath $WorkspaceAppCaPath).ProviderPath
+} else {
+  Remove-Item -Path "Env:NODE_EXTRA_CA_CERTS" -ErrorAction SilentlyContinue
+}
+foreach ($mount in $verifiedSecondaryRepositoryMounts) {
+  Set-Item -Path "Env:$($mount.Environment)" -Value $mount.ResolvedRoot
+}
 
-$process = Start-Process -FilePath $node -ArgumentList @($server) -WorkingDirectory $AppRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -Wait -PassThru -WindowStyle Hidden
-exit $process.ExitCode
+# Keep Node as the scheduled task's direct child. Start-Process detached the server from the task:
+# stopping `WilliamOS Live` left port 3100 serving the outgoing process, while the replacement task
+# failed with EADDRINUSE. Health then measured the orphan and falsely reported a successful restart.
+$previousPreference = $ErrorActionPreference
+$serverExit = 1
+try {
+  $ErrorActionPreference = "Continue"
+  & $node $server 1>> $stdoutLog 2>> $stderrLog
+  $nodeInvocationSucceeded = $?
+  $nodeExit = $LASTEXITCODE
+  if ($nodeInvocationSucceeded) {
+    $serverExit = if ($null -eq $nodeExit) { 0 } else { $nodeExit }
+  } elseif ($null -ne $nodeExit -and $nodeExit -ne 0) {
+    $serverExit = $nodeExit
+  }
+} finally {
+  $ErrorActionPreference = $previousPreference
+}
+exit $serverExit

@@ -513,6 +513,56 @@ export class CodexAppServerClient {
     this.#fail(new AppServerCancelledError())
   }
 
+  /**
+   * Preserve the immediate close contract while additionally proving the captured child exited.
+   * Callers that remove a disposable workspace must use this bounded confirmation first.
+   */
+  closeAndWait(timeoutMs = 5_000) {
+    const child = this.process
+    if (!child) return Promise.resolve()
+    if (child.exitCode != null || child.signalCode != null) {
+      this.close()
+      return Promise.resolve()
+    }
+    const boundedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.min(timeoutMs, 30_000)
+      : 5_000
+
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let timer = null
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        if (timer) this.clearTimer(timer)
+        child.removeListener?.("exit", onExit)
+        child.removeListener?.("error", onError)
+        callback(value)
+      }
+      const onExit = () => finish(resolve)
+      const onError = () => finish(reject, Object.assign(
+        new Error("Codex App Server reported a process error while closing"),
+        { code: "APP_SERVER_CLOSE_FAILED" },
+      ))
+
+      child.once?.("exit", onExit)
+      child.once?.("error", onError)
+      timer = this.setTimer(() => finish(reject, Object.assign(
+        new Error(`Codex App Server did not exit within ${boundedTimeoutMs}ms`),
+        { code: "APP_SERVER_CLOSE_TIMEOUT" },
+      )), boundedTimeoutMs)
+      timer.unref?.()
+      try {
+        this.close()
+      } catch {
+        finish(reject, Object.assign(
+          new Error("Codex App Server could not be closed"),
+          { code: "APP_SERVER_CLOSE_FAILED" },
+        ))
+      }
+    })
+  }
+
   #write(message) {
     if (!this.process?.stdin?.writable) throw new Error("Codex App Server stdin is not writable")
     this.process.stdin.write(`${JSON.stringify(message)}\n`)

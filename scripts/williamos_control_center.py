@@ -733,7 +733,27 @@ def smoke() -> int:
     try:
         r = urllib.request.urlopen(f"{BACKEND_URL}/api/review-queues", timeout=10)  # noqa: S310
         data = json.loads(r.read().decode())
-        checks["review_queues"] = "PASS" if "total" in data else "FAIL: missing total"
+        # A drafted queue whose folder is absent is NOT a clear queue. The prior
+        # check only asserted the presence of a "total" key, so a missing
+        # promotion folder reported "0 pending" and the suite stayed green over
+        # it. The gate now requires the queues to actually be present, and fails
+        # closed when the backend does not report queue health at all.
+        # Remedy: python scripts/william.py init
+        if "total" not in data:
+            checks["review_queues"] = "FAIL: missing total"
+        elif "unavailable" not in data:
+            checks["review_queues"] = "FAIL: backend did not report queue health"
+        else:
+            missing = data.get("unavailable") or []
+            if missing:
+                checks["review_queues"] = (
+                    f"FAIL: {len(missing)} queue folder(s) missing: {', '.join(missing)}"
+                    " (remedy: python scripts/william.py init)"
+                )
+            elif data.get("healthy") is not True:
+                checks["review_queues"] = "FAIL: queues not reported healthy"
+            else:
+                checks["review_queues"] = "PASS"
     except Exception as e:
         checks["review_queues"] = f"FAIL: {e}"
 

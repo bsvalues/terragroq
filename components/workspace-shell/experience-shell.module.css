@@ -1,0 +1,686 @@
+.environment {
+  --world-bg: #111310;
+  --world-surface: #171a16;
+  --world-surface-raised: #1d211c;
+  --world-line: #2a3029;
+  --world-line-soft: #222721;
+  --world-text: #eceee8;
+  --world-muted: #969e93;
+  --world-dim: #697168;
+  --world-accent: #9caf9a;
+  --world-accent-strong: #c6d3c2;
+  --world-warn: #c6a06e;
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  min-height: 520px;
+  display: grid;
+  overflow: hidden;
+  color: var(--world-text);
+  background: var(--world-bg);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  transition: grid-template-columns 140ms ease;
+}
+
+.environmentContextOpen {
+  grid-template-columns: 64px minmax(0, 1fr) 348px;
+}
+
+.environmentContextClosed {
+  grid-template-columns: 64px minmax(0, 1fr) 54px;
+}
+
+.worldRail {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border-right: 1px solid var(--world-line-soft);
+  background: #0e100e;
+}
+
+.worldMark {
+  height: 64px;
+  display: grid;
+  place-items: center;
+  color: var(--world-text);
+  font-size: 18px;
+  font-weight: 760;
+  letter-spacing: -0.06em;
+}
+
+.worldRailBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+}
+
+.railButton {
+  width: 48px;
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  border: 0;
+  border-radius: 4px;
+  color: var(--world-muted);
+  background: transparent;
+}
+
+.railButton:hover,
+.railButton:focus-visible,
+.railButtonActive {
+  color: var(--world-text);
+  background: var(--world-surface-raised);
+  outline: none;
+}
+
+.railButtonActive {
+  box-shadow: inset 2px 0 0 var(--world-accent);
+}
+
+.railButtonBottom {
+  margin-top: auto;
+}
+
+.world {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 72px minmax(0, 1fr);
+  background: var(--world-bg);
+}
+
+.worldHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 22px 0 24px;
+  border-bottom: 1px solid var(--world-line-soft);
+  background: var(--world-bg);
+}
+
+.worldIdentity {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.worldEyebrow {
+  color: var(--world-dim);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.worldTitle {
+  overflow: hidden;
+  margin: 0;
+  color: var(--world-text);
+  font-size: 17px;
+  font-weight: 620;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worldPath {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--world-muted);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worldStatus {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--world-muted);
+  font-size: 11px;
+}
+
+.statusDot,
+.statusDotError {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--world-accent);
+}
+
+.statusDotError {
+  background: var(--world-warn);
+}
+
+.contextToggle {
+  display: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  color: var(--world-muted);
+  background: transparent;
+}
+
+.contextToggle:hover,
+.contextToggle:focus-visible {
+  color: var(--world-text);
+  background: var(--world-surface-raised);
+}
+
+.workbench {
+  --source-percent: 58%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(420px, var(--source-percent)) 6px minmax(340px, 1fr);
+  overflow: hidden;
+  background: var(--world-line-soft);
+}
+
+.sourceRegion,
+.previewRegion {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 42px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--world-bg);
+}
+
+.regionHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--world-line-soft);
+  color: var(--world-muted);
+  background: var(--world-surface);
+  font-size: 11px;
+}
+
+.regionHeaderStrong {
+  color: var(--world-text);
+  font-weight: 600;
+}
+
+.regionMeta {
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--world-dim);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewState {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--world-muted);
+  font-size: 10px;
+}
+
+.previewState::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--world-accent);
+}
+
+.previewState[data-live="false"]::before {
+  background: var(--world-warn);
+}
+
+.splitHandle {
+  position: relative;
+  cursor: col-resize;
+  background: var(--world-line-soft);
+  touch-action: none;
+}
+
+.splitHandle::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+}
+
+.splitHandle:hover::after,
+.splitHandle:focus-visible::after {
+  background: var(--world-accent);
+}
+
+.sourceBody,
+.previewBody {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.previewBody {
+  position: relative;
+  background: #f5f5f1;
+}
+
+.runningApp {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 0;
+  background: #f5f5f1;
+}
+
+.previewUnavailable {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 11px;
+  padding: clamp(28px, 6vw, 72px);
+  color: #20251f;
+  background: #e8e9e3;
+}
+
+.previewUnavailable svg {
+  color: #667364;
+}
+
+.previewUnavailable h2 {
+  margin: 0;
+  color: #20251f;
+  font-size: 18px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.previewUnavailable p {
+  max-width: 46ch;
+  margin: 0;
+  color: #5b6259;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.contextRail {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 72px 40px minmax(0, 1fr) auto;
+  overflow: hidden;
+  border-left: 1px solid var(--world-line-soft);
+  background: #141713;
+}
+
+.contextHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--world-line-soft);
+}
+
+.contextRailSummon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  color: var(--world-muted);
+  background: transparent;
+}
+
+.contextRailSummon:hover,
+.contextRailSummon:focus-visible {
+  color: var(--world-text);
+  background: var(--world-surface-raised);
+  outline: none;
+}
+
+.contextHeaderTitle {
+  color: var(--world-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.contextHeaderMeta {
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--world-dim);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextTabs {
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--world-line-soft);
+}
+
+.contextTab {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--world-dim);
+  background: transparent;
+  font-size: 11px;
+}
+
+.contextTab:hover,
+.contextTab:focus-visible,
+.contextTabActive {
+  color: var(--world-text);
+  outline: none;
+}
+
+.contextTabActive {
+  border-bottom-color: var(--world-accent);
+}
+
+.contextBody {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: #343a33 transparent;
+  scrollbar-width: thin;
+}
+
+.environmentContextClosed .contextRail {
+  grid-template-rows: 72px minmax(0, 1fr);
+  background: #0e100e;
+}
+
+.environmentContextClosed .contextHeader {
+  justify-content: center;
+  padding: 0;
+}
+
+.environmentContextClosed .contextHeaderTitle,
+.environmentContextClosed .contextHeaderMeta,
+.environmentContextClosed .contextTabs,
+.environmentContextClosed .contextBody,
+.environmentContextClosed .composer,
+.environmentContextClosed .contextToggle {
+  display: none;
+}
+
+.conversation {
+  min-height: 100%;
+  padding: 20px 18px 28px;
+}
+
+.conversationEmpty {
+  max-width: 30ch;
+  margin: 8px 0 0;
+  color: var(--world-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.message {
+  padding: 0 0 20px;
+}
+
+.message + .message {
+  padding-top: 18px;
+  border-top: 1px solid var(--world-line-soft);
+}
+
+.messageRole {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--world-dim);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.message[data-role="owner"] .messageRole {
+  color: var(--world-accent);
+}
+
+.messageText {
+  margin: 0;
+  color: #d8ddd5;
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.inspectorPane {
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.inspectorList {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--world-line-soft);
+  scrollbar-width: none;
+}
+
+.inspectorChoice {
+  min-width: 0;
+  max-width: 150px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--world-dim);
+  background: transparent;
+  font-size: 10px;
+}
+
+.inspectorChoiceActive {
+  color: var(--world-text);
+  border-bottom-color: var(--world-accent);
+}
+
+.inspectorChoice span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspectorDismiss {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: var(--world-dim);
+  background: transparent;
+}
+
+.inspectorBody {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--world-line-soft);
+  background: var(--world-surface);
+}
+
+.composerField {
+  min-width: 0;
+}
+
+.composer input {
+  width: 100%;
+  height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--world-line);
+  border-radius: 3px;
+  color: var(--world-text);
+  background: #111410;
+  font: inherit;
+  font-size: 12px;
+}
+
+.composer input:focus {
+  border-color: #667565;
+  outline: none;
+}
+
+.composer input::placeholder {
+  color: #697168;
+}
+
+.composerError {
+  display: block;
+  padding-top: 6px;
+  color: var(--world-warn);
+  font-size: 10px;
+}
+
+.composerSubmit {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #596657;
+  border-radius: 3px;
+  color: #e7ece5;
+  background: #293027;
+}
+
+.composerSubmit:hover:not(:disabled),
+.composerSubmit:focus-visible {
+  background: #333c31;
+}
+
+.composerSubmit:disabled {
+  opacity: 0.45;
+}
+
+@media (max-width: 1180px) {
+  .environment,
+  .environmentContextOpen,
+  .environmentContextClosed {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .contextRail {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(390px, calc(100vw - 56px));
+    grid-template-rows: 72px 40px minmax(0, 1fr) auto;
+    transform: translateX(100%);
+    transition: transform 150ms ease;
+    box-shadow: -18px 0 48px rgb(0 0 0 / 30%);
+  }
+
+  .contextRail[data-open="true"] {
+    transform: translateX(0);
+  }
+
+  .environmentContextClosed .contextRail {
+    grid-template-rows: 72px 40px minmax(0, 1fr) auto;
+  }
+
+  .environmentContextClosed .contextHeader {
+    justify-content: flex-start;
+    padding: 0 14px;
+  }
+
+  .environmentContextClosed .contextHeaderTitle,
+  .environmentContextClosed .contextHeaderMeta,
+  .environmentContextClosed .contextTabs,
+  .environmentContextClosed .contextBody {
+    display: initial;
+  }
+
+  .contextToggle {
+    display: grid;
+  }
+}
+
+@media (max-width: 900px) {
+  .world {
+    grid-template-rows: 62px minmax(0, 1fr);
+  }
+
+  .worldHeader {
+    padding-inline: 14px;
+  }
+
+  .worldEyebrow,
+  .worldPath {
+    display: none;
+  }
+
+  .workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(360px, 1.15fr) minmax(280px, 0.85fr);
+    overflow: auto;
+  }
+
+  .splitHandle {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .environment,
+  .environmentContextOpen,
+  .environmentContextClosed {
+    grid-template-columns: 1fr;
+  }
+
+  .worldRail {
+    display: none;
+  }
+
+  .contextRail {
+    width: min(390px, 100vw);
+  }
+
+  .worldStatus > span:not(.statusDot):not(.statusDotError) {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .environment,
+  .contextRail {
+    transition: none;
+  }
+}

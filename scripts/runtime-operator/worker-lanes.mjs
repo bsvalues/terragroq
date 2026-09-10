@@ -19,6 +19,9 @@
 
 export const IMPLEMENTATION = "implementation"
 
+/** Read-only analysis: grounded findings over supplied context, never a repository edit. */
+export const ANALYSIS = "analysis"
+
 /**
  * What a lane has actually been measured to do.
  *
@@ -28,9 +31,9 @@ export const IMPLEMENTATION = "implementation"
 function measuredCapabilities(laneId, measured) {
   const record = measured?.[laneId]
   const evidence = record?.evidence
-  return record?.[IMPLEMENTATION] === "PROVEN" && typeof evidence === "string" && evidence.trim() !== ""
-    ? [IMPLEMENTATION]
-    : []
+  const proven = (capability) =>
+    record?.[capability] === "PROVEN" && typeof evidence === "string" && evidence.trim() !== "" ? [capability] : []
+  return [...proven(IMPLEMENTATION), ...proven(ANALYSIS)]
 }
 
 /**
@@ -61,6 +64,17 @@ export function laneRoster({ measured = {} } = {}) {
       id: "hermes-local",
       capabilities: measuredCapabilities("hermes-local", measured),
       binary: "pwsh",
+    },
+    {
+      // The DAEDALUS resident GPU model lane (PR #1186): read-only inference only. It is an analysis
+      // lane by construction -- the dispatch contract refuses any claimed edit/commit/PR -- so it
+      // must NEVER carry the implementation capability, only the analysis one, and only once a
+      // measurement (the promotion record) says its grounded output cleared the bar. `readOnly`
+      // marks it so the dispatch loop routes it to the analysis path, never the patch path.
+      id: "daedalus-model",
+      capabilities: measuredCapabilities("daedalus-model", measured).filter((c) => c !== IMPLEMENTATION),
+      binary: "node",
+      readOnly: true,
     },
   ]
 }

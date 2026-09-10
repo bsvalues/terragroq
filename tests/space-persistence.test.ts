@@ -83,19 +83,40 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
 
 import {
+  browserSpaceStorageKey,
   databaseSpaceWorkingWorldStore,
+  findLatestProjectOwnedByPage,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
+  listOwnedProjectSpaces,
+  createOwnedProjectSpace,
+  loadOwnedCouncilHistory,
+  saveOwnedCouncilDisposition,
+  saveOwnedCouncilSession,
   saveOwnedLineWorld,
+  selectedLineContextFingerprint,
   saveOwnedSpace,
+  workspaceProjectFromRoot,
   type OwnedWorkingWorldRecord,
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
-import { createWorkingWorld, withTurn, type SpaceState } from "@/lib/environment/working-world"
+import { createWorkingWorld, EMPTY_SPINE, withTurn, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 import { POST } from "@/app/api/environment/line/route"
+
+function councilSession(id: string, createdAt: string) {
+  return {
+    id, question: `Question ${id}`, status: "ready" as const, createdAt,
+    context: { spaceName: "TerraFusion", kind: "file" as const, label: "src/App.tsx" },
+    members: [{ id: "architect", role: "Architect", name: "Atlas", provider: "local", model: "model", status: "ready" as const, perspective: "Keep it bounded." }],
+    consensus: "Proceed carefully.", dissent: "One risk.", blindSpot: "Unknown.", recommendation: "Verify it.", confidence: 80,
+    evidence: [{ id: "selected", label: "Selected file", detail: "src/App.tsx" }],
+    disposition: null,
+  }
+}
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
+  private projectInsertTail: Promise<void> = Promise.resolve()
 
   async findOwned(userId: string, worldId: string) {
     const row = this.rows.get(worldId)
@@ -108,6 +129,41 @@ class MemoryStore implements SpaceWorkingWorldStore {
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null
   }
 
+  async findLatestOwnedForProject(userId: string, projectIdentity: string) {
+    const ordered = [...this.rows.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    return findLatestProjectOwnedByPage(projectIdentity, async (offset, limit) => (
+      ordered.slice(offset, offset + limit)
+    ))
+  }
+
+  async listOwnedForProject(userId: string) {
+    return [...this.rows.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id))
+  }
+
+  async readOwnedPage(userId: string, offset: number, limit: number) {
+    return (await this.listOwnedForProject(userId)).slice(offset, offset + limit)
+  }
+
+  insertOwnedProjectSpace(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord) {
+    let resolve!: (result: "created" | "limit") => void
+    let reject!: (error: unknown) => void
+    const result = new Promise<"created" | "limit">((done, failed) => { resolve = done; reject = failed })
+    this.projectInsertTail = this.projectInsertTail.then(async () => {
+      const projectRows = (await this.listOwnedForProject(userId)).filter((candidate) => {
+        try { return JSON.parse(candidate.snapshot).resources.includes(`williamos-workspace-root:v1:${projectIdentity}`) }
+        catch { return false }
+      })
+      if (projectRows.length >= 64) { resolve("limit"); return }
+      await this.insertOwned(row)
+      resolve("created")
+    }).catch(reject)
+    return result
+  }
+
   async insertOwned(row: OwnedWorkingWorldRecord) {
     if (this.rows.has(row.id)) throw new Error("WORLD_ID_COLLISION")
     this.rows.set(row.id, row)
@@ -116,8 +172,9 @@ class MemoryStore implements SpaceWorkingWorldStore {
   async updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string) {
     const row = await this.findOwned(userId, worldId)
     if (!row || row.snapshot !== expectedSnapshot) return false
-    this.rows.set(worldId, { ...row, snapshot, intent, updatedAt: new Date(row.updatedAt.getTime() + 1) })
-    return true
+    const updatedAt = new Date(row.updatedAt.getTime() + 1)
+    this.rows.set(worldId, { ...row, snapshot, intent, updatedAt })
+    return updatedAt
   }
 }
 
@@ -201,6 +258,81 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("lists only valid owner and project Spaces newest first", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    const make = (id: string, userId: string, target: typeof project, updatedAt: string) => {
+      const world = createWorkingWorld({ intent: id, resources: [`williamos-workspace-root:v1:${target.identity}`] })
+      store.rows.set(id, { id, userId, intent: id, snapshot: JSON.stringify({ ...world, space: space(null, 1) }), updatedAt: new Date(updatedAt) })
+    }
+    make("older", "owner-a", project, "2026-08-20T00:00:00Z")
+    make("newer", "owner-a", project, "2026-08-22T00:00:00Z")
+    make("foreign-owner", "owner-b", project, "2026-08-24T00:00:00Z")
+    make("foreign-project", "owner-a", other, "2026-08-23T00:00:00Z")
+    store.rows.set("corrupt", { id: "corrupt", userId: "owner-a", intent: "bad", snapshot: "{", updatedAt: new Date("2026-08-25T00:00:00Z") })
+
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["newer", "older"])
+  })
+
+  it("creates a fresh server-derived Space from only a canonical name", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const created = await createOwnedProjectSpace({
+      userId: "owner-a", project, name: "  Release work  ", newWorldId: () => "server-id",
+    }, store)
+    expect(created.worldId).toBe("server-id")
+    expect(created.name).toBe("Release work")
+    expect(created.space.revision).toBe(0)
+    expect(created.space.openFiles).toEqual([])
+    const persisted = JSON.parse(store.rows.get("server-id")!.snapshot)
+    expect(persisted.resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
+    expect(persisted.spine).toEqual(EMPTY_SPINE)
+    await expect(createOwnedProjectSpace({ userId: "owner-a", project, name: "bad\nname" }, store)).rejects.toThrow("SPACE_NAME_INVALID")
+  })
+
+  it("pages beyond 240 newer foreign rows to find the exact project collection", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    for (let index = 0; index < 260; index += 1) {
+      const world = createWorkingWorld({ intent: `foreign-${index}`, resources: [`williamos-workspace-root:v1:${other.identity}`] })
+      store.rows.set(`foreign-${index}`, { id: `foreign-${index}`, userId: "owner-a", intent: world.intent, snapshot: JSON.stringify(world), updatedAt: new Date(10_000 + index) })
+    }
+    const exactWorld = createWorkingWorld({ intent: "Exact", resources: [`williamos-workspace-root:v1:${project.identity}`] })
+    store.rows.set("exact", { id: "exact", userId: "owner-a", intent: "Exact", snapshot: JSON.stringify({ ...exactWorld, space: space(null, 1) }), updatedAt: new Date(1) })
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["exact"])
+  })
+
+  it("keeps a substantial project history and transactionally bounds concurrent creation", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    for (let index = 0; index < 63; index += 1) {
+      await createOwnedProjectSpace({ userId: "owner-a", project, name: `Space ${index}`, newWorldId: () => `world-${index}` }, store)
+    }
+    const outcomes = await Promise.allSettled([
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space 63", newWorldId: () => "world-63" }, store),
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space 64", newWorldId: () => "world-64" }, store),
+    ])
+    expect(outcomes.filter((item) => item.status === "fulfilled")).toHaveLength(1)
+    expect(outcomes.filter((item) => item.status === "rejected").map((item) => (item as PromiseRejectedResult).reason.message)).toEqual(["SPACE_LIMIT_REACHED"])
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store))).toHaveLength(64)
+  })
+  it("derives separate opaque browser fallback namespaces per user and project", () => {
+    const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")
+    expect(owner).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(owner).not.toContain("owner-a")
+    expect(browserSpaceStorageKey("owner-b", "c:/repos/terrafusion")).not.toBe(owner)
+    expect(browserSpaceStorageKey("owner-a", "c:/repos/other")).not.toBe(owner)
+  })
+
+  it("derives one stable user-visible project identity from the configured root", () => {
+    expect(workspaceProjectFromRoot("C:\\workspaces\\TerraFusion_OS_1.0\\.")).toEqual({
+      identity: "c:/workspaces/terrafusion_os_1.0",
+      name: "TerraFusion_OS_1.0",
+    })
+  })
+
   it("binds the Line route persistence seam to the shared CAS writer", async () => {
     const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
     const initialRow = {
@@ -281,13 +413,19 @@ describe("server-owned Space persistence", () => {
 
   it("creates a uniquely owned cold-start world and restores it from the server store", async () => {
     const store = new MemoryStore()
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
     const opened = await loadOrCreateOwnedSpace({
       userId: "owner-a",
       newWorldId: () => "world-uuid-a",
       workspaceAppUrl: "https://configured.terrafusion.test/",
+      project,
     }, store)
 
-    expect(opened).toMatchObject({ worldId: "world-uuid-a", space: { runningAppUrl: "https://configured.terrafusion.test/" } })
+    expect(opened).toMatchObject({
+      worldId: "world-uuid-a",
+      project,
+      space: { runningAppUrl: "https://configured.terrafusion.test/" },
+    })
     expect(opened?.space.revision).toBe(0)
     expect(opened?.spine).toMatchObject({ execution: "idle", projectId: null })
     expect(store.rows.get("world-uuid-a")?.userId).toBe("owner-a")
@@ -296,8 +434,183 @@ describe("server-owned Space persistence", () => {
       userId: "owner-a",
       newWorldId: () => "must-not-be-used",
       workspaceAppUrl: "https://configured.terrafusion.test/",
+      project,
     }, store)
     expect(restored!.worldId).toBe("world-uuid-a")
+  })
+
+  it("initializes a cold-start WilliamOS project Space with WilliamOS metadata", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/hermeslab/williamos-source", name: "WilliamOS" }
+    const opened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "williamos-world",
+      workspaceAppUrl: null,
+      project,
+    }, store)
+
+    expect(opened).toMatchObject({ worldId: "williamos-world", name: "WilliamOS", project })
+    expect(opened?.space.windows.find((window) => window.kind === "running-app")?.title).toBe("WilliamOS")
+    const persisted = JSON.parse(store.rows.get("williamos-world")!.snapshot)
+    expect(persisted.intent).toBe("WilliamOS")
+    expect(persisted.resources).toContain(`williamos-workspace-name:v1:WilliamOS`)
+  })
+
+  it("restores the durable William conversation with its owned Space", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
+    const world = withTurn(
+      withTurn(createWorkingWorld({
+        intent: "TerraFusion",
+        resources: ["williamos-workspace-root:v1:c:/repos/terrafusion"],
+      }), "owner", "What changed in the selected file?"),
+      "williamos",
+      "The save path is now revision-bound.",
+    )
+    store.rows.set("world-conversation", {
+      id: "world-conversation",
+      userId: "owner-a",
+      intent: world.intent,
+      snapshot: JSON.stringify({ ...world, space: space(null, 3) }),
+      updatedAt: new Date("2026-08-29T09:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-conversation",
+      project,
+    }, store)
+
+    expect(restored?.conversation.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "owner", content: "What changed in the selected file?" },
+      { role: "williamos", content: "The save path is now revision-bound." },
+    ])
+  })
+
+  it("starts a clean bound Space instead of reinterpreting saved paths against another repository", async () => {
+    const store = new MemoryStore()
+    const first = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+    await saveOwnedSpace({
+      userId: "owner-a",
+      worldId: first!.worldId,
+      space: space(null, 1),
+      project: first!.project,
+    }, store)
+
+    const second = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)
+
+    expect(second).toMatchObject({
+      worldId: "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+      space: { openFiles: [], revision: 0 },
+    })
+    expect(JSON.parse(store.rows.get("world-repo-a")!.snapshot).space.openFiles).toEqual([
+      "src/search-ranking.ts", "src/query.ts",
+    ])
+  })
+
+  it("restores a layout-less WilliamOS world with its bound project title", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/repos/williamos", name: "WilliamOS" }
+    const world = createWorkingWorld({
+      intent: "WilliamOS",
+      resources: [`williamos-workspace-root:v1:${project.identity}`],
+    })
+    store.rows.set("legacy-williamos", {
+      id: "legacy-williamos", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date(),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "legacy-williamos", project,
+    }, store)
+    expect(restored!.space.windows.find((window) => window.kind === "running-app")?.title).toBe("WilliamOS")
+  })
+
+  it("returns to an older bound Space after a different repository became the latest world", async () => {
+    const store = new MemoryStore()
+    const projectA = { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" }
+    const first = await loadOrCreateOwnedSpace({
+      userId: "owner-a", newWorldId: () => "world-repo-a", project: projectA,
+    }, store)
+    await saveOwnedSpace({
+      userId: "owner-a", worldId: first!.worldId, space: space(null, 1), project: projectA,
+    }, store)
+
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)
+
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a", newWorldId: () => "must-not-create", project: projectA,
+    }, store)
+    expect(reopened).toMatchObject({
+      worldId: "world-repo-a",
+      space: { revision: 1, openFiles: ["src/search-ranking.ts", "src/query.ts"] },
+    })
+    expect(store.rows.has("must-not-create")).toBe(false)
+  })
+
+  it("restores the same project identity when only its display name changes", async () => {
+    const store = new MemoryStore()
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion", name: "Old display name" },
+    }, store)
+
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "must-not-create",
+      project: { identity: "c:/repos/terrafusion", name: "New display name" },
+    }, store)
+    expect(reopened).toMatchObject({
+      worldId: "world-repo-a",
+      project: { identity: "c:/repos/terrafusion", name: "New display name" },
+    })
+    expect(store.rows.has("must-not-create")).toBe(false)
+  })
+
+  it("refuses an addressed Space when the configured repository no longer matches its binding", async () => {
+    const store = new MemoryStore()
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+
+    await expect(loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)).rejects.toThrow("SPACE_PROJECT_MISMATCH")
+  })
+
+  it("refuses a delayed save after the configured repository changes", async () => {
+    const store = new MemoryStore()
+    const opened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+
+    await expect(saveOwnedSpace({
+      userId: "owner-a",
+      worldId: opened!.worldId,
+      space: space(null, 1),
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)).rejects.toThrow("SPACE_PROJECT_MISMATCH")
+    expect(JSON.parse(store.rows.get("world-repo-a")!.snapshot).space.revision).toBe(0)
   })
 
   it("creates a dedicated TerraFusion world instead of falling back to an unrelated latest world", async () => {
@@ -341,6 +654,7 @@ describe("server-owned Space persistence", () => {
       workspaceAppUrl: "https://admitted.terrafusion.test/",
     }, store)
     expect(saved?.space.runningAppUrl).toBe("https://admitted.terrafusion.test/")
+    expect(saved?.updatedAt).toBe(store.rows.get("world-a")?.updatedAt.toISOString())
 
     const reopened = await loadOrCreateOwnedSpace({
       userId: "owner-a", worldId: "world-a", newWorldId: () => "unused",
@@ -348,6 +662,120 @@ describe("server-owned Space persistence", () => {
     }, store)
     expect(reopened!.space).toEqual({ ...space(), runningAppUrl: "https://admitted.terrafusion.test/" })
     expect(reopened!.spine).toMatchObject({ projectId: 42, projectName: "TerraFusion", execution: "implementing" })
+  })
+
+  it("promotes a newly admitted minimized Preview exactly once during server restore", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-a",
+      workspaceAppUrl: "https://admitted.terrafusion.test/app",
+    }, store)
+
+    const preview = restored!.space.windows.find((window) => window.kind === "running-app")!
+    const persistedPreview = persisted.windows.find((window) => window.kind === "running-app")!
+    expect(preview).toEqual({ ...persistedPreview, minimized: false, z: 6 })
+    expect(preview.frame).toEqual(persistedPreview.frame)
+    expect(restored!.space.activeWindowId).toBe(preview.id)
+    expect(restored!.space.runningAppUrl).toBe("https://admitted.terrafusion.test/app")
+    expect(restored!.space.windows.filter((window) => window.id !== preview.id))
+      .toEqual(persisted.windows.filter((window) => window.id !== preview.id))
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).space).toEqual(persisted)
+  })
+
+  it("does not disturb visible Preview layout or focus when an app is newly admitted", async () => {
+    const store = new MemoryStore()
+    const persisted = {
+      ...space(null, 4),
+      windows: space(null, 4).windows.map((window) => window.kind === "running-app"
+        ? { ...window, minimized: false }
+        : window),
+    }
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: "https://admitted.terrafusion.test/app",
+    }, store)
+
+    expect(restored!.space).toEqual({ ...persisted, runningAppUrl: "https://admitted.terrafusion.test/app" })
+  })
+
+  it.each([
+    ["the same", "https://admitted.terrafusion.test/app"],
+    ["a changed", "https://admitted.terrafusion.test/next"],
+  ])("preserves an intentional minimized Preview when restoring %s admitted URL", async (_label, workspaceAppUrl) => {
+    const store = new MemoryStore()
+    const persisted = space("https://admitted.terrafusion.test/app", 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a", workspaceAppUrl }, store)
+
+    expect(restored!.space).toEqual({ ...persisted, runningAppUrl: workspaceAppUrl })
+  })
+
+  it("leaves layout untouched when no Preview URL is admitted", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a", workspaceAppUrl: null }, store)
+
+    expect(restored!.space).toEqual(persisted)
+  })
+
+  it("keeps a later intentional Preview minimize durable after the one-time promotion", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+    const configured = "https://admitted.terrafusion.test/app"
+    const promoted = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: configured,
+    }, store)
+    const previewId = promoted!.space.windows.find((window) => window.kind === "running-app")!.id
+    const intentionallyMinimized = {
+      ...promoted!.space,
+      revision: promoted!.space.revision + 1,
+      windows: promoted!.space.windows.map((window) => window.id === previewId
+        ? { ...window, minimized: true }
+        : window),
+      activeWindowId: "editor",
+      runningAppUrl: "https://browser-must-not-control.invalid/",
+    }
+
+    const saved = await saveOwnedSpace({
+      userId: "owner-a", worldId: "world-a", space: intentionallyMinimized, workspaceAppUrl: configured,
+    }, store)
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: configured,
+    }, store)
+
+    expect(saved!.space.runningAppUrl).toBe(configured)
+    expect(reopened!.space.windows.find((window) => window.id === previewId)?.minimized).toBe(true)
+    expect(reopened!.space.activeWindowId).toBe("editor")
+    expect(reopened!.space.runningAppUrl).toBe(configured)
   })
 
   it("does not update another owner's world", async () => {
@@ -460,6 +888,78 @@ describe("server-owned Space persistence", () => {
     expect(persisted.space.windows.find((window: { id: string }) => window.id === "editor").frame.x).toBe(333)
   })
 
+  it("refuses a stale Line reply when the persisted selected context changes during inference", async () => {
+    const store = new LineBarrierStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+    const answered = withTurn(
+      withTurn(initial, "owner", "show current work", () => "2026-08-25T10:01:00Z"),
+      "williamos",
+      "A reply bound to the old selection.",
+      () => "2026-08-25T10:01:01Z",
+    )
+    const lineSave = saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: answered,
+      isNew: false,
+      expectedSelectedContext: selectedLineContextFingerprint(initial),
+    }, store)
+    await store.lineWaiting
+
+    const moved = {
+      ...space(null, 2),
+      selection: { filePath: "src/search-ranking.ts", anchor: 2, head: 8 },
+      activePaneId: "left",
+      activeWindowId: "editor",
+    }
+    await saveOwnedSpace({ userId: "owner-a", worldId: "world-a", space: moved }, store)
+    store.releaseAfterSpaceCommit()
+
+    await expect(lineSave).rejects.toThrow("LINE_CONTEXT_STALE")
+    const reopened = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a" }, store)
+    expect(reopened?.space.revision).toBe(2)
+    expect(reopened?.conversation).toEqual([])
+  })
+
+  it("refuses a Line reply when the authoritative bytes change at the same persisted selection", async () => {
+    const store = new MemoryStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+    let selectedVersion = "sha256:before"
+    const deriveSelectedContext = async (world: WorkingWorldSnapshot) => JSON.stringify({
+      persisted: selectedLineContextFingerprint(world),
+      path: "src/query.ts",
+      version: selectedVersion,
+    })
+    const expectedSelectedContext = await deriveSelectedContext(initial)
+    const answered = withTurn(
+      withTurn(initial, "owner", "Explain this file"),
+      "williamos",
+      "A reply grounded in the old bytes.",
+    )
+
+    selectedVersion = "sha256:after"
+    await expect(saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: answered,
+      isNew: false,
+      expectedSelectedContext,
+      deriveSelectedContext,
+    }, store)).rejects.toThrow("LINE_CONTEXT_STALE")
+
+    const reopened = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a" }, store)
+    expect(reopened?.conversation).toEqual([])
+    expect(reopened?.space.selection?.filePath).toBe("src/query.ts")
+  })
+
   it("lets a later Space save preserve a Line turn committed first", async () => {
     const store = new MemoryStore()
     const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
@@ -498,5 +998,134 @@ describe("server-owned Space persistence", () => {
     }, store)).rejects.toThrow("WORLD_PERSISTENCE_BUSY")
     expect(store.updateAttempts).toBe(3)
     expect(store.rows.get("world-a")?.snapshot).toBe(originalSnapshot)
+  })
+
+  it("persists, deduplicates, and prunes Council history while preserving unrelated world state", async () => {
+    const store = new MemoryStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+    for (let index = 0; index < 7; index += 1) {
+      await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession(`c-${index}`, `2026-08-27T10:0${index}:00.000Z`) }, store)
+    }
+    await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession("c-6", "2026-08-27T10:09:00.000Z") }, store)
+
+    const history = await loadOwnedCouncilHistory("owner-a", "world-a", store)
+    expect(history?.map((entry) => entry.id)).toEqual(["c-1", "c-2", "c-3", "c-4", "c-5", "c-6"])
+    expect(history?.at(-1)?.createdAt).toBe("2026-08-27T10:09:00.000Z")
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).space.revision).toBe(1)
+    expect(await loadOwnedCouncilHistory("owner-b", "world-a", store)).toBeNull()
+  })
+
+  it("retries Council CAS against the latest world instead of replacing concurrent fields", async () => {
+    class CouncilRetryStore extends MemoryStore {
+      attempts = 0
+      override async updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string) {
+        this.attempts += 1
+        if (this.attempts === 1) {
+          const row = this.rows.get(worldId)!
+          this.rows.set(worldId, { ...row, snapshot: JSON.stringify({
+            ...JSON.parse(row.snapshot),
+            openConcerns: ["concurrent"],
+            councilHistory: [councilSession("c-concurrent", "2026-08-27T09:59:00.000Z")],
+          }) })
+          return false
+        }
+        return super.updateOwned(userId, worldId, snapshot, intent, expectedSnapshot)
+      }
+    }
+    const store = new CouncilRetryStore()
+    const initial = createWorkingWorld({ intent: "TerraFusion" })
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession("c-current", "2026-08-27T10:00:00.000Z") }, store)
+
+    expect(store.attempts).toBe(2)
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["concurrent"])
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).councilHistory.map((entry: { id: string }) => entry.id)).toEqual(["c-concurrent", "c-current"])
+  })
+
+  it("records owner direction on the exact owned Council session and restores it from history", async () => {
+    const store = new MemoryStore()
+    const initial = {
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      openConcerns: ["keep this"],
+      councilHistory: [councilSession("c-current", "2026-08-27T10:00:00.000Z")],
+    }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    const updated = await saveOwnedCouncilDisposition({
+      userId: "owner-a",
+      worldId: "world-a",
+      sessionId: "c-current",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z",
+      direction: "approve",
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }, store)
+
+    expect(updated.disposition).toEqual({ direction: "approve", recordedAt: "2026-08-29T18:00:00.000Z" })
+    expect((await loadOwnedCouncilHistory("owner-a", "world-a", store))?.[0]?.disposition).toEqual(updated.disposition)
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["keep this"])
+  })
+
+  it("makes exact disposition replay idempotent while refusing stale, missing, foreign, and conflicting sessions", async () => {
+    const store = new MemoryStore()
+    const initial = {
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      councilHistory: [councilSession("c-current", "2026-08-27T10:00:00.000Z")],
+    }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+    const input = {
+      userId: "owner-a", worldId: "world-a", sessionId: "c-current",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z", direction: "reject" as const,
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }
+    await saveOwnedCouncilDisposition(input, store)
+    const committed = store.rows.get("world-a")!.snapshot
+
+    expect((await saveOwnedCouncilDisposition({ ...input, recordedAt: "2026-08-29T18:01:00.000Z" }, store)).disposition)
+      .toEqual({ direction: "reject", recordedAt: "2026-08-29T18:00:00.000Z" })
+    expect(store.rows.get("world-a")!.snapshot).toBe(committed)
+    await expect(saveOwnedCouncilDisposition({ ...input, direction: "approve" }, store)).rejects.toThrow("COUNCIL_DISPOSITION_CONFLICT")
+    await expect(saveOwnedCouncilDisposition({ ...input, sessionCreatedAt: "2026-08-27T10:01:00.000Z" }, store)).rejects.toThrow("COUNCIL_SESSION_STALE")
+    await expect(saveOwnedCouncilDisposition({ ...input, sessionId: "c-missing" }, store)).rejects.toThrow("COUNCIL_SESSION_NOT_FOUND")
+    await expect(saveOwnedCouncilDisposition({ ...input, userId: "owner-b" }, store)).rejects.toThrow("WORLD_NOT_FOUND")
+    expect(store.rows.get("world-a")!.snapshot).toBe(committed)
+  })
+
+  it("prunes only older non-target advice when disposition metadata crosses the bounded-history byte limit", async () => {
+    const store = new MemoryStore()
+    const fill = "x".repeat(2_843)
+    const nearLimit = Array.from({ length: 5 }, (_, index) => ({
+      id: `large-${index}`,
+      question: fill,
+      status: "ready" as const,
+      createdAt: `2026-08-27T10:0${index}:00.000Z`,
+      context: { spaceName: "T", kind: "file" as const, label: "x" },
+      members: Array.from({ length: 5 }, (_, member) => ({ id: `r-${member}`, role: "R", name: "N", provider: "p", model: "m", status: "ready" as const, perspective: fill })),
+      consensus: fill,
+      dissent: fill,
+      blindSpot: fill,
+      recommendation: fill,
+      confidence: 80,
+      evidence: Array.from({ length: 12 }, (_, evidence) => ({ id: `e-${evidence}`, label: "E", detail: "x".repeat(1_900) })),
+      disposition: null,
+    }))
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), councilHistory: nearLimit }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    const target = await saveOwnedCouncilDisposition({
+      userId: "owner-a",
+      worldId: "world-a",
+      sessionId: "large-0",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z",
+      direction: "request-changes",
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }, store)
+    const history = await loadOwnedCouncilHistory("owner-a", "world-a", store)
+
+    expect(target.id).toBe("large-0")
+    expect(target.disposition?.direction).toBe("request-changes")
+    expect(history?.map((entry) => entry.id)).toEqual(["large-0", "large-2", "large-3", "large-4"])
+    expect(history?.[0]).toEqual(target)
   })
 })

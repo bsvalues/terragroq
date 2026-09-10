@@ -16,7 +16,7 @@ describe("thin Tauri cockpit contract", () => {
     }>("cockpit.config.json")
 
     expect(config).toEqual({
-      hermesOrigin: "https://192.168.88.9:3443",
+      hermesOrigin: "https://williamos.lan:3443",
       startupPath: "/device-bootstrap",
       endpoints: {
         enrollmentChallenge: "/api/device/enrollment/challenge",
@@ -35,7 +35,7 @@ describe("thin Tauri cockpit contract", () => {
       permissions: string[]
     }>("src-tauri/capabilities/remote-cockpit.json")
 
-    expect(capability.remote.urls).toEqual(["https://192.168.88.9:3443/*"])
+    expect(capability.remote.urls).toEqual(["https://williamos.lan:3443/*"])
     expect(capability.permissions).toEqual([
       "allow-device-generate-key",
       "allow-device-bind-credential",
@@ -65,7 +65,7 @@ describe("thin Tauri cockpit contract", () => {
 
     expect(recovery).toContain("WilliamOS Cockpit")
     expect(recovery).toContain("Reconnect")
-    expect(recovery).toContain('href="https://192.168.88.9:3443/device-bootstrap"')
+    expect(recovery).toContain('href="https://williamos.lan:3443/device-bootstrap"')
     expect(recovery).not.toMatch(/<form|<input|password|access[_ -]?token|session[_ -]?token/i)
   })
 })

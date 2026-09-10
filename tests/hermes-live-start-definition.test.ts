@@ -20,9 +20,15 @@ import path from "node:path"
 
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
+const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
+const TRANSPORT_VERIFY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "verify-cockpit-transport.ps1")
+const RELAY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "hermes-cockpit-relay.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
+const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
+const transportVerifyText = fs.readFileSync(TRANSPORT_VERIFY_SCRIPT, "utf8")
+const relayText = fs.readFileSync(RELAY_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -59,10 +65,10 @@ describe("the cockpit's start script is declared in the repository", () => {
 
   it("refuses to start when resolution fails, instead of falling back to the file's address", () => {
     const code = executableOnly(startText)
-    // A non-zero resolver exit must reach an `exit 1` and must NOT reach Start-Process.
+    // A non-zero resolver exit must reach an `exit 1` and must NOT reach the server invocation.
     expect(code).toMatch(/\$resolverExit\s*-ne\s*0/)
     const refusalIndex = code.indexOf("AUTHORITY_HOST_UNRESOLVED")
-    const startIndex = code.indexOf("Start-Process")
+    const startIndex = code.indexOf("& $node $server")
     expect(refusalIndex).toBeGreaterThan(-1)
     expect(startIndex).toBeGreaterThan(refusalIndex)
     expect(code).not.toMatch(/catch\s*\{\s*\}/)
@@ -91,14 +97,40 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/&\s*\$node\s+@resolverArgs\s+2>&1/)
   })
 
-  it("only ever overrides the variables it resolves", () => {
-    const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
+  it("only applies the runtime variables it resolves or reads explicitly", () => {
+    const code = executableOnly(startText)
+    const assignments = code.match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
-    // WILLIAMOS_PROJECT_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
-    // reads `process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()`, `.env.local` declared it, and
+    // WILLIAMOS_TERRAFUSION_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
+    // reads the declared TerraFusion target root, `.env.local` declared it, and
     // nothing applied it -- so the deployed bundle became "the workspace" and every governed save
     // was refused with FAILED_STALE_MAIN while the cockpit answered 200.
-    expect(names).toEqual(new Set(["NODE_ENV", "HOSTNAME", "PORT", "DATABASE_URL", "WILLIAMOS_PROJECT_ROOT"]))
+    expect(names).toEqual(new Set([
+      "NODE_ENV",
+      "HOSTNAME",
+      "PORT",
+      "DATABASE_URL",
+      "LOCAL_SETUP_ENABLED",
+      "WILLIAMOS_TERRAFUSION_ROOT",
+      "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
+      "WILLIAMOS_PROJECT_ROOT",
+      "WILLIAMOS_PROJECT_SPACE_IDENTITY",
+      "WILLIAMOS_WORKSPACE_APP_URL",
+      "NODE_EXTRA_CA_CERTS",
+    ]))
+    expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
+  })
+
+  it("carries only an explicit local-setup enablement into the production process", () => {
+    const code = executableOnly(startText)
+    const read = code.indexOf('Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"')
+    const exportFlag = code.indexOf("$env:LOCAL_SETUP_ENABLED = $localSetupEnabled")
+    const serverStart = code.indexOf("& $node $server")
+    expect(read).toBeGreaterThan(-1)
+    expect(code).toMatch(/\$localSetupEnabled\s*=\s*if\s*\(\$declaredLocalSetupEnabled\s+-ieq\s+"true"\)\s*\{\s*"true"\s*\}\s*else\s*\{\s*"false"\s*\}/)
+    expect(exportFlag).toBeGreaterThan(read)
+    expect(exportFlag).toBeLessThan(serverStart)
+    expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 })
 
@@ -106,21 +138,53 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   const code = executableOnly(startText)
 
   it("applies the declared workspace instead of letting process.cwd() win", () => {
-    expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
+    expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_ROOT\s*=\s*\$resolvedProjectRoot/)
     // Applied BEFORE the server is launched, or it is not applied at all.
-    expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_ROOT")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("exports the WilliamOS source root separately from the TerraFusion target", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$declaredWilliamOsRoot/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
+    expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("exports the stable Space identity without replacing it with the current checkout", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("exports the declared Preview endpoint so a supervised restart preserves the real application", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_WORKSPACE_APP_URL\s*=\s*\$declaredWorkspaceAppUrl/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code.indexOf("$env:WILLIAMOS_WORKSPACE_APP_URL")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("adds only the existing Preview CA to Node trust for an HTTPS application", () => {
+    expect(code).toMatch(/\[string\]\$WorkspaceAppCaPath\s*=\s*"C:\\ProgramData\\WilliamOS\\williamos-preview-root-ca\.pem"/)
+    expect(code).toMatch(/\$declaredWorkspaceAppUrl\s+-match\s+'\^https:\/\/'/)
+    expect(code).toMatch(/Test-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\s+-PathType\s+Leaf/)
+    expect(code).toContain("WORKSPACE_APP_CA_MISSING")
+    expect(code).toMatch(/\$env:NODE_EXTRA_CA_CERTS\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\)\.ProviderPath/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:NODE_EXTRA_CA_CERTS"/)
+    expect(code.indexOf("$env:NODE_EXTRA_CA_CERTS")).toBeLessThan(code.indexOf("& $node $server"))
+    expect(code).not.toMatch(/NODE_TLS_REJECT_UNAUTHORIZED/)
   })
 
   it("does not carry a written-down workspace path of its own", () => {
     // The same reasoning as the address literals: a path baked in here is correct the day it is
     // typed and silently wrong afterwards, and a wrong workspace still serves files happily. The
     // value is a declared deployment fact, read from .env.local or passed in.
-    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_ROOT"/)
     expect(code).not.toMatch(/\[string\]\$ProjectRoot\s*=\s*"/)
   })
 
-  it("refuses every way the workspace can be wrong, before Start-Process", () => {
-    const startIndex = code.indexOf("Start-Process")
+  it("refuses every way the workspace can be wrong before invoking the server", () => {
+    const startIndex = code.indexOf("& $node $server")
     for (const refusal of [
       "PROJECT_ROOT_UNDECLARED",
       "PROJECT_ROOT_MISSING",
@@ -128,6 +192,7 @@ describe("the cockpit is given a proven governed workspace, or it does not start
       "PROJECT_ROOT_NOT_GOVERNED_WORKSPACE",
       "PROJECT_ROOT_NOT_WORKTREE_ROOT",
       "PROJECT_ROOT_NO_ORIGIN_REMOTE",
+      "PROJECT_ROOT_REPOSITORY_MISMATCH",
     ]) {
       const at = code.indexOf(refusal)
       expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)
@@ -161,6 +226,81 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   })
 })
 
+describe("the cockpit validates optional Core Seven secondary mounts before exporting them", () => {
+  const code = executableOnly(startText)
+  const expected = [
+    ["WILLIAMOS_TERRAFUSION_SOVEREIGN_OS_ROOT", "bsvalues/terrafusion-os"],
+    ["WILLIAMOS_TERRAFUSION_FORGE_ROOT", "bsvalues/terrafusion-forge"],
+    ["WILLIAMOS_TERRAFUSION_ATLAS_ROOT", "bsvalues/terrafusion-atlas"],
+    ["WILLIAMOS_TERRAFUSION_DAIS_ROOT", "bsvalues/terrafusion-dais"],
+    ["WILLIAMOS_TERRAFUSION_DOSSIER_ROOT", "bsvalues/terrafusion-dossier"],
+    ["WILLIAMOS_TERRAFUSION_GPT_ROOT", "bsvalues/terrafusion-gpt"],
+  ] as const
+
+  it("owns the exact six environment-to-repository mappings", () => {
+    for (const [environment, repository] of expected) {
+      expect(code).toContain(`Environment = "${environment}"; Repository = "${repository}"`)
+    }
+    expect(code.match(/Environment = "WILLIAMOS_TERRAFUSION_[A-Z_]+_ROOT"; Repository = "bsvalues\/terrafusion-[a-z-]+"/g))
+      .toHaveLength(6)
+  })
+
+  it("allows an absent optional declaration without fabricating or exporting a mount", () => {
+    const clearInherited = code.indexOf('Remove-Item -Path "Env:$($secondary.Environment)"')
+    const readDeclaration = code.indexOf("Get-DeclaredEnvValue -File $envFile -Key $secondary.Environment")
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    expect(clearInherited).toBeGreaterThan(-1)
+    expect(clearInherited).toBeLessThan(readDeclaration)
+    expect(readDeclaration).toBeLessThan(retain)
+    expect(retain).toBeLessThan(exportMount)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:\$\(\$secondary\.Environment\)"\s+-ErrorAction\s+SilentlyContinue/)
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+\$secondary\.Environment/)
+    expect(code).toMatch(/if \(-not \$declaredSecondaryRoot\)\s*\{\s*continue\s*\}/)
+    expect(code).not.toMatch(/WILLIAMOS_TERRAFUSION_(?:SOVEREIGN_OS|FORGE|ATLAS|DAIS|DOSSIER|GPT)_ROOT\s*=\s*["']/)
+  })
+
+  it("fails closed for every configured-root violation before Node starts", () => {
+    const serverStart = code.indexOf("& $node $server")
+    for (const refusal of [
+      "SECONDARY_ROOT_MISSING",
+      "SECONDARY_ROOT_IS_APP_ROOT",
+      "SECONDARY_ROOT_NOT_GOVERNED_WORKSPACE",
+      "SECONDARY_ROOT_NOT_WORKTREE_ROOT",
+      "SECONDARY_ROOT_NO_ORIGIN_REMOTE",
+      "SECONDARY_ROOT_REPOSITORY_MISMATCH",
+    ]) {
+      const at = code.indexOf(refusal)
+      expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)
+      expect(at, `${refusal} must refuse before the server starts`).toBeLessThan(serverStart)
+    }
+  })
+
+  it("proves exact worktree root and canonical origin before retaining or exporting a mount", () => {
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    const serverStart = code.indexOf("& $node $server")
+    expect(code).toMatch(/\$secondaryTopLevel\s*=\s*Invoke-GitProbe[^\n]*"rev-parse",\s*"--show-toplevel"/)
+    expect(code).toMatch(/\$normalizedSecondaryTopLevel\s+-ine\s+\$resolvedSecondaryRoot/)
+    expect(code).toMatch(/\$secondaryOriginRemote\s*=\s*Invoke-GitProbe[^\n]*"remote",\s*"get-url",\s*"origin"/)
+    expect(code).toMatch(/\$normalizedSecondaryOrigin\s+-ne\s+\$secondary\.Repository/)
+    expect(retain).toBeGreaterThan(code.indexOf("SECONDARY_ROOT_REPOSITORY_MISMATCH"))
+    expect(exportMount).toBeGreaterThan(retain)
+    expect(exportMount).toBeLessThan(serverStart)
+  })
+
+  it("normalizes GitHub's canonical SSH URI for both primary and secondary mounts", () => {
+    const sshUriBranches = code.match(/\^ssh:\/\/git@github\\\.com\(\?:\\:22\)\?\/\(\.\+\)\$/g) ?? []
+    expect(sshUriBranches).toHaveLength(2)
+  })
+
+  it("documents all six optional declarations without changing the required OS 1.0 declaration", () => {
+    const example = fs.readFileSync(path.join(process.cwd(), ".env.example"), "utf8")
+    expect(example).toContain('WILLIAMOS_TERRAFUSION_ROOT="/absolute/path/to/terrafusion_os_1.0"')
+    for (const [environment] of expected) expect(example).toMatch(new RegExp(`^${environment}=`, "m"))
+  })
+})
+
 describe("the deploy places what the start script needs and can be undone", () => {
   it("copies the boot-time tooling Next's tracer does not include", () => {
     const code = executableOnly(deployText)
@@ -168,6 +308,51 @@ describe("the deploy places what the start script needs and can be undone", () =
     // registry -> run-baseline -> audit/broker/transport, and a list would fail at boot, not here.
     expect(code).toContain('Join-Path $Source "lib\\fabric"')
     expect(code).toContain("scripts\\fabric\\resolve-authority-registry-url.mjs")
+    expect(code).toMatch(/Get-ChildItem[^\n]*\$fabricTarget[^\n]*"\*\.mjs"[\s\S]*Remove-Item -Force/)
+    expect(code).toMatch(/robocopy \$fabricSource \$fabricTarget "\*\.mjs" \/E/)
+  })
+
+  it("keeps Node inside the scheduled task process tree so stopping the task closes port 3100", () => {
+    const code = executableOnly(startText)
+    expect(code).toMatch(/&\s*\$node\s+\$server\s+1>>\s*\$stdoutLog\s+2>>\s*\$stderrLog/)
+    expect(code).toMatch(/\$serverExit\s*=\s*1/)
+    expect(code).toMatch(/\$nodeInvocationSucceeded\s*=\s*\$\?/)
+    expect(code).toMatch(/\$nodeExit\s*=\s*\$LASTEXITCODE/)
+    expect(code.indexOf("$nodeInvocationSucceeded = $?"))
+      .toBeLessThan(code.indexOf("$nodeExit = $LASTEXITCODE"))
+    expect(code).toMatch(/exit\s+\$serverExit/)
+    expect(code).not.toContain("Start-Process")
+  })
+
+  it("mirrors public assets so stale files from the outgoing generation cannot survive", () => {
+    const code = executableOnly(deployText)
+    expect(code).toMatch(/robocopy \(Join-Path \$Source "public"\) \(Join-Path \$Runtime "public"\) \/MIR/)
+    expect(code).toMatch(/elseif \(Test-Path -LiteralPath \(Join-Path \$Runtime "public"\) -PathType Container\)[\s\S]*Remove-Item -LiteralPath \(Join-Path \$Runtime "public"\) -Recurse -Force/)
+  })
+
+  it("installs the repository-owned WilliamOS Live task definition before restart", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("deploy\\hermes\\williamos-live\\start-williamos-live.ps1")
+    expect(code).toContain("C:\\ProgramData\\WilliamOS\\start-williamos-live.ps1")
+    expect(code).toMatch(/Copy-Item\s+-LiteralPath\s+\$liveStartSource\s+-Destination\s+\$LiveStartTarget/)
+    expect(code.indexOf("$liveStartSource")).toBeLessThan(code.lastIndexOf("Start-ScheduledTask"))
+  })
+
+  it("proves the scheduled task invokes the selected launcher before any deployment mutation", () => {
+    const code = executableOnly(deployText)
+    const assertion = code.lastIndexOf("Assert-LiveTaskUsesLauncher")
+    const rollback = code.indexOf("rollback captured")
+    const stop = code.indexOf("Stop-ScheduledTask")
+    expect(code).toContain("Get-ScheduledTask -TaskName $TaskName")
+    expect(code).toContain('[IO.Path]::GetFileName($actions[0].Execute) -ine "powershell.exe"')
+    expect(code).toContain("[regex]::Matches($actions[0].Arguments")
+    expect(code).toContain("$fileArguments.Count -ne 1")
+    expect(code).toContain("[IO.Path]::GetFullPath($selectedArgument)")
+    expect(code).toContain("$actualLauncher -ine $expectedLauncher")
+    expect(code).toContain("refusing a deploy that would install unused boot semantics")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(rollback)
+    expect(assertion).toBeLessThan(stop)
   })
 
   it("fails loudly if a boot-time tool is missing from the source tree", () => {
@@ -206,5 +391,287 @@ describe("the deploy places what the start script needs and can be undone", () =
 
   it("still proves the runtime's .env.local survived the copy", () => {
     expect(executableOnly(deployText)).toMatch(/\$envNow -ne \$envGuard/)
+  })
+
+  it("deploys and verifies the loose provenance record inspected by operators", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("lib\\generated\\build-provenance.json")
+    expect(code).toMatch(/Copy-Item\s+\$provenanceSource\s+\$provenanceTarget/)
+    expect(code).toMatch(/\$deployedLooseSha\s+-ne\s+\$builtSha/)
+  })
+
+  it("treats the HTTPS proxy as part of the exact deployment and restarts its supervisor", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain("scripts\\hermes-https-proxy.mjs")
+    expect(code).toMatch(/Stop-ScheduledTask\s+-TaskName\s+\$HttpsTaskName/)
+    expect(code).toMatch(/Start-ScheduledTask\s+-TaskName\s+\$HttpsTaskName/)
+    expect(code).toContain("Test-HttpsCockpit")
+  })
+
+  it("retires only the exact legacy overlay relay and records it for truthful rollback", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toContain("Get-LegacyCockpitRelayState")
+    expect(deploy).toContain("Remove-LegacyCockpitRelay")
+    expect(deploy).toContain("reserved by an unrelated portproxy target")
+    expect(deploy).toMatch(/version\s*=\s*6/)
+    expect(deploy).toContain("legacyRelay =")
+    expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
+    expect(deploy).toContain('"compatibility-relay"')
+    expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
+      .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
+    expect(restore).toMatch(/\$manifestVersion\s+-ne\s+6/)
+    expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
+    expect(restore).toMatch(/if \(\$overlayRestoreMode -in @\("legacy-relay", "compatibility-relay"\)\)[\s\S]*portproxy add v4tov4/)
+    expect(restore).toContain("Rollback manifest overlay mode contradicts the captured proxy and relay state")
+    expect(restore.indexOf("$manifestVersion -ne 6")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
+    const code = executableOnly(deployText)
+    const finalStart = code.lastIndexOf("Start-ScheduledTask -TaskName $HttpsTaskName")
+    const afterStart = code.slice(finalStart)
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort")
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay")
+    expect(code).toContain('--resolve "williamos.lan:${Port}:$HermesOverlayAddress"')
+    expect(afterStart).toContain("canonical williamos.lan origin did not answer over the HERMES overlay")
+    expect(afterStart).toContain("Assert-OverlayFirewallRule")
+    expect(code).toContain("Get-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain("New-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain('[string]$rule.Enabled -ne "True"')
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(code.lastIndexOf("Ensure-OverlayFirewallRule")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+    expect(code).toContain("Assert-TailscaleServiceReady")
+    expect(code).toContain("configured for automatic start before WilliamOS deployment")
+    expect(code.lastIndexOf("Assert-TailscaleServiceReady")).toBeLessThan(code.indexOf('if ($VerifyOnly)'))
+    expect(code).toContain("not exactly scoped to inbound Private TCP")
+    expect(afterStart).toContain("remote acceptance remains separate")
+    expect(afterStart).toContain("verify-cockpit-transport.ps1 on OMEN")
+    expect(afterStart).not.toContain("canonical overlay HTTPS healthy")
+  })
+
+  it("makes verify-only prove both product origins and agreement between both provenance surfaces", () => {
+    const code = executableOnly(deployText)
+    const verify = code.slice(code.indexOf('if ($VerifyOnly)'))
+    expect(verify).toContain("Test-Cockpit")
+    expect(verify).toContain("Test-HttpsCockpit")
+    expect(verify).toMatch(/\$runningSha\s+-ne\s+\$looseSha/)
+  })
+
+  it("captures every loose file and directory it can overwrite in the rollback", () => {
+    const code = executableOnly(deployText)
+    for (const file of ["server.js", "package.json", "pnpm-lock.yaml", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
+      expect(code).toContain(file)
+    }
+    for (const directory of ['".next"', '"public"', '"lib\\fabric"', '"node_modules"']) {
+      expect(code).toContain(directory)
+    }
+    expect(code).toMatch(/if \(\$WithDependencies\) \{ \$rollbackDirectories \+= "node_modules" \}/)
+    expect(code).toMatch(/\$wasPresent\s+-and\s+\$directory\s+-ne\s+"node_modules"/)
+    expect(code).toContain("restore-hermes-runtime.ps1")
+  })
+
+  it("stages a portable locked dependency tree before production mutation and swaps it by rename", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toMatch(/pnpm-lock\.yaml/)
+    expect(deploy).toMatch(/install --prod --offline --ignore-workspace --frozen-lockfile --config\.node-linker=hoisted/)
+    expect(deploy).toMatch(/Get-ChildItem[^\n]*\$stagedModules[^\n]*ReparsePoint/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$rollbackModules/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$stagedModules -Destination \$runtimeModules/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$dependencyStageRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).not.toMatch(/robocopy[^\n]*standalone[^\n]*node_modules/)
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+4[\s\S]*Move-Item -LiteralPath \(Join-Path \$RollbackRoot "node_modules"\) -Destination \$runtimeModules/)
+    expect(restore).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackModules[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(restore).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$heldModules/)
+    expect(restore).toMatch(/catch \{[\s\S]*Move-Item -LiteralPath \$heldModules -Destination \$runtimeModules[\s\S]*throw/)
+    expect(restore).not.toContain("install --prod --offline")
+    expect(deploy.indexOf("install --prod --offline")).toBeLessThan(deploy.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("refuses a default deploy when the runtime lock cannot prove the retained dependency graph", () => {
+    const code = executableOnly(deployText)
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    const missingLockIndex = code.indexOf("runtime has no pnpm-lock.yaml")
+    const mismatchIndex = code.indexOf("source and runtime lockfiles differ")
+    expect(code).toMatch(/Get-FileHash -LiteralPath \$lockSource[\s\S]*Get-FileHash -LiteralPath \$runtimeLock/)
+    expect(missingLockIndex).toBeGreaterThan(-1)
+    expect(mismatchIndex).toBeGreaterThan(-1)
+    expect(missingLockIndex).toBeLessThan(stopIndex)
+    expect(mismatchIndex).toBeLessThan(stopIndex)
+  })
+
+  it("bounds every robocopy retry instead of hanging a failed deployment", () => {
+    for (const code of [executableOnly(deployText), executableOnly(restoreText)]) {
+      const copies = code.split(/\r?\n/).filter((line) => line.trimStart().startsWith("$null = robocopy "))
+      expect(copies.length).toBeGreaterThan(0)
+      for (const copy of copies) {
+        expect(copy).toContain("/R:2")
+        expect(copy).toContain("/W:1")
+      }
+    }
+  })
+
+  it("records absent rollback inputs so restore can remove files introduced by deploy", () => {
+    const code = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(code).toContain("rollback-manifest.json")
+    expect(code).toContain("wasPresent")
+    expect(code).toContain("withDependencies")
+    expect(code).toContain("directories")
+    expect(restore).toContain("expectedRollbackFiles")
+    expect(restore).toContain("expectedRollbackDirectories")
+    expect(restore).toContain("Compare-Object")
+    expect(restore).toMatch(/foreach \(\$entry in \$manifest\.directories\)[\s\S]*Remove-Item -LiteralPath \$target -Recurse -Force/)
+    expect(restore).toMatch(/foreach \(\$entry in \$manifest\.files\)[\s\S]*Remove-Item -LiteralPath \$target -Force/)
+    expect(code).toContain("liveStartWasPresent")
+    expect(code).toContain("external\\start-williamos-live.ps1")
+    expect(restore).toContain("Rollback manifest does not name the exact WilliamOS Live start definition")
+    expect(restore).toMatch(/Copy-Item\s+-LiteralPath\s+\$liveStartRollbackFile\s+-Destination\s+\$LiveStartTarget/)
+    expect(restore).toMatch(/Remove-Item\s+-LiteralPath\s+\$LiveStartTarget/)
+  })
+
+  it("prints a restore command with every path serialized as PowerShell data", () => {
+    const code = executableOnly(deployText)
+    const restoreCommand = code.split(/\r?\n/).find((line) => line.includes("to restore:")) ?? ""
+    expect(code).toMatch(/function ConvertTo-PowerShellLiteral[\s\S]*\.Replace\("'",\s*"''"\)/)
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \$LiveStartTarget/)
+    expect(restoreCommand).toContain("-LiveStartTarget $liveStartTargetLiteral")
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \(\[string\]\$Port\)/)
+    expect(code).toMatch(/ConvertTo-PowerShellLiteral \(\[string\]\$HttpsPort\)/)
+    expect(restoreCommand).toContain("-Port $portLiteral")
+    expect(restoreCommand).toContain("-HttpsPort $httpsPortLiteral")
+    expect(restoreCommand).not.toContain('$LiveStartTarget`"')
+  })
+
+  it("refuses noncanonical port overrides before verification or deployment mutation", () => {
+    const code = executableOnly(deployText)
+    const refusalIndex = code.indexOf("port overrides are not supported")
+    expect(code).toMatch(/\$Port\s+-ne\s+3100\s+-or\s+\$HttpsPort\s+-ne\s+3443/)
+    expect(refusalIndex).toBeGreaterThan(-1)
+    expect(refusalIndex).toBeLessThan(code.indexOf('if ($VerifyOnly)'))
+    expect(refusalIndex).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+
+    const restore = executableOnly(restoreText)
+    const restoreRefusalIndex = restore.indexOf("port overrides are not supported")
+    expect(restore).toMatch(/\$Port\s+-ne\s+3100\s+-or\s+\$HttpsPort\s+-ne\s+3443/)
+    expect(restoreRefusalIndex).toBeGreaterThan(-1)
+    expect(restoreRefusalIndex).toBeLessThan(restore.indexOf("Rollback directory does not exist"))
+    expect(restoreRefusalIndex).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("refuses rollback-skip mode before overwriting an existing external launcher", () => {
+    const code = executableOnly(deployText)
+    const refusalIndex = code.indexOf("SkipRollbackCapture cannot overwrite")
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    const copyIndex = code.indexOf("Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget")
+    expect(code).toMatch(/\$SkipRollbackCapture\s+-and\s+\(Test-Path -LiteralPath \$LiveStartTarget -PathType Leaf\)/)
+    expect(refusalIndex).toBeGreaterThan(-1)
+    expect(refusalIndex).toBeLessThan(stopIndex)
+    expect(refusalIndex).toBeLessThan(copyIndex)
+  })
+
+  it("proves the external launcher is writable before stopping production", () => {
+    const code = executableOnly(deployText)
+    const assertion = code.lastIndexOf("Assert-LiveLauncherWritable")
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    expect(code).toContain("[IO.File]::Open($LiveStartTarget")
+    expect(code).toContain("Run the deployment from an elevated administrator shell; refusing before stopping production")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(stopIndex)
+  })
+
+  it("proves rollback can restore or remove the external launcher before stopping production", () => {
+    const restore = executableOnly(restoreText)
+    const assertion = restore.lastIndexOf("Assert-LauncherMutationAccess")
+    const stopIndex = restore.indexOf("Stop-ScheduledTask")
+    expect(restore).toContain("[IO.File]::Open($TargetPath")
+    expect(restore).toContain("$deleteAccess")
+    expect(restore).toContain("Run rollback from an elevated administrator shell; refusing before stopping production")
+    expect(assertion).toBeGreaterThan(-1)
+    expect(assertion).toBeLessThan(stopIndex)
+  })
+
+  it("refuses to stop unrelated processes on either product port", () => {
+    const code = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(code).toContain("Stop-ExpectedListener")
+    expect(code).toContain('ExpectedCommandPath (Join-Path $Runtime "server.js")')
+    expect(code).toContain('ExpectedCommandPath (Join-Path $Runtime "scripts\\hermes-https-proxy.mjs")')
+    expect(restore).toContain('ExpectedCommandPath (Join-Path $Runtime "server.js")')
+    expect(restore).toContain('ExpectedCommandPath (Join-Path $Runtime "scripts\\hermes-https-proxy.mjs")')
+    expect(code).toContain("[regex]::Matches($process.CommandLine")
+    expect(restore).toContain("[regex]::Matches($process.CommandLine")
+    expect(code).toContain('[IO.Path]::GetFileName($tokens[0]) -ieq "node.exe"')
+    expect(restore).toContain('[IO.Path]::GetFileName($tokens[0]) -ieq "node.exe"')
+    expect(code).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(restore).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(code).toContain("-ieq $expectedPath")
+    expect(restore).toContain("-ieq $expectedPath")
+    expect(code).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
+    expect(restore).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
+    expect(code).toContain("owned by an unrelated process")
+    expect(code).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+    expect(restore).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+  })
+
+  it("provisions the canonical HERMES hostname without replacing conflicting ownership", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain('$CanonicalHostname = "williamos.lan"')
+    expect(code).toContain('Add-Content -LiteralPath $HostsPath')
+    expect(code).toContain("contains a conflicting or ambiguous '$CanonicalHostname' mapping")
+    expect(code.lastIndexOf("Ensure-CanonicalHostname")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("requires Tailscale to survive reboot before accepting the direct overlay listener", () => {
+    const code = executableOnly(relayText)
+    const preflight = code.indexOf("TAILSCALE_NOT_AUTOMATIC")
+    const listenerProof = code.lastIndexOf("if (-not (Test-ExpectedDirectOverlayListener))")
+    expect(code).toContain("Get-CimInstance Win32_Service")
+    expect(code).toContain("StartMode -ne 'Auto'")
+    expect(code).toContain("TAILSCALE_NOT_RUNNING")
+    expect(code).toContain("[string]$rule.Enabled -ne 'True'")
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(preflight).toBeGreaterThan(-1)
+    expect(listenerProof).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(listenerProof)
+  })
+
+  it("keeps standalone relay migration inside the rollback-capturing deployment and proves the exact direct listener", () => {
+    const code = executableOnly(relayText)
+    expect(code).toContain("Test-ExpectedDirectOverlayListener")
+    expect(code).toContain("Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port")
+    expect(code).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(code).toContain("-ieq $proxyPath")
+    expect(code).toContain("RELAY_MIGRATION_REQUIRES_DEPLOYMENT")
+    expect(code).toContain("use deploy-hermes-runtime.ps1")
+    expect(code).toContain("DIRECT_LISTENER_NOT_PROVEN")
+    expect(code).not.toContain("portproxy delete")
+  })
+
+  it("removes an exact current relay before rollback applies Node-only listener ownership checks", () => {
+    const restore = executableOnly(restoreText)
+    expect(restore).toContain("Get-CurrentLegacyRelayState")
+    expect(restore).toContain("Remove-CurrentLegacyRelay")
+    expect(restore).toContain("owned by an unrelated portproxy target")
+    const preflight = restore.lastIndexOf("$currentLegacyRelay = Get-CurrentLegacyRelayState")
+    const stopTasks = restore.indexOf("Stop-ScheduledTask")
+    const removeRelay = restore.lastIndexOf("if ($currentLegacyRelay.wasPresent) { Remove-CurrentLegacyRelay }")
+    const stopHttpsListener = restore.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort')
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(stopTasks)
+    expect(removeRelay).toBeGreaterThan(stopTasks)
+    expect(removeRelay).toBeLessThan(stopHttpsListener)
+  })
+})
+
+describe("the OMEN transport verifier survives its expected off-LAN control", () => {
+  it("captures native curl stderr under Continue and restores the caller preference", () => {
+    const code = executableOnly(transportVerifyText)
+    expect(code).toContain("$previousPreference = $ErrorActionPreference")
+    expect(code).toMatch(/\$ErrorActionPreference\s*=\s*'Continue'[\s\S]*& \$curl @arguments 2>&1[\s\S]*\$curlExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).toContain("$ErrorActionPreference = $previousPreference")
+    expect(code.indexOf("$curlExit = $LASTEXITCODE")).toBeLessThan(code.indexOf("$ErrorActionPreference = $previousPreference"))
   })
 })

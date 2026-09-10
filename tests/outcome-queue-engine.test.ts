@@ -337,6 +337,46 @@ describe("deterministic selection and eligibility", () => {
       selected: false,
       reason: "ALL_OUTCOMES_TERMINAL",
     })
+    const unresolvedParent = {
+      integrity: "VERIFIED" as const,
+      unresolved: [{
+        missionKey: "external-parent:abc123",
+        externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+        goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+        worldId: "space-terrafusion",
+        projectId: 7,
+        repository: "bsvalues/terrafusion_os_1.0",
+      }],
+      resolved: [],
+    }
+    expect(selectNextOutcome([], {
+      ...CURRENT_SELECTION,
+      parentMissions: unresolvedParent,
+    })).toMatchObject({
+      selected: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: unresolvedParent,
+    })
+    expect(selectNextOutcome([
+      outcome({ lifecycleState: "completed" }),
+    ], {
+      ...CURRENT_SELECTION,
+      parentMissions: unresolvedParent,
+    })).toMatchObject({
+      selected: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+    })
+    expect(selectNextOutcome([], {
+      ...CURRENT_SELECTION,
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    })).toMatchObject({
+      selected: false,
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+    })
+    expect(selectNextOutcome([outcome()], {
+      ...CURRENT_SELECTION,
+      parentMissions: unresolvedParent,
+    })).toMatchObject({ selected: true })
   })
 })
 

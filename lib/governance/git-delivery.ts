@@ -1,0 +1,129 @@
+import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
+import path from "node:path"
+import { promisify } from "node:util"
+
+import { DeliverySealError, type MeasuredDelivery } from "./delivery-seal.ts"
+
+const runFile = promisify(execFile)
+const COMMIT = /^[0-9a-f]{40}$/i
+
+function invalid(detail: string): never {
+  throw new DeliverySealError("DELIVERY_SEAL_DIFF_INVALID", detail)
+}
+
+async function git(root: string, args: readonly string[]): Promise<string> {
+  const result = await runFile("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    maxBuffer: 16_000_000,
+    windowsHide: true,
+  })
+  return result.stdout
+}
+
+async function gitBytes(root: string, args: readonly string[]): Promise<Buffer> {
+  const result = await runFile("git", ["-C", root, ...args], {
+    encoding: "buffer",
+    maxBuffer: 16_000_000,
+    windowsHide: true,
+  })
+  return result.stdout
+}
+
+async function gitBytesIfPresent(root: string, revision: string, deliveryPath: string): Promise<Buffer | null> {
+  const entry = await gitBytes(root, ["ls-tree", "-z", revision, "--", `:(literal)${deliveryPath}`])
+  return entry.length === 0 ? null : gitBytes(root, ["show", `${revision}:${deliveryPath}`])
+}
+
+function literalPathspecs(paths: readonly string[]): string[] {
+  return paths.map((deliveryPath) => `:(literal)${deliveryPath}`)
+}
+
+function canonicalRemote(value: string): string {
+  const trimmed = value.trim().replace(/\.git$/i, "").replace(/\/$/, "")
+  const scp = /^git@([^:]+):(.+)$/.exec(trimmed)
+  if (scp) return `https://${scp[1].toLowerCase()}/${scp[2]}`
+  try {
+    const url = new URL(trimmed)
+    if (!url.hostname || !url.pathname || url.username || url.password) invalid("the repository origin is not a canonical public identity")
+    return `${url.protocol}//${url.hostname.toLowerCase()}${url.pathname}`.replace(/\/$/, "")
+  } catch {
+    invalid("the repository origin is not a canonical URL")
+  }
+}
+
+function normalizedPaths(root: string, values: readonly string[]): string[] {
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const candidate = raw
+    const absolute = path.resolve(root, candidate)
+    const relative = path.relative(path.resolve(root), absolute).replace(/\\/g, "/")
+    if (!candidate || /\p{White_Space}/u.test(candidate) || candidate.includes("\\") || candidate.includes("*") || candidate.includes("?")
+      || candidate !== relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(candidate) || path.isAbsolute(relative)) {
+      invalid("the delivery path is not canonical and repository-relative")
+    }
+    if (seen.has(relative)) invalid("the delivery path set contains a duplicate claim")
+    seen.add(relative)
+  }
+  return [...seen].sort()
+}
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left)
+  const normalizedRight = path.resolve(right)
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
+}
+
+/** Measure an exact assignment patch using only Git and Node built-ins. */
+export async function inspectGitDelivery(
+  projectRoot: string,
+  baseSha: string,
+  commitSha: string,
+  requestedPaths: readonly string[],
+  options: Readonly<{ allowMultiple?: boolean }> = {},
+): Promise<MeasuredDelivery> {
+  const root = path.resolve(projectRoot)
+  if (!COMMIT.test(baseSha) || !COMMIT.test(commitSha)) invalid("the delivery commits are malformed")
+  const paths = normalizedPaths(root, requestedPaths)
+  if (paths.length === 0) invalid("the delivery has no assigned paths")
+  try {
+    const top = (await git(root, ["rev-parse", "--show-toplevel"])).trim()
+    if (!sameFilesystemPath(top, root)) invalid("the assignment workspace is not the exact Git worktree root")
+    const measuredBase = (await git(root, ["rev-parse", `${baseSha}^{commit}`])).trim().toLowerCase()
+    const measuredCommit = (await git(root, ["rev-parse", `${commitSha}^{commit}`])).trim().toLowerCase()
+    if (measuredBase !== baseSha.toLowerCase() || measuredCommit !== commitSha.toLowerCase()) invalid("the exact delivery commits are unavailable")
+    await git(root, ["merge-base", "--is-ancestor", measuredBase, measuredCommit])
+    const pathspecs = literalPathspecs(paths)
+    const changed = (await git(root, ["diff", "--no-renames", "--name-only", "-z", measuredBase, measuredCommit, "--", ...pathspecs]))
+      .split("\0").filter(Boolean).map((item) => item.replace(/\\/g, "/")).sort()
+    if (JSON.stringify(changed) !== JSON.stringify(paths)) invalid("the exact assignment paths are not all changed by this commit")
+    const patch = await git(root, ["diff", "--no-renames", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...pathspecs])
+    if (!patch) invalid("the assignment patch is empty")
+    if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
+    const delivered = await Promise.all(paths.map(async (deliveryPath) => ({
+      deliveryPath,
+      bytes: await gitBytesIfPresent(root, measuredCommit, deliveryPath),
+    })))
+    const deliveredBytes = paths.length === 1 && delivered[0].bytes !== null
+      ? delivered[0].bytes
+      : Buffer.concat(delivered.map(({ deliveryPath, bytes }) => (
+          bytes === null
+            ? Buffer.from(`${deliveryPath}\0deleted\0`, "utf8")
+            : Buffer.concat([Buffer.from(`${deliveryPath}\0${bytes.length}\0`, "utf8"), bytes])
+        )))
+    const origin = canonicalRemote(await git(root, ["remote", "get-url", "origin"]))
+    return {
+      repository: origin,
+      baseSha: measuredBase,
+      commitSha: measuredCommit,
+      paths,
+      patchDigest: createHash("sha256").update(patch, "utf8").digest("hex"),
+      contentDigest: createHash("sha256").update(deliveredBytes).digest("hex"),
+    }
+  } catch (error) {
+    if (error instanceof DeliverySealError) throw error
+    invalid("the exact assignment delivery could not be measured from Git")
+  }
+}

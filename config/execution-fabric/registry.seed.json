@@ -194,6 +194,96 @@
       "cpus": [], "dimms": [], "gpus": [], "disks": [], "network": [], "runtimes": [], "capabilities": [],
       "constraints": ["explicit-authority-required", "cost-boundary", "data-classification-boundary"],
       "warnings": []
+    },
+    {
+      "id": "daedalus",
+      "hostname": "daedalus-ThinkStation-P620",
+      "identity": {
+        "hostname": "daedalus-ThinkStation-P620",
+        "machine_id_sha256": "cc4b1b2b7b646030b222edd2e24ef3711c3621af06b21555355fef718889effb",
+        "source": "linux-machine-id-sha256"
+      },
+      "role": "resident-gpu-model-and-repository-worker",
+      "availability_class": "resident",
+      "os": {
+        "family": "linux",
+        "version": null
+      },
+      "authority": {
+        "allow": [
+          "local-llm-inference",
+          "gpu-batch",
+          "bounded-execution",
+          "repository-worker"
+        ],
+        "deny": [
+          "authoritative-durable-state",
+          "county-production-write",
+          "pacs-production-write",
+          "direct-model-lan-exposure",
+          "autonomous-work-selection"
+        ]
+      },
+      "evidence": {
+        "observed_at": "2026-09-09T00:00:00Z",
+        "probe": "owner-declared; live identity and qualification required",
+        "probe_version": null,
+        "confidence": "declared",
+        "ttl_seconds": 0,
+        "notes": "Owner requested integration on 2026-09-09. RTX 3090/Qwen3-8B BF16 results are owner-reported, not live acceptance."
+      },
+      "capability_health": {
+        "compute": {
+          "state": "UNKNOWN",
+          "reason": "LIVE_CAPABILITY_EVIDENCE_REQUIRED",
+          "observed_at": null,
+          "expires_at": null,
+          "snapshot_sha256": null,
+          "evidence_ref": null
+        },
+        "backup_target": {
+          "state": "PENDING",
+          "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE",
+          "observed_at": null,
+          "expires_at": null,
+          "snapshot_sha256": null,
+          "evidence_ref": null
+        },
+        "archive_storage": {
+          "state": "PENDING",
+          "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE",
+          "observed_at": null,
+          "expires_at": null,
+          "snapshot_sha256": null,
+          "evidence_ref": null
+        },
+        "nas": {
+          "state": "PENDING",
+          "reason": "CAPABILITY_NOT_DECLARED_FOR_NODE",
+          "observed_at": null,
+          "expires_at": null,
+          "snapshot_sha256": null,
+          "evidence_ref": null
+        }
+      },
+      "cpus": [],
+      "dimms": [],
+      "gpus": [],
+      "disks": [],
+      "network": [],
+      "runtimes": [],
+      "capabilities": [
+        "local-llm-inference",
+        "gpu-batch",
+        "repository-worker"
+      ],
+      "constraints": [
+        "no-authoritative-state",
+        "no-direct-model-lan-exposure"
+      ],
+      "warnings": [
+        "P620/RTX 3090 and Qwen3-8B qualification require live identity-bound evidence; no installed GPU or model inferred from owner report"
+      ]
     }
   ]
 }

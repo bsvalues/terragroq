@@ -5,6 +5,7 @@ import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
 import { resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
@@ -39,6 +40,13 @@ export async function GET(request: Request) {
     return new Response(null, { status: 303, headers: { location: "/sign-in" } })
   }
   if (!userId) return new Response(null, { status: 303, headers: { location: "/sign-in?reason=owner-unresolved" } })
+
+  // A pre-provisioned Cockpit returns here on every startup. Preserve an already valid OWNER
+  // session, but never let an abandoned setup/diagnostic account override the certificate's owner.
+  const existingSession = await getSession()
+  if (existingSession?.user.id === userId) {
+    return new Response(null, { status: 303, headers: { location: destination, "cache-control": "no-store" } })
+  }
 
   const context = await auth.$context
   const session = await context.internalAdapter.createSession(userId, false)

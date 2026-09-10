@@ -1,11 +1,205 @@
 import path from "node:path"
+import { EventEmitter } from "node:events"
+import { spawnSync } from "node:child_process"
 
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const terminalRouteSeams = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  getSession: vi.fn(),
+  recordLoomStart: vi.fn(),
+  recordLoomEnd: vi.fn(),
+  deriveSpaceMutationAuthority: vi.fn(),
+  resolveProject: vi.fn(),
+}))
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:child_process")>(),
+  spawn: terminalRouteSeams.spawn,
+}))
+vi.mock("@/lib/session", () => ({ getSession: terminalRouteSeams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveCanonicalWorkspaceProjectBinding: terminalRouteSeams.resolveProject,
+}))
+vi.mock("@/lib/loom/receipts", () => ({
+  recordLoomStart: terminalRouteSeams.recordLoomStart,
+  recordLoomEnd: terminalRouteSeams.recordLoomEnd,
+}))
+vi.mock("@/lib/governance/space-mutation-authority", () => ({
+  deriveSpaceMutationAuthority: terminalRouteSeams.deriveSpaceMutationAuthority,
+  SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
+}))
+
+import { POST } from "@/app/api/loom/run/route"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
-import { LOOM_OPERATIONS, resolveLoomOperation } from "@/lib/loom/operations"
+import { LOOM_OPERATIONS, resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 
 const ROOT = process.platform === "win32" ? "C:\\work\\repo" : "/work/repo"
+
+class FakeTerminalChild extends EventEmitter {
+  stdout = new EventEmitter()
+  stderr = new EventEmitter()
+  kill = vi.fn()
+}
+
+function terminalRequest(body: Record<string, unknown>) {
+  return new Request("http://williamos.test/api/loom/run", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+describe("Experience V2 bounded Terminal route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    terminalRouteSeams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: ROOT, projectId: 7, projectKey: "terrafusion",
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
+    } })
+  })
+
+  it("spawns the exact server-derived argv for an allowed read-only inspection command", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+
+    const response = await POST(terminalRequest({ operation: "repo.status", terminalCommand: "git status --short --branch" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith("git", ["status", "--short", "--branch"], expect.objectContaining({
+      shell: false,
+      windowsHide: true,
+    }))
+    child.stdout.emit("data", Buffer.from("## main\n"))
+    child.emit("close", 0)
+    expect(await response.text()).toContain('"type":"exit","code":0')
+  })
+
+  it("redacts credential output split across process chunks before streaming it to the browser", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+
+    const response = await POST(terminalRequest({ operation: "repo.status" }))
+    child.stderr.emit("data", Buffer.from("DATABASE_URL=postgresql://owner:split-pa"))
+    child.stderr.emit("data", Buffer.from("ssword@db.example.test/app\nsafe diagnostic\n"))
+    child.emit("close", 1)
+    const streamed = await response.text()
+
+    expect(streamed).not.toMatch(/split-password|postgresql:\/\/owner:/)
+    expect(streamed).toContain("DATABASE_URL=[REDACTED]")
+    expect(streamed).toContain("safe diagnostic")
+  })
+
+  it("runs project tests in test mode even when WilliamOS itself is a production server", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    const originalNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = "production"
+
+    try {
+      const response = await POST(terminalRequest({ operation: "tests.run" }))
+
+      expect(response.status).toBe(200)
+      expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+        "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent",
+      ], expect.objectContaining({
+        env: expect.objectContaining({ NODE_ENV: "test" }),
+      }))
+      child.emit("close", 0)
+      await response.text()
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+  })
+
+  it("runs a WilliamOS Space operation only in its server-derived WilliamOS checkout", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: "C:/HermesLab/williamos-source", projectId: 8, projectKey: "williamos",
+      repositoryIdentity: "bsvalues/terragroq", project: { identity: "c:/hermeslab/williamos-source" },
+    } })
+
+    const response = await POST(terminalRequest({ operation: "tests.run", projectKey: "williamos" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.resolveProject).toHaveBeenCalledWith("owner-1", "williamos")
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+      "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent", "--config", "vitest.ci.config.ts",
+    ], expect.objectContaining({
+      cwd: "C:/HermesLab/williamos-source",
+    }))
+    child.emit("close", 0)
+    await response.text()
+  })
+
+  it("runs an Atlas operation only in its selected verified repository mount", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    terminalRouteSeams.resolveProject.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: "C:/mounts/terrafusion-atlas",
+      projectId: 7,
+      projectKey: "terrafusion",
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryRole: "suite-source",
+      repositoryLabel: "Atlas",
+      repositoryPreviewSource: false,
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+      project: { identity: "c:/terrafusion" },
+    } })
+
+    const response = await POST(terminalRequest({
+      operation: "tests.run",
+      projectKey: "terrafusion",
+      repositoryKey: "atlas",
+    }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.resolveProject).toHaveBeenCalledWith(
+      "owner-1", "terrafusion", undefined, "atlas",
+    )
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith(process.execPath, [
+      "node_modules/vitest/vitest.mjs", "run", "--reporter=dot", "--silent",
+    ], expect.objectContaining({ cwd: "C:/mounts/terrafusion-atlas" }))
+    child.emit("close", 0)
+    expect(await response.text()).toContain('"repositoryKey":"atlas"')
+  })
+
+  it("injects the default commit bound when a typed log inspection omits one", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+
+    const response = await POST(terminalRequest({ operation: "repo.log", terminalCommand: "git log --stat" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.spawn).toHaveBeenCalledWith("git", ["log", "--stat", "-20"], expect.objectContaining({ shell: false }))
+    child.emit("close", 0)
+    await response.text()
+  })
+
+  it.each([
+    ["git checkout main", "repo.status"],
+    ["git status && whoami", "repo.status"],
+    ["git diff ../../secret", "repo.diff"],
+  ])("refuses unsupported command text %s before spawning", async (terminalCommand, operation) => {
+    const response = await POST(terminalRequest({ operation, terminalCommand }))
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: "UNSUPPORTED_TERMINAL_COMMAND" })
+    expect(terminalRouteSeams.spawn).not.toHaveBeenCalled()
+  })
+
+  it("refuses an operation id that does not match the server-derived command", async () => {
+    const response = await POST(terminalRequest({ operation: "repo.diff", terminalCommand: "git status --short" }))
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: "UNKNOWN_OPERATION" })
+    expect(terminalRouteSeams.spawn).not.toHaveBeenCalled()
+  })
+})
 
 describe("workspace path containment", () => {
   it("resolves ordinary paths inside the workspace", () => {
@@ -67,6 +261,26 @@ describe("workspace listing and content", () => {
 })
 
 describe("operation catalogue", () => {
+  it("turns bounded read-only Terminal text into fixed executable argv without a shell", () => {
+    expect(resolveProjectTerminalCommand("git status --short --branch")).toMatchObject({
+      id: "repo.status",
+      command: "git",
+      args: ["status", "--short", "--branch"],
+      mutating: false,
+    })
+    expect(resolveProjectTerminalCommand("git diff --check HEAD")?.args).toEqual(["diff", "--check", "HEAD"])
+    expect(resolveProjectTerminalCommand("git log --stat")?.args).toEqual(["log", "--stat", "-20"])
+    expect(resolveProjectTerminalCommand("git log --oneline --decorate -100")?.args).toEqual(["log", "--oneline", "--decorate", "-100"])
+  })
+
+  it("never lets Terminal text select an executable, path, revision, mutation or shell expression", () => {
+    for (const command of [
+      "git add .", "git commit", "git reset --hard", "git diff main", "git diff src/file.ts",
+      "git status | more", "git status; whoami", "git status > output.txt", "git -c core.pager=cat status",
+      "node --version", "powershell Get-ChildItem", "git log -101", "git log -10 -20",
+    ]) expect(resolveProjectTerminalCommand(command)).toBeNull()
+  })
+
   it("refuses anything not in the catalogue", () => {
     for (const value of ["rm -rf /", "repo.status; whoami", "", null, 42]) {
       expect(resolveLoomOperation(value)).toMatchObject({ ok: false, refusal: "UNKNOWN_OPERATION" })
@@ -87,6 +301,25 @@ describe("operation catalogue", () => {
       expect(["git", "node", "powershell"]).toContain(operation.command)
       expect(operation.args.every((argument) => typeof argument === "string")).toBe(true)
     }
+  })
+
+  it("starts the catalogued Test operation with the installed Vitest CLI", () => {
+    const operation = LOOM_OPERATIONS.find((candidate) => candidate.id === "tests.run")
+    expect(operation).toBeDefined()
+
+    const result = spawnSync(process.execPath, [
+      ...operation!.args,
+      "--passWithNoTests",
+      "tests/__catalogue_smoke_never__.test.ts",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      timeout: 30_000,
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
   })
 })
 

@@ -57,9 +57,217 @@ import {
   v12CampaignDecision,
   v12CampaignGrant,
 } from "@/lib/outcome-queue/v1-2-campaign-authority"
+import { hashRecord } from "@/lib/governance/hash"
+import {
+  EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+  EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+  EXTERNAL_PARENT_MISSION_BIND_OPERATION,
+  EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
+  EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
+  isCanonicalGitHubRepositoryIdentity,
+} from "@/lib/outcome-queue/contract.mjs"
+import {
+  externalParentMissionBindReceiptHash,
+  externalParentMissionDecompositionPolicyDigest,
+  externalParentMissionIdentity,
+  externalParentMissionProvenanceDigest,
+  normalizeExternalParentMission,
+  normalizeExternalParentMissionTerminalInput,
+} from "@/lib/environment/external-parent-mission-admission"
 
 const now = "2026-07-28T12:00:00.000Z"
 const userId = "owner"
+
+function parentMissionReceipts(
+  terminalState: "SATISFIED" | "REVOKED" | null = null,
+  missionInput: Record<string, unknown> = {},
+) {
+  const rawMission = {
+    source: "github",
+    repository: "bsvalues/terrafusion_os_1.0",
+    externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+    issueNumber: 1485,
+    goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+    loopRef: "LOOP-WASHINGTON-ASSESSOR-LAUNCH-V1",
+    objective: "Launch the Washington assessor product for all 39 counties.",
+    terminalConditions: ["External assessor acceptance", "Production deployment"],
+    authorityEvidence: ["github:bsvalues/terrafusion_os_1.0#1485"],
+    ...missionInput,
+  }
+  const mission = normalizeExternalParentMission(rawMission)
+  const missionKey = externalParentMissionIdentity(mission)
+  const provenanceDigest = externalParentMissionProvenanceDigest(mission)
+  const requestBinding = {
+    version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+    worldId: "space-terrafusion",
+    idempotencyKey: `parent:${missionKey}`,
+    confirmation: "ADMIT_EXTERNAL_PARENT_MISSION",
+    confirmedProvenanceDigest: provenanceDigest,
+    externalParentMission: mission,
+    provenanceDigest,
+    missionKey,
+  }
+  const resultBinding = {
+    binding: {
+      version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+      source: mission.source,
+      repository: mission.repository,
+      externalRef: mission.externalRef,
+      issueNumber: mission.issueNumber,
+      goalRef: mission.goalRef,
+      projectId: 7,
+      objectiveDigest: hashRecord(mission.objective),
+      missionKey,
+    },
+    worldId: "space-terrafusion",
+    repositoryResourceId: 11,
+    loopRef: mission.loopRef,
+    terminalConditionsDigest: hashRecord(mission.terminalConditions),
+    authorityEvidenceDigest: hashRecord(mission.authorityEvidence),
+    authorityEvidenceRole: "SUPPORTING_ONLY",
+    authorityProvenance: {
+      kind: "AUTHENTICATED_CONFIGURED_OWNER_ADMISSION",
+      ownerUserId: userId,
+      confirmation: "ADMIT_EXTERNAL_PARENT_MISSION",
+      provenanceDigest,
+    },
+    provenanceDigest,
+    state: "ACTIVE",
+    admittedBy: userId,
+    admittedAt: now,
+  }
+  const bind = {
+    id: 101,
+    userId,
+    idempotencyKey: requestBinding.idempotencyKey,
+    operation: EXTERNAL_PARENT_MISSION_BIND_OPERATION,
+    outcomeKey: missionKey,
+    requestHash: hashRecord(requestBinding),
+    requestBinding,
+    resultBinding,
+  }
+  if (terminalState === null) return [bind]
+  const bindReceiptHash = hashRecord({
+    operation: bind.operation,
+    outcomeKey: bind.outcomeKey,
+    requestHash: bind.requestHash,
+    requestBinding: bind.requestBinding,
+    resultBinding: bind.resultBinding,
+  })
+  const normalizedTerminal = normalizeExternalParentMissionTerminalInput({
+    mode: "TERMINAL",
+    missionKey,
+    bindReceiptId: bind.id,
+    bindReceiptHash,
+    terminalState,
+    terminalEvidenceRefs: ["a", "Z"],
+    idempotencyKey: `terminal:${missionKey}`,
+  })
+  const { mode: _mode, ...terminalInput } = normalizedTerminal
+  const terminalRequest = {
+    version: EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
+    ...terminalInput,
+  }
+  return [bind, {
+    id: 102,
+    userId,
+    idempotencyKey: terminalRequest.idempotencyKey,
+    operation: EXTERNAL_PARENT_MISSION_TERMINAL_OPERATION,
+    outcomeKey: missionKey,
+    requestHash: hashRecord(terminalRequest),
+    requestBinding: terminalRequest,
+    resultBinding: {
+      version: EXTERNAL_PARENT_MISSION_TERMINAL_VERSION,
+      missionKey,
+      bindReceiptId: bind.id,
+      bindReceiptHash,
+      state: terminalState,
+      terminalEvidenceDigest: hashRecord(terminalRequest.terminalEvidenceRefs),
+      terminalAt: now,
+    },
+  }]
+}
+
+function parentMissionWithDecompositionReceipt() {
+  const [bind] = parentMissionReceipts()
+  const bindReceiptHash = externalParentMissionBindReceiptHash(bind)
+  const policy = {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    executionPowers: ["child:derive", "child:dispatch"],
+    pathReservationCeiling: ["lib/outcome-queue/**", "tests/**"],
+    contractReservationCeiling: [],
+    environmentReservationCeiling: [
+      { environmentIdentity: "a", access: "shared-read" },
+      { environmentIdentity: "z", access: "exclusive" },
+    ],
+    hardWalls: {
+      singleRepositoryPerChild: true,
+      exactReservationSubset: true,
+      noAuthorityEscalation: true,
+      childExpiryNoLaterThanParent: true,
+      deterministicChildIdentity: true,
+      atomicChildLineage: true,
+      rawProseAuthorityForbidden: true,
+      parentCompletionInferenceForbidden: true,
+      crossBoundaryWideningForbidden: true,
+    },
+  } as const
+  const locator = {
+    worldId: "space-terrafusion",
+    missionKey: bind.outcomeKey,
+    bindReceiptId: bind.id,
+    bindReceiptHash,
+    policy,
+  }
+  const policyDigest = externalParentMissionDecompositionPolicyDigest(locator)
+  const requestBinding = {
+    version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+    ...locator,
+    idempotencyKey: `decomposition:${bind.outcomeKey}`,
+    confirmation: "ADMIT_EXTERNAL_PARENT_MISSION_DECOMPOSITION",
+    confirmedPolicyDigest: policyDigest,
+  }
+  const digest = "a".repeat(64)
+  const authorityContext = {
+    ownerUserId: userId,
+    worldId: "space-terrafusion",
+    projectId: 7,
+    repository: "bsvalues/terrafusion_os_1.0",
+    repositoryResourceId: 11,
+    workOrderId: 472,
+    workOrderRef: "WO-PARENT-DECOMPOSITION",
+    grantId: 73,
+    grantRef: "GRANT-PARENT-DECOMPOSITION",
+    grantContentHash: "b".repeat(64),
+    grantExpiresAt: "2026-12-01T00:00:00.000Z",
+    authorityCeiling: "A2_WRITE_OWN",
+    grantScopeDigest: digest,
+    grantAllowedActionsDigest: digest,
+    grantBlockedActionsDigest: digest,
+  }
+  return [bind, {
+    id: 103,
+    userId,
+    idempotencyKey: requestBinding.idempotencyKey,
+    operation: EXTERNAL_PARENT_MISSION_DECOMPOSITION_OPERATION,
+    outcomeKey: bind.outcomeKey,
+    requestHash: hashRecord(requestBinding),
+    requestBinding,
+    resultBinding: {
+      version: EXTERNAL_PARENT_MISSION_DECOMPOSITION_VERSION,
+      missionKey: bind.outcomeKey,
+      bindReceiptId: bind.id,
+      bindReceiptHash,
+      policyDigest,
+      policy,
+      authorityContext,
+      state: "ACTIVE",
+      admittedBy: userId,
+      admittedAt: now,
+    },
+  }]
+}
 
 function successorKey(idempotencyKey: string) {
   return `outcome:successor:${createHash("sha256")
@@ -385,6 +593,7 @@ function acquisitionQuery({
   resumeAfterRenewal,
   replayResume = [],
   releasedSlot = [],
+  parentMissionReceipts = [],
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
@@ -401,6 +610,7 @@ function acquisitionQuery({
   resumeAfterRenewal?: unknown[]
   replayResume?: unknown[]
   releasedSlot?: unknown[]
+  parentMissionReceipts?: unknown[]
 }) {
   let acquireCalls = 0
   let resumeCalls = 0
@@ -509,6 +719,9 @@ function acquisitionQuery({
       return { rows: [{ id: 61 }] }
     }
     if (sql === OUTCOME_QUEUE_SQL.noSelectionReason) return { rows: counts }
+    if (sql === OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts) {
+      return { rows: parentMissionReceipts }
+    }
     if (sql === OUTCOME_QUEUE_SQL.readActiveAcquisitionProof) {
       return {
         rows: [queueRow({
@@ -1869,6 +2082,7 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
       OUTCOME_QUEUE_SQL.noSelectionReason,
+      OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts,
       ...(reason === "ACTIVE_LEASE_HELD"
         ? [OUTCOME_QUEUE_SQL.readActiveAcquisitionProof]
         : []),
@@ -1901,6 +2115,268 @@ describe("transactional durable outcome queue source", () => {
         478,
       ])
     }
+  })
+
+  it("returns a typed orphan with exact persisted parent identity when no child is selectable", async () => {
+    const receipts = parentMissionReceipts()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{
+          missionKey: receipts[0].outcomeKey,
+          externalRef: "github:bsvalues/terrafusion_os_1.0#1485",
+          goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+          worldId: "space-terrafusion",
+          projectId: 7,
+          repository: "bsvalues/terrafusion_os_1.0",
+        }],
+      },
+    })
+    expect(query).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.readExternalParentMissionReceipts,
+      [userId],
+    )
+  })
+
+  it("preserves the active parent when two unrelated suggested rows make the queue otherwise ineligible", async () => {
+    const receipts = parentMissionReceipts()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 2, approvalEligibleCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{ missionKey: receipts[0].outcomeKey }],
+      },
+    })
+  })
+
+  it("exposes an exact chained decomposition receipt and fails closed on authority-context drift", async () => {
+    const receipts = parentMissionWithDecompositionReceipt()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+    await expect(acquireNextEligibleOutcome({ query, ...acquireInput })).resolves.toMatchObject({
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{ missionKey: receipts[0].outcomeKey }],
+      },
+    })
+
+    const decomposition = receipts[1] as any
+    const forged = {
+      ...decomposition,
+      resultBinding: {
+        ...decomposition.resultBinding,
+        authorityContext: {
+          ...decomposition.resultBinding.authorityContext,
+          repository: "bsvalues/other-repository",
+        },
+      },
+    }
+    const forgedQuery = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: [receipts[0], forged],
+    })
+    await expect(acquireNextEligibleOutcome({ query: forgedQuery, ...acquireInput })).resolves.toMatchObject({
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+
+    const unsafePolicy = {
+      ...decomposition.requestBinding.policy,
+      pathReservationCeiling: ["../outside"],
+    }
+    const unsafePolicyDigest = externalParentMissionDecompositionPolicyDigest({
+      worldId: decomposition.requestBinding.worldId,
+      missionKey: decomposition.requestBinding.missionKey,
+      bindReceiptId: decomposition.requestBinding.bindReceiptId,
+      bindReceiptHash: decomposition.requestBinding.bindReceiptHash,
+      policy: unsafePolicy,
+    })
+    const unsafeRequest = {
+      ...decomposition.requestBinding,
+      policy: unsafePolicy,
+      confirmedPolicyDigest: unsafePolicyDigest,
+    }
+    const unsafeReceipt = {
+      ...decomposition,
+      requestHash: hashRecord(unsafeRequest),
+      requestBinding: unsafeRequest,
+      resultBinding: {
+        ...decomposition.resultBinding,
+        policy: unsafePolicy,
+        policyDigest: unsafePolicyDigest,
+      },
+    }
+    const unsafeQuery = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 2, approvalEligibleCount: 0 }],
+      parentMissionReceipts: [receipts[0], unsafeReceipt],
+    })
+    await expect(acquireNextEligibleOutcome({ query: unsafeQuery, ...acquireInput })).resolves.toMatchObject({
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED" },
+    })
+  })
+
+  it("fails closed when more than one active parent could own the next child", async () => {
+    const first = parentMissionReceipts()
+    const second = parentMissionReceipts(null, {
+      issueNumber: 1486,
+      externalRef: "github:bsvalues/terrafusion_os_1.0#1486",
+      goalRef: "GOAL-SECOND-PARENT",
+    }).map((receipt) => ({ ...receipt, id: Number(receipt.id) + 100 }))
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 2, candidateStateCount: 0 }],
+      parentMissionReceipts: [...first, ...second],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: { integrity: "VERIFIED", unresolved: [{}, {}] },
+    })
+  })
+
+
+  it("accepts the admission canonical ordering and repository grammar without locale drift", async () => {
+    const receipts = parentMissionReceipts(null, {
+      repository: "BSValues/Repo_Name.GIT",
+      externalRef: "github:bsvalues/repo_name#1485",
+      terminalConditions: ["a", "Z"],
+      authorityEvidence: ["a", "Z"],
+    })
+    const bind = receipts[0]
+    if (!("externalParentMission" in bind.requestBinding)) {
+      throw new Error("expected bind receipt")
+    }
+    const mission = bind.requestBinding.externalParentMission
+    expect(mission.terminalConditions).toEqual(["Z", "a"])
+    expect(mission.authorityEvidence).toEqual(["Z", "a"])
+    expect(mission.repository).toBe("bsvalues/repo_name")
+    expect(isCanonicalGitHubRepositoryIdentity(mission.repository)).toBe(true)
+
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 0 }],
+      parentMissionReceipts: receipts,
+    })
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      reason: "ORPHANED_ACTIVE_MISSION",
+      parentMissions: {
+        integrity: "VERIFIED",
+        unresolved: [{ repository: "bsvalues/repo_name" }],
+      },
+    })
+  })
+
+  it.each([
+    "bsvalues/repo:name",
+    "bs:values/repo",
+    "bsvalues/nested/repo",
+  ])("rejects repository identity %s in both admission and the portable contract", (repository) => {
+    expect(isCanonicalGitHubRepositoryIdentity(repository)).toBe(false)
+    expect(() => normalizeExternalParentMission({
+      source: "github",
+      repository,
+      externalRef: `github:${repository}#1485`,
+      issueNumber: 1485,
+      goalRef: "GOAL-WASHINGTON-ASSESSOR-LAUNCH-V1",
+      loopRef: "LOOP-WASHINGTON-ASSESSOR-LAUNCH-V1",
+      objective: "Launch the Washington assessor product for all 39 counties.",
+      terminalConditions: ["Z", "a"],
+      authorityEvidence: ["Z", "a"],
+    })).toThrow("EXTERNAL_PARENT_MISSION_INVALID")
+  })
+
+  it("preserves empty selection only after an exact parent terminal receipt", async () => {
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 0 }],
+      parentMissionReceipts: parentMissionReceipts("SATISFIED"),
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "EMPTY_QUEUE",
+      parentMissions: { integrity: "VERIFIED", unresolved: [], resolved: [{ terminalState: "SATISFIED" }] },
+    })
+  })
+
+  it("fails closed when persisted parent mission evidence is malformed", async () => {
+    const [bind] = parentMissionReceipts()
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 1, terminalCount: 1 }],
+      parentMissionReceipts: [{ ...bind, requestHash: "0".repeat(64) }],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      acquired: false,
+      outcome: null,
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    })
+  })
+
+  it("rejects a parent authority identity that does not match the scoped receipt owner", async () => {
+    const [bind] = parentMissionReceipts()
+    if (!("authorityProvenance" in bind.resultBinding)) {
+      throw new Error("expected bind receipt")
+    }
+    const forged = {
+      ...bind,
+      resultBinding: {
+        ...bind.resultBinding,
+        admittedBy: "foreign-owner",
+        authorityProvenance: {
+          ...bind.resultBinding.authorityProvenance,
+          ownerUserId: "foreign-owner",
+        },
+      },
+    }
+    const query = acquisitionQuery({
+      counts: [{ totalCount: 0 }],
+      parentMissionReceipts: [forged],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+    })).resolves.toMatchObject({
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      parentMissions: { integrity: "BINDING_REQUIRED", unresolved: [], resolved: [] },
+    })
   })
 
   it("renews an exact prerequisite without relying on aggregate no-selection counts", async () => {

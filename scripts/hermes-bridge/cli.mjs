@@ -48,6 +48,11 @@ export function printHermesCycleResult(value, write = process.stdout.write.bind(
     : `${JSON.stringify(value)}\n`)
 }
 
+const PARENT_MISSION_WALL_RESULTS = new Set([
+  "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE",
+  "PARENT_MISSION_BINDING_REQUIRED",
+])
+
 function flushStdout() {
   return new Promise((resolve, reject) => {
     process.stdout.write("", (error) => error ? reject(error) : resolve())
@@ -201,6 +206,7 @@ export async function runHermesQueueDrain({
   let decision = null
   let pendingDecision = null
   let findingDecisionDirty = false
+  const replayedChildRechecks = new Set()
   try {
     if (consumeDecision) {
       const decisionResult = await consumeDecision({ repositoryPath: process.cwd() })
@@ -214,9 +220,49 @@ export async function runHermesQueueDrain({
       const result = await orchestrator.cycle()
       const findingResult = await orchestrator.consumeRuntimeFindings?.()
       findingDecisionDirty ||= Number(findingResult?.gated) > 0
+      const queuedChildAvailable = Number(findingResult?.queuedChildren) > 0
+      const replayedChildKey = Array.isArray(findingResult?.results)
+        ? findingResult.results.find((entry) => (
+          entry?.disposition === "DERIVED" && entry?.replayed === true
+          && typeof entry?.outcomeKey === "string" && entry.outcomeKey.length > 0
+          && !replayedChildRechecks.has(entry.outcomeKey)
+        ))?.outcomeKey ?? null
+        : null
+      const retryForFindingChild = () => {
+        if (queuedChildAvailable) return true
+        if (!replayedChildKey) return false
+        replayedChildRechecks.add(replayedChildKey)
+        return true
+      }
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
-        if (result.result === "NO_ELIGIBLE_OUTCOME"
-          && Number(findingResult?.queuedChildren) > 0) continue
+        if (PARENT_MISSION_WALL_RESULTS.has(result.result)) {
+          if (retryForFindingChild()) continue
+          if (findingDecisionDirty && consumeDecision) {
+            const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
+            findingDecisionDirty = false
+            if (refreshedDecision?.status === "PENDING_PRIMARY_DECISION") return refreshedDecision
+            if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+              .includes(refreshedDecision?.status)) {
+              decision = refreshedDecision
+              pendingDecision = null
+            }
+          }
+          if (pendingDecision?.sourceKind === "RUNTIME_FINDING") {
+            const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
+            if (refreshedDecision?.status === "PENDING_PRIMARY_DECISION") return refreshedDecision
+            pendingDecision = null
+            if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+              .includes(refreshedDecision?.status)) decision = refreshedDecision
+          } else if (pendingDecision) {
+            return pendingDecision
+          }
+          return {
+            ...result,
+            ...(settled.length > 0 ? { settled } : {}),
+            ...(decision ? { decision } : {}),
+          }
+        }
+        if (result.result === "NO_ELIGIBLE_OUTCOME" && retryForFindingChild()) continue
         if (result.result === "NO_ELIGIBLE_OUTCOME" && findingDecisionDirty && consumeDecision) {
           const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
           findingDecisionDirty = false
@@ -1402,14 +1448,15 @@ export async function runCli(command = process.argv[2], options = {}) {
   let orchestrator = null
   const args = options.args ?? process.argv.slice(3)
   const printResult = options.print ?? print
+  const consumeDecision = options.consumeDecision ?? consumePrimaryDecisionIntake
   const createResident = options.createResidentOrchestrator ?? createResidentHermesOrchestrator
   const runRetiredReconciliation = options.reconcileRetiredAcquisition ?? reconcileRetiredAcquisition
   try {
     if (command === "cycle") {
       orchestrator = createResident({ requireAegis: true })
-      printHermesCycleResult(
-        await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
-      )
+      const result = await runHermesQueueDrain({ orchestrator, consumeDecision })
+      printHermesCycleResult(result)
+      if (PARENT_MISSION_WALL_RESULTS.has(result.result)) return 1
     }
     else if (command === "reconcile-retired-acquisition") {
       if (args.length !== 2) assertRetiredAcquisitionRecoveryIdentity(undefined, undefined)
