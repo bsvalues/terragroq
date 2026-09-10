@@ -1213,4 +1213,69 @@ export type AcceleratorReservation = z.infer<typeof AcceleratorReservationSchema
 export type InferenceExecution = z.infer<typeof InferenceExecutionSchema>
 export type CapabilityEvaluation = z.infer<typeof CapabilityEvaluationSchema>
 export type ElasticWorker = z.infer<typeof ElasticWorkerSchema>
+// ─── IF-02: whole-fabric topology (spec 09 §2 FabricLink; 11 FabricTopologySnapshot) ────────────
+// Measured inter-node links and the reconciled topology projection. A configured Ethernet speed is
+// inventory, not usable throughput: freshnessState marks whether the measurement is current, and a
+// STALE/UNKNOWN/FAILED link must never be presented as AVAILABLE placement capacity (spec 11 proof 5).
+
+export const FabricFreshnessStateSchema = z.enum(["LIVE", "STALE", "UNKNOWN", "FAILED"])
+
+export const FabricLinkSchema = z
+  .object({
+    id: IdentifierSchema,
+    fromNodeId: IdentifierSchema,
+    toNodeId: IdentifierSchema,
+    transportClass: IdentifierSchema,
+    measuredBandwidthBytesPerSecond: FiniteNonNegativeSchema.optional(),
+    latencyMsP50: FiniteNonNegativeSchema.optional(),
+    latencyMsP95: FiniteNonNegativeSchema.optional(),
+    reliability: z.number().min(0).max(1).optional(),
+    trustClass: IdentifierSchema,
+    observedAt: TimestampSchema.optional(),
+    freshnessState: FabricFreshnessStateSchema,
+    evidenceRef: NonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .superRefine((link, context) => {
+    if (link.latencyMsP50 !== undefined && link.latencyMsP95 !== undefined && link.latencyMsP95 < link.latencyMsP50) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "p95 latency cannot be below p50", path: ["latencyMsP95"] })
+    }
+    // A link measured LIVE must carry at least one measurement; otherwise it is an assertion, not evidence.
+    if (link.freshnessState === "LIVE"
+      && link.measuredBandwidthBytesPerSecond === undefined && link.latencyMsP50 === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "a LIVE link must carry a measured bandwidth or latency", path: ["freshnessState"] })
+    }
+  })
+
+// A node's discovery record: its immutable identity plus its probe observation, with the same freshness
+// discipline as links. The probe detail itself stays in the evidence store; the snapshot carries the
+// placement-relevant projection, never a guessed capability.
+export const FabricNodeObservationSchema = z
+  .object({
+    nodeId: IdentifierSchema,
+    role: IdentifierSchema.optional(),
+    observedAt: TimestampSchema.optional(),
+    freshnessState: FabricFreshnessStateSchema,
+    capacity: z.record(z.union([z.number().finite(), z.string(), z.boolean(), z.null()])).optional(),
+    bottleneck: z.record(z.union([z.number().finite(), z.string(), z.boolean(), z.null()])).optional(),
+    evidenceRef: NonEmptyStringSchema.optional(),
+  })
+  .strict()
+
+export const FabricTopologySnapshotSchema = z
+  .object({
+    schemaVersion: PositiveIntegerSchema,
+    generatedAt: TimestampSchema,
+    nodes: z.array(FabricNodeObservationSchema),
+    links: z.array(FabricLinkSchema),
+    digest: DigestSchema,
+    evidenceRefs: z.array(NonEmptyStringSchema),
+  })
+  .strict()
+
+export type FabricFreshnessState = z.infer<typeof FabricFreshnessStateSchema>
+export type FabricLink = z.infer<typeof FabricLinkSchema>
+export type FabricNodeObservation = z.infer<typeof FabricNodeObservationSchema>
+export type FabricTopologySnapshot = z.infer<typeof FabricTopologySnapshotSchema>
+
 export type InferenceReceipt = z.infer<typeof InferenceReceiptSchema>
