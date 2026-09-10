@@ -52,6 +52,246 @@
       },
       "id": "qwen3-8b-daedalus",
       "createdAt": "2026-09-10T09:45:00Z"
+    },
+    {
+      "id": "ollama-williamos-qwen3-14b-64k",
+      "family": "Qwen3",
+      "repository": "williamos-qwen3-14b:64k",
+      "source": "ollama",
+      "revision": "201cfcc6a274cdbceeb2752e8508a399f85fa879ec0f3fadd23ef835755c0c02",
+      "immutableIdentity": "williamos-qwen3-14b:64k@201cfcc6a274cdbceeb2752e8508a399f85fa879ec0f3fadd23ef835755c0c02",
+      "alias": "williamos-qwen3-14b:64k",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://williamos-qwen3-14b:64k",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 65536,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 67584
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-williamos-qwen3-14b-16k",
+      "family": "Qwen3",
+      "repository": "williamos-qwen3-14b:16k",
+      "source": "ollama",
+      "revision": "d19004a0061d19992e98c3c7cc8a8b389070e481d05f2288055d4d6a89a9eeab",
+      "immutableIdentity": "williamos-qwen3-14b:16k@d19004a0061d19992e98c3c7cc8a8b389070e481d05f2288055d4d6a89a9eeab",
+      "alias": "williamos-qwen3-14b:16k",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://williamos-qwen3-14b:16k",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 16384,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 18432
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-qwen3-14b",
+      "family": "Qwen3",
+      "repository": "qwen3:14b",
+      "source": "ollama",
+      "revision": "bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+      "immutableIdentity": "qwen3:14b@bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+      "alias": "qwen3:14b",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://qwen3:14b",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 10240
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-qwen2-5-coder-7b",
+      "family": "Qwen2.5",
+      "repository": "qwen2.5-coder:7b",
+      "source": "ollama",
+      "revision": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "immutableIdentity": "qwen2.5-coder:7b@dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "alias": "qwen2.5-coder:7b",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://qwen2.5-coder:7b",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 10240
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-williamos-qwen3-4b-64k",
+      "family": "Qwen3",
+      "repository": "williamos-qwen3-4b:64k",
+      "source": "ollama",
+      "revision": "63d09764f352964a8de7c6960fd7cc80d39810ebc957f1a81fe1bd2b53062c30",
+      "immutableIdentity": "williamos-qwen3-4b:64k@63d09764f352964a8de7c6960fd7cc80d39810ebc957f1a81fe1bd2b53062c30",
+      "alias": "williamos-qwen3-4b:64k",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://williamos-qwen3-4b:64k",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 65536,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 67584
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-qwen3-4b-instruct",
+      "family": "Qwen3",
+      "repository": "qwen3:4b-instruct",
+      "source": "ollama",
+      "revision": "0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0",
+      "immutableIdentity": "qwen3:4b-instruct@0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0",
+      "alias": "qwen3:4b-instruct",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://qwen3:4b-instruct",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 10240
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-snowflake-arctic-embed2-latest",
+      "family": "Snowflake",
+      "repository": "snowflake-arctic-embed2:latest",
+      "source": "ollama",
+      "revision": "5de93a84837d0ff00da872e90830df5d973f616cbf1e5c198731ab19dd7b776b",
+      "immutableIdentity": "snowflake-arctic-embed2:latest@5de93a84837d0ff00da872e90830df5d973f616cbf1e5c198731ab19dd7b776b",
+      "alias": "snowflake-arctic-embed2:latest",
+      "architecture": "unknown",
+      "modalities": [
+        "EMBEDDING"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://snowflake-arctic-embed2:latest",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 10240
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
+    },
+    {
+      "id": "ollama-llama3-2-3b",
+      "family": "Llama",
+      "repository": "llama3.2:3b",
+      "source": "ollama",
+      "revision": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+      "immutableIdentity": "llama3.2:3b@a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+      "alias": "llama3.2:3b",
+      "architecture": "unknown",
+      "modalities": [
+        "TEXT"
+      ],
+      "license": {
+        "id": "see-upstream",
+        "evidenceRef": "ollama://llama3.2:3b",
+        "commercialUse": "UNKNOWN",
+        "redistribution": "UNKNOWN"
+      },
+      "quantization": {
+        "disclosure": "PROVIDER_UNDISCLOSED"
+      },
+      "context": {
+        "maxInputTokens": 8192,
+        "maxOutputTokens": 2048,
+        "maxTotalTokens": 10240
+      },
+      "sourceTrust": "APPROVED",
+      "admission": "CANDIDATE",
+      "createdAt": "2026-09-10T19:42:17.817Z"
     }
   ],
   "runtimes": [
@@ -126,5 +366,6 @@
     "path": "/home/daedalus/Documents/Codex/2026-09-09/you/outputs/bakeoff005/Qwen3-8B/model",
     "configDigest": "sha256:f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30",
     "verifiedAt": "2026-09-10T09:50:00Z"
-  }
+  },
+  "ollamaRosterBoundAt": "2026-09-10T19:30:55.500Z"
 }
