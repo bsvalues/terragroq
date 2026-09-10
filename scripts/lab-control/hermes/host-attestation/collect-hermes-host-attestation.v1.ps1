@@ -715,7 +715,12 @@ Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, dep
   $taskArguments = if ($taskAction -and $taskAction.Arguments) { [string]$taskAction.Arguments } else { '' }
   $taskExecute = if ($taskAction -and $taskAction.Execute) { ([string]$taskAction.Execute).Trim() } else { '' }
   $trustedPowerShellActions = @('powershell.exe','C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe','C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe')
-  $exactTaskArguments = '(?i)^-NoProfile\s+-NonInteractive\s+-ExecutionPolicy\s+Bypass\s+-File\s+"?C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service\.ps1"?$'
+  # The task action must be the same service this fact reads above. Pinning the retired
+  # C:\HermesLab\hermes\... path here made every post-deployment attestation report inference drift:
+  # deploy-hermes-appliance.ps1 rewrites privileged task arguments onto the protected runtime root,
+  # so the registered action names the protected path while this predicate rejected it. Deriving the
+  # predicate from $servicePath keeps the two from disagreeing again.
+  $exactTaskArguments = '(?i)^-NoProfile\s+-NonInteractive\s+-ExecutionPolicy\s+Bypass\s+-File\s+"?' + [regex]::Escape($servicePath) + '"?$'
   $taskTriggers = if ($task) { @($task.Triggers) } else { @() }
   $hasBootTrigger = @($taskTriggers | Where-Object { [bool]$_.Enabled -and $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }).Count -eq 1
   $hasRecheckTrigger = @($taskTriggers | Where-Object { [bool]$_.Enabled -and $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and [string]$_.Repetition.Interval -eq 'PT2M' }).Count -eq 1
