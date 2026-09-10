@@ -21,6 +21,19 @@ const HUMAN_STATES = Object.freeze(["queued", "running", "done", "needs-attentio
  *
  * chain: { status, rerouted?, outcomeSummary?, error? }
  */
+
+// Infrastructure vocabulary that must never leak into the required human path, even when an
+// upstream summary supplies it. A chain-provided outcomeSummary containing these is replaced with a
+// neutral human message rather than leaking Fabric vocabulary into the normal path.
+const INFRA_VOCAB = /\b(qwen|kimi|llm|model|provider|gpu|vram|ollama|transformers|runtime|daedalus|omen|aegis|atlas|hermes|codex|claude|vllm|llama\.cpp|inference|tokenizer|placement|fabric)\b/i
+
+function humanOutcomeMessage(outcomeSummary) {
+  if (typeof outcomeSummary !== "string" || !outcomeSummary.trim()) return "Done."
+  // An upstream summary that leaks infrastructure vocabulary is replaced with a neutral message;
+  // the required path must never show model/provider/GPU/runtime terms.
+  return INFRA_VOCAB.test(outcomeSummary) ? "Done." : outcomeSummary
+}
+
 export function projectThreadState(chain) {
   if (!chain || typeof chain !== "object") throw new Error("THREAD_CHAIN_INVALID")
   const status = HUMAN_STATES.includes(chain.status) ? chain.status : "running"
@@ -29,7 +42,7 @@ export function projectThreadState(chain) {
     state: status,
     // A reroute is folded into the same running job; it never surfaces as a new pane or navigation.
     message:
-      status === "done" ? (chain.outcomeSummary ?? "Done.")
+      status === "done" ? humanOutcomeMessage(chain.outcomeSummary)
         : status === "needs-attention" ? "This needs your attention."
         : "Working on it.",
     // No model/provider/GPU/runtime vocabulary in the required path.
@@ -48,6 +61,12 @@ export function projectThreadState(chain) {
  */
 export function projectTechnicalView(placementDecision, execution, optimizerChoice) {
   if (!placementDecision || !execution) throw new Error("TECHNICAL_VIEW_REQUIRES_CHAIN")
+  // The technical/provenance view is only available AFTER completion — never for an in-progress or
+  // partial execution. The contract requires provenance to be inspectable post-completion, not live.
+  const completed = execution.state === "COMPLETED" || execution.completed === true || typeof execution.completedAt === "string"
+  if (!completed) {
+    return { visible: false, reason: "available-after-completion", provenance: { placementDecisionId: placementDecision.id ?? null, executionId: execution.id ?? null } }
+  }
   return {
     visible: true,
     selected: {
@@ -73,5 +92,9 @@ export function projectTechnicalView(placementDecision, execution, optimizerChoi
  */
 export function absorbReroute(threadState) {
   if (!threadState || threadState.infrastructureVisible) throw new Error("REROUTE_REQUIRES_THREAD_STATE")
-  return { ...threadState, state: threadState.state === "done" ? "done" : "running", focusEvent: null }
+  // A reroute is absorbed into the same job with no focus event. A job already needing attention
+  // keeps that state (a reroute must not silently clear it); only an actively progressing job that
+  // is not done and not needs-attention is reported as running.
+  const state = threadState.state === "done" ? "done" : threadState.state === "needs-attention" ? "needs-attention" : "running"
+  return { ...threadState, state, focusEvent: null }
 }

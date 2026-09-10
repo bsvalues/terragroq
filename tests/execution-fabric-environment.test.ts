@@ -11,7 +11,7 @@ const placementDecision = {
     { candidateId: "omen-qwen", eligible: false },
   ],
 }
-const execution = { id: "exec-1", model: "Qwen/Qwen3-8B", runtime: "daedalus-hf-transformers", compute: "daedalus" }
+const execution = { id: "exec-1", model: "Qwen/Qwen3-8B", runtime: "daedalus-hf-transformers", compute: "daedalus", state: "COMPLETED" }
 const optimizerChoice = { rationale: "Local preferred: daedalus-qwen value 0.92 within burst threshold." }
 
 describe("IF-12 Thread-level human state (required path)", () => {
@@ -76,5 +76,30 @@ describe("IF-12 Technical/Execution projection (provenance on demand)", () => {
     const view = projectThreadState({ status: "done" })
     expect(view.provenanceAvailable).toBe(true)
     expect(view.infrastructureVisible).toBe(false)
+  })
+})
+
+describe("IF-12 remediation: no vocabulary leak, completion-gated provenance, reroute state preserved", () => {
+  it("a chain-provided outcomeSummary that leaks infrastructure vocabulary is replaced, never shown", () => {
+    const leaked = projectThreadState({ status: "done", outcomeSummary: "Placed on daedalus via Qwen3-8B on the GPU runtime." })
+    expect(leaked.message).toBe("Done.")
+    expect(leaked.message).not.toMatch(/qwen|gpu|runtime|daedalus|model|provider/i)
+    // a clean human summary passes through unchanged
+    const clean = projectThreadState({ status: "done", outcomeSummary: "The 39-county digest is ready." })
+    expect(clean.message).toBe("The 39-county digest is ready.")
+  })
+
+  it("the technical view is hidden until execution completes", () => {
+    const inProgress = { id: "exec-2", model: "Qwen/Qwen3-8B", runtime: "daedalus-hf-transformers", compute: "daedalus", state: "RUNNING" }
+    const tech = projectTechnicalView(placementDecision, inProgress, optimizerChoice)
+    expect(tech.visible).toBe(false)
+    expect(tech.reason).toBe("available-after-completion")
+  })
+
+  it("a reroute preserves needs-attention instead of clearing it to running", () => {
+    const attention = projectThreadState({ status: "needs-attention" })
+    const after = absorbReroute(attention)
+    expect(after.state).toBe("needs-attention")
+    expect(after.focusEvent).toBeNull()
   })
 })
