@@ -1,3 +1,5 @@
+import { humanMessage } from "@/lib/workbench/human-vocabulary"
+
 export type ThreadItemKind =
   | "OWNER_INTENT"
   | "WILLIAMOS_RESPONSE"
@@ -293,12 +295,24 @@ function item(
     occurredAt: source.occurredAt,
     actorRole,
     title: safeText(title, kind.replaceAll("_", " ")),
-    summary: safeText(summary, "No safe summary recorded"),
+    // IF-12: the owner-facing summary never leaks Intelligence Fabric / infrastructure vocabulary.
+    // A summary that would name a model, provider, GPU, runtime, or placement is neutralized here so
+    // the Fabric stays invisible in the normal path (provenance stays available in drilldown).
+    summary: kind === "WORK_STATE" || kind === "ARTIFACT_DELIVERY"
+      ? safeText(humanMessage(summary, kind === "WORK_STATE" ? workStateFallback(summary) : "Done."), "No safe summary recorded")
+      : safeText(summary, "No safe summary recorded"),
     rawState,
     truth: truth(source.truth),
     source: sourceRef(source, facet),
     ...(decision ? { decision } : {}),
   }
+}
+
+function workStateFallback(summary: string): string {
+  const lowered = summary.toLowerCase()
+  if (lowered.includes("block") || lowered.includes("needs") || lowered.includes("attention") || lowered.includes("fail") || lowered.includes("error")) return "This needs your attention."
+  if (lowered.includes("run") || lowered.includes("progress") || lowered.includes("working") || lowered.includes("start")) return "Working on it."
+  return "Done."
 }
 
 function decisionDetail(value: unknown): ThreadDecisionDetail | null {
