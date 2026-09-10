@@ -77,11 +77,9 @@ export type SovereignReviewVerifyResult =
   | Readonly<{ valid: true; reason: null; payload: SovereignReviewPayload }>
   | Readonly<{ valid: false; reason: string; payload?: never }>
 
-const sha256 = (value: string): string => "sha256:" + crypto.createHash("sha256").update(value, "utf8").digest("hex")
-
 function canonicalBytes(value: unknown): Buffer {
   // Deterministic canonical form: sorted keys, no whitespace.
-  const canon = (v: any): string => {
+  const canon = (v: unknown): string => {
     if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`
     if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canon((v as Record<string, unknown>)[k])).join(",")}}`
     return JSON.stringify(v)
