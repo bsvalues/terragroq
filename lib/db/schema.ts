@@ -1248,18 +1248,23 @@ export type LockRecord = typeof lockRecord.$inferSelect
 
 // ─── Intelligence Fabric domain objects (IF-01, issue #964) ─────────────────────────────
 // Persistence seam for the Zod contracts in components/operator/intelligence-fabric-contracts.ts.
-// Additive only (migration 0014); no routing or provider path reads these yet. Nested and optional
-// structure lives in jsonb and is validated by the Zod layer; immutable identity is execution
-// identity and mutable display names never are. Rollback = drop these eight tables.
+// Additive only (migration 0014); no routing or provider path reads these yet. The seam is a
+// FAITHFUL persistence of the contracts: every contract field has a column, cross-object references
+// are by immutable identity string scoped to the owning user (composite userId+key FKs), and
+// lifecycle/verdict/state columns carry exactly the contract enums. Nested/optional structure lives
+// in jsonb and is re-validated by the Zod layer on read. Rollback = drop these eight tables.
+
+const sha256Check = (column: string) => sql`"${sql.raw(column)}" ~ '^sha256:[a-f0-9]{64}$'`
 
 export const fabricModelArtifact = pgTable(
   "fabric_model_artifact",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     modelKey: text("modelKey").notNull(),
     family: text("family").notNull(),
     repository: text("repository").notNull(),
+    source: text("source").notNull(),
     revision: text("revision").notNull(),
     immutableIdentity: text("immutableIdentity").notNull(),
     alias: text("alias"),
@@ -1280,10 +1285,11 @@ export const fabricModelArtifact = pgTable(
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_model_artifact_user_key_unique").on(table.userId, table.modelKey),
+    unique("fabric_model_artifact_pk").on(table.userId, table.modelKey),
     unique("fabric_model_artifact_identity_unique").on(table.userId, table.immutableIdentity),
     check("fabric_model_artifact_sourcetrust_check", sql`"sourceTrust" IN ('APPROVED','QUARANTINED','UNKNOWN','DENIED')`),
     check("fabric_model_artifact_admission_check", sql`"admission" IN ('DISCOVERED','QUARANTINED','CANDIDATE','APPROVED','ACTIVE','FALLBACK','RETIRED','DENIED')`),
+    check("fabric_model_artifact_digest_ck", sql`("artifactDigest" IS NULL OR "artifactDigest" ~ '^sha256:[a-f0-9]{64}$') AND ("tokenizerDigest" IS NULL OR "tokenizerDigest" ~ '^sha256:[a-f0-9]{64}$') AND ("chatTemplateDigest" IS NULL OR "chatTemplateDigest" ~ '^sha256:[a-f0-9]{64}$') AND ("configDigest" IS NULL OR "configDigest" ~ '^sha256:[a-f0-9]{64}$')`),
   ],
 )
 
@@ -1291,19 +1297,21 @@ export const fabricRuntime = pgTable(
   "fabric_runtime",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     runtimeKey: text("runtimeKey").notNull(),
     kind: text("kind").notNull(),
     version: text("version").notNull(),
     buildIdentity: text("buildIdentity"),
+    artifact: jsonb("artifact").notNull(),
     endpointClass: text("endpointClass"),
     lifecycle: text("lifecycle").default("UNKNOWN").notNull(),
+    features: text("features").array().default([]).notNull(),
     observedAt: timestamp("observedAt", { withTimezone: true }),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_runtime_user_key_unique").on(table.userId, table.runtimeKey),
+    unique("fabric_runtime_pk").on(table.userId, table.runtimeKey),
     check("fabric_runtime_kind_check", sql`"kind" IN ('OLLAMA','LLAMA_CPP','VLLM','HERMES_AGENT','EXTERNAL_API','SPECIALIST')`),
     check("fabric_runtime_endpoint_check", sql`"endpointClass" IS NULL OR "endpointClass" IN ('OPENAI_COMPATIBLE','NATIVE','CLI','INTERNAL')`),
     check("fabric_runtime_lifecycle_check", sql`"lifecycle" IN ('UNKNOWN','OFFLINE','STARTING','HEALTHY','DEGRADED','FAILED','STOPPING')`),
@@ -1314,8 +1322,9 @@ export const fabricRuntimeCapability = pgTable(
   "fabric_runtime_capability",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
-    runtimeId: integer("runtimeId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
+    runtimeRef: text("runtimeRef").notNull(),
+    runtimeVersion: text("runtimeVersion").notNull(),
     hardwarePlatform: text("hardwarePlatform").notNull(),
     feature: text("feature").notNull(),
     verdict: text("verdict").default("UNKNOWN").notNull(),
@@ -1325,10 +1334,10 @@ export const fabricRuntimeCapability = pgTable(
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_runtime_capability_unique").on(table.userId, table.runtimeId, table.hardwarePlatform, table.feature),
+    unique("fabric_runtime_capability_pk").on(table.userId, table.runtimeRef, table.hardwarePlatform, table.feature),
     check("fabric_runtime_capability_verdict_check", sql`"verdict" IN ('UNKNOWN','SUPPORTED','MEASURED','PROVEN','DEGRADED','FAILED','UNAVAILABLE')`),
-    foreignKey({ columns: [table.runtimeId], foreignColumns: [fabricRuntime.id], name: "fabric_runtime_capability_runtime_fk" }).onDelete("cascade"),
-    index("fabric_runtime_capability_runtime_idx").on(table.runtimeId),
+    foreignKey({ columns: [table.userId, table.runtimeRef], foreignColumns: [fabricRuntime.userId, fabricRuntime.runtimeKey], name: "fabric_runtime_capability_runtime_fk" }).onDelete("cascade"),
+    index("fabric_runtime_capability_runtime_idx").on(table.userId, table.runtimeRef),
   ],
 )
 
@@ -1336,23 +1345,32 @@ export const fabricComputeResource = pgTable(
   "fabric_compute_resource",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     resourceKey: text("resourceKey").notNull(),
     fabricNodeId: text("fabricNodeId"),
     providerId: text("providerId"),
-    locationClass: text("locationClass").notNull(),
+    providerResourceId: text("providerResourceId"),
+    placement: text("placement").notNull(),
     trustClass: text("trustClass").notNull(),
-    accelerator: jsonb("accelerator"),
+    health: text("health").default("UNKNOWN").notNull(),
+    lifecycle: text("lifecycle").default("UNKNOWN").notNull(),
+    hardwareDisclosure: text("hardwareDisclosure").notNull(),
+    accelerators: jsonb("accelerators").default([]).notNull(),
     cpu: jsonb("cpu"),
     systemMemoryBytes: bigint("systemMemoryBytes", { mode: "number" }),
     storageClass: text("storageClass"),
-    observedAt: timestamp("observedAt", { withTimezone: true }),
+    networkClass: text("networkClass"),
+    expiresAt: timestamp("expiresAt", { withTimezone: true }),
+    observedAt: timestamp("observedAt", { withTimezone: true }).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_compute_resource_user_key_unique").on(table.userId, table.resourceKey),
-    check("fabric_compute_resource_location_check", sql`"locationClass" IN ('LOCAL_HOST','LOCAL_FABRIC','PRIVATE_REMOTE','PROVIDER_MANAGED')`),
+    unique("fabric_compute_resource_pk").on(table.userId, table.resourceKey),
+    check("fabric_compute_resource_placement_check", sql`"placement" IN ('LOCAL_HOST','LOCAL_FABRIC','PRIVATE_REMOTE','PROVIDER_MANAGED')`),
+    check("fabric_compute_resource_health_check", sql`"health" IN ('UNKNOWN','AVAILABLE','RESERVED','DEGRADED','DRAINING','UNAVAILABLE','DESTROYED')`),
+    check("fabric_compute_resource_lifecycle_check", sql`"lifecycle" IN ('UNKNOWN','OFFLINE','AVAILABLE','RESERVED','DEGRADED','DRAINING','FAILED','DESTROYED')`),
+    check("fabric_compute_resource_disclosure_check", sql`"hardwareDisclosure" IN ('ATTESTED','SELF_REPORTED','PROVIDER_UNDISCLOSED')`),
   ],
 )
 
@@ -1360,7 +1378,7 @@ export const fabricContextPackage = pgTable(
   "fabric_context_package",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     packageKey: text("packageKey").notNull(),
     schemaVersion: integer("schemaVersion").notNull(),
     projectId: text("projectId"),
@@ -1379,9 +1397,10 @@ export const fabricContextPackage = pgTable(
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    unique("fabric_context_package_pk").on(table.userId, table.packageKey),
     unique("fabric_context_package_digest_unique").on(table.userId, table.digest),
     check("fabric_context_package_classification_check", sql`"classification" IN ('S0','S1','S2','S3','S4')`),
-    check("fabric_context_package_digest_ck", sql`"digest" ~ '^sha256:[a-f0-9]{64}$'`),
+    check("fabric_context_package_digest_ck", sha256Check("digest")),
   ],
 )
 
@@ -1389,22 +1408,23 @@ export const fabricPlacementDecision = pgTable(
   "fabric_placement_decision",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     decisionKey: text("decisionKey").notNull(),
-    schemaVersion: integer("schemaVersion").notNull(),
-    requestEnvelope: jsonb("requestEnvelope").notNull(),
-    selection: jsonb("selection"),
-    considered: jsonb("considered").default([]).notNull(),
-    status: text("status").notNull(),
-    rationale: text("rationale"),
-    digest: text("digest").notNull(),
+    requestId: text("requestId").notNull(),
+    requirementId: text("requirementId").notNull(),
+    contextPackageRef: text("contextPackageRef").notNull(),
+    considered: jsonb("considered").notNull(),
+    selected: jsonb("selected").notNull(),
+    fallbackCandidateIds: text("fallbackCandidateIds").array().default([]).notNull(),
+    policyDigest: text("policyDigest").notNull(),
+    reason: text("reason").notNull(),
     decidedAt: timestamp("decidedAt", { withTimezone: true }).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_placement_decision_digest_unique").on(table.userId, table.digest),
-    check("fabric_placement_decision_status_check", sql`"status" IN ('RECOMMENDED','REFUSED','NO_CAPABLE_PLACEMENT','DEFERRED')`),
-    check("fabric_placement_decision_digest_ck", sql`"digest" ~ '^sha256:[a-f0-9]{64}$'`),
+    unique("fabric_placement_decision_pk").on(table.userId, table.decisionKey),
+    foreignKey({ columns: [table.userId, table.contextPackageRef], foreignColumns: [fabricContextPackage.userId, fabricContextPackage.packageKey], name: "fabric_placement_decision_context_fk" }).onDelete("restrict"),
+    check("fabric_placement_decision_policy_digest_ck", sha256Check("policyDigest")),
   ],
 )
 
@@ -1412,23 +1432,33 @@ export const fabricAcceleratorReservation = pgTable(
   "fabric_accelerator_reservation",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     reservationKey: text("reservationKey").notNull(),
-    computeResourceId: integer("computeResourceId").notNull(),
-    state: text("state").default("REQUESTED").notNull(),
-    leaseExpiresAt: timestamp("leaseExpiresAt", { withTimezone: true }),
-    fenceToken: text("fenceToken"),
+    requestId: text("requestId").notNull(),
+    computeResourceRef: text("computeResourceRef").notNull(),
+    workRef: text("workRef").notNull(),
+    threadId: text("threadId"),
+    modelArtifactRef: text("modelArtifactRef"),
+    requestedWeightBytes: bigint("requestedWeightBytes", { mode: "number" }).notNull(),
+    requestedKvBytes: bigint("requestedKvBytes", { mode: "number" }).notNull(),
+    requestedRuntimeOverheadBytes: bigint("requestedRuntimeOverheadBytes", { mode: "number" }).notNull(),
+    requestedSystemMemoryBytes: bigint("requestedSystemMemoryBytes", { mode: "number" }).notNull(),
     priority: text("priority").default("NORMAL").notNull(),
-    workloadRef: text("workloadRef"),
+    preemptible: boolean("preemptible").default(true).notNull(),
+    fencingToken: integer("fencingToken").notNull(),
+    leaseExpiresAt: timestamp("leaseExpiresAt", { withTimezone: true }).notNull(),
+    state: text("state").default("REQUESTED").notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_accel_res_user_key_unique").on(table.userId, table.reservationKey),
-    check("fabric_accel_res_state_check", sql`"state" IN ('REQUESTED','LEASED','ACTIVE','PREEMPTED','RELEASED','EXPIRED','FENCED')`),
+    unique("fabric_accel_res_pk").on(table.userId, table.reservationKey),
+    foreignKey({ columns: [table.userId, table.computeResourceRef], foreignColumns: [fabricComputeResource.userId, fabricComputeResource.resourceKey], name: "fabric_accel_res_resource_fk" }).onDelete("restrict"),
+    check("fabric_accel_res_state_check", sql`"state" IN ('REQUESTED','ACTIVE','PREEMPTING','RELEASED','EXPIRED','FAILED')`),
     check("fabric_accel_res_priority_check", sql`"priority" IN ('REALTIME','INTERACTIVE','NORMAL','BACKGROUND','MAINTENANCE')`),
-    foreignKey({ columns: [table.computeResourceId], foreignColumns: [fabricComputeResource.id], name: "fabric_accel_res_resource_fk" }).onDelete("restrict"),
-    index("fabric_accel_res_resource_idx").on(table.computeResourceId),
+    check("fabric_accel_res_fence_ck", sql`"fencingToken" > 0`),
+    check("fabric_accel_res_bytes_ck", sql`"requestedWeightBytes" >= 0 AND "requestedKvBytes" >= 0 AND "requestedRuntimeOverheadBytes" >= 0 AND "requestedSystemMemoryBytes" >= 0`),
+    index("fabric_accel_res_resource_idx").on(table.userId, table.computeResourceRef),
   ],
 )
 
@@ -1436,37 +1466,36 @@ export const fabricInferenceExecution = pgTable(
   "fabric_inference_execution",
   {
     id: serial("id").primaryKey(),
-    userId: text("userId").notNull(),
+    userId: text("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
     executionKey: text("executionKey").notNull(),
-    schemaVersion: integer("schemaVersion").notNull(),
-    placementDecisionId: integer("placementDecisionId"),
-    modelArtifactId: integer("modelArtifactId"),
-    runtimeId: integer("runtimeId"),
-    computeResourceId: integer("computeResourceId"),
-    workerLane: text("workerLane"),
+    requestId: text("requestId").notNull(),
+    requirementId: text("requirementId").notNull(),
+    placementDecisionRef: text("placementDecisionRef").notNull(),
+    contextPackageRef: text("contextPackageRef").notNull(),
+    reservationRef: text("reservationRef"),
+    parentExecutionRef: text("parentExecutionRef"),
     state: text("state").default("QUEUED").notNull(),
+    failureClass: text("failureClass"),
     startedAt: timestamp("startedAt", { withTimezone: true }),
-    completedAt: timestamp("completedAt", { withTimezone: true }),
-    metrics: jsonb("metrics"),
-    evidenceRef: text("evidenceRef"),
-    digest: text("digest").notNull(),
+    finishedAt: timestamp("finishedAt", { withTimezone: true }),
+    metrics: jsonb("metrics").default({}).notNull(),
+    toolEvidenceRefs: text("toolEvidenceRefs").array().default([]).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    unique("fabric_inference_execution_digest_unique").on(table.userId, table.digest),
-    check("fabric_inference_execution_state_check", sql`"state" IN ('QUEUED','DISPATCHED','RUNNING','COMPLETED','FAILED','INTERRUPTED','RECONCILE_REQUIRED')`),
-    check("fabric_inference_execution_digest_ck", sql`"digest" ~ '^sha256:[a-f0-9]{64}$'`),
-    foreignKey({ columns: [table.placementDecisionId], foreignColumns: [fabricPlacementDecision.id], name: "fabric_inference_execution_placement_fk" }).onDelete("set null"),
-    foreignKey({ columns: [table.modelArtifactId], foreignColumns: [fabricModelArtifact.id], name: "fabric_inference_execution_model_fk" }).onDelete("set null"),
-    foreignKey({ columns: [table.runtimeId], foreignColumns: [fabricRuntime.id], name: "fabric_inference_execution_runtime_fk" }).onDelete("set null"),
-    foreignKey({ columns: [table.computeResourceId], foreignColumns: [fabricComputeResource.id], name: "fabric_inference_execution_compute_fk" }).onDelete("set null"),
-    index("fabric_inference_execution_thread_idx").on(table.userId, table.state),
+    unique("fabric_inference_execution_pk").on(table.userId, table.executionKey),
+    foreignKey({ columns: [table.userId, table.placementDecisionRef], foreignColumns: [fabricPlacementDecision.userId, fabricPlacementDecision.decisionKey], name: "fabric_inference_execution_placement_fk" }).onDelete("restrict"),
+    foreignKey({ columns: [table.userId, table.contextPackageRef], foreignColumns: [fabricContextPackage.userId, fabricContextPackage.packageKey], name: "fabric_inference_execution_context_fk" }).onDelete("restrict"),
+    check("fabric_inference_execution_state_check", sql`"state" IN ('QUEUED','LOADING','RUNNING','VALIDATING','COMPLETED','WAITING','FAILED','CANCELLED')`),
+    check("fabric_inference_execution_failure_ck", sql`"failureClass" IS NULL OR "failureClass" IN ('MODEL_LOAD_FAILED','MODEL_OOM','KV_CAPACITY_EXHAUSTED','CONTEXT_TOO_LARGE','RUNTIME_UNHEALTHY','ACCELERATOR_UNAVAILABLE','CAPABILITY_UNPROVEN','PROVIDER_RATE_LIMITED','PROVIDER_AUTH_FAILED','CLOUD_CAPACITY_UNAVAILABLE','BUDGET_EXCEEDED','POLICY_DENIED_REMOTE','MODEL_OUTPUT_INVALID','TOOL_CALL_FAILED','QUALITY_GATE_FAILED','ELASTIC_IDENTITY_FAILED','ELASTIC_WIPE_FAILED','ELASTIC_DESTROY_FAILED')`),
+    index("fabric_inference_execution_state_idx").on(table.userId, table.state),
   ],
 )
 
 export type FabricModelArtifact = typeof fabricModelArtifact.$inferSelect
 export type NewFabricModelArtifact = typeof fabricModelArtifact.$inferInsert
 export type FabricRuntime = typeof fabricRuntime.$inferSelect
+export type NewFabricRuntime = typeof fabricRuntime.$inferInsert
 export type FabricRuntimeCapability = typeof fabricRuntimeCapability.$inferSelect
 export type FabricComputeResource = typeof fabricComputeResource.$inferSelect
 export type FabricContextPackage = typeof fabricContextPackage.$inferSelect
