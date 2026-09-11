@@ -94,7 +94,7 @@ def main() -> int:
     if len(parsed) < 2:
         problems.append(f"expected a full-scale and a small-scale table, found {len(parsed)}")
 
-    def compare(rows, data, name, integer_ratio=False):
+    def compare(rows, data, name):
         by_task = {t["task"]: t for t in data["tasks"]}
         for row in rows:
             task = task_for(row[0])
@@ -111,16 +111,28 @@ def main() -> int:
             if not close(got_gpu, gpu, max(0.006, gpu * 0.002)):
                 problems.append(f"{name}/{task}: gpu {got_gpu} vs json {gpu:.4f}")
             if ratio:
-                tolerance = max(0.6 if integer_ratio else 0.006, abs(ratio) * 0.001)
-                if not close(got_ratio, ratio, tolerance):
+                # The record shows ratios to 2 decimals, which is at most ~1.3% for values below 1;
+                # anything past 1.5% is a real mismatch, not display rounding.
+                if not close(got_ratio, ratio, max(0.006, abs(ratio) * 0.015)):
                     problems.append(f"{name}/{task}: ratio {got_ratio} vs json {ratio:.4f}")
             claimed = "PASS" if row[4].upper().startswith("PASS") else "FAIL"
             actual = "PASS" if task_data["parity"]["within_tolerance"] else "FAIL"
             if claimed != actual:
                 problems.append(f"{name}/{task}: parity column {claimed} vs json {actual}")
+            # Trailing columns, when the table carries them: worst metric delta and tolerance.
+            if len(row) >= 6 and row[5].strip():
+                got_delta = number(row[5])
+                delta = task_data["parity"]["relative_delta"]
+                if got_delta is not None and not close(got_delta, delta, max(0.0005, abs(delta) * 0.02)):
+                    problems.append(f"{name}/{task}: delta {got_delta} vs json {delta:.6f}")
+            if len(row) >= 7 and "%" in row[6]:
+                got_tol = number(row[6])
+                expected_tol = task_data["parity"]["tolerance"] * 100
+                if got_tol is not None and abs(got_tol - expected_tol) > 0.51:
+                    problems.append(f"{name}/{task}: tolerance {got_tol}% vs json {expected_tol:.2f}%")
 
     if len(parsed) >= 2:
-        compare(parsed[0], full, "full", integer_ratio=True)
+        compare(parsed[0], full, "full")
         compare(parsed[1], small, "small")
 
     # Prose figures that must be traceable to the primary full-scale run.
