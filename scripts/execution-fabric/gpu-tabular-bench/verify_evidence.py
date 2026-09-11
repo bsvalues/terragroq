@@ -9,13 +9,25 @@ Run from this directory (or anywhere; paths are resolved relative to the script)
 
     python verify_evidence.py
 
-Exits 0 when every checked figure is traceable, 1 otherwise. What is checked, and what is deliberately
-not, is listed in the README's "Checking the record against the evidence" section — in short: the two
-results tables cell by cell, the prose cold-start/RSS/memory figures, and a stale-figure scan. Section-5
-prose ratios and the section-4 Nsight figures (which live in the CSV, not the JSONs) are NOT checked.
+Exits 0 when every checked figure is traceable, 1 otherwise. What is checked:
 
-It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm that the
-hardware produced the numbers, only that the record does not claim anything the evidence files lack.
+  * both results tables, cell by cell — seconds, ratio, parity flag, worst-metric delta, tolerance;
+  * the prose cold-start / peak-RSS / memory figures drawn from the primary run;
+  * the placement-thresholds record against the committed placement curve (points and derived block);
+  * a superseded-figure scan over current claims;
+  * evidence-artifact integrity: required files present, and no artifact claiming `promoted: true` —
+    a JSON cannot promote itself, promotion is a reviewed registry transition.
+
+It FAILS CLOSED. If the thresholds record or the placement curve is absent, verification fails instead
+of skipping that check: a checker that reports success for missing evidence is worse than no checker,
+because placement thresholds would then be trusted without being verifiable.
+
+Deliberately NOT checked: section-5 prose ratios and the section-4 Nsight figures, which live in the CSV
+rather than the JSONs. The superseded-figure scan exempts correction tables and "earlier revisions
+reported X" prose, so documenting superseded values is not punished.
+
+It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm the hardware
+produced the numbers, only that the record claims nothing the evidence files lack.
 """
 from __future__ import annotations
 
@@ -125,6 +137,17 @@ def verify_thresholds_record(problems: list[str]) -> int:
     for checkouts that predate it).
     """
     if not (os.path.exists(THRESHOLDS_RECORD) and os.path.exists(CURVE)):
+        # FAIL CLOSED. The thresholds record and the curve it cites are part of the committed artifact
+        # set; if either is absent the threshold claims are unverifiable, and silently skipping the
+        # check would report success for evidence that is not there. This is the difference between a
+        # verifier and a decoration — HERMES must not rely on placement thresholds the checker cannot
+        # confirm.
+        for path in (THRESHOLDS_RECORD, CURVE):
+            if not os.path.exists(path):
+                problems.append(
+                    f"required threshold evidence missing: {os.path.basename(path)} — verification "
+                    f"FAILS CLOSED rather than skipping the check"
+                )
         return 0
     record = open(THRESHOLDS_RECORD, encoding="utf-8").read()
     curve = json.load(open(CURVE, encoding="utf-8"))
@@ -249,6 +272,27 @@ def main() -> int:
         if token not in record:
             problems.append(f"{label} {token} absent from record")
 
+    # Evidence artifacts are INPUTS to a reviewed transition, never the transition itself. An artifact
+    # that says `promoted: true` is asserting an authority it does not have, so it is rejected: the
+    # traceable source of a promotion is the machine-registry state change, not a field in a JSON.
+    for name in ("qualification-full-2.5M.json", "qualification-full-2.5M-run2.json",
+                 "qualification-small-60k.json", "placement-curve.json",
+                 "live-cancellation-proof.json"):
+        path = os.path.join(EVIDENCE, name)
+        if not os.path.exists(path):
+            problems.append(f"required evidence file missing: {name}")
+            continue
+        try:
+            data = json.load(open(path, encoding="utf-8"))
+        except Exception as exc:
+            problems.append(f"{name}: unreadable ({exc})")
+            continue
+        if data.get("promoted") is not False:
+            problems.append(
+                f"{name}: promoted={data.get('promoted')!r} — an evidence artifact cannot promote "
+                f"itself; promotion is a reviewed registry transition"
+            )
+
     thresholds_text = open(THRESHOLDS_RECORD, encoding="utf-8").read() if os.path.exists(THRESHOLDS_RECORD) else ""
     for stale in STALE_FIGURES:
         if stale in current_claims(record):
@@ -280,6 +324,7 @@ def main() -> int:
     if thresholds_verified:
         print(f"  placement thresholds: {thresholds_verified} tasks verified against placement-curve.json")
     print("  table cells (seconds, ratio, parity, delta, tolerance), prose cold-start/RSS/memory figures,")
+    print("  evidence-artifact integrity (all required files present, none self-promoting),")
     print("  and superseded-figure scan all clean.")
     print("  NOT checked here: section-5 prose ratios and the section-4 Nsight figures in the CSV.")
     return 0

@@ -196,9 +196,12 @@ describe("multi-agent executable capability inventory", () => {
       status: "PROVEN",
       executionClass: "NON_EXECUTABLE",
     })
+    // The promotion lane is the only thing that has ever added to the executable set: three
+    // pilot-authorized GPU tabular compute capabilities, alongside the Hermes resident worker.
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.executionClass === "EXECUTABLE_WORKER")
-      .map((entry) => entry.capabilityId))
-      .toEqual(["hermes-worker-sidecar"])
+      .map((entry) => entry.capabilityId)
+      .sort())
+      .toEqual(["gpu-aggregation", "gpu-clustering", "gpu-tabular-ml", "hermes-worker-sidecar"])
   })
 
   it("records provider and adapter truth without architecture inflation", () => {
@@ -613,10 +616,18 @@ describe("multi-agent executable capability inventory", () => {
     expect(capability("claude-code-provider")?.runtimeReality).toBe("EXCLUDED")
   })
 
-  it("allows only the proven bounded resident worker to dispatch", () => {
+  it("allows only the resident worker and the pilot-authorized compute capabilities to dispatch", () => {
+    // Adding a capability to this set is the promotion transition itself, so this list is the
+    // machine-readable answer to "what can HERMES actually select?".
+    const dispatchable = new Set([
+      "hermes-worker-sidecar",
+      "gpu-tabular-ml",
+      "gpu-clustering",
+      "gpu-aggregation",
+    ])
     for (const entry of MULTI_AGENT_CAPABILITY_INVENTORY) {
       const decision = evaluateCapabilityDispatch(entry)
-      expect(decision).toEqual(entry.capabilityId === "hermes-worker-sidecar"
+      expect(decision).toEqual(dispatchable.has(entry.capabilityId)
         ? { allowed: true, reasonCode: "EXECUTABLE_CAPABILITY_ELIGIBLE" }
         : { allowed: false, reasonCode: "NOT_EXECUTABLE_WORKER" })
     }
@@ -626,7 +637,16 @@ describe("multi-agent executable capability inventory", () => {
     })
     expect(MULTI_AGENT_CAPABILITY_INVENTORY.filter((entry) => entry.coordinationEligible)
       .map((entry) => entry.capabilityId))
-      .toEqual(["hosted-codex-session", "codex-native-subagent-team", "hosted-codex-coordinator-adapter", "hosted-codex-role-adapters", "hermes-worker-sidecar"])
+      .toEqual([
+        "hosted-codex-session",
+        "codex-native-subagent-team",
+        "hosted-codex-coordinator-adapter",
+        "hosted-codex-role-adapters",
+        "hermes-worker-sidecar",
+        "gpu-tabular-ml",
+        "gpu-clustering",
+        "gpu-aggregation",
+      ])
   })
 
   it("requires status, adapter, authority, and preventive trust proof for an executable worker", () => {

@@ -83,8 +83,23 @@ A threshold is a placement *input*, not a promotion: see the record's promotion 
   tolerance — against the **primary** full-scale run and the small-scale run. Tolerances admit the
   record's display rounding and nothing more (a ratio overstated by 10% fails, as it should);
 * the prose figures that must come from the primary run: cold start, peak RSS, total memory;
+* the placement thresholds record against `evidence/placement-curve.json` — both the curve table and the
+  derived thresholds block (value, floor flag, and that the row names a real task);
+* evidence-artifact integrity: every required evidence file is present, and **no artifact may claim
+  `promoted: true`**. Promotion is a reviewed registry transition, so a JSON that promotes itself is
+  rejected rather than believed;
 * a scan for figures from superseded runs — this is how the stale-value defects in review were caught,
   and replanting one now fails the check.
+
+**It fails closed.** If the thresholds record or the placement curve is absent, verification fails
+instead of skipping that check. A checker that reports success for missing evidence is worse than no
+checker, because placement thresholds would then be trusted without being verifiable — and those
+thresholds decide where real work runs.
+
+The superseded-figure scan deliberately exempts correction tables and "earlier revisions reported X"
+prose: documenting a superseded value is the transparency the record is supposed to have, so it must not
+be punished. The exemption is scoped to lines that are *about* a correction, so a stale figure planted in
+a current claim is still caught.
 
 ```bash
 python verify_evidence.py   # exit 0 = traceable, 1 = a claim the evidence does not support
@@ -92,7 +107,8 @@ python verify_evidence.py   # exit 0 = traceable, 1 = a claim the evidence does 
 
 What it does **not** cover, stated plainly:
 
-* free-prose ratios elsewhere in the document (the candidate scope in section 5);
+* free-prose ratios elsewhere in the document (the candidate scope in section 5), including the
+  thresholds record's ordering measurements;
 * the section-3 run-to-run stability figures — the checker reads one full-scale run. The second run is
   committed so a human can verify reproducibility, but the checker does not parse it;
 * the Nsight figures in section 4, which live in `evidence/nsys-stats-2.5M.csv` rather than in the

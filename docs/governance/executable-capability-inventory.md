@@ -13,9 +13,12 @@ registry capability appears exactly once below with its exact status, execution 
 `runtimeReality`, proof classification, and bounded claim. The machine registry remains authoritative;
 the parity test fails when this document is missing a record or preserves stale truth.
 
-Only the Hermes resident Codex worker currently passes the complete `EXECUTABLE_WORKER` dispatch
-contract. It is a native non-elevated Windows supervisor using Codex App Server transport for one
-fenced WilliamOS-native R0/R1 outcome at a time. The production web app does not host the worker,
+The Hermes resident Codex worker and the three pilot-authorized DAEDALUS GPU tabular capabilities pass
+the complete `EXECUTABLE_WORKER` dispatch contract. The Hermes worker is a native non-elevated Windows supervisor
+using Codex App Server transport for one fenced WilliamOS-native R0/R1 outcome at a time. The GPU
+tabular entries are additionally gated by measured, size-aware threshold evidence: they are eligible
+only for their measured binding, only at or above the measured row threshold, and they fall to the CPU
+path whenever that evidence is missing, stale, or invalid. The production web app does not host the worker,
 and current host liveness is verified separately from retained runtime proof. The nested local Codex
 adapter from issue #357 remains terminal and excluded.
 
@@ -98,6 +101,11 @@ The AC-12 proof classifications are exhaustive:
 | `agent-forge-governance` | Agent Forge governance surface | `PROVEN` | `NON_EXECUTABLE` | `NON_RUNTIME` | `STATIC_READ_ONLY` | Agent Forge provides skill governance, quarantine, review, and safety read models. |
 | `hermes-worker-sidecar` | Hermes resident Codex worker | `PROVEN` | `EXECUTABLE_WORKER` | `LIVE_BOUNDED_RESIDENT` | `RUNTIME_PROVEN` | A native non-elevated Windows supervisor has proven one fenced WilliamOS-native R0/R1 outcome at a time through Codex App Server with persisted execution projection; current host liveness is verified separately. |
 | `ollama-local-model` | Ollama local model capacity | `PROVEN` | `NON_EXECUTABLE` | `NON_RUNTIME` | `STATIC_READ_ONLY` | The existing registry records local reasoning capacity; model availability is not an agent or repository-delivery worker claim. |
+| `gpu-tabular-ml` | DAEDALUS GPU tabular regression | `PILOT_AUTHORIZED` | `EXECUTABLE_WORKER` | `LIVE_BOUNDED_RESIDENT` | `RUNTIME_PROVEN` | Measured cuML/RAPIDS regression on the DAEDALUS RTX 3090 binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured. |
+| `gpu-clustering` | DAEDALUS GPU valuation-zone clustering | `PILOT_AUTHORIZED` | `EXECUTABLE_WORKER` | `LIVE_BOUNDED_RESIDENT` | `RUNTIME_PROVEN` | Measured cuML KMeans clustering on the DAEDALUS binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured. |
+| `gpu-aggregation` | DAEDALUS GPU collection aggregation | `PILOT_AUTHORIZED` | `EXECUTABLE_WORKER` | `LIVE_BOUNDED_RESIDENT` | `RUNTIME_PROVEN` | Measured cuDF groupby aggregation on the DAEDALUS binding is authorized for accelerator placement at or above 100,000 rows; it is size-aware, never a blanket accelerator rule. |
+| `gpu-anomaly-screening` | DAEDALUS GPU sales-ratio anomaly screening | `PROVEN` | `NON_EXECUTABLE` | `NON_RUNTIME` | `STATIC_READ_ONLY` | Accelerated isolation-forest screening is fast but not authoritative: it fails its own parity tolerance at small scale, so it may screen and may not decide. |
+| `gpu-dimensional-reduction` | DAEDALUS GPU dimensional reduction | `REJECTED` | `WORKER_CANDIDATE` | `EXCLUDED` | `EXCLUDED` | A GPU principal-component binding is refused: the CPU path wins at every measured size, including 0.75x at the largest measured scale. |
 
 ## Non-Inference Rules
 
@@ -106,7 +114,9 @@ The AC-12 proof classifications are exhaustive:
 - `LIVE_BOUNDED_RESIDENT` records retained Hermes delivery proof; application health and actual worker
   liveness remain separate checks.
 - The production web app reads persisted execution projections but does not host the Hermes worker.
-- Only the Hermes resident capability is an `EXECUTABLE_WORKER`.
+- The Hermes resident capability and the three pilot-authorized DAEDALUS GPU tabular capabilities are
+  `EXECUTABLE_WORKER` entries. The GPU entries carry size-aware restrictions, require valid and fresh
+  threshold evidence, and default to the CPU path whenever an input is missing or invalid.
 - The issue #357 local nested Codex adapter remains terminally rejected and cannot be retried,
   reactivated, wrapped, renamed, or silently reused.
 - Claude remains unavailable and excluded without owner diagnostic or credential work.

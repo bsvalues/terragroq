@@ -73,7 +73,7 @@ Read these honestly:
 * `DIMENSIONAL_REDUCTION_GPU` — CPU wins at every measured size; no GPU threshold is claimed.
 * Sizes below 50,000 rows, multi-GPU, and concurrent workloads.
 
-## Eligibility shape this feeds (not yet wired)
+## Eligibility shape this feeds (wired by the promotion lane)
 
 ```
 capability: TABULAR_ML_GPU | CLUSTERING_GPU
@@ -87,8 +87,38 @@ otherwise:
   CPU path
 ```
 
-Wiring this into automatic placement is the integration lane's job, and the enforcement source stays
-the machine registry and its dispatch evaluator — this record only supplies the measured thresholds.
+The enforcement source is the machine registry and its dispatch evaluator — this record supplies the
+measured thresholds, and `scripts/execution-fabric/gpu-tabular-capability.mjs` is the adapter that turns
+them into a placement decision. The adapter reads these thresholds from
+`scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json` rather than restating them,
+so the measured evidence stays the single source and cannot silently diverge from what dispatch uses.
+
+## Owner-authorized scope
+
+The owner authorized a bounded promotion/integration lane over the measured evidence, admitting only
+the evidence-supported scope and refusing everything the measurements do not support. That instruction
+is the authority the registry records cite, and it resolves as follows:
+
+| Namespace | Decision | Measured basis |
+|---|---|---|
+| `TABULAR_ML_GPU` | Authorized for accelerator placement at or above 50,000 rows | 20.38x at 2.5 M; clears the 25% margin at the smallest measured size |
+| `CLUSTERING_GPU` | Authorized for accelerator placement at or above 50,000 rows | 4.80x at 2.5 M; clears the margin at the smallest measured size |
+| Aggregation (size-aware) | Authorized at or above 100,000 rows only | 35.40x at 2.5 M but 1.12x at 50 k; the only bracketed crossover |
+| `ANOMALY_DETECTION_GPU` | Screening only, non-authoritative | Extremely fast, but fails its own parity tolerance at small scale |
+| `DIMENSIONAL_REDUCTION_GPU` | Refused; not bound to the accelerator | The CPU wins at every measured size, including 0.75x at 2.5 M |
+
+Two consequences are deliberately written into the records rather than left implicit. First, the true
+crossover for regression and clustering lies **at or below 50,000 rows and is unmeasured there**, so the
+CPU default below the threshold is a conservative choice and not a measured one — the records say so.
+Second, this authorization is a **pilot** authorization (`PILOT_AUTHORIZED`), not a claim of production
+proof: the evidence is a bounded qualification at synthetic scale, and a later reviewed transition is
+what would carry it further. Nothing here marks the capability PROVEN, and no registry entry changes
+state without the reviewed transition in this lane.
+
+The lane's stated boundaries: no county/PACS or protected data, no TerraFusion production, no Windows
+or network configuration change, no cloud spend, no hardware purchase, and no new scheduler, registry,
+dashboard, agent framework, or memory system — the existing machine registry and dispatch path are the
+only enforcement surface.
 
 ## Correction to the published qualification record
 
