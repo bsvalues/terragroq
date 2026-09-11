@@ -1,0 +1,199 @@
+{
+  "schemaVersion": "williamos-gpu-tabular-qualification/1",
+  "startedAt": "2026-09-11T14:23:00Z",
+  "host": {
+    "node": "daedalus-ThinkStation-P620",
+    "os": "Linux 7.0.0-31-generic",
+    "kernel": "#31~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Mon Aug 10 09:38:02 UTC 2",
+    "python": "3.12.3",
+    "cpuCount": 24,
+    "peakHostRssBytes": 5089984512,
+    "availableMemoryBytes": 52443541504
+  },
+  "binding": {
+    "runtimeId": "cuml-cu13",
+    "runtimeVersion": "26.08.00",
+    "cudfVersion": "26.08.01",
+    "cupyVersion": "14.2.0",
+    "sklearnVersion": "1.9.1",
+    "numpyVersion": "2.4.6",
+    "computeResourceClass": "local-gpu-tabular"
+  },
+  "dataset": {
+    "parcels": 2500000,
+    "transactions": 20000000,
+    "seed": 20260911,
+    "provenance": "synthetic, schema- and scale-matched to pacs_oltp; no county rows used",
+    "parcelBytes": 74847152,
+    "transactionBytes": 233194186,
+    "generationSeconds": 3.560292695998214
+  },
+  "tasks": [
+    {
+      "task": "aggregation",
+      "workload": "collection-transaction rollup per parcel",
+      "cpu": {
+        "seconds": 3.8448565769940615,
+        "error": null,
+        "rows": 20000000,
+        "groups": 2499202,
+        "sum": 23303604797.989998
+      },
+      "gpu": {
+        "seconds": 0.7485554899903946,
+        "error": null,
+        "rows": 20000000,
+        "groups": 2499202,
+        "sum": 23303604797.99
+      },
+      "parity": {
+        "metric": "sum",
+        "cpu": 23303604797.989998,
+        "gpu": 23303604797.99,
+        "relative_delta": 1.6369558695717447e-16,
+        "within_tolerance": true,
+        "tolerance": 0.02
+      },
+      "timing": {
+        "cpu_seconds": 3.8448565769940615,
+        "gpu_seconds": 0.7485554899903946,
+        "ratio_cpu_over_gpu": 5.1363681495989
+      },
+      "peakHostRssBytes": 2614763520,
+      "freeVramBytesAfter": 24593498112
+    },
+    {
+      "task": "regression",
+      "workload": "sale-price valuation model",
+      "rows": 2500000,
+      "gpu": {
+        "seconds": 4.227227659022901,
+        "error": null,
+        "rmse": 30942.548828125
+      },
+      "cpu": {
+        "seconds": 83.726681094995,
+        "error": null,
+        "rmse": 30307.356910936694
+      },
+      "parity": {
+        "metric": "rmse",
+        "cpu": 30307.356910936694,
+        "gpu": 30942.548828125,
+        "relative_delta": 0.020958340875943907,
+        "within_tolerance": true,
+        "tolerance": 0.3
+      },
+      "timing": {
+        "cpu_seconds": 83.726681094995,
+        "gpu_seconds": 4.227227659022901,
+        "ratio_cpu_over_gpu": 19.806522820289253
+      },
+      "peakHostRssBytes": 4975681536,
+      "freeVramBytesAfter": 24582946816
+    },
+    {
+      "task": "clustering",
+      "workload": "valuation-zone grouping",
+      "rows": 2500000,
+      "gpu": {
+        "seconds": 4.34237357598613,
+        "error": null,
+        "inertia": 7016450774532096.0
+      },
+      "cpu": {
+        "seconds": 21.355163736006944,
+        "error": null,
+        "inertia": 7009111212294144.0
+      },
+      "parity": {
+        "metric": "inertia",
+        "cpu": 7009111212294144.0,
+        "gpu": 7016450774532096.0,
+        "relative_delta": 0.0010471459241620017,
+        "within_tolerance": true,
+        "tolerance": 0.05
+      },
+      "timing": {
+        "cpu_seconds": 21.355163736006944,
+        "gpu_seconds": 4.34237357598613,
+        "ratio_cpu_over_gpu": 4.917855030737953
+      },
+      "peakHostRssBytes": 4975681536,
+      "freeVramBytesAfter": 24582946816
+    },
+    {
+      "task": "decomposition",
+      "workload": "parcel feature PCA",
+      "rows": 2500000,
+      "cpu": {
+        "seconds": 0.035639790003187954,
+        "error": null,
+        "explained_variance": 1.0
+      },
+      "gpu": {
+        "seconds": 0.12614484099322,
+        "error": null,
+        "explained_variance": 1.0
+      },
+      "parity": {
+        "metric": "explained_variance",
+        "cpu": 1.0,
+        "gpu": 1.0,
+        "relative_delta": 0.0,
+        "within_tolerance": true,
+        "tolerance": 0.02
+      },
+      "timing": {
+        "cpu_seconds": 0.035639790003187954,
+        "gpu_seconds": 0.12614484099322,
+        "ratio_cpu_over_gpu": 0.2825306982241431
+      },
+      "peakHostRssBytes": 4975681536,
+      "freeVramBytesAfter": 24559878144
+    },
+    {
+      "task": "outlier",
+      "workload": "sales-ratio anomaly detection",
+      "rows": 2500000,
+      "cpu": {
+        "seconds": 10.079761262983084,
+        "error": null,
+        "outliers": 450822
+      },
+      "gpu": {
+        "seconds": 0.03252631300711073,
+        "error": null,
+        "outliers": 414396
+      },
+      "parity": {
+        "metric": "outliers",
+        "cpu": 450822,
+        "gpu": 414396,
+        "relative_delta": 0.08079907369205584,
+        "within_tolerance": true,
+        "tolerance": 0.35
+      },
+      "timing": {
+        "cpu_seconds": 10.079761262983084,
+        "gpu_seconds": 0.03252631300711073,
+        "ratio_cpu_over_gpu": 309.8955993192189
+      },
+      "peakHostRssBytes": 5089984512,
+      "freeVramBytesAfter": 24559878144
+    }
+  ],
+  "failures": [],
+  "promoted": false,
+  "note": "MEASURED evidence only. Capability promotion is a reviewed owner act (IF promotion rule).",
+  "coldStart": {
+    "firstDeviceWorkSeconds": 0.3975852600124199,
+    "error": null
+  },
+  "gpu": {
+    "nvidiaSmi": "NVIDIA GeForce RTX 3090, 595.84, 24576 MiB, 8.6",
+    "freeBytesAtStart": 24608178176,
+    "totalBytes": 25288769536
+  },
+  "finishedAt": "2026-09-11T14:25:15Z"
+}
