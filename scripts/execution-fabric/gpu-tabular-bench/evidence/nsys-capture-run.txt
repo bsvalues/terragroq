@@ -1,0 +1,35 @@
+# Nsight Systems capture run record (DAEDALUS, 2026-09-11)
+#
+# Command:
+#   nsys profile --trace=cuda,nvtx --force-overwrite=true \
+#     --output=$HOME/gpu-tabular-bench/nsys-tabular2 \
+#     ~/.venvs/cuml-qual/bin/python profile_gpu.py
+# Profile tool: Nsight Systems 2026.4.1 (user-dir install, no root)
+# Process exit status: 0
+#
+# The NVTX ranges present in the report are the coverage proof: the capture contains
+# synthetic_generation, host_to_device, regression_fit, regression_predict, device_to_host,
+# clustering_fit and pca_fit, i.e. the workload ran to completion under the profiler.
+# (An earlier attempt aborted at regression_predict and contained only the first three.)
+#
+== nsys/report generation output (tail) ==
+       ] nsys-tabular2.nsys-rep
+[1/1] [=======================93%  ] nsys-tabular2.nsys-rep
+[1/1] [=======================96%  ] nsys-tabular2.nsys-rep
+[1/1] [========================98% ] nsys-tabular2.nsys-rep
+[1/1] [========================100%] nsys-tabular2.nsys-rep
+[1/1] [========================100%] nsys-tabular2.nsys-rep
+Generated:
+	/home/daedalus/gpu-tabular-bench/nsys-tabular2.nsys-rep
+
+== NVTX ranges present in nsys-tabular2.nsys-rep ==
+:clustering_fit
+:device_to_host
+:host_to_device
+:pca_fit
+:regression_fit
+:regression_predict
+:synthetic_generation
+
+== profiled process stdout ==
+rows=2500000 rmse=30942.5 free_vram_mb=24385.8 total_vram_mb=25288.8
