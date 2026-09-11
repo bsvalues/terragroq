@@ -44,6 +44,7 @@ try {
     $ownedMode = ($policy.placement.workspaceMode -eq "OWNED_WORKTREE")
     if ($ownedMode) {
         $expectedFields = @("kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath")
+        if ($null -ne $packet.PSObject.Properties['placement']) { $expectedFields += "placement" }
     } else {
         $expectedFields = @("maximumTurns", "model", "prompt", "schemaVersion", "toolsets", "workOrderId", "workspaceRoot")
     }
@@ -66,7 +67,21 @@ try {
     if ($packet.workOrderId -isnot [string] -or $packet.workOrderId -ne $policy.workOrderId) { throw "HERMES_FREE_AGENT_WORK_ORDER_WALL" }
     $promptMax = if ($ownedMode) { [int]$policy.execution.promptMaxChars } else { 16000 }
     if ($packet.prompt -isnot [string] -or [string]::IsNullOrWhiteSpace($packet.prompt) -or $packet.prompt.Length -gt $promptMax) { throw "HERMES_FREE_AGENT_PROMPT_WALL" }
-    if ($packet.model -isnot [string] -or $packet.model -ne $policy.model.id) { throw "HERMES_FREE_AGENT_MODEL_WALL" }
+    if ($packet.model -isnot [string] -or [string]::IsNullOrWhiteSpace($packet.model)) { throw "HERMES_FREE_AGENT_MODEL_WALL" }
+    if ($null -ne $packet.PSObject.Properties['placement']) {
+        # Tier 2: a placed packet must match exactly one qualified model × runtime × compute binding
+        # in the policy roster — the alias the packet names, and the runtime/compute it carries.
+        # Anything else (roster drift, caller-forged placement, partial binding) is refused closed.
+        $roster = @($policy.modelRoster)
+        if ($roster.Count -eq 0) { throw "HERMES_FREE_AGENT_PLACEMENT_NOT_QUALIFIED" }
+        $match = @($roster | Where-Object {
+            $_.alias -eq $packet.model -and $_.runtimeId -eq $packet.placement.runtimeId -and $_.computeId -eq $packet.placement.computeId
+        })
+        if ($match.Count -ne 1) { throw "HERMES_FREE_AGENT_PLACEMENT_WALL" }
+        $matchClass = $match[0].executionClass
+        if ([string]::IsNullOrWhiteSpace([string]$matchClass)) { $matchClass = "LOCAL" }
+        if ([string]$packet.placement.executionClass -ne [string]$matchClass) { throw "HERMES_FREE_AGENT_PLACEMENT_WALL" }
+    } elseif ($packet.model -ne $policy.model.id) { throw "HERMES_FREE_AGENT_MODEL_WALL" }
     if (-not ($packet.maximumTurns -is [int] -or $packet.maximumTurns -is [long]) -or $packet.maximumTurns -lt 1 -or $packet.maximumTurns -gt $policy.execution.maximumTurns) { throw "HERMES_FREE_AGENT_TURN_WALL" }
     if ($ownedMode) {
         # Every declared evidence line must actually be satisfied. A declared-but-null
