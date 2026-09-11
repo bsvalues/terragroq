@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalizeJcs } from './canonical-json.mjs';
+import { mergePublishedRuntimes, registryRuntimePublications } from './adopt-model-runtime.mjs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback = null) {
@@ -11,6 +12,7 @@ function arg(name, fallback = null) {
 }
 
 const seedPath = arg('--seed', 'config/execution-fabric/registry.seed.json');
+const adoptionPath = arg('--adoption', 'config/execution-fabric/model-runtime-adoption.json');
 const schemaPath = arg('--schema', 'config/execution-fabric/registry.schema.json');
 const evidenceDir = arg('--evidence-dir', '.artifacts/execution-fabric');
 const outPath = arg('--out', '.artifacts/execution-fabric/registry.snapshot.json');
@@ -25,6 +27,9 @@ function readJson(filePath, label) {
   }
 }
 const seed = readJson(seedPath, 'seed');
+// The reviewed model-runtime adoption record: adopted runtimes and their bound model inventory are
+// part of the registry the placement engine reads, not merely recorded beside it.
+const adoption = readJson(adoptionPath, 'adoption');
 const schema = readJson(schemaPath, 'schema');
 // The registry declares the version of the schema that validates it, so it is READ from that schema
 // rather than restated here. A restated literal is how a bump lands emitting the old version: the
@@ -532,9 +537,18 @@ function declaredFallback(declared) {
   const evidenceWarning = probeWarnings.has(declared.id)
     ? `LIVE_PROBE_INVALID ${probeWarnings.get(declared.id)}`
     : 'LIVE_PROBE_MISSING';
+  const mergedWarnings = [...(declared.warnings || []), evidenceWarning];
   return {
     ...declared,
-    warnings: [...(declared.warnings || []), evidenceWarning],
+    // Even without a live probe, the adopted runtimes and their reviewed model inventory belong in
+    // the registry so the Fabric can see what was adopted — while the constraint below keeps the
+    // node unschedulable until a live probe actually reports it.
+    runtimes: mergePublishedRuntimes(
+      declared.runtimes || [],
+      registryRuntimePublications(adoption, declared.id),
+      mergedWarnings,
+    ),
+    warnings: [...new Set(mergedWarnings)],
     constraints: [...new Set([...(declared.constraints || []), 'not-schedulable-without-live-probe'])]
   };
 }
@@ -576,7 +590,11 @@ const probedNodes = seed.nodes.map((declared) => {
     gpus: probe.node.gpus || [],
     disks: probe.node.disks || [],
     network: probe.node.network || [],
-    runtimes: probe.node.runtimes || [],
+    runtimes: mergePublishedRuntimes(
+      probe.node.runtimes || [],
+      registryRuntimePublications(adoption, declared.id),
+      mergedWarnings,
+    ),
     constraints: [
       ...new Set([
         ...(declared.constraints || []),
