@@ -65,33 +65,49 @@ sustained/thermal dimension is not covered by this run).
 
 ## 4. Nsight Systems evidence (same workload, 2.5 M parcels, GPU path)
 
-NVTX phase ranges:
+Capture covers the **complete** workload — RandomForest fit and predict, KMeans, and PCA all ran to
+completion under the profiler (`rows=2500000`, process exit 0). The capture target is
+`profile_gpu.py`; the phase ranges are NVTX annotations, so the timeline below is the tool's own
+measurement, not a self-report.
 
-| Phase | Time | Share of window |
+NVTX phase ranges (share of the profile window):
+
+| Phase | Time | Share |
 |---|---|---|
-| `regression_fit` | 4.4617 s | 29.1% |
-| `host_to_device` | 0.6333 s | 4.1% |
-| `synthetic_generation` | 0.5153 s | 3.4% |
+| `regression_fit` (RF, 40 trees) | 4.4372 s | 22.9% |
+| `clustering_fit` (KMeans, 24 clusters) | 4.0126 s | 20.7% |
+| `host_to_device` | 0.6017 s | 3.1% |
+| `synthetic_generation` | 0.5167 s | 2.7% |
+| `pca_fit` | 0.0872 s | 0.4% |
 
-Kernel time is dominated by one class:
+Kernel time — **two** dominant families, not one:
 
 | Kernel | GPU time | Share of kernel time | Instances |
 |---|---|---|---|
-| `ML::DT::buildHistogramsKernel<...>` (RF histogram build) | 3.1881 s | **85.5%** | 1200 |
-| `cub scan_by_key` (node-split partition) | 0.1891 s | 5.1% | 600 |
-| `ML::DT::countLocalLeftKernel` | 0.1439 s | 3.9% | 600 |
-| `ML::DT::findBestSplitsKernel` | 0.0793 s | 2.1% | 1200 |
-| `ML::DT::leafKernel` | 0.0336 s | 0.9% | 40 |
+| `ML::DT::buildHistogramsKernel<...>` (RF histogram build) | 3.1866 s | 42.3% | 1200 |
+| `cutlass_cuvs_cutlass::Kernel<...FusedDistanceNNPersistent...>` (cuVS nearest-neighbour / KMeans) | 2.7924 s | 37.0% | 416 |
+| `raft::linalg::sum_rows_by_key_large_nkeys_kernel_rowmajor` (KMeans centroid update) | 0.5802 s | 7.7% | 411 |
+| `cutlass_cuvs_cutlass::Kernel<...>` (PCA path) | 0.3479 s | 4.6% | 48 |
+| `cub scan_by_key` (node-split partition) | 0.1899 s | 2.5% | 600 |
+| `ML::DT::countLocalLeftKernel` | 0.1441 s | 1.9% | 600 |
 
-Device-side memory activity is **not** the bottleneck: `memcpy Host-to-Device` 40.5 ms total across
-3,087 calls (largest single 6.55 ms), `memset` 26.5 ms, `memcpy Device-to-Host` 6.1 ms.
+Device-side memory activity is **not** the bottleneck: `memcpy Host-to-Device` 40.0 ms total across
+3,992 calls (largest single 6.48 ms), `memset` 31.8 ms, `memcpy Device-to-Host` 6.4 ms,
+`Device-to-Device` 0.47 ms.
 
 **Findings that matter for placement:** the workload is **compute-bound, not transfer-bound** — the
-host-side H2D wall time (0.63 s, pageable synchronous copies) is ~14% of the fit, and the GPU-side
-copy time is only 40 ms. Within the compute, ~85% of kernel time sits in the RandomForest histogram
-kernel, so tree-model tuning (bin count, histogram budget) is the lever, not data movement. Because
-no single kernel is a launch-bound micro-kernel, Nsight Compute is **not** warranted yet — the
-Systems-level question ("where does the time go?") has a clear answer.
+host-side H2D wall time (0.60 s, pageable synchronous copies) is ~14% of the RF fit, and total
+device-side copy time is ~40 ms against ~8.4 s of fit compute across the two tree/cluster paths.
+Within that compute, two kernel families split the time almost evenly: RandomForest histogram
+building (42.3%) and the cuVS nearest-neighbour distance kernel used by KMeans (37.0%), with KMeans
+centroid reduction a further 7.7%. So the levers are tree histogram/bin budget and KMeans
+distance/centroid strategy — **not** data movement. No micro-kernel is launch-bound, so Nsight
+Compute is **not** warranted: the Systems-level question ("where does the time go?") has a clear
+answer.
+
+Both harness defects found while producing this capture are fixed in `profile_gpu.py`: an invalid
+NVTX color name (the built-in palette is limited without matplotlib) that silently truncated the
+first capture, and `np.asarray()` on a CuPy result, which modern CuPy refuses.
 
 ## 5. Candidate capability (proposed, NOT admitted)
 
