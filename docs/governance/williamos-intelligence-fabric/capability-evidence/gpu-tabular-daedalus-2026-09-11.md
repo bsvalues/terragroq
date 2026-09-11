@@ -15,8 +15,9 @@ capability is a reviewed owner act (promotion rule, `executable-capability-inven
 | OS / kernel | Ubuntu 24.04, kernel 7.0.0-31 |
 | CPU / RAM | 24 cores / 62 GB |
 | Runtime | `cuml 26.08.00` + `cudf 26.08.01` (pip CUDA-13 wheels, `cuml-cu13`/`cudf-cu13` 26.8.x) |
+| CUDA runtime | `nvidia-cuda-runtime 13.4.49`, `cuda-toolkit 13.4.1.0` (recorded from the installed distributions) |
 | CuPy / sklearn | `cupy-cuda13x 14.2.0` / `scikit-learn 1.9.1`, numpy 2.4.6, pandas 3.0.3 |
-| Environment | `~/.venvs/cuml-qual` — **isolated**; the commissioned Qwen/HF runtime is untouched |
+| Environment | `/home/daedalus/.venvs/cuml-qual` — **isolated**; the commissioned Qwen/HF runtime is untouched |
 | Nsight Systems | 2026.4.1, extracted to `~/nsight-systems-2026.4.1` (user-dir `.run`, no root) |
 
 Compatibility was verified by live pip resolution and import before any measurement: the CUDA-13
@@ -41,27 +42,51 @@ detection (IsolationForest).
 
 ## 3. Results — CPU baseline vs GPU (full scale, 0 failures)
 
-| Task | CPU | GPU | CPU/GPU | Parity | Relative delta | Tolerance |
+| Task | CPU | GPU | CPU/GPU | Parity | Worst metric delta | Tolerance |
 |---|---|---|---|---|---|---|
-| aggregation (20 M tx rollup) | 3.84 s | 0.75 s | **5.1×** | PASS | 0.0 (exact) | 2% |
-| valuation regression (2.5 M parcels) | 83.73 s | 4.23 s | **19.8×** | PASS | 0.021 (RMSE 2.1%) | 30% |
-| valuation-zone clustering | 21.36 s | 4.34 s | **4.9×** | PASS | 0.0010 | 5% |
-| PCA (12 features) | 0.04 s | 0.13 s | **0.28× — CPU wins** | PASS | 0.0 | 2% |
-| sales-ratio outliers | 10.08 s | 0.03 s | **310×** | PASS | 0.081 | 35% |
+| aggregation (20 M tx rollup) | 3.77 s | 0.74 s | **5.12×** | PASS | 0.0 (exact) | 2% |
+| valuation regression (2.5 M parcels) | 83.53 s | 4.21 s | **19.86×** | PASS | 0.0210 (RMSE 2.1%) | 30% |
+| valuation-zone clustering | 20.96 s | 4.36 s | **4.80×** | PASS | 0.00098 | 5% |
+| PCA (12 features) | 0.035 s | 0.089 s | **0.39× — CPU wins** | PASS | 0.000007 | 2% |
+| sales-ratio outliers | 10.07 s | 0.032 s | **318×** | PASS | 0.0808 | 35% |
 
-Cold start (first real device work, context + first kernel): **0.398 s**. Peak host RSS: **5.09 GB**.
+Cold start, split honestly: first CuPy **import 0.131 s**, first real **device work 0.301 s**. Peak
+host RSS **5.29 GB**. Zero failures, zero unresolved-binding warnings.
 
-**Same workloads at small scale (60,000 parcels / 300,000 tx) invert the story** — GPU is *slower* on
-regression (0.87 s CPU vs 4.17 s GPU, 0.21×) and PCA (0.0015 s vs 0.049 s, 0.03×), while clustering
-(2.8×) and outlier detection (4.3×) still win. **Placement relevance: the accelerator pays only above
-a size threshold; a small input should stay on CPU.** Two of the five tasks are size-sensitive enough
-that a naive "GPU is faster" placement rule would regress.
+Parity is stated over several metrics per task wherever a single scalar would be insensitive to a
+wrong result: aggregation compares the total, the group count *and* the largest group, and PCA
+compares the dominant component's share and the leading-variance magnitude — `explained_variance_ratio_`
+alone sums to 1.0 by construction and can never detect a wrong decomposition.
 
-Honest caveats: (a) `outlier` parity is 8.1% — cuML and scikit-learn IsolationForest differ in
-sampling/split semantics, so the outlier *count* is comparable but not identical; (b) `PCA` at this
-width is transfer- and launch-dominated and should not be placed on GPU; (c) single-run wall times on
-a shared desktop-class card are not a benchmark of sustained throughput (the IF-05 matrix's
-sustained/thermal dimension is not covered by this run).
+These ratios are not single-sample noise: the full-scale run is reproducible across repetitions
+(regression 83.73 s → 83.53 s, clustering 21.36 s → 20.96 s) and the aggregation figure is
+independently corroborated by the §4 profiling run.
+
+### Small input (60,000 parcels / 300,000 tx) — where the accelerator loses
+
+| Task | CPU | GPU | CPU/GPU | Parity |
+|---|---|---|---|---|
+| aggregation | 0.031 s | 0.650 s | **0.048× — GPU ~21× slower** | PASS |
+| PCA | 0.0015 s | 0.071 s | **0.021× — GPU ~49× slower** | PASS |
+| regression | 0.877 s | 0.707 s | 1.24× | PASS |
+| clustering | 0.506 s | 0.193 s | 2.62× | PASS |
+| sales-ratio outliers | 0.389 s | 0.015 s | 26.4× | **FAIL — 0.372 vs 0.35 tolerance** |
+
+**Placement relevance:** the accelerator pays only above a size threshold, and the *worst* inversion is
+aggregation — a rollup of a small transaction table, where cuDF's fixed overhead dominates the work. A
+naive "GPU is faster" rule would regress two of the five tasks at small input. An earlier measurement of
+this same case reported regression at 0.21×; that was an artifact of the first GPU task in the process
+absorbing CUDA/cuML warm-up, which is why cold start is now measured separately and before any other
+device work.
+
+**Outlier detection carries the weakest correctness signal.** cuML and scikit-learn IsolationForest
+differ in sampling and split semantics: the outlier *count* is comparable at full scale (8.1% delta
+inside a 35% tolerance) but **exceeds its tolerance at small scale (37.2%)**, and the tolerance itself
+is deliberately loose. The 318× speedup is real; "same answer" is not. It is a screening workload, not
+a drop-in replacement.
+
+Not covered by this run: sustained/thermal throughput on a shared desktop-class card (the IF-05
+matrix's sustained dimension), and multi-GPU or concurrent-workload behaviour.
 
 ## 4. Nsight Systems evidence (same workload, 2.5 M parcels, GPU path)
 
@@ -116,9 +141,20 @@ cuML 26.08.00 × CUDA 13.4 (pip runtime) × RTX 3090 24GB (CC 8.6) × ~/.venvs/c
 ```
 
 Proposed ids: `TABULAR_ML_GPU`, `CLUSTERING_GPU`, `DIMENSIONAL_REDUCTION_GPU`,
-`ANOMALY_DETECTION_GPU`. Evidence suggests scoping the useful set to **`TABULAR_ML_GPU`**
-(tree ensembles), **`CLUSTERING_GPU`** and **`ANOMALY_DETECTION_GPU`** at ≥ ~1 M rows, and **excluding**
-dimensional reduction from an accelerator binding at this feature width.
+`ANOMALY_DETECTION_GPU`. The measured evidence supports a narrower scope than the id list suggests:
+
+* **`TABULAR_ML_GPU`** (tree ensembles over parcel-scale rows) — strongest case: 19.9× at 2.5 M rows
+  with 2.1% RMSE parity, reproducible across runs, and corroborated by the profiling capture.
+* **`CLUSTERING_GPU`** — solid at both scales (4.8× / 2.6×) with sub-1% inertia parity.
+* **`ANOMALY_DETECTION_GPU`** — fast (318×) but the *answer* is implementation-dependent: parity
+  passes at full scale and fails at small scale. Bind it only as a screening step with a stated
+  tolerance, never as a drop-in replacement.
+* **`DIMENSIONAL_REDUCTION_GPU`** — **not supported** at this feature width (0.39×, and 0.021× at
+  small input). CPU wins; do not bind it.
+* **Aggregation / rollup work** — supported only above the size threshold; at 60 k rows cuDF loses by
+  ~21×. A placement rule must be size-aware, not class-aware alone.
+
+All of the above are recommendations from measurement. Nothing here is a binding.
 
 Per the promotion rule, admission would still require provider identity, adapter conformance, exact
 authority evidence, path confinement, preventive trust enforcement, output redaction, cancellation,

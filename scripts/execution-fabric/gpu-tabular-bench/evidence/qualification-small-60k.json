@@ -1,22 +1,27 @@
 {
   "schemaVersion": "williamos-gpu-tabular-qualification/1",
-  "startedAt": "2026-09-11T14:19:00Z",
+  "startedAt": "2026-09-11T15:31:21Z",
   "host": {
     "node": "daedalus-ThinkStation-P620",
     "os": "Linux 7.0.0-31-generic",
     "kernel": "#31~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Mon Aug 10 09:38:02 UTC 2",
     "python": "3.12.3",
     "cpuCount": 24,
-    "peakHostRssBytes": 2101956608,
-    "availableMemoryBytes": 55216013312
+    "peakHostRssBytes": 1991176192,
+    "availableMemoryBytes": 55476760576
   },
   "binding": {
     "runtimeId": "cuml-cu13",
     "runtimeVersion": "26.08.00",
+    "runtimeDistribution": "26.8.0",
     "cudfVersion": "26.08.01",
     "cupyVersion": "14.2.0",
     "sklearnVersion": "1.9.1",
     "numpyVersion": "2.4.6",
+    "pandasVersion": "3.0.3",
+    "cudaRuntimeVersion": "13.4.49",
+    "cudaToolkitVersion": "13.4.1.0",
+    "pythonEnvironment": "/home/daedalus/.venvs/cuml-qual",
     "computeResourceClass": "local-gpu-tabular"
   },
   "dataset": {
@@ -26,169 +31,243 @@
     "provenance": "synthetic, schema- and scale-matched to pacs_oltp; no county rows used",
     "parcelBytes": 2162621,
     "transactionBytes": 2819678,
-    "generationSeconds": 0.10517381300451234
+    "generationSeconds": 0.10735580400796607
   },
   "tasks": [
     {
       "task": "aggregation",
       "workload": "collection-transaction rollup per parcel",
       "cpu": {
-        "seconds": 0.03193087998079136,
+        "seconds": 0.030835301004117355,
         "error": null,
-        "result": {
-          "rows": 300000,
-          "groups": 59591,
-          "sum": 350692214.25
-        }
+        "rows": 300000,
+        "groups": 59591,
+        "sum": 350692214.25,
+        "max_group_total": 110625.09999999999
       },
       "gpu": {
-        "seconds": 0.6778999410162214,
+        "seconds": 0.6498317679797765,
         "error": null,
-        "result": {
-          "rows": 300000,
-          "groups": 59591,
-          "sum": 350692214.25
-        }
+        "rows": 300000,
+        "groups": 59591,
+        "sum": 350692214.25,
+        "max_group_total": 110625.09999999999
       },
       "parity": {
-        "comparable": false,
-        "reason": "metric unavailable"
+        "metrics": [
+          "sum",
+          "groups",
+          "max_group_total"
+        ],
+        "worst_metric": "sum",
+        "relative_delta": 0.0,
+        "within_tolerance": true,
+        "tolerance": 0.02,
+        "detail": {
+          "sum": {
+            "cpu": 350692214.25,
+            "gpu": 350692214.25,
+            "relative_delta": 0.0
+          },
+          "groups": {
+            "cpu": 59591,
+            "gpu": 59591,
+            "relative_delta": 0.0
+          },
+          "max_group_total": {
+            "cpu": 110625.09999999999,
+            "gpu": 110625.09999999999,
+            "relative_delta": 0.0
+          }
+        }
       },
-      "peakHostRssBytes": 1358635008,
-      "freeVramBytesAfter": 24595529728
+      "timing": {
+        "cpu_seconds": 0.030835301004117355,
+        "gpu_seconds": 0.6498317679797765,
+        "ratio_cpu_over_gpu": 0.047451205871297114
+      },
+      "peakHostRssBytes": 1359433728,
+      "freeVramBytesBefore": 24584519680,
+      "freeVramBytesAfter": 24571936768
     },
     {
       "task": "regression",
       "workload": "sale-price valuation model",
       "rows": 60000,
       "gpu": {
-        "seconds": 4.164729808981065,
+        "seconds": 0.706990348000545,
         "error": null,
         "rmse": 21002.822265625
       },
       "cpu": {
-        "seconds": 0.8705182420089841,
+        "seconds": 0.877038236008957,
         "error": null,
         "rmse": 20602.330018122793
       },
       "parity": {
-        "metric": "rmse",
-        "cpu": 20602.330018122793,
-        "gpu": 21002.822265625,
+        "metrics": [
+          "rmse"
+        ],
+        "worst_metric": "rmse",
         "relative_delta": 0.019439172518346936,
         "within_tolerance": true,
-        "tolerance": 0.3
+        "tolerance": 0.3,
+        "detail": {
+          "rmse": {
+            "cpu": 20602.330018122793,
+            "gpu": 21002.822265625,
+            "relative_delta": 0.019439172518346936
+          }
+        }
       },
       "timing": {
-        "cpu_seconds": 0.8705182420089841,
-        "gpu_seconds": 4.164729808981065,
-        "ratio_cpu_over_gpu": 0.20902154087685307
+        "cpu_seconds": 0.877038236008957,
+        "gpu_seconds": 0.706990348000545,
+        "ratio_cpu_over_gpu": 1.2405236344305521
       },
-      "peakHostRssBytes": 2002010112,
-      "freeVramBytesAfter": 24585043968
+      "peakHostRssBytes": 1810849792,
+      "freeVramBytesBefore": 24571936768,
+      "freeVramBytesAfter": 24563548160
     },
     {
       "task": "clustering",
       "workload": "valuation-zone grouping",
       "rows": 60000,
       "gpu": {
-        "seconds": 0.184442889993079,
+        "seconds": 0.19344484200701118,
         "error": null,
-        "inertia": 166688754499584.0
+        "inertia": 166679426367488.0
       },
       "cpu": {
-        "seconds": 0.5108525379910134,
+        "seconds": 0.506386568013113,
         "error": null,
-        "inertia": 165128406302720.0
+        "inertia": 165128389525504.0
       },
       "parity": {
-        "metric": "inertia",
-        "cpu": 165128406302720.0,
-        "gpu": 166688754499584.0,
-        "relative_delta": 0.009449302102531695,
+        "metrics": [
+          "inertia"
+        ],
+        "worst_metric": "inertia",
+        "relative_delta": 0.009392914485758023,
         "within_tolerance": true,
-        "tolerance": 0.05
+        "tolerance": 0.05,
+        "detail": {
+          "inertia": {
+            "cpu": 165128389525504.0,
+            "gpu": 166679426367488.0,
+            "relative_delta": 0.009392914485758023
+          }
+        }
       },
       "timing": {
-        "cpu_seconds": 0.5108525379910134,
-        "gpu_seconds": 0.184442889993079,
-        "ratio_cpu_over_gpu": 2.7697057772743774
+        "cpu_seconds": 0.506386568013113,
+        "gpu_seconds": 0.19344484200701118,
+        "ratio_cpu_over_gpu": 2.6177310429127885
       },
-      "peakHostRssBytes": 2020089856,
-      "freeVramBytesAfter": 24585043968
+      "peakHostRssBytes": 1847226368,
+      "freeVramBytesBefore": 24563548160,
+      "freeVramBytesAfter": 24561451008
     },
     {
       "task": "decomposition",
       "workload": "parcel feature PCA",
       "rows": 60000,
       "cpu": {
-        "seconds": 0.0015463750169146806,
+        "seconds": 0.00146666300133802,
         "error": null,
-        "explained_variance": 1.0
+        "pc1_explained_ratio": 0.8729885816574097,
+        "leading_variance_l2": 55884431360.0
       },
       "gpu": {
-        "seconds": 0.04905457599670626,
+        "seconds": 0.07121154500055127,
         "error": null,
-        "explained_variance": 1.0
+        "pc1_explained_ratio": 0.8729894161224365,
+        "leading_variance_l2": 55884365824.0
       },
       "parity": {
-        "metric": "explained_variance",
-        "cpu": 1.0,
-        "gpu": 1.0,
-        "relative_delta": 0.0,
+        "metrics": [
+          "pc1_explained_ratio",
+          "leading_variance_l2"
+        ],
+        "worst_metric": "leading_variance_l2",
+        "relative_delta": 1.17270585751917e-06,
         "within_tolerance": true,
-        "tolerance": 0.02
+        "tolerance": 0.02,
+        "detail": {
+          "pc1_explained_ratio": {
+            "cpu": 0.8729885816574097,
+            "gpu": 0.8729894161224365,
+            "relative_delta": 9.558716395479056e-07
+          },
+          "leading_variance_l2": {
+            "cpu": 55884431360.0,
+            "gpu": 55884365824.0,
+            "relative_delta": 1.17270585751917e-06
+          }
+        }
       },
       "timing": {
-        "cpu_seconds": 0.0015463750169146806,
-        "gpu_seconds": 0.04905457599670626,
-        "ratio_cpu_over_gpu": 0.031523563000901506
+        "cpu_seconds": 0.00146666300133802,
+        "gpu_seconds": 0.07121154500055127,
+        "ratio_cpu_over_gpu": 0.020595859861300105
       },
-      "peakHostRssBytes": 2083049472,
-      "freeVramBytesAfter": 24561975296
+      "peakHostRssBytes": 1971011584,
+      "freeVramBytesBefore": 24561451008,
+      "freeVramBytesAfter": 24540479488
     },
     {
       "task": "outlier",
       "workload": "sales-ratio anomaly detection",
       "rows": 60000,
       "cpu": {
-        "seconds": 0.39266530398163013,
+        "seconds": 0.38848364900331944,
         "error": null,
         "outliers": 8290
       },
       "gpu": {
-        "seconds": 0.09032271400792524,
+        "seconds": 0.01470500699360855,
         "error": null,
         "outliers": 11374
       },
       "parity": {
-        "metric": "outliers",
-        "cpu": 8290,
-        "gpu": 11374,
+        "metrics": [
+          "outliers"
+        ],
+        "worst_metric": "outliers",
         "relative_delta": 0.37201447527141135,
         "within_tolerance": false,
-        "tolerance": 0.35
+        "tolerance": 0.35,
+        "detail": {
+          "outliers": {
+            "cpu": 8290,
+            "gpu": 11374,
+            "relative_delta": 0.37201447527141135
+          }
+        }
       },
       "timing": {
-        "cpu_seconds": 0.39266530398163013,
-        "gpu_seconds": 0.09032271400792524,
-        "ratio_cpu_over_gpu": 4.347359446563754
+        "cpu_seconds": 0.38848364900331944,
+        "gpu_seconds": 0.01470500699360855,
+        "ratio_cpu_over_gpu": 26.418460676160965
       },
-      "peakHostRssBytes": 2101956608,
-      "freeVramBytesAfter": 24561975296
+      "peakHostRssBytes": 1991176192,
+      "freeVramBytesBefore": 24540479488,
+      "freeVramBytesAfter": 24540479488
     }
   ],
   "failures": [],
+  "warnings": [],
   "promoted": false,
   "note": "MEASURED evidence only. Capability promotion is a reviewed owner act (IF promotion rule).",
   "coldStart": {
-    "firstImportSeconds": 7.920025382190943e-07,
+    "firstImportSeconds": 0.1293622789962683,
+    "firstDeviceWorkSeconds": 0.1976159000187181,
     "error": null
   },
   "gpu": {
     "nvidiaSmi": "NVIDIA GeForce RTX 3090, 595.84, 24576 MiB, 8.6",
-    "freeBytesAtStart": 24610209792,
+    "freeBytesAtStart": 24584519680,
     "totalBytes": 25288769536
   },
-  "finishedAt": "2026-09-11T14:19:09Z"
+  "finishedAt": "2026-09-11T15:31:26Z"
 }

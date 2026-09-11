@@ -37,12 +37,14 @@ A benchmark against the **real** de-identified extract is a separate, owner-auth
 ## What is measured (IF-05 benchmark matrix)
 
 Per `docs/governance/williamos-intelligence-fabric/18-if-05-fabric-benchmark-matrix.md`, a bare
-speedup is not evidence. Each run records: wall time per phase, **correctness parity** between CPU
-and GPU (relative delta against a stated tolerance), peak host RSS, VRAM free before/after, the
-**cold-start** cost of the first real device work, and any typed failure. Task order is alternated so
-warm caches cannot masquerade as a result.
+speedup is not evidence. Each run records: wall time per phase, **correctness parity between CPU and
+GPU over several metrics per task** (worst relative delta against a stated tolerance — deliberately
+not a single scalar, since some metrics are insensitive to a wrong result), peak host RSS, VRAM free
+before *and* after each task, the **cold-start cost split into first import and first real device
+work**, and any typed failure. Task order is alternated so warm caches cannot masquerade as a result.
 
-Results land in `<out>/qualification.json` with `"promoted": false`.
+Results land in `<out>/qualification.json` with `"promoted": false`. The `warnings` array names any
+binding value that failed to resolve, so a degraded binding cannot pass as a complete one.
 
 ## Running it
 

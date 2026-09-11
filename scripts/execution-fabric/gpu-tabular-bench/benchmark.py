@@ -92,9 +92,44 @@ def timed(fn):
 def version_of(module_name: str) -> str | None:
     try:
         module = __import__(module_name)
-        return getattr(module, "__version__", "unknown")
+        return getattr(module, "__version__", None)
     except Exception:
         return None
+
+
+def dist_version(distribution_name: str) -> str | None:
+    """Installed distribution version, or None. A None is surfaced as a warning, never hidden."""
+    try:
+        from importlib.metadata import version
+
+        return version(distribution_name)
+    except Exception:
+        return None
+
+
+def first_dist_version(*distribution_names: str) -> str | None:
+    """First of the given distributions that resolves — packaging names vary by release."""
+    for name in distribution_names:
+        resolved = dist_version(name)
+        if resolved:
+            return resolved
+    return None
+
+
+def to_numpy(value):
+    """Host NumPy view of a value that may be device-resident.
+
+    Two distinct device paths exist and both refuse implicit conversion:
+      * cuDF Series/DataFrame  -> .to_numpy()
+      * CuPy ndarray           -> .get()
+    np.asarray() on either raises in the installed versions, so each is handled explicitly. Applied
+    to every device result in this harness so the pattern cannot silently reappear on one path only.
+    """
+    if hasattr(value, "to_numpy"):
+        return value.to_numpy()
+    if (type(value).__module__ or "").split(".")[0] == "cupy" and hasattr(value, "get"):
+        return value.get()
+    return np.asarray(value)
 
 
 # ------------------------------------------------------------------------------------ synthetic data
@@ -173,7 +208,12 @@ def task_aggregation(tx_path: str, cpu_first: bool) -> dict:
         grouped = frame.groupby("parcel_id", as_index=False).agg(
             total_amount=("amount", "sum"), tx_count=("amount", "size"), late_count=("late", "sum")
         )
-        return {"rows": int(len(frame)), "groups": int(len(grouped)), "sum": float(grouped["total_amount"].sum())}
+        return {
+            "rows": int(len(frame)),
+            "groups": int(len(grouped)),
+            "sum": float(grouped["total_amount"].sum()),
+            "max_group_total": float(grouped["total_amount"].max()),
+        }
 
     def gpu():
         import cudf
@@ -182,10 +222,12 @@ def task_aggregation(tx_path: str, cpu_first: bool) -> dict:
         grouped = frame.groupby("parcel_id", as_index=False).agg(
             {"amount": ["sum", "count"], "late": "sum"}
         )
+        totals = to_numpy(grouped.iloc[:, 1].astype("float64"))
         return {
             "rows": int(len(frame)),
             "groups": int(len(grouped)),
-            "sum": float(grouped.iloc[:, 1].astype("float64").sum()),
+            "sum": float(totals.sum()),
+            "max_group_total": float(totals.max()),
         }
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
@@ -196,7 +238,7 @@ def task_aggregation(tx_path: str, cpu_first: bool) -> dict:
         # metrics stay at the top level so parity is comparable with the other tasks
         observed[label] = {"seconds": seconds, "error": error, **(value or {})}
     result.update(observed)
-    _add_parity(result, observed)
+    _add_parity(result, observed, keys=["sum", "groups", "max_group_total"])
     return result
 
 
@@ -223,7 +265,7 @@ def task_regression(parcels_path: str, cpu_first: bool) -> dict:
         model = RandomForestRegressor(n_estimators=40, max_depth=14, random_state=7)
         model.fit(features, target)
         predictions = model.predict(features[:200000])
-        predictions = np.asarray(predictions).ravel()
+        predictions = to_numpy(predictions).ravel()
         return float(np.sqrt(np.mean((predictions - target[:200000]) ** 2)))
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
@@ -283,23 +325,34 @@ def task_decomposition(parcels_path: str, cpu_first: bool) -> dict:
 
         model = PCA(n_components=8, random_state=7)
         model.fit(features)
-        return float(np.sum(model.explained_variance_ratio_))
+        # explained_variance_ratio_ sums to exactly 1.0 by construction, so it can never detect a
+        # wrong decomposition. Compare the dominant component's share and the magnitude of the
+        # leading variances instead.
+        return {
+            "pc1_explained_ratio": float(model.explained_variance_ratio_[0]),
+            "leading_variance_l2": float(np.linalg.norm(model.explained_variance_)),
+        }
 
     def gpu():
         from cuml.decomposition import PCA
 
         model = PCA(n_components=8)
         model.fit(features)
-        return float(np.sum(np.asarray(model.explained_variance_ratio_)))
+        ratio = to_numpy(model.explained_variance_ratio_)
+        variance = to_numpy(model.explained_variance_)
+        return {
+            "pc1_explained_ratio": float(ratio[0]),
+            "leading_variance_l2": float(np.linalg.norm(variance)),
+        }
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")
     observed = {}
     for label, fn in zip(labels, order):
         value, seconds, error = timed(fn)
-        observed[label] = {"seconds": seconds, "error": error, "explained_variance": value}
+        observed[label] = {"seconds": seconds, "error": error, **(value or {})}
     result.update(observed)
-    _add_parity(result, observed, key="explained_variance", rel_tolerance=0.02)
+    _add_parity(result, observed, keys=["pc1_explained_ratio", "leading_variance_l2"], rel_tolerance=0.02)
     return result
 
 
@@ -324,7 +377,7 @@ def task_outlier(parcels_path: str, cpu_first: bool) -> dict:
 
         model = IsolationForest(n_estimators=100, random_state=7)
         labels = model.fit_predict(features)
-        labels = np.asarray(labels).ravel()
+        labels = to_numpy(labels).ravel()
         return int((labels == -1).sum())
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
@@ -338,24 +391,35 @@ def task_outlier(parcels_path: str, cpu_first: bool) -> dict:
     return result
 
 
-def _add_parity(result: dict, observed: dict, key: str = "sum", rel_tolerance: float = 0.02) -> None:
-    """Record parity between CPU and GPU, and the honest derived metrics. No bare speedup claim."""
+def _add_parity(result: dict, observed: dict, key: str | None = None, rel_tolerance: float = 0.02,
+                keys: list | None = None) -> None:
+    """Record parity between CPU and GPU, and the honest derived metrics. No bare speedup claim.
+
+    Accepts several metrics at once (keys=) so a task's correctness claim cannot rest on a single
+    scalar that is insensitive to a wrong result. The reported delta is the worst of them.
+    """
     cpu, gpu = observed.get("cpu"), observed.get("gpu")
     if not cpu or not gpu or cpu.get("error") or gpu.get("error"):
         result["parity"] = {"comparable": False, "reason": "a side failed; see per-side error"}
         return
-    cpu_value, gpu_value = cpu.get(key), gpu.get(key)
-    if cpu_value in (None, 0) or gpu_value is None:
-        result["parity"] = {"comparable": False, "reason": "metric unavailable"}
-        return
-    relative_delta = abs(gpu_value - cpu_value) / abs(cpu_value)
+    metric_keys = list(keys) if keys else [key or "sum"]
+    metrics = {}
+    worst_delta = 0.0
+    for metric in metric_keys:
+        cpu_value, gpu_value = cpu.get(metric), gpu.get(metric)
+        if cpu_value in (None, 0) or gpu_value is None:
+            result["parity"] = {"comparable": False, "reason": f"metric unavailable: {metric}"}
+            return
+        delta = abs(gpu_value - cpu_value) / abs(cpu_value)
+        metrics[metric] = {"cpu": cpu_value, "gpu": gpu_value, "relative_delta": delta}
+        worst_delta = max(worst_delta, delta)
     result["parity"] = {
-        "metric": key,
-        "cpu": cpu_value,
-        "gpu": gpu_value,
-        "relative_delta": relative_delta,
-        "within_tolerance": relative_delta <= rel_tolerance,
+        "metrics": metric_keys,
+        "worst_metric": max(metrics, key=lambda name: metrics[name]["relative_delta"]),
+        "relative_delta": worst_delta,
+        "within_tolerance": worst_delta <= rel_tolerance,
         "tolerance": rel_tolerance,
+        "detail": metrics,
     }
     if cpu["seconds"] > 0:
         result["timing"] = {
@@ -379,6 +443,20 @@ def main() -> int:
 
     os.makedirs(args.out, exist_ok=True)
     rng = np.random.default_rng(args.seed)
+
+    # Cold start is measured BEFORE anything else imports these modules: resolving the binding
+    # below imports cuML (which imports CuPy), so measuring afterwards reports a meaningless ~0 s
+    # import cost. Both numbers are real only in this order.
+    _, import_seconds, import_error = timed(lambda: __import__("cupy"))
+
+    def _first_device_work():
+        import cupy
+
+        array = cupy.arange(1024, dtype="float32")
+        return float(cupy.asnumpy(array.sum()))
+
+    _, device_seconds, device_error = timed(_first_device_work)
+
     evidence = {
         "schemaVersion": EVIDENCE_SCHEMA,
         "startedAt": now_iso(),
@@ -392,30 +470,37 @@ def main() -> int:
         "binding": {
             "runtimeId": "cuml-cu13",
             "runtimeVersion": version_of("cuml"),
+            "runtimeDistribution": dist_version("cuml-cu13"),
             "cudfVersion": version_of("cudf"),
             "cupyVersion": version_of("cupy"),
             "sklearnVersion": version_of("sklearn"),
             "numpyVersion": version_of("numpy"),
+            "pandasVersion": dist_version("pandas"),
+            "cudaRuntimeVersion": first_dist_version("nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime"),
+            "cudaToolkitVersion": dist_version("cuda-toolkit"),
+            "pythonEnvironment": sys.prefix,
             "computeResourceClass": "local-gpu-tabular",
         },
         "dataset": {"parcels": args.parcels, "transactions": args.transactions, "seed": args.seed,
                     "provenance": "synthetic, schema- and scale-matched to pacs_oltp; no county rows used"},
         "tasks": [],
         "failures": [],
+        "warnings": [],
         "promoted": False,
         "note": "MEASURED evidence only. Capability promotion is a reviewed owner act (IF promotion rule).",
     }
 
-    # Cold-start measurement: the first real device work (context creation + first kernel) is part
-    # of the owner-visible cost, so it is measured with an actual allocation, not an import.
-    def _cold_start():
-        import cupy
+    # A binding that silently degrades to nulls is not evidence, so unresolved values are named.
+    for field, value in evidence["binding"].items():
+        if value is None:
+            evidence["warnings"].append(f"binding value unresolved on this host: {field}")
 
-        array = cupy.arange(1024, dtype="float32")
-        return float(cupy.asnumpy(array.sum()))
-
-    _, cold_seconds, cold_error = timed(_cold_start)
-    evidence["coldStart"] = {"firstDeviceWorkSeconds": cold_seconds, "error": cold_error}
+    # Cold-start numbers were captured before any module import above; record them now.
+    evidence["coldStart"] = {
+        "firstImportSeconds": import_seconds,
+        "firstDeviceWorkSeconds": device_seconds,
+        "error": device_error or import_error,
+    }
 
     try:
         driver = subprocess.run(
@@ -468,6 +553,7 @@ def main() -> int:
             record = {"task": name, "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()[-1500:]}
             evidence["failures"].append(record)
         record["peakHostRssBytes"] = peak_host_rss_bytes()
+        record["freeVramBytesBefore"] = free_before_task
         free_after, _ = gpu_memory_bytes()
         record["freeVramBytesAfter"] = free_after
         evidence["tasks"].append(record)
