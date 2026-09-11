@@ -20,11 +20,26 @@ export function adoptModelRuntime(seed, adoption) {
 
   for (const runtime of adoption.runtimes ?? []) {
     // A runtime is adopted onto a node only when the policy provenance names that node as its host.
+    // Local serving runtimes bind to their fabric machine. An EXTERNAL_API runtime is provider-managed:
+    // it has no fabric machine host, so it attaches to the commissioning node's declared external
+    // capability envelope (the same place an approved external envelope lives) — never an invented host.
     const hostId = runtime.id === "daedalus-hf-transformers" ? "daedalus"
       : runtime.id === "hermes-ollama" ? "hermes-node"
+      : runtime.kind === "EXTERNAL_API" ? "hermes-node"
       : null
     if (!hostId || !byId.has(hostId)) throw new Error(`IF03_ADOPTION_UNKNOWN_NODE:${hostId ?? runtime.id}`)
     const node = byId.get(hostId)
+    if (runtime.kind === "EXTERNAL_API") {
+      // Provider-managed: record it as a declared external capability, not a local runtime, and never
+      // mark it healthy without live qualification evidence.
+      const externals = Array.isArray(node.externalCapabilities) ? [...node.externalCapabilities] : []
+      if (!externals.some((r) => r.id === runtime.id)) {
+        externals.push({ id: runtime.id, kind: runtime.kind, state: runtime.lifecycle === "HEALTHY" ? "healthy" : "declared-candidate", details: { version: runtime.version, buildIdentity: runtime.buildIdentity, endpointClass: runtime.endpointClass ?? "OPENAI_COMPATIBLE" } })
+      }
+      node.externalCapabilities = externals
+      attached.push({ nodeId: hostId, runtimeId: runtime.id, external: true })
+      continue
+    }
     const runtimes = Array.isArray(node.runtimes) ? [...node.runtimes] : []
     if (!runtimes.some((r) => r.id === runtime.id)) {
       runtimes.push({ id: runtime.id, kind: runtime.kind, state: runtime.lifecycle === "HEALTHY" ? "healthy" : "unavailable", details: { version: runtime.version, buildIdentity: runtime.buildIdentity } })

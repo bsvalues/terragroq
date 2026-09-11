@@ -330,6 +330,24 @@
       ],
       "observedAt": "2026-09-10T09:45:00Z",
       "id": "hermes-ollama"
+    },
+    {
+      "id": "openrouter-api",
+      "kind": "EXTERNAL_API",
+      "version": "ca5b2ac2ef96696b0b9abd8fde206188d9262d6f3ec76ecf5d37d940825801b7",
+      "buildIdentity": "OpenAI-compatible managed model service at openrouter.ai/api/v1; replaceable provider adapter (OpenRouter, direct Claude/OpenAI, Azure model APIs share this surface)",
+      "artifact": {
+        "kind": "PROVIDER_MANAGED",
+        "serviceRevision": "ca5b2ac2ef96696b0b9abd8fde206188d9262d6f3ec76ecf5d37d940825801b7"
+      },
+      "endpointClass": "OPENAI_COMPATIBLE",
+      "lifecycle": "UNKNOWN",
+      "features": [
+        "openai-compatible",
+        "managed-model-service",
+        "cost-metered",
+        "replaceable-adapter"
+      ]
     }
   ],
   "runtimeCapabilities": [
