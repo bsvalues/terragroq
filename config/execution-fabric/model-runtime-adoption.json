@@ -1,7 +1,7 @@
 {
   "schema": "williamos-if03-model-runtime-adoption/1",
   "recordedAt": "2026-09-10T09:45:00Z",
-  "note": "Represents the existing, already-running resident model path exactly. This is a recording of current truth, not a change to it: no new model download, no behavior change, the promoted DAEDALUS policy remains the authority for its contained worker path.",
+  "note": "Represents the existing, already-running resident model path exactly. This is a recording of current truth, not a change to it: no new model download, no behavior change, the promoted DAEDALUS policy remains the authority for its contained worker path. Runtime publications name the exact host node, the registry runtime kind, and the bound model artifacts, so the production registry assembly can attach adopted runtimes without inferring any of the three.",
   "modelArtifacts": [
     {
       "family": "Qwen3",
@@ -385,5 +385,36 @@
     "configDigest": "sha256:f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30",
     "verifiedAt": "2026-09-10T09:50:00Z"
   },
-  "ollamaRosterBoundAt": "2026-09-10T19:30:55.500Z"
+  "ollamaRosterBoundAt": "2026-09-10T19:30:55.500Z",
+  "runtimePublications": [
+    {
+      "runtimeId": "hermes-ollama",
+      "hostNodeId": "hermes-node",
+      "registryKind": "ollama",
+      "modelArtifactIds": [
+        "ollama-williamos-qwen3-14b-64k",
+        "ollama-williamos-qwen3-14b-16k",
+        "ollama-qwen3-14b",
+        "ollama-qwen2-5-coder-7b",
+        "ollama-williamos-qwen3-4b-64k",
+        "ollama-qwen3-4b-instruct",
+        "ollama-snowflake-arctic-embed2-latest",
+        "ollama-llama3-2-3b"
+      ]
+    },
+    {
+      "runtimeId": "daedalus-hf-transformers",
+      "hostNodeId": "daedalus",
+      "registryKind": "remote-resident-model",
+      "modelArtifactIds": [
+        "qwen3-8b-daedalus"
+      ]
+    },
+    {
+      "runtimeId": "openrouter-api",
+      "hostNodeId": "hermes-node",
+      "registryKind": "external-model-api",
+      "modelArtifactIds": []
+    }
+  ]
 }
