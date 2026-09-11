@@ -171,7 +171,9 @@ def main() -> int:
     print("evidence record matches the committed evidence:")
     print(f"  full-scale table: {len(parsed[0])} tasks verified against qualification-full-2.5M.json")
     print(f"  small-scale table: {len(parsed[1])} tasks verified against qualification-small-60k.json")
-    print("  prose figures, parity flags, and Nsight tokens traceable; no stale figures")
+    print("  table cells (seconds, ratio, parity, delta, tolerance), prose cold-start/RSS/memory figures,")
+    print("  and superseded-figure scan all clean.")
+    print("  NOT checked here: section-5 prose ratios and the section-4 Nsight figures in the CSV.")
     return 0
 
 
