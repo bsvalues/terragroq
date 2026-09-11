@@ -44,15 +44,19 @@ detection (IsolationForest).
 
 | Task | CPU | GPU | CPU/GPU | Parity | Worst metric delta | Tolerance |
 |---|---|---|---|---|---|---|
-| aggregation (20 M tx rollup) | 3.87 s | 0.80 s | **4.82×** | PASS | 0.0 (exact) | 2% |
-| valuation regression (2.5 M parcels) | 83.70 s | 4.21 s | **19.87×** | PASS | 0.0210 (RMSE 2.1%) | 30% |
-| valuation-zone clustering | 20.98 s | 4.32 s | **4.86×** | PASS | 0.00098 | 5% |
-| PCA (12 features) | 0.035 s | 0.089 s | **0.39× — CPU wins** | PASS | 0.000007 | 2% |
-| sales-ratio outliers | 10.05 s | 0.031 s | **323×** | PASS | 0.0808 | 35% |
+| aggregation (20 M tx rollup) | 3.76 s | 0.20 s | **18.70×** | PASS | 0.0 (exact) | 2% |
+| valuation regression (2.5 M parcels) | 83.83 s | 4.18 s | **20.04×** | PASS | 0.0210 (RMSE 2.1%) | 30% |
+| valuation-zone clustering | 21.15 s | 4.36 s | **4.85×** | PASS | 0.00097 | 5% |
+| PCA (12 features) | 0.035 s | 0.046 s | **0.75× — CPU wins** | PASS | 0.000007 | 2% |
+| sales-ratio outliers | 9.96 s | 0.030 s | **335×** | PASS | 0.0808 | 35% |
 
-Cold start, split honestly: first CuPy **import 0.126 s**, first real **device work 0.276 s**. Peak
-host RSS **5.20 GB** (decimal, as `ru_maxrss`-derived bytes are reported here; the RAM figure above is
-binary GiB to match `/proc/meminfo`). Zero failures, zero unresolved-binding warnings,
+Cold start, split honestly: first CuPy **import 0.130 s**, first real **device work 0.201 s**, plus an
+explicit warm-up of **0.379 s**. Every task is then timed from that warm state, so no task carries
+one-off setup. That is a correction to earlier revisions of this record, which charged setup to
+whichever task ran first — the measurement that forced it, and the numbers it changed, are in
+`gpu-tabular-placement-thresholds-2026-09-11.md`.
+
+Peak host RSS **5.07 GB** (decimal). Zero failures, zero unresolved-binding warnings,
 `parityFailures: []`.
 
 Parity is stated over several metrics per task wherever a single scalar would be insensitive to a
@@ -62,41 +66,41 @@ alone sums to 1.0 by construction and can never detect a wrong decomposition.
 
 The §4 profiling capture is a separate measurement of the same workload by a different tool. Where it
 overlaps, it agrees with the benchmark's GPU-side timings to within ~10% (profile `regression_fit`
-4.4372 s vs benchmark GPU 4.21 s; profile `clustering_fit` 4.0126 s vs benchmark GPU 4.32 s). It does
+4.4372 s vs benchmark GPU 4.18 s; profile `clustering_fit` 4.0126 s vs benchmark GPU 4.36 s). It does
 **not** cover the aggregation task — `profile_gpu.py` runs no cuDF groupby — so aggregation rests on
 the benchmark evidence alone.
 
 Run-to-run stability, measured on two full-scale runs from this same revision
 (`qualification-full-2.5M.json` and `qualification-full-2.5M-run2.json`, both executed from the harness
-as committed at `098a2441` — the harness and evidence files are unchanged since that commit): GPU
-seconds agree to 0.9% (aggregation), 0.2% (regression), 0.0% (clustering) and 1.1% (outlier). PCA
-differs by 21% between the two runs — it completes in ~0.1 s, where scheduler noise dominates — so the
-0.39× should be read as "CPU wins clearly", not as a precise figure.
+as committed in this revision — unchanged between the two runs): GPU seconds agree to 1.3%
+(aggregation), 0.3% (regression), 2.2% (clustering), 1.5% (PCA) and 2.1% (outlier) — every task stable
+to within ~2%. PCA is in that list deliberately: before the warm-up fix it varied 21% between runs,
+because it was timing a cold-dominated slice rather than the workload.
 
 ### Small input (60,000 parcels / 300,000 tx) — where the accelerator loses
 
 | Task | CPU | GPU | CPU/GPU | Parity |
 |---|---|---|---|---|
-| aggregation | 0.030 s | 0.652 s | **0.047× — GPU ~21× slower** | PASS |
-| PCA | 0.0014 s | 0.069 s | **0.020× — GPU ~50× slower** | PASS |
-| regression | 0.851 s | 0.708 s | 1.20× | PASS |
-| clustering | 0.483 s | 0.195 s | 2.47× | PASS |
-| sales-ratio outliers | 0.379 s | 0.014 s | 27.6× | **FAIL — 0.372 vs 0.35 tolerance** |
+| aggregation | 0.025 s | 0.032 s | **0.79× — CPU ahead** | PASS |
+| PCA | 0.0015 s | 0.0024 s | **0.65× — CPU wins** | PASS |
+| regression | 0.845 s | 0.659 s | 1.28× | PASS |
+| clustering | 0.509 s | 0.159 s | 3.19× | PASS |
+| sales-ratio outliers | 0.384 s | 0.010 s | 37.1× | **FAIL — 0.372 vs 0.35 tolerance** |
 
 This run reports `parityFailures: ["outlier"]` — a machine-readable signal, so a reader does not have
 to infer a parity miss from a nested flag inside an otherwise clean `failures: []`.
 
-**Placement relevance:** the accelerator pays only above a size threshold. The deepest inversions are
-PCA (~50× slower on GPU) and aggregation (~21× slower) — in both, the work per row is small enough that
-cuDF/cuML fixed overhead dominates. A naive "GPU is faster" rule would regress two of the five tasks at
-small input. An earlier measurement of this same case reported regression at 0.21×; that was an artifact
-of the first GPU task in the process absorbing CUDA/cuML warm-up, which is why cold start is now measured
-separately and before any other device work.
+**Placement relevance:** at this size the accelerator is not worth using, but the penalty is modest —
+the CPU is ahead by roughly 20–35%, not by orders of magnitude — and two of five tasks still regress
+under a naive "GPU is faster" rule. Earlier revisions of this record reported 0.048× and 0.020× here;
+those figures charged one-off setup to the first task in the process (see the thresholds record). The
+*direction* of the conclusion held; the magnitude was overstated against the GPU. Precise switch points
+are now measured in `gpu-tabular-placement-thresholds-2026-09-11.md`.
 
 **Outlier detection carries the weakest correctness signal.** cuML and scikit-learn IsolationForest
 differ in sampling and split semantics: the outlier *count* is comparable at full scale (8.1% delta
 inside a 35% tolerance) but **exceeds its tolerance at small scale (37.2%)**, and the tolerance itself
-is deliberately loose. The 323× speedup is real; "same answer" is not. It is a screening workload, not
+is deliberately loose. The 335× speedup is real; "same answer" is not. It is a screening workload, not
 a drop-in replacement.
 
 Not covered by this run: sustained/thermal throughput on a shared desktop-class card (the IF-05
@@ -157,17 +161,19 @@ cuML 26.08.00 × CUDA 13.4 (pip runtime) × RTX 3090 24GB (CC 8.6) × ~/.venvs/c
 Proposed ids: `TABULAR_ML_GPU`, `CLUSTERING_GPU`, `DIMENSIONAL_REDUCTION_GPU`,
 `ANOMALY_DETECTION_GPU`. The measured evidence supports a narrower scope than the id list suggests:
 
-* **`TABULAR_ML_GPU`** (tree ensembles over parcel-scale rows) — strongest case: 19.9× at 2.5 M rows
+* **`TABULAR_ML_GPU`** (tree ensembles over parcel-scale rows) — strongest case: 20.0× at 2.5 M rows
   with 2.1% RMSE parity, stable across two same-revision runs, and its fit independently timed by the
-  §4 capture (4.44 s there vs 4.21 s here).
-* **`CLUSTERING_GPU`** — solid at both scales (4.9× / 2.5×) with sub-1% inertia parity.
-* **`ANOMALY_DETECTION_GPU`** — fast (323×) but the *answer* is implementation-dependent: parity
-  passes at full scale and fails at small scale. Bind it only as a screening step with a stated
-  tolerance, never as a drop-in replacement.
-* **`DIMENSIONAL_REDUCTION_GPU`** — **not supported** at this feature width (0.39×, and 0.020× at
-  small input). CPU wins; do not bind it.
-* **Aggregation / rollup work** — supported only above the size threshold; at 60 k rows cuDF loses by
-  ~21×. A placement rule must be size-aware, not class-aware alone.
+  §4 capture (4.44 s there vs 4.18 s here). Measured crossover: prefers the GPU at or above
+  **50,000 rows** (at the measurement floor — see the thresholds record).
+* **`CLUSTERING_GPU`** — solid at both measured scales (4.9× / 3.2×) with sub-1% inertia parity;
+  prefers the GPU at or above **50,000 rows**.
+* **`ANOMALY_DETECTION_GPU`** — fast (335×) but the *answer* is implementation-dependent: parity
+  passes at full scale and fails at small scale. Screening only, with **no** automatic-placement
+  threshold.
+* **`DIMENSIONAL_REDUCTION_GPU`** — **not supported** at this feature width (0.75× at 2.5 M rows,
+  0.65× at 60 k — the CPU wins at every measured size). Do not bind it.
+* **Aggregation / rollup work** — size-aware only: 0.79× at 60 k rows, preferring the GPU from
+  **100,000 rows**. Never blanket-GPU.
 
 All of the above are recommendations from measurement. Nothing here is a binding.
 

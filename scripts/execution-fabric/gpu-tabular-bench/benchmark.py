@@ -81,6 +81,52 @@ def host_total_memory_bytes():
     return None
 
 
+def warm_runtimes() -> float:
+    """Pay the one-time cost of every path the tasks use, BEFORE timing anything.
+
+    Module import, CUDA context creation and each library's first call are one-off costs. Warming has
+    to cover the actual code paths, not just the libraries: a tiny in-memory cuDF groupby does NOT warm
+    cuDF's parquet reader, and a KMeans fit does not warm the RandomForest/PCA/IsolationForest kernels.
+    Otherwise whichever task runs first still absorbs setup, the per-task ratios mislead, and a size
+    sweep derives thresholds from contaminated points. The cost is reported, not hidden.
+    """
+    started = time.perf_counter()
+    try:
+        import cudf
+        import cupy
+        from cuml.cluster import KMeans
+        from cuml.decomposition import PCA
+        from cuml.ensemble import IsolationForest, RandomForestRegressor
+
+        frame = cudf.DataFrame({
+            "a": [1, 1, 2, 2, 3, 3],
+            "b": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        })
+        frame.groupby("a", as_index=False).agg({"b": "sum"})
+        # Warm the parquet READ path the aggregation task depends on.
+        warm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "warmup.parquet")
+        frame.to_parquet(warm_path)
+        cudf.read_parquet(warm_path)
+        try:
+            os.remove(warm_path)
+        except OSError:
+            pass
+
+        import numpy as np
+
+        array = cupy.asarray(np.arange(2048, dtype="float32").reshape(-1, 2))
+        target = cupy.asarray(np.arange(1024, dtype="float32"))
+        KMeans(n_clusters=2, n_init=1).fit(array)
+        PCA(n_components=2).fit(array)
+        RandomForestRegressor(n_estimators=2, max_depth=2, random_state=7).fit(array, target)
+        IsolationForest(n_estimators=2, random_state=7).fit(array)
+        cupy.asnumpy(array.sum())
+        cupy.cuda.Stream.null.synchronize()
+    except Exception as exc:
+        print(f"    [warmup] partial: {type(exc).__name__}: {exc}", flush=True)
+    return time.perf_counter() - started
+
+
 def peak_host_rss_bytes() -> int | None:
     try:
         import resource
@@ -507,12 +553,17 @@ def main() -> int:
         if value is None:
             evidence["warnings"].append(f"binding value unresolved on this host: {field}")
 
-    # Cold-start numbers were captured before any module import above; record them now.
+    # Cold-start numbers were captured before any module import above; record them now. The device
+    # families are then warmed so every task is timed from the same warm state — otherwise whichever
+    # task runs first absorbs the one-off cost and its per-task ratio misleads. The one-off cost is
+    # still reported, just not charged to a task.
     evidence["coldStart"] = {
         "firstImportSeconds": import_seconds,
         "firstDeviceWorkSeconds": device_seconds,
         "error": device_error or import_error,
     }
+    evidence["warmUpSeconds"] = warm_runtimes()
+    print(f"[warmup] {evidence['warmUpSeconds']:.3f}s", flush=True)
 
     try:
         driver = subprocess.run(
