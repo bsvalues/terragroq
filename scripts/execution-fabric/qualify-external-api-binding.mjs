@@ -1,7 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
-import { createHash } from "node:crypto"
 
 /**
  * Tier 3 qualification runner: ONE tiny bounded evaluation call through the governed external-API
@@ -30,15 +29,16 @@ if (!baseUrl || !keyEnv || !model || !evidenceDir) {
 const apiKey = process.env[keyEnv]
 if (!apiKey) { console.log(`NO_KEY: environment variable ${keyEnv} is unset — cannot qualify`); process.exit(3) }
 
-// A real S1 ContextPackage: a public-knowledge probe. The digest binds the evidence to this exact input.
+// A real S1 ContextPackage: a public-knowledge probe. The adapter derives + digests the exact
+// egress messages from it, binding the evidence to what actually left the estate.
 const prompt = "In one sentence: what does a database index do?"
-const contextPackage = { securityTier: "S1", digest: "sha256:" + createHash("sha256").update(prompt).digest("hex") }
+const contextPackage = { classification: "S1" }
 const spendPolicy = { maxCostUsd: maxCost, hardCeilingUsd: 0.05 }
 
 try {
   const result = await callExternalModelApi({
     baseUrl, apiKey, model,
-    messages: [{ role: "user", content: prompt }],
+    prompt,
     contextPackage, spendPolicy, maxTokens: 64,
   })
   fs.mkdirSync(evidenceDir, { recursive: true })
