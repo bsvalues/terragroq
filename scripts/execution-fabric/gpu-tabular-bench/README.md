@@ -53,8 +53,8 @@ buried in a nested flag.
 `verify_evidence.py` mechanically re-checks the record against the committed raw evidence:
 
 * both results tables, cell by cell — CPU/GPU seconds, ratio, parity flag, worst-metric delta and
-  tolerance — against the two full-scale runs and the small-scale run. Tolerances admit the record's
-  display rounding and nothing more (a ratio overstated by 10% fails, as it should);
+  tolerance — against the **primary** full-scale run and the small-scale run. Tolerances admit the
+  record's display rounding and nothing more (a ratio overstated by 10% fails, as it should);
 * the prose figures that must come from the primary run: cold start, peak RSS, total memory;
 * a scan for figures from superseded runs — this is how the stale-value defects in review were caught,
   and replanting one now fails the check.
@@ -63,10 +63,16 @@ buried in a nested flag.
 python verify_evidence.py   # exit 0 = traceable, 1 = a claim the evidence does not support
 ```
 
-What it does **not** cover, stated plainly: free-prose ratios elsewhere in the document (the candidate
-scope in section 5) and the Nsight figures in section 4, which live in `evidence/nsys-stats-2.5M.csv`
-rather than in the JSON. Those were checked by hand during review. Teaching a checker to parse prose
-numbers reliably costs more in brittleness than it buys.
+What it does **not** cover, stated plainly:
+
+* free-prose ratios elsewhere in the document (the candidate scope in section 5);
+* the section-3 run-to-run stability figures — the checker reads one full-scale run. The second run is
+  committed so a human can verify reproducibility, but the checker does not parse it;
+* the Nsight figures in section 4, which live in `evidence/nsys-stats-2.5M.csv` rather than in the
+  JSON.
+
+Those were checked by hand during review. Teaching a checker to parse prose numbers reliably costs more
+in brittleness than it buys.
 
 It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm the
 hardware produced these numbers, only that the record claims nothing the evidence files lack.

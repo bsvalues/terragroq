@@ -9,9 +9,13 @@ Run from this directory (or anywhere; paths are resolved relative to the script)
 
     python verify_evidence.py
 
-Exits 0 when every table cell, prose figure and Nsight token is traceable, 1 otherwise. It is a
-consistency check over committed artifacts, not a re-measurement: it cannot confirm that the hardware
-produced the numbers, only that the record does not claim anything the evidence files lack.
+Exits 0 when every checked figure is traceable, 1 otherwise. What is checked, and what is deliberately
+not, is listed in the README's "Checking the record against the evidence" section — in short: the two
+results tables cell by cell, the prose cold-start/RSS/memory figures, and a stale-figure scan. Section-5
+prose ratios and the section-4 Nsight figures (which live in the CSV, not the JSONs) are NOT checked.
+
+It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm that the
+hardware produced the numbers, only that the record does not claim anything the evidence files lack.
 """
 from __future__ import annotations
 
@@ -86,7 +90,6 @@ def main() -> int:
     record = open(RECORD, encoding="utf-8").read()
     full = json.load(open(os.path.join(EVIDENCE, "qualification-full-2.5M.json"), encoding="utf-8"))
     small = json.load(open(os.path.join(EVIDENCE, "qualification-small-60k.json"), encoding="utf-8"))
-    nsys_csv = open(os.path.join(EVIDENCE, "nsys-stats-2.5M.csv"), encoding="utf-8").read()
 
     problems: list[str] = []
 
@@ -156,11 +159,9 @@ def main() -> int:
     if full["parityFailures"]:
         problems.append(f"full-scale parityFailures is {full['parityFailures']}, expected []")
 
-    # Any Nsight nanosecond figure quoted in the record must exist in the committed CSV.
-    for token in ["4437171751", "4012598477", "3186611969", "2792362598", "601656212", "87166984",
-                  "40022228", "6360712"]:
-        if token in record and token not in nsys_csv:
-            problems.append(f"Nsight token {token} in record but absent from the committed CSV")
+    # The Nsight figures quoted in the record are seconds/shares, and they live in the CSV rather than
+    # in the JSONs. They are NOT checked here (see the README); an earlier ns-nanosecond token loop was
+    # dead code and has been removed rather than left implying coverage that never fired.
 
     if problems:
         print("EVIDENCE RECORD DOES NOT MATCH THE COMMITTED EVIDENCE:")
