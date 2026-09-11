@@ -51,7 +51,9 @@ detection (IsolationForest).
 | sales-ratio outliers | 10.05 s | 0.031 s | **323×** | PASS | 0.0808 | 35% |
 
 Cold start, split honestly: first CuPy **import 0.126 s**, first real **device work 0.276 s**. Peak
-host RSS **5.20 GB**. Zero failures, zero unresolved-binding warnings, `parityFailures: []`.
+host RSS **5.20 GB** (decimal, as `ru_maxrss`-derived bytes are reported here; the RAM figure above is
+binary GiB to match `/proc/meminfo`). Zero failures, zero unresolved-binding warnings,
+`parityFailures: []`.
 
 Parity is stated over several metrics per task wherever a single scalar would be insensitive to a
 wrong result: aggregation compares the total, the group count *and* the largest group, and PCA
@@ -60,15 +62,16 @@ alone sums to 1.0 by construction and can never detect a wrong decomposition.
 
 The §4 profiling capture is a separate measurement of the same workload by a different tool. Where it
 overlaps, it agrees with the benchmark's GPU-side timings to within ~10% (profile `regression_fit`
-4.4372 s vs benchmark GPU 4.21 s; profile `clustering_fit` 4.0126 s vs benchmark GPU 4.36 s). It does
+4.4372 s vs benchmark GPU 4.21 s; profile `clustering_fit` 4.0126 s vs benchmark GPU 4.32 s). It does
 **not** cover the aggregation task — `profile_gpu.py` runs no cuDF groupby — so aggregation rests on
 the benchmark evidence alone.
 
 Run-to-run stability, measured on two full-scale runs from this same revision
-(`qualification-full-2.5M.json` and `qualification-full-2.5M-run2.json`): GPU seconds agree to 0.9%
-(aggregation), 0.2% (regression), 0.0% (clustering) and 1.1% (outlier). PCA differs by 21% between the
-two runs — it completes in ~0.1 s, where scheduler noise dominates — so the 0.39× should be read as
-"CPU wins clearly", not as a precise figure.
+(`qualification-full-2.5M.json` and `qualification-full-2.5M-run2.json`, both executed from the harness
+as committed at `098a2441` — the harness and evidence files are unchanged since that commit): GPU
+seconds agree to 0.9% (aggregation), 0.2% (regression), 0.0% (clustering) and 1.1% (outlier). PCA
+differs by 21% between the two runs — it completes in ~0.1 s, where scheduler noise dominates — so the
+0.39× should be read as "CPU wins clearly", not as a precise figure.
 
 ### Small input (60,000 parcels / 300,000 tx) — where the accelerator loses
 

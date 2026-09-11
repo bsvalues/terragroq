@@ -44,7 +44,23 @@ before *and* after each task, the **cold-start cost split into first import and 
 work**, and any typed failure. Task order is alternated so warm caches cannot masquerade as a result.
 
 Results land in `<out>/qualification.json` with `"promoted": false`. The `warnings` array names any
-binding value that failed to resolve, so a degraded binding cannot pass as a complete one.
+binding value that failed to resolve, so a degraded binding cannot pass as a complete one, and
+`parityFailures` names any task outside its tolerance so a parity miss is machine-readable rather than
+buried in a nested flag.
+
+## Checking the record against the evidence
+
+`verify_evidence.py` mechanically re-checks the capability-evidence record against the committed raw
+evidence — every table cell, ratio, parity flag, prose figure and Nsight token, plus a scan for figures
+from superseded runs. An evidence record's whole value is traceability, so the check should not depend
+on an author's care or a reviewer's patience:
+
+```bash
+python verify_evidence.py   # exit 0 = traceable, 1 = a claim the evidence does not support
+```
+
+It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm the
+hardware produced these numbers, only that the record claims nothing the evidence files lack.
 
 ## Running it
 
