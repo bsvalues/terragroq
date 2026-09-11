@@ -12,6 +12,7 @@ export type CapabilityKind =
   | "PROVIDER_SURFACE"
   | "PROVIDER_ADAPTER"
   | "MODEL_RUNTIME"
+  | "COMPUTE_CAPABILITY"
 
 export type ExecutionClass = "NON_EXECUTABLE" | "WORKER_CANDIDATE" | "EXECUTABLE_WORKER"
 
@@ -1114,6 +1115,143 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
     trustGateRef: null,
     evidence: ["control-center/backend/worker_registry.json"],
     restrictions: ["No repository delivery authority", "No provider fallback or autonomous dispatch"],
+  }),
+  record({
+    capabilityId: "gpu-tabular-ml",
+    label: "DAEDALUS GPU tabular regression",
+    kind: "COMPUTE_CAPABILITY",
+    status: "PILOT_AUTHORIZED",
+    executionClass: "EXECUTABLE_WORKER",
+    coordinationEligible: true,
+    claim: "Measured cuML/RAPIDS regression on the DAEDALUS RTX 3090 binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured.",
+    reasonCode: "GPU_TABULAR_MEASURED_PILOT_AUTHORIZED",
+    adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    authorityGrantRefs: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md#owner-authorized-scope",
+    ],
+    trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
+    evidence: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-daedalus-2026-09-11.md",
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
+      "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
+      "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    ],
+    restrictions: [
+      "Only the exact measured binding: RTX 3090 x cuML 26.08.00 x CUDA 13.4.49 in the isolated cuml-qual environment",
+      "Eligible at or above 50,000 rows; below that the dispatcher must use the CPU path",
+      "The true crossover below 50,000 rows is unmeasured, so the CPU default there is conservative rather than measured",
+      "Placement requires valid, fresh threshold evidence; missing, stale, or invalid evidence falls to the CPU path",
+      "No county/PACS or protected data; synthetic or otherwise authorized data only",
+      "No cloud spend and no hardware purchase; this binding is the local accelerator only",
+    ],
+  }),
+  record({
+    capabilityId: "gpu-clustering",
+    label: "DAEDALUS GPU valuation-zone clustering",
+    kind: "COMPUTE_CAPABILITY",
+    status: "PILOT_AUTHORIZED",
+    executionClass: "EXECUTABLE_WORKER",
+    coordinationEligible: true,
+    claim: "Measured cuML KMeans clustering on the DAEDALUS binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured.",
+    reasonCode: "GPU_CLUSTERING_MEASURED_PILOT_AUTHORIZED",
+    adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    authorityGrantRefs: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md#owner-authorized-scope",
+    ],
+    trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
+    evidence: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-daedalus-2026-09-11.md",
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
+      "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
+      "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    ],
+    restrictions: [
+      "Only the exact measured binding: RTX 3090 x cuML 26.08.00 x CUDA 13.4.49 in the isolated cuml-qual environment",
+      "Eligible at or above 50,000 rows; below that the dispatcher must use the CPU path",
+      "The true crossover below 50,000 rows is unmeasured, so the CPU default there is conservative rather than measured",
+      "Placement requires valid, fresh threshold evidence; missing, stale, or invalid evidence falls to the CPU path",
+      "No county/PACS or protected data; synthetic or otherwise authorized data only",
+    ],
+  }),
+  record({
+    capabilityId: "gpu-aggregation",
+    label: "DAEDALUS GPU collection aggregation",
+    kind: "COMPUTE_CAPABILITY",
+    status: "PILOT_AUTHORIZED",
+    executionClass: "EXECUTABLE_WORKER",
+    coordinationEligible: true,
+    claim: "Measured cuDF groupby aggregation on the DAEDALUS binding is authorized for accelerator placement at or above 100,000 rows; it is size-aware, never a blanket accelerator rule.",
+    reasonCode: "GPU_AGGREGATION_MEASURED_PILOT_AUTHORIZED",
+    adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    authorityGrantRefs: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md#owner-authorized-scope",
+    ],
+    trustGateRef: PREVENTIVE_TRUST_GATE_V2_REF,
+    evidence: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-daedalus-2026-09-11.md",
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
+      "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
+      "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    ],
+    restrictions: [
+      "Eligible at or above 100,000 rows only; below that the dispatcher must use the CPU path",
+      "This is the only workload class whose crossover is bracketed by measurements on both sides",
+      "Never applied as a blanket accelerator rule; placement is always size-aware",
+      "Placement requires valid, fresh threshold evidence; missing, stale, or invalid evidence falls to the CPU path",
+      "No county/PACS or protected data; synthetic or otherwise authorized data only",
+    ],
+  }),
+  record({
+    capabilityId: "gpu-anomaly-screening",
+    label: "DAEDALUS GPU sales-ratio anomaly screening",
+    kind: "COMPUTE_CAPABILITY",
+    status: "PROVEN",
+    executionClass: "NON_EXECUTABLE",
+    claim: "Accelerated isolation-forest screening is fast but not authoritative: it fails its own parity tolerance at small scale, so it may screen and may not decide.",
+    reasonCode: "GPU_ANOMALY_SCREENING_ONLY",
+    adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    authorityGrantRefs: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md#owner-authorized-scope",
+    ],
+    trustGateRef: null,
+    evidence: [
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/qualification-full-2.5M.json",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/qualification-small-60k.json",
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-daedalus-2026-09-11.md",
+    ],
+    restrictions: [
+      "Screening and exploratory use only; never authoritative for valuation-affecting decisions",
+      "Cannot dispatch through the durable registry; its small-scale parity failures are recorded in the evidence",
+      "No threshold is derived for this workload class, so no placement claim is made for it",
+      "No county/PACS or protected data; synthetic or otherwise authorized data only",
+    ],
+  }),
+  record({
+    capabilityId: "gpu-dimensional-reduction",
+    label: "DAEDALUS GPU dimensional reduction",
+    kind: "COMPUTE_CAPABILITY",
+    status: "REJECTED",
+    executionClass: "WORKER_CANDIDATE",
+    claim: "A GPU principal-component binding is refused: the CPU path wins at every measured size, including 0.75x at the largest measured scale.",
+    reasonCode: "GPU_DIMENSIONAL_REDUCTION_MEASURED_NO_BENEFIT",
+    adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
+    authorityGrantRefs: [
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md#owner-authorized-scope",
+    ],
+    trustGateRef: null,
+    evidence: [
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/qualification-full-2.5M.json",
+      "docs/governance/williamos-intelligence-fabric/capability-evidence/gpu-tabular-placement-thresholds-2026-09-11.md",
+    ],
+    restrictions: [
+      "Do not bind this workload class to the accelerator at any measured size",
+      "CPU path only; the accelerator loses at every measured size",
+      "No re-attempt without new measured evidence that clears the required margin",
+    ],
   }),
 ] satisfies readonly MultiAgentCapabilityRecord[])
 
