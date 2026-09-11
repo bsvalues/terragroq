@@ -87,9 +87,9 @@ describe("Tier 2 — Hermes Agent as a governed Fabric worker runtime", () => {
     const plain = buildKernelPacket({ policy, prompt: "p", workspacePath: "D:\\w", runId: "r", statePath: "D:\\s" })
     expect(plain.model).toBe("williamos-qwen3-4b:64k")
     expect("placement" in plain).toBe(false)
-    const placed = buildKernelPacket({ policy, prompt: "p", workspacePath: "D:\\w", runId: "r", statePath: "D:\\s", placementBinding: { modelAlias: "Qwen3-8B", modelBinding: "Qwen/Qwen3-8B@b968", runtimeId: "daedalus-hf-transformers", compute: "daedalus", executionClass: "LOCAL" } })
+    const placed = buildKernelPacket({ policy, prompt: "p", workspacePath: "D:\\w", runId: "r", statePath: "D:\\s", placementBinding: { modelAlias: "Qwen3-8B", modelBinding: "Qwen/Qwen3-8B@b968", providerId: "p", runtime: "rt", runtimeId: "daedalus-hf-transformers", compute: "daedalus", executionClass: "LOCAL" } } as any)
     expect(placed.model).toBe("Qwen3-8B")
-    expect(placed.placement).toEqual({ runtimeId: "daedalus-hf-transformers", computeId: "daedalus", executionClass: "LOCAL" })
+    expect((placed as any).placement).toEqual({ runtimeId: "daedalus-hf-transformers", computeId: "daedalus", executionClass: "LOCAL" })
     // the immutable identity is NEVER a packet field — only the derived alias + provenance travel
     expect(JSON.stringify(placed)).not.toContain("b968")
   })

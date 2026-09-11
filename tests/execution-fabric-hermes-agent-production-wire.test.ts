@@ -59,7 +59,7 @@ function fixture({ placementProvider }: { placementProvider?: () => Promise<unkn
     now: () => new Date("2026-09-10T20:00:00.000Z"), powershellCommand: "powershell",
     randomUUID: (() => { let n = 0; return () => `00000000-0000-4000-8000-00000000000${++n}` })(),
     ...(placementProvider === undefined ? {} : { placementProvider }),
-  })
+  } as any)
   return { root, runtimeRoot, workspacePath, policyPath, invokerPath, calls, client }
 }
 
@@ -68,7 +68,7 @@ describe("Tier 2 production wire — the kernel client actually consumes the pla
     const f = fixture({ placementProvider: async () => ({ recommendation: { recommendation: { node_id: "daedalus" } }, status: "RECOMMENDED" }) })
     await f.client.connect()
     const threadId = await f.client.startThread()
-    await f.client.runTurn({ threadId, prompt: "Deliver WO-1" })
+    await (f.client as any).runTurn({ threadId, prompt: "Deliver WO-1" } as any)
     const packetCall = f.calls.find((call) => call.command === "powershell")!
     const packetPath = packetCall.args[packetCall.args.indexOf("-PacketPath") + 1]
     const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"))
@@ -84,7 +84,7 @@ describe("Tier 2 production wire — the kernel client actually consumes the pla
     const f = fixture({ placementProvider: async () => ({ recommendation: { recommendation: { node_id: "atlas" } }, status: "RECOMMENDED" }) })
     await f.client.connect()
     const threadId = await f.client.startThread()
-    await expect(f.client.runTurn({ threadId, prompt: "Deliver WO-1" })).rejects.toThrow(/PLACEMENT_INCOMPLETE:no-model-for-node:atlas/)
+    await expect((f.client as any).runTurn({ threadId, prompt: "Deliver WO-1" } as any)).rejects.toThrow(/PLACEMENT_INCOMPLETE:no-model-for-node:atlas/)
     expect(f.calls.some((call) => call.command === "powershell")).toBe(false)
   })
 
@@ -92,7 +92,7 @@ describe("Tier 2 production wire — the kernel client actually consumes the pla
     const f = fixture()
     await f.client.connect()
     const threadId = await f.client.startThread()
-    await f.client.runTurn({ threadId, prompt: "Deliver WO-1" })
+    await (f.client as any).runTurn({ threadId, prompt: "Deliver WO-1" } as any)
     const packetCall = f.calls.find((call) => call.command === "powershell")!
     const packetPath = packetCall.args[packetCall.args.indexOf("-PacketPath") + 1]
     const packet = JSON.parse(fs.readFileSync(packetPath, "utf8"))

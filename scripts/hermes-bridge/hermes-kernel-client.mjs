@@ -61,6 +61,13 @@ export function buildKernelPromptEpilogue(runId = null) {
 export const KERNEL_STATE_DIR = "kernel-state"
 export const KERNEL_SESSION_ID_PATTERN = /^Session:[ \t]+([A-Za-z0-9_-]{4,64})[ \t]*$/m
 
+/**
+ * @typedef {{ modelBinding: string, modelAlias: string, providerId: string, runtime: string, executionClass: string, compute: string, runtimeId: string }} AgentModelBinding
+ */
+
+/**
+ * @param {{ policy: any, prompt: string, workspacePath: string, runId: string, statePath: string, kernelSessionId?: string | null, placementBinding?: AgentModelBinding | null }} input
+ */
 export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null, placementBinding = null }) {
   // Tier 2: when a Fabric placement decision selected the model for this turn, the packet carries
   // the placed binding (serving alias) and its provenance. The immutable identity never travels as

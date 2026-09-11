@@ -47,10 +47,15 @@ export function resolveAgentModelBinding(placementDecision, workerPolicy) {
 }
 
 /**
+ * @typedef {{ modelIdentity: string, alias?: string, runtimeId: string, computeId: string, executionClass?: string }} QualifiedModelBinding
+ */
+
+/**
  * Convert a live Fabric placement recommendation (node_id from the placement evidence) into the
  * placement decision the worker resolver consumes, using the worker policy's qualified bindings.
  * Fail-closed: no qualified binding for the recommended node means NO placement for this worker —
  * the worker must not improvise a model for a node it was never qualified on.
+ * @param {{ recommendation: any, qualifiedBindings?: QualifiedModelBinding[] }} input
  */
 export function placementDecisionFromFabric({ recommendation, qualifiedBindings = [] }) {
   const nodeId = recommendation?.recommendation?.node_id ?? recommendation?.node_id ?? null
