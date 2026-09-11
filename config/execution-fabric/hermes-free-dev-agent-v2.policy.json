@@ -15,7 +15,9 @@
     "baselineBundle": "D:\\HermesServices\\williamos-hermes-agent\\williamos-baseline.bundle",
     "baselineBundleRef": "refs/remotes/origin/main",
     "workspaceMode": "OWNED_WORKTREE",
-    "allowedWorkspaceRoots": ["C:\\Users\\bs\\.williamos\\hermes-bridge\\worktrees"]
+    "allowedWorkspaceRoots": [
+      "C:\\Users\\bs\\.williamos\\hermes-bridge\\worktrees"
+    ]
   },
   "model": {
     "provider": "custom",
@@ -30,7 +32,10 @@
     "maximumConcurrency": 1,
     "maximumTurns": 20,
     "timeoutSeconds": 1800,
-    "allowedToolsets": ["file", "terminal"],
+    "allowedToolsets": [
+      "file",
+      "terminal"
+    ],
     "persistentGatewayAllowed": false,
     "autonomousSchedulingAllowed": false,
     "promptMaxChars": 60000,
@@ -115,5 +120,21 @@
       "KERNEL_SESSION_CONTINUITY_PROVEN": "v2-scoped; P2b continuity probe 2026-08-16, docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md",
       "V2_OWNED_WORKTREE_REVIEW_APPROVED": "v2-scoped; GRANTED 2026-08-17 by Tier 1 sovereign independent review review-2026-08-17-t1-indep-opus5, performed in a separate isolated reviewer context that did not build this lane. Verdict APPROVE_WITH_CONDITIONS, all nine conditions then closed and closure independently re-verified (CONDITIONS_CLOSED). Record: docs/reports/hermes-kernel-p3-independent-review-2026-08-17.md. This grants PROMOTION ONLY. It authorises NO activation: control/activation, DATABASE_URL and running the launcher remain three separate owner decisions, and this line must never be cited as having given them"
     }
-  }
+  },
+  "modelRoster": [
+    {
+      "modelIdentity": "williamos-qwen3-4b:64k@fabric:commissioned-v1",
+      "alias": "williamos-qwen3-4b:64k",
+      "runtimeId": "hermes-ollama",
+      "computeId": "hermes-node",
+      "executionClass": "LOCAL"
+    },
+    {
+      "modelIdentity": "Qwen/Qwen3-8B@b968826d9c46dd6066d109eabc6255188de91218",
+      "alias": "Qwen3-8B",
+      "runtimeId": "daedalus-hf-transformers",
+      "computeId": "daedalus",
+      "executionClass": "LOCAL"
+    }
+  ]
 }

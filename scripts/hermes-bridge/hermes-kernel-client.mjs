@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { AppServerTimeoutError, AppServerTurnEndedError, AppServerWallError, sanitizeAppServerText } from "./app-server-client.mjs"
 import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, TURN_OUTPUT_SENTINEL_CLOSE, TURN_OUTPUT_SENTINEL_OPEN, validateAgainstTurnSchema } from "./hermes-kernel-output.mjs"
+import { placementDecisionFromFabric, resolveAgentModelBinding, assertAgentExecutesPlacedModel } from "../execution-fabric/hermes-agent-worker.mjs"
 import { HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 
 export const HERMES_KERNEL_POLICY_RELATIVE = "config/execution-fabric/hermes-free-dev-agent-v2.policy.json"
@@ -60,11 +61,18 @@ export function buildKernelPromptEpilogue(runId = null) {
 export const KERNEL_STATE_DIR = "kernel-state"
 export const KERNEL_SESSION_ID_PATTERN = /^Session:[ \t]+([A-Za-z0-9_-]{4,64})[ \t]*$/m
 
-export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null }) {
-  return {
+export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null, placementBinding = null }) {
+  // Tier 2: when a Fabric placement decision selected the model for this turn, the packet carries
+  // the placed binding (serving alias) and its provenance. The immutable identity never travels as
+  // a caller-supplied packet field — the invoker re-derives it from trusted placement state.
+  if (placementBinding !== null) {
+    if (typeof placementBinding.modelAlias !== "string" || placementBinding.modelAlias.length === 0) throw new TypeError("PLACEMENT_BINDING_ALIAS_REQUIRED")
+    if (typeof placementBinding.modelBinding !== "string" || placementBinding.modelBinding.length === 0) throw new TypeError("PLACEMENT_BINDING_MODEL_REQUIRED")
+  }
+  const base = {
     schemaVersion: 3,
     workOrderId: policy.workOrderId,
-    model: policy.model.id,
+    model: placementBinding !== null ? placementBinding.modelAlias : policy.model.id,
     prompt: `${prompt}\n\n${buildKernelPromptEpilogue(runId)}`,
     maximumTurns: policy.execution.maximumTurns,
     toolsets: [...policy.execution.allowedToolsets],
@@ -74,6 +82,14 @@ export function buildKernelPacket({ policy, prompt, workspacePath, runId, stateP
     statePath,
     kernelSessionId,
   }
+  if (placementBinding !== null) {
+    base.placement = {
+      runtimeId: placementBinding.runtimeId,
+      computeId: placementBinding.compute,
+      executionClass: placementBinding.executionClass,
+    }
+  }
+  return base
 }
 
 // Wall tokens are only believed at the start of a line: the model's own stdout is
@@ -97,6 +113,10 @@ export function createHermesKernelClient({
   invokerKind = "powershell",
   pythonCommand,
   randomUUID = () => crypto.randomUUID(),
+  // Tier 2: trusted host wiring that returns the current Fabric placement record (the same record
+  // refresh-model-fabric writes to evidence). When present, every turn executes the model HERMES
+  // placed — never the policy's default. When absent (probe/test lanes), the default applies.
+  placementProvider = null,
 } = {}) {
   requiredString(workspacePath, "workspacePath"); requiredString(runtimeRoot, "runtimeRoot")
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
@@ -405,7 +425,21 @@ export function createHermesKernelClient({
       const statePath = path.join(threadsRoot, threadId, KERNEL_STATE_DIR)
       fs.mkdirSync(statePath, { recursive: true })
       const kernelSessionId = typeof session.kernelSessionId === "string" && session.kernelSessionId.length > 0 ? session.kernelSessionId : null
-      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId, statePath, kernelSessionId })
+      // Tier 2: resolve the Fabric-selected model binding for this turn. The placement record is
+      // trusted host configuration (the fabric evidence the orchestrator refreshed), never a model
+      // packet field. If placement exists but no qualified binding matches, this throws — the
+      // worker refuses to improvise a model instead of running what HERMES placed.
+      let placementBinding = null
+      if (placementProvider !== null) {
+        const record = await placementProvider()
+        if (record?.recommendation) {
+          const decision = placementDecisionFromFabric({ recommendation: record.recommendation, qualifiedBindings: policy.modelRoster ?? [] })
+          placementBinding = resolveAgentModelBinding(decision, policy)
+          const check = assertAgentExecutesPlacedModel(placementBinding, decision)
+          if (!check.ok) throw wall("RESIDENT_MODEL_PLACEMENT_MISMATCH", "runTurn")
+        }
+      }
+      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId, statePath, kernelSessionId, placementBinding })
       if (packet.prompt.length > (policy.execution?.promptMaxChars ?? 16000)) throw wall("RESIDENT_MODEL_PROMPT_TOO_LONG", "runTurn")
       const turnIndex = session.turns.length + 1
       const turnDir = path.join(threadsRoot, threadId, "turns", String(turnIndex))
