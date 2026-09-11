@@ -40,13 +40,40 @@ Per `docs/governance/williamos-intelligence-fabric/18-if-05-fabric-benchmark-mat
 speedup is not evidence. Each run records: wall time per phase, **correctness parity between CPU and
 GPU over several metrics per task** (worst relative delta against a stated tolerance — deliberately
 not a single scalar, since some metrics are insensitive to a wrong result), peak host RSS, VRAM free
-before *and* after each task, the **cold-start cost split into first import and first real device
-work**, and any typed failure. Task order is alternated so warm caches cannot masquerade as a result.
+before *and* after each task, the **cold-start cost split into first import and first real device work**
+plus an explicit **warm-up** of every code path the tasks use, and any typed failure. Task order is
+alternated so warm caches cannot masquerade as a result, and no task is timed until the one-off setup
+costs are paid — otherwise whichever task runs first absorbs them and its ratio misleads.
 
 Results land in `<out>/qualification.json` with `"promoted": false`. The `warnings` array names any
 binding value that failed to resolve, so a degraded binding cannot pass as a complete one, and
 `parityFailures` names any task outside its tolerance so a parity miss is machine-readable rather than
 buried in a nested flag.
+
+## Deriving placement thresholds (scale sweep)
+
+`benchmark.py` answers "does this binding have useful capability?" at one scale. `sweep.py` answers
+"where does the CPU/GPU switch belong?" — it measures a placement curve across sizes and derives a
+conservative per-task crossover:
+
+```bash
+~/.venvs/cuml-qual/bin/python sweep.py \
+  --sizes 50000,100000,250000,500000,1000000,2500000 \
+  --tasks regression,clustering,aggregation --tx-per-parcel 8 --out sweep
+```
+
+It **reuses the reviewed task functions and generators from `benchmark.py`** rather than a second
+implementation, so the curve is measured by the code that produced the qualification evidence. Output
+is a placement curve (`sweep/placement-curve.json`, written after every size so a long sweep survives
+interruption) plus derived thresholds:
+
+* `gpuPreferredAboveRows` — the smallest measured size where the GPU wins by at least `--margin`
+  (default 25%) **and** parity passes at that size and at every larger measured size;
+* `cpuPreferredAtOrBelowRows` — the largest measured size where the CPU still wins;
+* `insufficientEvidence: true` when no measured size reaches the margin — the honest outcome, and the
+  safe one: the task stays on the CPU path rather than switching on a guess.
+
+A threshold is a placement *input*, not a promotion: see the record's promotion section.
 
 ## Checking the record against the evidence
 
