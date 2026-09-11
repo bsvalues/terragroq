@@ -6,6 +6,10 @@ Deliberately explicit about the phases Nsight must see on the timeline:
 so the report answers the questions the IF-05 benchmark matrix actually asks: how much time is
 transfer versus compute, whether host and device overlap, where synchronisation happens, and which
 kernel dominates. Synthetic data only (no county rows), mirroring pacs_oltp shape.
+
+NOTE: without matplotlib installed, nvtx accepts only its built-in palette — green, blue, yellow,
+purple, rapids, cyan, red, white, darkgreen, orange. Any other name (e.g. "olive") raises TypeError
+at the annotate() call and aborts the run mid-profile, silently truncating the capture.
 """
 from __future__ import annotations
 
@@ -46,12 +50,13 @@ def main() -> int:
         model.fit(features, target)
     cupy.cuda.Stream.null.synchronize()
 
-    with nvtx.annotate("regression_predict", color="olive"):
-        predictions = np.asarray(model.predict(features[:200000]))
+    with nvtx.annotate("regression_predict", color="orange"):
+        raw_predictions = model.predict(features[:200000])  # device-resident result
     cupy.cuda.Stream.null.synchronize()
 
     with nvtx.annotate("device_to_host", color="purple"):
-        _ = cupy.asnumpy(predictions)
+        # explicit device->host copy: np.asarray() on a CuPy array is refused by modern CuPy
+        predictions = cupy.asnumpy(raw_predictions)
 
     kmeans = KMeans(n_clusters=24, n_init=4, random_state=7)
     with nvtx.annotate("clustering_fit", color="green"):
