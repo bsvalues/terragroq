@@ -67,6 +67,27 @@ print("WORKER_COMPLETED")
 '''
 
 
+def _sha256(path: str) -> str:
+    import hashlib
+
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def query_compute_apps():
+    """Return (query_succeeded, rows). A failed query is NOT evidence that the device is free."""
+    try:
+        smi = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure means we cannot prove the device state
+        return False, [f"QUERY_ERROR:{exc}"]
+    if smi.returncode != 0:
+        return False, [f"QUERY_ERROR:exit={smi.returncode}"]
+    return True, [line.strip() for line in smi.stdout.splitlines() if line.strip()]
+
+
 def run_checks() -> dict:
     worker_path = os.path.join(HERE, "live_cancellation_worker.py")
     with open(worker_path, "w") as handle:
@@ -88,6 +109,8 @@ def run_checks() -> dict:
         "host": os.uname().nodename,
         "workloadRows": WORKLOAD_ROWS,
         "syntheticDataOnly": True,
+        # An evidence artifact never asserts its own promotion; the verifier rejects it if it does.
+        "promoted": False,
         "checks": {},
     }
 
@@ -110,6 +133,12 @@ def run_checks() -> dict:
     time.sleep(1.0)
 
     was_running = child.poll() is None
+
+    # Prove the child actually held the device BEFORE cancelling. The marker alone only shows the
+    # process reached the fit call; the compute-apps query shows the device was in use by that PID.
+    inflight_ok, inflight_rows = query_compute_apps()
+    held_device = inflight_ok and any(row.split(",")[0].strip() == str(child.pid) for row in inflight_rows)
+
     os.killpg(os.getpgid(child.pid), signal.SIGTERM)
     try:
         child.wait(timeout=20)
@@ -125,19 +154,19 @@ def run_checks() -> dict:
     still_alive = child.poll() is None
 
     result["checks"]["acceleratorPhaseObservedBeforeCancel"] = accelerator_phase_started
+    result["checks"]["deviceHeldByWorkerBeforeCancel"] = held_device
+    result["checks"]["inflightDeviceRows"] = inflight_rows
     result["checks"]["wasActivelyRunningWhenCancelled"] = was_running
     result["checks"]["processGoneAfterCancel"] = not still_alive
     result["checks"]["cancelledExitCode"] = cancelled_after
     result["checks"]["noArtifactFromCancelledRun"] = not os.path.exists(CANCELLED_OUTPUT)
 
-    # The device must be free afterwards: no compute process may still hold the device.
-    smi = subprocess.run(
-        ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"],
-        capture_output=True, text=True,
-    )
-    residual = [line.strip() for line in smi.stdout.splitlines() if line.strip()]
+    # The device must be free afterwards - and the query must have SUCCEEDED for that to mean anything.
+    # A failed nvidia-smi returns empty stdout, which the earlier version read as "released".
+    released_ok, residual = query_compute_apps()
     result["checks"]["deviceComputeProcessesAfterCancel"] = residual
-    result["checks"]["deviceReleased"] = len(residual) == 0
+    result["checks"]["deviceQuerySucceeded"] = released_ok
+    result["checks"]["deviceReleased"] = released_ok and len(residual) == 0
 
     # --- check 3: a clean run produces one artifact; a replay does not add a second -----------------
     clean = subprocess.run(
@@ -147,33 +176,47 @@ def run_checks() -> dict:
     result["checks"]["recoveryRunCompleted"] = clean.returncode == 0 and "WORKER_COMPLETED" in clean.stdout
     result["checks"]["recoveryArtifactPresent"] = os.path.exists(RECOVERY_OUTPUT)
 
+    family = "live-recovery-run-output"
+    replay_files_before = len([name for name in os.listdir(EVIDENCE_DIR) if name.startswith(family)])
+    hash_before = _sha256(RECOVERY_OUTPUT) if os.path.exists(RECOVERY_OUTPUT) else None
+
     replay = subprocess.run(
         [sys.executable, worker_path, str(WORKLOAD_ROWS), RECOVERY_OUTPUT, marker],
         capture_output=True, text=True, timeout=1800,
     )
     result["checks"]["replayCompleted"] = replay.returncode == 0
-    present = [name for name in os.listdir(EVIDENCE_DIR) if name == os.path.basename(RECOVERY_OUTPUT)]
-    result["checks"]["artifactCountAfterReplay"] = len(present)
 
-    if os.path.exists(RECOVERY_OUTPUT):
-        with open(RECOVERY_OUTPUT) as handle:
-            written = json.load(handle)
-        written["artifactWrites"] = 2  # the replay rewrote the same artifact, it did not add one
-        with open(RECOVERY_OUTPUT, "w") as handle:
-            json.dump(written, handle, indent=2)
+    # The earlier version counted entries equal to a fixed basename, which is 1 by construction and
+    # therefore could not fail. Count the artifact family before and after the replay instead, and
+    # compare content: the replay must not add a second artifact, and it must produce the same result.
+    family = "live-recovery-run-output"
+    after_files = sorted(name for name in os.listdir(EVIDENCE_DIR) if name.startswith(family))
+    hash_after = _sha256(RECOVERY_OUTPUT) if os.path.exists(RECOVERY_OUTPUT) else None
+    result["checks"]["replayArtifactFilesBefore"] = replay_files_before
+    result["checks"]["replayArtifactFilesAfter"] = len(after_files)
+    result["checks"]["replayDidNotAddArtifact"] = len(after_files) == replay_files_before == 1
+    result["checks"]["replayReproducedSameResult"] = (
+        hash_after is not None and hash_before is not None and hash_after == hash_before
+    )
+
+    # The post-check cosmetic mutation of the artifact is gone: it rewrote the file after the checks
+    # had been taken and added nothing but confusion.
 
     required = [
         "acceleratorPhaseObservedBeforeCancel",
+        "deviceHeldByWorkerBeforeCancel",
         "wasActivelyRunningWhenCancelled",
         "processGoneAfterCancel",
         "noArtifactFromCancelledRun",
+        "deviceQuerySucceeded",
         "deviceReleased",
         "recoveryRunCompleted",
         "recoveryArtifactPresent",
         "replayCompleted",
+        "replayDidNotAddArtifact",
+        "replayReproducedSameResult",
     ]
-    result["ok"] = all(result["checks"][key] for key in required) \
-        and result["checks"]["artifactCountAfterReplay"] == 1
+    result["ok"] = all(result["checks"].get(key) is True for key in required)
     if os.path.exists(marker):
         os.remove(marker)
     return result

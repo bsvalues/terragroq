@@ -140,12 +140,19 @@ export function loadPlacementEvidence(curvePath, { now = new Date(), maxAgeDays 
   if (curve.promoted !== false) {
     return { ok: false, reasonCode: "THRESHOLD_EVIDENCE_INVALID", detail: "promoted must be false" }
   }
+  // Freshness must be positively established. An absent or unparseable timestamp is NOT fresh: treating
+  // "no timestamp" as "fresh" was a fail-open default that let unverifiable evidence reach the device.
   const finishedAt = curve.finishedAt ? new Date(curve.finishedAt) : null
-  if (finishedAt && !Number.isNaN(finishedAt.getTime())) {
-    const ageDays = (now.getTime() - finishedAt.getTime()) / 86_400_000
-    if (ageDays > maxAgeDays) {
-      return { ok: false, reasonCode: "THRESHOLD_EVIDENCE_STALE", detail: `age ${ageDays.toFixed(1)}d`, ageDays }
+  if (!finishedAt || Number.isNaN(finishedAt.getTime())) {
+    return {
+      ok: false,
+      reasonCode: "THRESHOLD_EVIDENCE_INVALID",
+      detail: "freshness unverifiable: finishedAt is absent or unparseable",
     }
+  }
+  const ageDays = (now.getTime() - finishedAt.getTime()) / 86_400_000
+  if (ageDays > maxAgeDays) {
+    return { ok: false, reasonCode: "THRESHOLD_EVIDENCE_STALE", detail: `age ${ageDays.toFixed(1)}d`, ageDays }
   }
   return {
     ok: true,
@@ -174,19 +181,27 @@ export function providerIdentity() {
   return { ...GPU_TABULAR_PROVIDER_IDENTITY }
 }
 
-/** Path confinement: unique, relative, traversal-free, wildcard-free (same rule as the trust gate). */
+/** The exact value the referenced gate recognizes (workers.py: `RECOGNIZED_PROMPT_INJECTION_BOUNDARIES`). */
+export const RECOGNIZED_PROMPT_INJECTION_BOUNDARIES = Object.freeze(["trusted-work-order-envelope-v1"])
+
+/**
+ * Path confinement - an exact port of the referenced gate's `_valid_exact_paths` (workers.py), so a
+ * path set accepted here is accepted there and a path set rejected there is rejected here. The earlier
+ * version of this function was weaker than the contract it claimed to implement.
+ */
 export function validExactPaths(paths) {
   if (!Array.isArray(paths) || paths.length === 0) return false
+  if (!paths.every((value) => typeof value === "string" && value.length > 0)) return false
   if (new Set(paths).size !== paths.length) return false
-  return paths.every((value) => (
-    typeof value === "string"
-    && value.length > 0
-    && !value.startsWith("/")
-    && !value.includes("..")
-    && !value.includes("*")
-    && !value.includes("\\")
-    && !/^[A-Za-z]:/.test(value)
-  ))
+  return paths.every((value) => {
+    const normalized = value.replace(/\\/g, "/")
+    const parts = normalized.split("/")
+    if (normalized.startsWith("/")) return false
+    if (parts[0].includes(":")) return false
+    if (parts.some((part) => part === "" || part === "." || part === "..")) return false
+    if (["*", "?", "[", "]"].some((token) => normalized.includes(token))) return false
+    return true
+  })
 }
 
 /**
@@ -210,8 +225,8 @@ export function assertPreventiveTrustGateV2(gate, authority) {
   if (gate.rawCredentialInspection !== false) {
     return deny("RAW_CREDENTIAL_INSPECTION_FORBIDDEN", "rawCredentialInspection must be explicitly false")
   }
-  if (gate.promptInjectionBoundary !== "provider-stdout-not-instructions") {
-    return deny("PROMPT_INJECTION_BOUNDARY_UNRECOGNIZED", "boundary must name the enforced boundary")
+  if (!RECOGNIZED_PROMPT_INJECTION_BOUNDARIES.includes(gate.promptInjectionBoundary)) {
+    return deny("PROMPT_INJECTION_BOUNDARY_UNRECOGNIZED", "boundary must name a recognized enforced boundary")
   }
   if (gate.exactPathConfinement !== true) {
     return deny("EXACT_PATH_CONFINEMENT_REQUIRED", "exactPathConfinement must be explicitly true")
@@ -225,11 +240,15 @@ export function assertPreventiveTrustGateV2(gate, authority) {
   if (gate.independentEvidenceCapture !== true) {
     return deny("INDEPENDENT_EVIDENCE_CAPTURE_REQUIRED", "independentEvidenceCapture must be explicitly true")
   }
-  if (!authority || typeof authority !== "object") {
-    return deny("EXACT_PATH_SCOPE_MISSING", "dispatch scope and execution grant are required")
+  // Mirrors the referenced gate exactly: both the grant and the scope must be objects, and a missing
+  // one is EXACT_PATH_SCOPE_MISSING rather than a path-validity failure.
+  const grant = authority?.grant
+  const scope = authority?.scope
+  if (!grant || typeof grant !== "object" || !scope || typeof scope !== "object") {
+    return deny("EXACT_PATH_SCOPE_MISSING", "both dispatch scope and execution grant are required")
   }
-  const grantPaths = authority.grant?.allowedPaths
-  const scopePaths = authority.scope?.allowedPaths
+  const grantPaths = grant.allowed_paths
+  const scopePaths = scope.allowed_paths
   if (!validExactPaths(grantPaths) || !validExactPaths(scopePaths)) {
     return deny("EXACT_PATH_SCOPE_INVALID", "allowed paths must be unique, relative and traversal-free")
   }
@@ -332,7 +351,10 @@ export function captureIndependentEvidence(decision, { evidenceDigest = null, no
  */
 export function evaluateGpuTabularPlacement(request = {}, context = {}) {
   const { workloadClass, rows } = request
-  const { evidence = null, bindingHealthy = true, authority = null, trustGate = null, cancellation = null } = context
+  // bindingHealthy defaults to FALSE: a caller that does not positively assert a healthy binding gets
+  // the CPU path. Defaulting it to true was a fail-open default and contradicted this module's own
+  // no-assume-accelerator rule.
+  const { evidence = null, bindingHealthy = false, authority = null, trustGate = null, cancellation = null } = context
 
   const decide = (placement, reasonCode, extra = {}) => Object.freeze({
     placement,

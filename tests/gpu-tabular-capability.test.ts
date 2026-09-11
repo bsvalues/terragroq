@@ -29,16 +29,18 @@ const trustGate = {
     attributable: true,
   },
   rawCredentialInspection: false,
-  promptInjectionBoundary: "provider-stdout-not-instructions",
+  // The value the referenced gate actually recognizes, not one invented here.
+  promptInjectionBoundary: "trusted-work-order-envelope-v1",
   exactPathConfinement: true,
   outputRedaction: true,
   cancellation: { supported: true },
   independentEvidenceCapture: true,
 }
 
+// Snake-case `allowed_paths`, the shape the referenced gate consumes.
 const authority = {
-  grant: { allowedPaths: ["scripts/execution-fabric"] },
-  scope: { allowedPaths: ["scripts/execution-fabric"] },
+  grant: { allowed_paths: ["scripts/execution-fabric"] },
+  scope: { allowed_paths: ["scripts/execution-fabric"] },
 }
 
 const context = (overrides: Record<string, unknown> = {}) => ({
@@ -185,6 +187,34 @@ describe("GPU tabular capability: every missing or invalid input fails closed to
     expect(decision.reasonCode).toBe("CPU_DEFAULT_BINDING_UNAVAILABLE")
   })
 
+  it("defaults to the CPU when binding health is not positively asserted at all", () => {
+    // Omitting the field must not read as healthy: that was a fail-open default.
+    const omitted = gpu.evaluateGpuTabularPlacement(
+      { workloadClass: "regression", rows: 2_500_000 },
+      { evidence, authority, trustGate, cancellation: null },
+    )
+    expect(omitted.placement).toBe("CPU")
+    expect(omitted.reasonCode).toBe("CPU_DEFAULT_BINDING_UNAVAILABLE")
+    for (const notTrue of [undefined, null, 1, "yes", {}]) {
+      expect(place("regression", 2_500_000, { bindingHealthy: notTrue }).placement, String(notTrue)).toBe("CPU")
+    }
+  })
+
+  it("treats unverifiable freshness as not fresh, never as fresh", () => {
+    const noTimestamp = tempCurve((curve) => {
+      delete curve.finishedAt
+      delete curve.startedAt
+    })
+    const loaded = gpu.loadPlacementEvidence(noTimestamp)
+    expect(loaded.ok).toBe(false)
+    expect(loaded.detail).toMatch(/freshness/i)
+    expect(place("regression", 2_500_000, { evidence: loaded }).placement).toBe("CPU")
+    const unparseable = tempCurve((curve) => {
+      curve.finishedAt = "not-a-timestamp"
+    })
+    expect(gpu.loadPlacementEvidence(unparseable).ok).toBe(false)
+  })
+
   it("defaults to the CPU for an unknown workload type or an unknown scale", () => {
     expect(place("mystery_workload", 2_500_000).reasonCode).toBe("CPU_DEFAULT_UNKNOWN_WORKLOAD_CLASS")
     expect(place("regression", Number.NaN).reasonCode).toBe("CPU_DEFAULT_SCALE_UNKNOWN")
@@ -232,15 +262,52 @@ describe("GPU tabular capability: the preventive trust contract is enforced, not
   })
 
   it("requires the grant and scope path sets to match exactly", () => {
-    const mismatched = { grant: { allowedPaths: ["scripts/a"] }, scope: { allowedPaths: ["scripts/b"] } }
+    const mismatched = { grant: { allowed_paths: ["scripts/a"] }, scope: { allowed_paths: ["scripts/b"] } }
     expect(gpu.assertPreventiveTrustGateV2(trustGate, mismatched).reasonCode).toBe("EXACT_PATH_SCOPE_MISMATCH")
-    const absolute = { grant: { allowedPaths: ["/etc"] }, scope: { allowedPaths: ["/etc"] } }
+    const absolute = { grant: { allowed_paths: ["/etc"] }, scope: { allowed_paths: ["/etc"] } }
     expect(gpu.assertPreventiveTrustGateV2(trustGate, absolute).reasonCode).toBe("EXACT_PATH_SCOPE_INVALID")
-    const traversal = { grant: { allowedPaths: ["../x"] }, scope: { allowedPaths: ["../x"] } }
+    const traversal = { grant: { allowed_paths: ["../x"] }, scope: { allowed_paths: ["../x"] } }
     expect(gpu.assertPreventiveTrustGateV2(trustGate, traversal).reasonCode).toBe("EXACT_PATH_SCOPE_INVALID")
-    const wildcard = { grant: { allowedPaths: ["scripts/*"] }, scope: { allowedPaths: ["scripts/*"] } }
+    const wildcard = { grant: { allowed_paths: ["scripts/*"] }, scope: { allowed_paths: ["scripts/*"] } }
     expect(gpu.assertPreventiveTrustGateV2(trustGate, wildcard).reasonCode).toBe("EXACT_PATH_SCOPE_INVALID")
     expect(gpu.assertPreventiveTrustGateV2(trustGate, null).reasonCode).toBe("EXACT_PATH_SCOPE_MISSING")
+  })
+
+  it("conforms to the referenced gate's path rule exactly, including the cases a looser rule missed", () => {
+    // Each of these is rejected by workers.py `_valid_exact_paths`; a weaker implementation accepted
+    // them, which is what made the earlier version a substitute rather than the contract.
+    for (const rejected of [
+      "foo/./bar",
+      "a/b//c",
+      "sc?ripts",
+      "we[i]rd",
+      "foo:bar",
+      "/absolute",
+      "C:/drive",
+      "../escape",
+      "wild*card",
+      "",
+    ]) {
+      const both = { grant: { allowed_paths: [rejected] }, scope: { allowed_paths: [rejected] } }
+      expect(gpu.validExactPaths([rejected]), JSON.stringify(rejected)).toBe(false)
+      expect(gpu.assertPreventiveTrustGateV2(trustGate, both).reasonCode, JSON.stringify(rejected))
+        .toBe("EXACT_PATH_SCOPE_INVALID")
+    }
+    for (const accepted of ["scripts/execution-fabric", "docs/governance", "a/b/c"]) {
+      expect(gpu.validExactPaths([accepted]), accepted).toBe(true)
+    }
+    // Duplicates and empty sets are invalid in the referenced rule too.
+    expect(gpu.validExactPaths(["a", "a"])).toBe(false)
+    expect(gpu.validExactPaths([])).toBe(false)
+  })
+
+  it("accepts exactly the prompt-injection boundary the referenced gate recognizes", () => {
+    expect(gpu.RECOGNIZED_PROMPT_INJECTION_BOUNDARIES).toEqual(["trusted-work-order-envelope-v1"])
+    expect(gpu.assertPreventiveTrustGateV2(trustGate, authority).allowed).toBe(true)
+    // The value this adapter used to require is not a boundary the gate recognizes.
+    const invented = { ...trustGate, promptInjectionBoundary: "provider-stdout-not-instructions" }
+    expect(gpu.assertPreventiveTrustGateV2(invented, authority).reasonCode)
+      .toBe("PROMPT_INJECTION_BOUNDARY_UNRECOGNIZED")
   })
 
   it("passes only when every requirement is explicitly satisfied", () => {
@@ -329,26 +396,88 @@ describe("GPU tabular capability: evidence capture and redaction", () => {
 
 describe("GPU tabular capability: the live cancellation proof is machine-checked", () => {
   const LIVE = "scripts/execution-fabric/gpu-tabular-bench/evidence/live-cancellation-proof.json"
+  const REQUIRED_CHECKS = [
+    "acceleratorPhaseObservedBeforeCancel",
+    "deviceHeldByWorkerBeforeCancel",
+    "wasActivelyRunningWhenCancelled",
+    "processGoneAfterCancel",
+    "noArtifactFromCancelledRun",
+    "deviceQuerySucceeded",
+    "deviceReleased",
+    "recoveryRunCompleted",
+    "recoveryArtifactPresent",
+    "replayCompleted",
+    "replayDidNotAddArtifact",
+    "replayReproducedSameResult",
+  ]
 
   it("records a cancelled accelerator run that stopped, left no partial effect, and did not duplicate", () => {
     expect(fs.existsSync(LIVE), LIVE).toBe(true)
     const proof = JSON.parse(fs.readFileSync(LIVE, "utf8"))
-    expect(proof.ok).toBe(true)
-    expect(proof.syntheticDataOnly).toBe(true)
     const checks = proof.checks
-    // The cancellation landed on real device work, not on process startup.
+
+    // The verdict must be derived from the checks rather than stored independently, so a flipped check
+    // cannot leave a passing artifact behind.
+    expect(proof.ok).toBe(true)
+    expect(REQUIRED_CHECKS.filter((key) => checks[key] !== true)).toEqual([])
+    expect(proof.promoted).toBe(false)
+    expect(proof.syntheticDataOnly).toBe(true)
+
+    // Cancellation landed on real device work: the marker proves the fit call was reached, and the
+    // compute-apps query proves that same PID held the device before the signal.
     expect(checks.acceleratorPhaseObservedBeforeCancel).toBe(true)
+    expect(checks.deviceHeldByWorkerBeforeCancel).toBe(true)
     expect(checks.wasActivelyRunningWhenCancelled).toBe(true)
     expect(checks.processGoneAfterCancel).toBe(true)
     expect(checks.cancelledExitCode).toBe(-15)
-    // Cancellation left nothing behind, and the device was actually released.
+
+    // Cancellation left nothing behind, and the device was released by a query that actually succeeded.
     expect(checks.noArtifactFromCancelledRun).toBe(true)
+    expect(checks.deviceQuerySucceeded).toBe(true)
     expect(checks.deviceReleased).toBe(true)
     expect(checks.deviceComputeProcessesAfterCancel).toEqual([])
-    // Recovery produced one artifact; the replay did not add a second.
+
+    // Recovery produced one artifact; the replay neither added a second nor changed the result.
     expect(checks.recoveryRunCompleted).toBe(true)
     expect(checks.replayCompleted).toBe(true)
-    expect(checks.artifactCountAfterReplay).toBe(1)
+    expect(checks.replayArtifactFilesBefore).toBe(1)
+    expect(checks.replayArtifactFilesAfter).toBe(1)
+  })
+})
+
+describe("GPU tabular capability: parity with the referenced trust gate is checked, not claimed", () => {
+  const PARITY = "scripts/execution-fabric/gpu-tabular-bench/evidence/trust-gate-parity.json"
+  const WORKERS_PY = "control-center/backend/workers.py"
+
+  it("keeps a committed parity matrix with no failures and no undeclared difference", () => {
+    expect(fs.existsSync(PARITY), PARITY).toBe(true)
+    const parity = JSON.parse(fs.readFileSync(PARITY, "utf8"))
+    expect(parity.ok).toBe(true)
+    expect(parity.failures).toEqual([])
+    expect(parity.cases).toBe(parity.matrix.length)
+    // Internal consistency: the counts must describe the matrix, not sit beside it.
+    expect(parity.agreeing).toBe(parity.matrix.filter((row: any) => row.verdict === "agree").length)
+    expect(parity.matrix.filter((row: any) => row.verdict === "adapter_more_permissive")).toEqual([])
+    // Every non-agreeing case must be declared stricter, with a reason.
+    const stricterCases = parity.matrix.filter((row: any) => row.verdict === "adapter_stricter").map((row: any) => row.case)
+    expect(stricterCases.sort()).toEqual(parity.stricter.map((entry: any) => entry.case).sort())
+    for (const entry of parity.stricter) expect(String(entry.reason).length).toBeGreaterThan(20)
+    expect(parity.promoted).toBe(false)
+  })
+
+  it("matches the boundary set the reference implementation declares right now", () => {
+    // A live cross-check rather than a stored claim: if workers.py changes what it recognizes, this
+    // fails until the adapter follows.
+    const source = fs.readFileSync(WORKERS_PY, "utf8")
+    const match = source.match(/RECOGNIZED_PROMPT_INJECTION_BOUNDARIES\s*=\s*\{([^}]*)\}/)
+    expect(match, "RECOGNIZED_PROMPT_INJECTION_BOUNDARIES not found in workers.py").not.toBeNull()
+    const reference = match![1]
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => entry.replace(/^["']|["']$/g, ""))
+      .sort()
+    expect([...gpu.RECOGNIZED_PROMPT_INJECTION_BOUNDARIES].sort()).toEqual(reference)
   })
 })
 

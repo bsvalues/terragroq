@@ -276,7 +276,8 @@ def main() -> int:
     # that says `promoted: true` is asserting an authority it does not have, so it is rejected: the
     # traceable source of a promotion is the machine-registry state change, not a field in a JSON.
     for name in ("qualification-full-2.5M.json", "qualification-full-2.5M-run2.json",
-                 "qualification-small-60k.json", "placement-curve.json"):
+                 "qualification-small-60k.json", "placement-curve.json",
+                 "live-cancellation-proof.json"):
         path = os.path.join(EVIDENCE, name)
         if not os.path.exists(path):
             problems.append(f"required evidence file missing: {name}")

@@ -1,21 +1,30 @@
 {
   "schemaVersion": "williamos-gpu-tabular-live-cancellation/1",
-  "capturedAt": "2026-09-11T18:45:49Z",
+  "capturedAt": "2026-09-11T19:13:06Z",
   "host": "daedalus-ThinkStation-P620",
   "workloadRows": 400000,
   "syntheticDataOnly": true,
+  "promoted": false,
   "checks": {
     "acceleratorPhaseObservedBeforeCancel": true,
+    "deviceHeldByWorkerBeforeCancel": true,
+    "inflightDeviceRows": [
+      "1979698, 624 MiB"
+    ],
     "wasActivelyRunningWhenCancelled": true,
     "processGoneAfterCancel": true,
     "cancelledExitCode": -15,
     "noArtifactFromCancelledRun": true,
     "deviceComputeProcessesAfterCancel": [],
+    "deviceQuerySucceeded": true,
     "deviceReleased": true,
     "recoveryRunCompleted": true,
     "recoveryArtifactPresent": true,
     "replayCompleted": true,
-    "artifactCountAfterReplay": 1
+    "replayArtifactFilesBefore": 1,
+    "replayArtifactFilesAfter": 1,
+    "replayDidNotAddArtifact": true,
+    "replayReproducedSameResult": true
   },
   "ok": true
 }
