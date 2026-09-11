@@ -189,3 +189,20 @@ No change to HERMES, TerraFusion production, or Windows security/network configu
 change to the commissioned DAEDALUS runtime; no cloud spend; no county/protected-data use. The
 `apt`-based Nsight install (needing sudo) was deliberately avoided in favour of the user-dir `.run`
 payload. No scheduler, registry, agent framework, dashboard, or memory system was added.
+
+## 7. Subsequent reviewed transition (same day)
+
+The promotion rule's requirements were subsequently implemented and reviewed in-repo, and the
+capability was admitted to the machine registry as `PILOT_AUTHORIZED` — three size-aware
+executable entries (regression ≥ 50k, clustering ≥ 50k, aggregation ≥ 100k), one screening-only
+non-executable entry, one refused entry (PR #1218, merge `4b7ad3fa`; the registry entries and
+`scripts/execution-fabric/gpu-tabular-capability.mjs` are the current enforcement source).
+
+The seam that makes the capability usable was then wired and accepted live:
+`scripts/execution-fabric/gpu-tabular-dispatch.mjs` submits a workload described by an authorized
+Work Order through the existing registry gate, the reviewed adapter, the existing fabric SSH
+transport, the existing per-lane lease store and evidence ledger, and projects result + provenance
+back onto the same Work Order. All 19 live scenarios against the real device — including the §5
+placement predictions, mid-flight cancellation, dispatcher-death orphan recovery, and every
+fail-closed input — are recorded in
+`scripts/execution-fabric/gpu-tabular-bench/evidence/dispatch-acceptance.json`.
