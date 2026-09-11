@@ -13,7 +13,7 @@ capability is a reviewed owner act (promotion rule, `executable-capability-inven
 | Accelerator | NVIDIA GeForce RTX 3090, 24,576 MiB, compute capability 8.6 |
 | Driver | 595.84 |
 | OS / kernel | Ubuntu 24.04, kernel 7.0.0-31 |
-| CPU / RAM | 24 cores / 62 GB |
+| CPU / RAM | 24 cores (`host.cpuCount`) / 67,263,365,120 bytes = 62.6 GiB (`host.totalMemoryBytes`) |
 | Runtime | `cuml 26.08.00` + `cudf 26.08.01` (pip CUDA-13 wheels, `cuml-cu13`/`cudf-cu13` 26.8.x) |
 | CUDA runtime | `nvidia-cuda-runtime 13.4.49`, `cuda-toolkit 13.4.1.0` (recorded from the installed distributions) |
 | CuPy / sklearn | `cupy-cuda13x 14.2.0` / `scikit-learn 1.9.1`, numpy 2.4.6, pandas 3.0.3 |
@@ -44,45 +44,56 @@ detection (IsolationForest).
 
 | Task | CPU | GPU | CPU/GPU | Parity | Worst metric delta | Tolerance |
 |---|---|---|---|---|---|---|
-| aggregation (20 M tx rollup) | 3.77 s | 0.74 s | **5.12×** | PASS | 0.0 (exact) | 2% |
-| valuation regression (2.5 M parcels) | 83.53 s | 4.21 s | **19.86×** | PASS | 0.0210 (RMSE 2.1%) | 30% |
-| valuation-zone clustering | 20.96 s | 4.36 s | **4.80×** | PASS | 0.00098 | 5% |
+| aggregation (20 M tx rollup) | 3.87 s | 0.80 s | **4.82×** | PASS | 0.0 (exact) | 2% |
+| valuation regression (2.5 M parcels) | 83.70 s | 4.21 s | **19.87×** | PASS | 0.0210 (RMSE 2.1%) | 30% |
+| valuation-zone clustering | 20.98 s | 4.32 s | **4.86×** | PASS | 0.00098 | 5% |
 | PCA (12 features) | 0.035 s | 0.089 s | **0.39× — CPU wins** | PASS | 0.000007 | 2% |
-| sales-ratio outliers | 10.07 s | 0.032 s | **318×** | PASS | 0.0808 | 35% |
+| sales-ratio outliers | 10.05 s | 0.031 s | **323×** | PASS | 0.0808 | 35% |
 
-Cold start, split honestly: first CuPy **import 0.131 s**, first real **device work 0.301 s**. Peak
-host RSS **5.29 GB**. Zero failures, zero unresolved-binding warnings.
+Cold start, split honestly: first CuPy **import 0.126 s**, first real **device work 0.276 s**. Peak
+host RSS **5.20 GB**. Zero failures, zero unresolved-binding warnings, `parityFailures: []`.
 
 Parity is stated over several metrics per task wherever a single scalar would be insensitive to a
 wrong result: aggregation compares the total, the group count *and* the largest group, and PCA
 compares the dominant component's share and the leading-variance magnitude — `explained_variance_ratio_`
 alone sums to 1.0 by construction and can never detect a wrong decomposition.
 
-These ratios are not single-sample noise: the full-scale run is reproducible across repetitions
-(regression 83.73 s → 83.53 s, clustering 21.36 s → 20.96 s) and the aggregation figure is
-independently corroborated by the §4 profiling run.
+The §4 profiling capture is a separate measurement of the same workload by a different tool. Where it
+overlaps, it agrees with the benchmark's GPU-side timings to within ~10% (profile `regression_fit`
+4.4372 s vs benchmark GPU 4.21 s; profile `clustering_fit` 4.0126 s vs benchmark GPU 4.36 s). It does
+**not** cover the aggregation task — `profile_gpu.py` runs no cuDF groupby — so aggregation rests on
+the benchmark evidence alone.
+
+Run-to-run stability, measured on two full-scale runs from this same revision
+(`qualification-full-2.5M.json` and `qualification-full-2.5M-run2.json`): GPU seconds agree to 0.9%
+(aggregation), 0.2% (regression), 0.0% (clustering) and 1.1% (outlier). PCA differs by 21% between the
+two runs — it completes in ~0.1 s, where scheduler noise dominates — so the 0.39× should be read as
+"CPU wins clearly", not as a precise figure.
 
 ### Small input (60,000 parcels / 300,000 tx) — where the accelerator loses
 
 | Task | CPU | GPU | CPU/GPU | Parity |
 |---|---|---|---|---|
-| aggregation | 0.031 s | 0.650 s | **0.048× — GPU ~21× slower** | PASS |
-| PCA | 0.0015 s | 0.071 s | **0.021× — GPU ~49× slower** | PASS |
-| regression | 0.877 s | 0.707 s | 1.24× | PASS |
-| clustering | 0.506 s | 0.193 s | 2.62× | PASS |
-| sales-ratio outliers | 0.389 s | 0.015 s | 26.4× | **FAIL — 0.372 vs 0.35 tolerance** |
+| aggregation | 0.030 s | 0.652 s | **0.047× — GPU ~21× slower** | PASS |
+| PCA | 0.0014 s | 0.069 s | **0.020× — GPU ~50× slower** | PASS |
+| regression | 0.851 s | 0.708 s | 1.20× | PASS |
+| clustering | 0.483 s | 0.195 s | 2.47× | PASS |
+| sales-ratio outliers | 0.379 s | 0.014 s | 27.6× | **FAIL — 0.372 vs 0.35 tolerance** |
 
-**Placement relevance:** the accelerator pays only above a size threshold, and the *worst* inversion is
-aggregation — a rollup of a small transaction table, where cuDF's fixed overhead dominates the work. A
-naive "GPU is faster" rule would regress two of the five tasks at small input. An earlier measurement of
-this same case reported regression at 0.21×; that was an artifact of the first GPU task in the process
-absorbing CUDA/cuML warm-up, which is why cold start is now measured separately and before any other
-device work.
+This run reports `parityFailures: ["outlier"]` — a machine-readable signal, so a reader does not have
+to infer a parity miss from a nested flag inside an otherwise clean `failures: []`.
+
+**Placement relevance:** the accelerator pays only above a size threshold. The deepest inversions are
+PCA (~50× slower on GPU) and aggregation (~21× slower) — in both, the work per row is small enough that
+cuDF/cuML fixed overhead dominates. A naive "GPU is faster" rule would regress two of the five tasks at
+small input. An earlier measurement of this same case reported regression at 0.21×; that was an artifact
+of the first GPU task in the process absorbing CUDA/cuML warm-up, which is why cold start is now measured
+separately and before any other device work.
 
 **Outlier detection carries the weakest correctness signal.** cuML and scikit-learn IsolationForest
 differ in sampling and split semantics: the outlier *count* is comparable at full scale (8.1% delta
 inside a 35% tolerance) but **exceeds its tolerance at small scale (37.2%)**, and the tolerance itself
-is deliberately loose. The 318× speedup is real; "same answer" is not. It is a screening workload, not
+is deliberately loose. The 323× speedup is real; "same answer" is not. It is a screening workload, not
 a drop-in replacement.
 
 Not covered by this run: sustained/thermal throughput on a shared desktop-class card (the IF-05
@@ -144,12 +155,13 @@ Proposed ids: `TABULAR_ML_GPU`, `CLUSTERING_GPU`, `DIMENSIONAL_REDUCTION_GPU`,
 `ANOMALY_DETECTION_GPU`. The measured evidence supports a narrower scope than the id list suggests:
 
 * **`TABULAR_ML_GPU`** (tree ensembles over parcel-scale rows) — strongest case: 19.9× at 2.5 M rows
-  with 2.1% RMSE parity, reproducible across runs, and corroborated by the profiling capture.
-* **`CLUSTERING_GPU`** — solid at both scales (4.8× / 2.6×) with sub-1% inertia parity.
-* **`ANOMALY_DETECTION_GPU`** — fast (318×) but the *answer* is implementation-dependent: parity
+  with 2.1% RMSE parity, stable across two same-revision runs, and its fit independently timed by the
+  §4 capture (4.44 s there vs 4.21 s here).
+* **`CLUSTERING_GPU`** — solid at both scales (4.9× / 2.5×) with sub-1% inertia parity.
+* **`ANOMALY_DETECTION_GPU`** — fast (323×) but the *answer* is implementation-dependent: parity
   passes at full scale and fails at small scale. Bind it only as a screening step with a stated
   tolerance, never as a drop-in replacement.
-* **`DIMENSIONAL_REDUCTION_GPU`** — **not supported** at this feature width (0.39×, and 0.021× at
+* **`DIMENSIONAL_REDUCTION_GPU`** — **not supported** at this feature width (0.39×, and 0.020× at
   small input). CPU wins; do not bind it.
 * **Aggregation / rollup work** — supported only above the size threshold; at 60 k rows cuDF loses by
   ~21×. A placement rule must be size-aware, not class-aware alone.

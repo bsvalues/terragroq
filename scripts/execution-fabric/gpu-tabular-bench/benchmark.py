@@ -70,6 +70,17 @@ def host_memory_bytes():
     return None
 
 
+def host_total_memory_bytes():
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return None
+
+
 def peak_host_rss_bytes() -> int | None:
     try:
         import resource
@@ -466,6 +477,7 @@ def main() -> int:
             "kernel": platform.version(),
             "python": platform.python_version(),
             "cpuCount": os.cpu_count(),
+            "totalMemoryBytes": host_total_memory_bytes(),
         },
         "binding": {
             "runtimeId": "cuml-cu13",
@@ -560,6 +572,12 @@ def main() -> int:
         parity = record.get("parity") or {}
         print(f"        parity={parity.get('within_tolerance')} delta={parity.get('relative_delta')}", flush=True)
 
+    # A parity miss is a machine-readable outcome, not something a reader must infer from a nested
+    # flag: a run can honestly report failures:[] and still have a task outside its tolerance.
+    evidence["parityFailures"] = sorted(
+        task["task"] for task in evidence["tasks"]
+        if isinstance(task.get("parity"), dict) and task["parity"].get("within_tolerance") is False
+    )
     evidence["finishedAt"] = now_iso()
     evidence["host"]["peakHostRssBytes"] = peak_host_rss_bytes()
     evidence["host"]["availableMemoryBytes"] = host_memory_bytes()

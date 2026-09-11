@@ -13,7 +13,12 @@
 # (An earlier attempt aborted at regression_predict and contained only the first three.)
 #
 == nsys/report generation output (tail) ==
-       ] nsys-tabular2.nsys-rep[1/1] [=======================93%  ] nsys-tabular2.nsys-rep[1/1] [=======================96%  ] nsys-tabular2.nsys-rep[1/1] [========================98% ] nsys-tabular2.nsys-rep[1/1] [========================100%] nsys-tabular2.nsys-rep[1/1] [========================100%] nsys-tabular2.nsys-rep
+       ] nsys-tabular2.nsys-rep
+[1/1] [=======================93%  ] nsys-tabular2.nsys-rep
+[1/1] [=======================96%  ] nsys-tabular2.nsys-rep
+[1/1] [========================98% ] nsys-tabular2.nsys-rep
+[1/1] [========================100%] nsys-tabular2.nsys-rep
+[1/1] [========================100%] nsys-tabular2.nsys-rep
 Generated:
 	/home/daedalus/gpu-tabular-bench/nsys-tabular2.nsys-rep
 
@@ -25,3 +30,6 @@ Generated:
 :regression_fit
 :regression_predict
 :synthetic_generation
+
+== profiled process stdout ==
+rows=2500000 rmse=30942.5 free_vram_mb=24385.8 total_vram_mb=25288.8
