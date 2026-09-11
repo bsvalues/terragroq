@@ -31,6 +31,11 @@ RECORD = os.path.join(
     "capability-evidence", "gpu-tabular-daedalus-2026-09-11.md",
 )
 RECORD = os.path.normpath(RECORD)
+THRESHOLDS_RECORD = os.path.normpath(os.path.join(
+    HERE, "..", "..", "..", "docs", "governance", "williamos-intelligence-fabric",
+    "capability-evidence", "gpu-tabular-placement-thresholds-2026-09-11.md",
+))
+CURVE = os.path.join(EVIDENCE, "placement-curve.json")
 
 TASK_KEYWORDS = {
     "aggregation": "aggregation",
@@ -41,15 +46,42 @@ TASK_KEYWORDS = {
 }
 
 # Figures from superseded runs. Their presence means a stale number survived an edit.
+#
+# This list must be maintained as the evidence is corrected: each entry was a real published figure
+# that later measurement invalidated. The first group is the cold-contaminated revision (one-off setup
+# charged to whichever task ran first); the second is the earlier single-scale revision.
 STALE_FIGURES = [
-    "4.36", "83.53", "5.12", "318×", "0.048", "0.021×", "5.29", "0.131 s", "0.301 s",
-    "4.4617", "20.96", "4.80×", "3.84", "83.73", "21.36", "0.75 s",
+    # cold-contaminated revision (superseded by the warm-up methodology)
+    "4.82×", "83.70", "20.98", "0.39×", "323×", "5.20 GB", "0.126 s", "0.276 s",
+    "0.047×", "0.020×", "27.6×", "1.20×", "2.47×", "0.00098",
+    # earlier revision (single scale, before the two-run reproducibility pair)
+    "5.12", "19.87", "4.86×", "0.048", "0.021×", "318×", "310×", "4.4617",
 ]
 
 
 def number(cell: str) -> float | None:
-    match = re.search(r"(\d+(?:\.\d+)?)", cell.replace("**", ""))
+    cleaned = cell.replace("**", "").replace(",", "")
+    match = re.search(r"(\d+(?:\.\d+)?)", cleaned)
     return float(match.group(1)) if match else None
+
+
+def current_claims(text: str) -> str:
+    """The part of a record that asserts CURRENT results.
+
+    A correction table deliberately cites the superseded values it replaces, and prose that says
+    "earlier revisions reported X" is doing the same. Those citations must not be flagged as stale
+    claims, or the stale-figure scan punishes exactly the transparency it exists to encourage.
+    """
+    marker = "## Correction"
+    for candidate in ("## Correction to", "## Correction"):
+        idx = text.find(candidate)
+        if idx != -1:
+            text = text[:idx]
+            break
+    historical = ("earlier revision", "previously published", "superseded", "corrected (warm)")
+    kept = [line for line in text.splitlines()
+            if not any(word in line.lower() for word in historical)]
+    return "\n".join(kept)
 
 
 def task_for(label: str) -> str | None:
@@ -84,6 +116,74 @@ def tables(text: str) -> list[list[list[str]]]:
 
 def close(a: float | None, b: float, tol: float) -> bool:
     return a is not None and abs(a - b) <= tol
+
+
+def verify_thresholds_record(problems: list[str]) -> int:
+    """Check the placement-thresholds record against the committed placement curve.
+
+    Returns the number of tasks verified (0 when the record or curve is absent, so this stays optional
+    for checkouts that predate it).
+    """
+    if not (os.path.exists(THRESHOLDS_RECORD) and os.path.exists(CURVE)):
+        return 0
+    record = open(THRESHOLDS_RECORD, encoding="utf-8").read()
+    curve = json.load(open(CURVE, encoding="utf-8"))
+    thresholds = curve.get("thresholds") or {}
+
+    # The curve table in the record must match the measured points.
+    lines = record.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("| Rows |"):
+            for row in lines[i + 2:]:
+                if not row.strip().startswith("|"):
+                    break
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                if len(cells) < 4:
+                    continue
+                size = number(cells[0])
+                if size is None:
+                    continue
+                point = next((p for p in curve["points"] if p["parcels"] == int(size)), None)
+                if not point:
+                    problems.append(f"thresholds record: size {int(size)} not in the committed curve")
+                    continue
+                for cell, task in zip(cells[1:4], ("regression", "clustering", "aggregation")):
+                    got, want = number(cell), point["tasks"][task]["ratioCpuOverGpu"]
+                    if got is None or not close(got, want, max(0.006, abs(want) * 0.015)):
+                        problems.append(f"thresholds record: {task} @{int(size)} claims {got}, curve has {want:.4f}")
+            break
+
+    # The derived threshold table must match the derived block.
+    verified = 0
+    for i, line in enumerate(lines):
+        if line.strip().startswith("| Task |") and "GPU-preferred" in line:
+            for row in lines[i + 2:]:
+                if not row.strip().startswith("|"):
+                    break
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                if len(cells) < 4:
+                    continue
+                task = task_for(cells[0])
+                entry = thresholds.get(task or "")
+                if not entry:
+                    problems.append(f"thresholds record: row {cells[0]!r} has no derived threshold")
+                    continue
+                claimed = number(cells[1])
+                want = entry["gpuPreferredAboveRows"]
+                if want is None:
+                    problems.append(f"thresholds record: {task} states a threshold but the curve says insufficientEvidence")
+                elif claimed is None or abs(claimed - want) > 1:
+                    problems.append(f"thresholds record: {task} threshold {claimed} vs curve {want}")
+                floor_claimed = "yes" in cells[2].replace("*", "").strip().lower()
+                if floor_claimed != bool(entry["thresholdIsAtMeasurementFloor"]):
+                    problems.append(f"thresholds record: {task} floor flag {floor_claimed} vs curve "
+                                    f"{entry['thresholdIsAtMeasurementFloor']}")
+                verified += 1
+            break
+
+    if verified == 0:
+        problems.append("thresholds record: could not parse the derived-threshold table")
+    return verified
 
 
 def main() -> int:
@@ -149,9 +249,12 @@ def main() -> int:
         if token not in record:
             problems.append(f"{label} {token} absent from record")
 
+    thresholds_text = open(THRESHOLDS_RECORD, encoding="utf-8").read() if os.path.exists(THRESHOLDS_RECORD) else ""
     for stale in STALE_FIGURES:
-        if stale in record:
-            problems.append(f"stale figure present: {stale!r}")
+        if stale in current_claims(record):
+            problems.append(f"stale figure present in the qualification record: {stale!r}")
+        if thresholds_text and stale in current_claims(thresholds_text):
+            problems.append(f"stale figure present in the thresholds record: {stale!r}")
 
     # A parity miss must be machine-readable, and the record must agree with it.
     if small["parityFailures"] != ["outlier"]:
@@ -163,6 +266,8 @@ def main() -> int:
     # in the JSONs. They are NOT checked here (see the README); an earlier ns-nanosecond token loop was
     # dead code and has been removed rather than left implying coverage that never fired.
 
+    thresholds_verified = verify_thresholds_record(problems)
+
     if problems:
         print("EVIDENCE RECORD DOES NOT MATCH THE COMMITTED EVIDENCE:")
         for problem in problems:
@@ -172,6 +277,8 @@ def main() -> int:
     print("evidence record matches the committed evidence:")
     print(f"  full-scale table: {len(parsed[0])} tasks verified against qualification-full-2.5M.json")
     print(f"  small-scale table: {len(parsed[1])} tasks verified against qualification-small-60k.json")
+    if thresholds_verified:
+        print(f"  placement thresholds: {thresholds_verified} tasks verified against placement-curve.json")
     print("  table cells (seconds, ratio, parity, delta, tolerance), prose cold-start/RSS/memory figures,")
     print("  and superseded-figure scan all clean.")
     print("  NOT checked here: section-5 prose ratios and the section-4 Nsight figures in the CSV.")

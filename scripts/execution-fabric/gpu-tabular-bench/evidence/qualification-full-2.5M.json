@@ -1,6 +1,6 @@
 {
   "schemaVersion": "williamos-gpu-tabular-qualification/1",
-  "startedAt": "2026-09-11T15:37:21Z",
+  "startedAt": "2026-09-11T17:51:00Z",
   "host": {
     "node": "daedalus-ThinkStation-P620",
     "os": "Linux 7.0.0-31-generic",
@@ -8,8 +8,8 @@
     "python": "3.12.3",
     "cpuCount": 24,
     "totalMemoryBytes": 67263365120,
-    "peakHostRssBytes": 5198729216,
-    "availableMemoryBytes": 52620816384
+    "peakHostRssBytes": 5065809920,
+    "availableMemoryBytes": 52690616320
   },
   "binding": {
     "runtimeId": "cuml-cu13",
@@ -32,14 +32,14 @@
     "provenance": "synthetic, schema- and scale-matched to pacs_oltp; no county rows used",
     "parcelBytes": 74847152,
     "transactionBytes": 233194186,
-    "generationSeconds": 3.536949541012291
+    "generationSeconds": 3.488158922002185
   },
   "tasks": [
     {
       "task": "aggregation",
       "workload": "collection-transaction rollup per parcel",
       "cpu": {
-        "seconds": 3.872654548002174,
+        "seconds": 3.7576058759877924,
         "error": null,
         "rows": 20000000,
         "groups": 2499202,
@@ -47,7 +47,7 @@
         "max_group_total": 315910.73999999993
       },
       "gpu": {
-        "seconds": 0.8029006980068516,
+        "seconds": 0.20091106501058675,
         "error": null,
         "rows": 20000000,
         "groups": 2499202,
@@ -83,25 +83,25 @@
         }
       },
       "timing": {
-        "cpu_seconds": 3.872654548002174,
-        "gpu_seconds": 0.8029006980068516,
-        "ratio_cpu_over_gpu": 4.823329407504297
+        "cpu_seconds": 3.7576058759877924,
+        "gpu_seconds": 0.20091106501058675,
+        "ratio_cpu_over_gpu": 18.70283190121853
       },
-      "peakHostRssBytes": 2579595264,
-      "freeVramBytesBefore": 24584519680,
-      "freeVramBytesAfter": 24569839616
+      "peakHostRssBytes": 3103834112,
+      "freeVramBytesBefore": 24564072448,
+      "freeVramBytesAfter": 24559878144
     },
     {
       "task": "regression",
       "workload": "sale-price valuation model",
       "rows": 2500000,
       "gpu": {
-        "seconds": 4.2120798690011725,
+        "seconds": 4.18239094800083,
         "error": null,
         "rmse": 30942.548828125
       },
       "cpu": {
-        "seconds": 83.69955328700598,
+        "seconds": 83.83123493299354,
         "error": null,
         "rmse": 30307.356910936694
       },
@@ -122,25 +122,25 @@
         }
       },
       "timing": {
-        "cpu_seconds": 83.69955328700598,
-        "gpu_seconds": 4.2120798690011725,
-        "ratio_cpu_over_gpu": 19.871312009772975
+        "cpu_seconds": 83.83123493299354,
+        "gpu_seconds": 4.18239094800083,
+        "ratio_cpu_over_gpu": 20.043854334818846
       },
-      "peakHostRssBytes": 4691189760,
-      "freeVramBytesBefore": 24569839616,
-      "freeVramBytesAfter": 24580915200
+      "peakHostRssBytes": 4820066304,
+      "freeVramBytesBefore": 24559878144,
+      "freeVramBytesAfter": 24555683840
     },
     {
       "task": "clustering",
       "workload": "valuation-zone grouping",
       "rows": 2500000,
       "gpu": {
-        "seconds": 4.315252751985099,
+        "seconds": 4.360105853003915,
         "error": null,
-        "inertia": 7016428762824704.0
+        "inertia": 7016341252866048.0
       },
       "cpu": {
-        "seconds": 20.981222672009608,
+        "seconds": 21.14754046901362,
         "error": null,
         "inertia": 7009571847536640.0
       },
@@ -149,38 +149,38 @@
           "inertia"
         ],
         "worst_metric": "inertia",
-        "relative_delta": 0.000978221699870829,
+        "relative_delta": 0.000965737348392678,
         "within_tolerance": true,
         "tolerance": 0.05,
         "detail": {
           "inertia": {
             "cpu": 7009571847536640.0,
-            "gpu": 7016428762824704.0,
-            "relative_delta": 0.000978221699870829
+            "gpu": 7016341252866048.0,
+            "relative_delta": 0.000965737348392678
           }
         }
       },
       "timing": {
-        "cpu_seconds": 20.981222672009608,
-        "gpu_seconds": 4.315252751985099,
-        "ratio_cpu_over_gpu": 4.862107477333244
+        "cpu_seconds": 21.14754046901362,
+        "gpu_seconds": 4.360105853003915,
+        "ratio_cpu_over_gpu": 4.850235563534294
       },
-      "peakHostRssBytes": 4691189760,
-      "freeVramBytesBefore": 24580915200,
-      "freeVramBytesAfter": 24578818048
+      "peakHostRssBytes": 4820066304,
+      "freeVramBytesBefore": 24555683840,
+      "freeVramBytesAfter": 24555749376
     },
     {
       "task": "decomposition",
       "workload": "parcel feature PCA",
       "rows": 2500000,
       "cpu": {
-        "seconds": 0.034985639998922125,
+        "seconds": 0.034842605993617326,
         "error": null,
         "pc1_explained_ratio": 0.8732303977012634,
         "leading_variance_l2": 55781949440.0
       },
       "gpu": {
-        "seconds": 0.08892681600991637,
+        "seconds": 0.046409127971855924,
         "error": null,
         "pc1_explained_ratio": 0.8732302784919739,
         "leading_variance_l2": 55781560320.0
@@ -208,25 +208,25 @@
         }
       },
       "timing": {
-        "cpu_seconds": 0.034985639998922125,
-        "gpu_seconds": 0.08892681600991637,
-        "ratio_cpu_over_gpu": 0.39342058524867035
+        "cpu_seconds": 0.034842605993617326,
+        "gpu_seconds": 0.046409127971855924,
+        "ratio_cpu_over_gpu": 0.7507705383894968
       },
-      "peakHostRssBytes": 4691189760,
-      "freeVramBytesBefore": 24578818048,
-      "freeVramBytesAfter": 24557846528
+      "peakHostRssBytes": 4820066304,
+      "freeVramBytesBefore": 24555749376,
+      "freeVramBytesAfter": 24555749376
     },
     {
       "task": "outlier",
       "workload": "sales-ratio anomaly detection",
       "rows": 2500000,
       "cpu": {
-        "seconds": 10.0468293169979,
+        "seconds": 9.964491313003236,
         "error": null,
         "outliers": 450822
       },
       "gpu": {
-        "seconds": 0.031068672018591315,
+        "seconds": 0.0297843610169366,
         "error": null,
         "outliers": 414396
       },
@@ -247,13 +247,13 @@
         }
       },
       "timing": {
-        "cpu_seconds": 10.0468293169979,
-        "gpu_seconds": 0.031068672018591315,
-        "ratio_cpu_over_gpu": 323.3749196291987
+        "cpu_seconds": 9.964491313003236,
+        "gpu_seconds": 0.0297843610169366,
+        "ratio_cpu_over_gpu": 334.55447667106307
       },
-      "peakHostRssBytes": 5198729216,
-      "freeVramBytesBefore": 24557846528,
-      "freeVramBytesAfter": 24557846528
+      "peakHostRssBytes": 5065809920,
+      "freeVramBytesBefore": 24555749376,
+      "freeVramBytesAfter": 24555683840
     }
   ],
   "failures": [],
@@ -261,15 +261,16 @@
   "promoted": false,
   "note": "MEASURED evidence only. Capability promotion is a reviewed owner act (IF promotion rule).",
   "coldStart": {
-    "firstImportSeconds": 0.12624202101142146,
-    "firstDeviceWorkSeconds": 0.27620812397799455,
+    "firstImportSeconds": 0.12992211800883524,
+    "firstDeviceWorkSeconds": 0.201147863001097,
     "error": null
   },
+  "warmUpSeconds": 0.3786465060256887,
   "gpu": {
     "nvidiaSmi": "NVIDIA GeForce RTX 3090, 595.84, 24576 MiB, 8.6",
-    "freeBytesAtStart": 24584519680,
+    "freeBytesAtStart": 24564072448,
     "totalBytes": 25288769536
   },
   "parityFailures": [],
-  "finishedAt": "2026-09-11T15:39:35Z"
+  "finishedAt": "2026-09-11T17:53:14Z"
 }
