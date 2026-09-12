@@ -1,0 +1,270 @@
+{
+  "schemaVersion": "williamos-gpu-tabular-dispatch-acceptance/1",
+  "promoted": false,
+  "runTag": "seam-1789169681278",
+  "generatedAt": "2026-09-11T23:36:25.667Z",
+  "host": "HERMES (dispatch) -> DAEDALUS (execution)",
+  "binding": {
+    "workerId": "daedalus-gpu-tabular",
+    "provider": "daedalus-cuml-rapids",
+    "runtime": "cuml 26.08.00 / cudf 26.08.01 / CUDA 13.4.49",
+    "environment": "/home/daedalus/.venvs/cuml-qual"
+  },
+  "transport": "fabric SSH (pinned key + pinned known_hosts + strict host checking)",
+  "stateGuard": "real WO-MAO-021 lane-lease store + real WO-MAO-022 evidence ledger (fresh per run)",
+  "dataBoundary": "synthetic generation only (reviewed generators, shape + seed on the wire); no county/protected data",
+  "ok": true,
+  "passed": 19,
+  "total": 19,
+  "scenarios": [
+    {
+      "name": "health",
+      "expect": "deviceHealthy true",
+      "pass": true,
+      "seconds": 2.75,
+      "detail": {
+        "pass": true,
+        "cuml": "26.08.00"
+      },
+      "error": null
+    },
+    {
+      "name": "place-matrix",
+      "expect": "threshold decisions",
+      "pass": true,
+      "seconds": 2.701,
+      "detail": {
+        "pass": true,
+        "cases": {
+          "regression 2.5M": [
+            "CUDA_DEVICE",
+            "CUDA_DEVICE"
+          ],
+          "regression 60k": [
+            "CUDA_DEVICE",
+            "CUDA_DEVICE"
+          ],
+          "regression 49,999": [
+            "CPU",
+            "CPU"
+          ],
+          "clustering 60k": [
+            "CUDA_DEVICE",
+            "CUDA_DEVICE"
+          ],
+          "aggregation 100k": [
+            "CUDA_DEVICE",
+            "CUDA_DEVICE"
+          ],
+          "aggregation 60k": [
+            "CPU",
+            "CPU"
+          ],
+          "decomposition 2.5M": [
+            "CPU",
+            "CPU"
+          ]
+        },
+        "wrong": []
+      },
+      "error": null
+    },
+    {
+      "name": "exec-regression-gpu",
+      "expect": "SUCCEEDED CUDA_DEVICE",
+      "pass": true,
+      "seconds": 6.76,
+      "detail": {
+        "pass": true,
+        "placement": "CUDA_DEVICE",
+        "reason": "GPU_ELIGIBLE_ABOVE_MEASURED_THRESHOLD",
+        "evidence": 1,
+        "seconds": 2.277385007007979
+      },
+      "error": null
+    },
+    {
+      "name": "replay-regression",
+      "expect": "IDEMPOTENT_REPLAY no second evidence",
+      "pass": true,
+      "seconds": 0.007,
+      "detail": {
+        "pass": true,
+        "outcome": "IDEMPOTENT_REPLAY",
+        "evidenceBefore": 1,
+        "evidenceAfter": 1
+      },
+      "error": null
+    },
+    {
+      "name": "exec-clustering-gpu",
+      "expect": "SUCCEEDED CUDA_DEVICE",
+      "pass": true,
+      "seconds": 6.092,
+      "detail": {
+        "pass": true,
+        "reason": "GPU_ELIGIBLE_ABOVE_MEASURED_THRESHOLD",
+        "seconds": 1.722718998993514,
+        "evidence": 1
+      },
+      "error": null
+    },
+    {
+      "name": "exec-aggregation-gpu",
+      "expect": "SUCCEEDED CUDA_DEVICE >=100k",
+      "pass": true,
+      "seconds": 6.683,
+      "detail": {
+        "pass": true,
+        "seconds": 1.384039352007676
+      },
+      "error": null
+    },
+    {
+      "name": "exec-aggregation-cpu-below",
+      "expect": "SUCCEEDED CPU <100k",
+      "pass": true,
+      "seconds": 6.058,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "exec-pca-cpu",
+      "expect": "SUCCEEDED CPU measured-refusal",
+      "pass": true,
+      "seconds": 6.008,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "exec-outlier-refused",
+      "expect": "REFUSED screening-only",
+      "pass": true,
+      "seconds": 2.924,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "stale-evidence-cpu",
+      "expect": "CPU stale evidence",
+      "pass": true,
+      "seconds": 6.974,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "missing-evidence-cpu",
+      "expect": "CPU missing evidence",
+      "pass": true,
+      "seconds": 6.533,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "missing-grant-cpu",
+      "expect": "CPU authority missing",
+      "pass": true,
+      "seconds": 6.967,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "scope-drift-cpu",
+      "expect": "CPU trust-gate scope mismatch",
+      "pass": true,
+      "seconds": 6.892,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "unhealthy-binding-cpu",
+      "expect": "CPU binding unavailable",
+      "pass": true,
+      "seconds": 4.242,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "node-down-incomplete",
+      "expect": "DISPATCH_INCOMPLETE node unreachable",
+      "pass": true,
+      "seconds": 0.085,
+      "detail": {
+        "pass": true
+      },
+      "error": null
+    },
+    {
+      "name": "device-down-cpu-fallback",
+      "expect": "SUCCEEDED CPU with device down",
+      "pass": true,
+      "seconds": 8.541,
+      "detail": {
+        "pass": true,
+        "health": {
+          "q": true,
+          "healthy": false
+        },
+        "placement": "CPU"
+      },
+      "error": null
+    },
+    {
+      "name": "cancel-live-workload",
+      "expect": "CANCELLED no evidence",
+      "pass": true,
+      "seconds": 6.487,
+      "detail": {
+        "pass": true,
+        "status": "CANCELLED",
+        "phase": "signal-term",
+        "evidence": 0,
+        "deviceFreeAfter": true
+      },
+      "error": null
+    },
+    {
+      "name": "dispatcher-death-orphan-adopt",
+      "expect": "adopt orphan, one evidence row",
+      "pass": true,
+      "seconds": 10.576,
+      "detail": {
+        "pass": true,
+        "outcome": "RECOVERED_ADOPTED_ORPHAN_RESULT",
+        "status": "SUCCEEDED",
+        "evidenceRows": 1
+      },
+      "error": null
+    },
+    {
+      "name": "evidence-lands-on-wo",
+      "expect": "evidence_record + governance_event + wo.evidence",
+      "pass": true,
+      "seconds": 6.679,
+      "detail": {
+        "pass": true,
+        "evidenceRef": "EV-GPU-d0aee879677c",
+        "woEvidence": 1,
+        "receiptDevice": "cuda"
+      },
+      "error": null
+    }
+  ],
+  "note": "MEASURED live acceptance of the dispatch seam. Records what executed, where, and what the owner-facing projection received. Promotion of the capability remains the reviewed registry transition in this repository's capability records."
+}

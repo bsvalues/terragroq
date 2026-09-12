@@ -445,7 +445,48 @@ describe("GPU tabular capability: the live cancellation proof is machine-checked
   })
 })
 
-describe("GPU tabular capability: parity with the referenced trust gate is checked, not claimed", () => {
+describe("gpu tabular dispatch seam: the live acceptance artifact is machine-checked", () => {
+  const LIVE = "scripts/execution-fabric/gpu-tabular-bench/evidence/dispatch-acceptance.json"
+  const REQUIRED_SCENARIOS = [
+    "health", "place-matrix",
+    "exec-regression-gpu", "replay-regression",
+    "exec-clustering-gpu",
+    "exec-aggregation-gpu", "exec-aggregation-cpu-below",
+    "exec-pca-cpu", "exec-outlier-refused",
+    "stale-evidence-cpu", "missing-evidence-cpu",
+    "missing-grant-cpu", "scope-drift-cpu",
+    "unhealthy-binding-cpu", "node-down-incomplete", "device-down-cpu-fallback",
+    "cancel-live-workload",
+    "dispatcher-death-orphan-adopt",
+    "evidence-lands-on-wo",
+  ]
+
+  it("records 19/19 live scenarios with the owner matrix fully covered", () => {
+    expect(fs.existsSync(LIVE), LIVE).toBe(true)
+    const artifact = JSON.parse(fs.readFileSync(LIVE, "utf8"))
+    expect(artifact.ok).toBe(true)
+    expect(artifact.passed).toBe(artifact.total)
+    expect(artifact.total).toBe(REQUIRED_SCENARIOS.length)
+    expect(artifact.promoted).toBe(false)
+    expect(artifact.dataBoundary).toMatch(/synthetic/i)
+    const names = artifact.scenarios.map((entry: any) => entry.name)
+    for (const scenario of REQUIRED_SCENARIOS) expect(names).toContain(scenario)
+    expect(artifact.scenarios.filter((entry: any) => !entry.pass)).toEqual([])
+    // The owner matrix's load-bearing details, asserted from the committed record rather than prose.
+    const byName = new Map(artifact.scenarios.map((entry: any) => [entry.name, entry]))
+    expect(byName.get("exec-regression-gpu").detail.placement).toBe("CUDA_DEVICE")
+    expect(byName.get("exec-regression-gpu").detail.evidence).toBe(1)
+    expect(byName.get("replay-regression").detail.outcome).toBe("IDEMPOTENT_REPLAY")
+    expect(byName.get("cancel-live-workload").detail.status).toBe("CANCELLED")
+    expect(byName.get("cancel-live-workload").detail.evidence).toBe(0)
+    expect(byName.get("dispatcher-death-orphan-adopt").detail.evidenceRows).toBe(1)
+    expect(byName.get("evidence-lands-on-wo").detail.receiptDevice).toBe("cuda")
+    expect(byName.get("device-down-cpu-fallback").detail.health).toEqual({ q: true, healthy: false })
+    expect(byName.get("exec-outlier-refused").detail.pass).toBe(true)
+  })
+})
+
+describe("gpu tabular dispatch seam: parity with the referenced trust gate is checked, not claimed", () => {
   const PARITY = "scripts/execution-fabric/gpu-tabular-bench/evidence/trust-gate-parity.json"
   const WORKERS_PY = "control-center/backend/workers.py"
 

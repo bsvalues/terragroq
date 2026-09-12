@@ -120,6 +120,24 @@ in brittleness than it buys.
 It is a consistency check over committed artifacts, not a re-measurement: it cannot confirm the
 hardware produced these numbers, only that the record claims nothing the evidence files lack.
 
+## The dispatch seam (production side, not a benchmark tool)
+
+- `gpu_tabular_workload.py` — the ONE implementation of the five reviewed workloads. `benchmark.py`
+  (measurement) and the production worker below both call it, so a dispatched job can never diverge
+  from what was measured. `refactor_parity_check.py` proves the extraction preserved behaviour by
+  re-running the pair runner and comparing shapes/parity against the committed evidence.
+- `resident-gpu-tabular-worker.py` — runs on DAEDALUS inside the reviewed venv via the existing
+  fabric SSH transport. JSON request in / JSON result out. Synthetic generation only (the protocol
+  carries shape + seed; there is no data-source field, so protected data cannot be named by it).
+  Honours a cancel artifact at every phase boundary and never writes a result file for cancelled
+  work; writes the result file BEFORE stdout so a lost channel cannot lose a completed result.
+- `../gpu-tabular-capability.mjs` — the reviewed adapter: trust gate, size-aware placement,
+  redaction, evidence capture.
+- `../gpu-tabular-dispatch.mjs` — the seam: registry gate + adapter placement + lease/ledger
+  (existing WO-MAO-021/022 modules) + fabric execution + evidence_record projection onto the same
+  Work Order. `collect_dispatch_acceptance.cjs` builds `evidence/dispatch-acceptance.json` from a
+  live acceptance run; the test suite machine-checks that artifact.
+
 ## Running it
 
 ```bash

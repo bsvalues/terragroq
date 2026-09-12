@@ -107,13 +107,16 @@ CASES: list[tuple[str, dict, dict | None]] = [
 
 def adapter_decision(gate_value: dict | None, authority: dict | None) -> dict:
     payload = json.dumps({"gate": gate_value, "authority": authority})
-    proc = subprocess.run(
-        ["node", PROBE],
-        input=payload, capture_output=True, text=True, encoding="utf-8", check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"adapter probe failed: {proc.stderr.strip()[:400]}")
-    return json.loads(proc.stdout)
+    last = None
+    for _attempt in range(2):  # one retry: node startup can transiently fail under heavy parallel load
+        proc = subprocess.run(
+            ["node", PROBE],
+            input=payload, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if proc.returncode == 0:
+            return json.loads(proc.stdout)
+        last = proc
+    raise RuntimeError(f"adapter probe failed: {last.stderr.strip()[:400]}")
 
 
 def python_decision(gate_value: dict | None, authority: dict | None) -> dict:
