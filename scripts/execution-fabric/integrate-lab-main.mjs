@@ -198,8 +198,8 @@ async function main() {
   }
 
   // 6) INTEGRATION: squash into authoritative lab main. One commit, parent = lab main, tree = cand.
-  const title = flags.title ?? `integrate ${candSha.slice(0, 10)} (sealed ${seal.keyId.slice(0, 8)})`
-  const msg = `${title}\n\nWilliamOS delivery seal ${seal.payload.delivery.baseSha?.slice(0, 10) ?? baseSha.slice(0, 10)}..${candSha.slice(0, 10)} (${seal.keyId}) reviewed CLEAN by sovereign reviewer ${attestation.keyId}\nExecuted by lab integration authority at ${nowIso()}\n`
+  const title = flags.title ?? `integrate ${candSha.slice(0, 10)} (sealed ${seal.payload.keyId.slice(0, 8)})`
+  const msg = `${title}\n\nWilliamOS delivery seal ${seal.payload.delivery.baseSha?.slice(0, 10) ?? baseSha.slice(0, 10)}..${candSha.slice(0, 10)} (${seal.payload.keyId}) reviewed CLEAN by sovereign reviewer ${attestation.payload.keyId}\nExecuted by lab integration authority at ${nowIso()}\n`
   const tree = git(["rev-parse", `${candSha}^{tree}`])
   const newSha = git(["commit-tree", tree, "-p", labMainBefore, "-m", msg])
   git(["push", "lab", `${newSha}:refs/heads/main`], { })
@@ -231,7 +231,7 @@ async function main() {
 
   const entry = recordState({
     at: nowIso(), candidate: candSha, base: baseSha,
-    labMainBefore, labMainAfter, sealKey: seal.keyId, reviewerKey: review.keyId,
+    labMainBefore, labMainAfter, sealKey: seal.payload.keyId, reviewerKey: review.payload?.keyId,
     productState: "COMPLETE", mirrorState: mirror.state, mirrorDetail: mirror.detail,
   })
   console.log(`PRODUCT STATE: COMPLETE`)
