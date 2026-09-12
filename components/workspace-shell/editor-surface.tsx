@@ -718,17 +718,24 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                 className={`${styles.pane} ${space.editor.activePaneId === pane.id ? styles.activePane : ""}`}
                 onPointerDown={() => updatePanes(space.editor.panes, space.editor.openFiles, space.editor.openFileRefs, pane.activePath, pane.id, pane.activeFileRef ?? null)}
               >
-                <div className={styles.tabs} role="tablist" aria-label={`${pane.id} editor tabs`}>
-                  {openFiles.map((openedFile) => {
-                    const dirty = buffers[openedFile.key] ? buffers[openedFile.key].content !== buffers[openedFile.key].savedContent : false
-                    const repository = repositoryForKey(project, openedFile.repositoryKey)
-                    return (
-                      <div key={openedFile.key} className={`${styles.tabItem} ${paneKey === openedFile.key ? styles.activeTab : ""}`} role="presentation">
+                {/* The tablist may own only role="tab" children, so the close controls cannot be
+                    its children (aria-required-children). The visible X is a glyph inside the tab
+                    (the tab reserves 24px of right padding for it), while the real, named,
+                    keyboard-operable close button sits outside the tablist — visually hidden but
+                    present to assistive technology. Geometry is verified: the glyph sits ~7px from
+                    each tab's right edge and cannot overlap the label. */}
+                <div className={styles.tabStrip}>
+                  <div className={styles.tabs} role="tablist" aria-label={`${pane.id} editor tabs`}>
+                    {openFiles.map((openedFile) => {
+                      const dirty = buffers[openedFile.key] ? buffers[openedFile.key].content !== buffers[openedFile.key].savedContent : false
+                      const repository = repositoryForKey(project, openedFile.repositoryKey)
+                      return (
                         <button
+                          key={openedFile.key}
                           type="button"
                           role="tab"
                           aria-selected={paneKey === openedFile.key}
-                          className={styles.tab}
+                          className={`${styles.tabItem} ${paneKey === openedFile.key ? styles.activeTab : ""}`}
                           onClick={() => {
                             const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, activePath: openedFile.path, activeFileRef: openedFile.fileRef } : item)
                             setActiveRepositoryKey(openedFile.repositoryKey)
@@ -740,18 +747,27 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                         >
                           <span>{repository && project?.repositories && project.repositories.length > 1 ? `${repository.label} · ` : ""}{openedFile.path.split("/").at(-1)}</span>
                           {dirty ? <span className={styles.dirtyMark} aria-label="Unsaved">●</span> : null}
+                          <span className={styles.tabCloseGlyph} aria-hidden="true"><X size={11} /></span>
                         </button>
+                      )
+                    })}
+                  </div>
+                  <div className={styles.tabClosers}>
+                    {openFiles.map((openedFile) => {
+                      const repository = repositoryForKey(project, openedFile.repositoryKey)
+                      return (
                         <button
+                          key={openedFile.key}
                           type="button"
-                          className={styles.closeTab}
+                          className={styles.srOnlyClose}
                           aria-label={`Close ${repository ? `${repository.label} · ` : ""}${openedFile.path}`}
                           onClick={() => closeTab(openedFile.key)}
                         >
                           <X size={11} />
                         </button>
-                      </div>
-                    )
-                  })}
+                      )
+                    })}
+                  </div>
                 </div>
                 <div className={styles.editorCanvas}>
                   {buffer ? (
