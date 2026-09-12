@@ -92,10 +92,10 @@ describe("sovereign authority surface", () => {
   })
 
   it("path resolution follows the writer's precedence and never hardcodes a home", () => {
-    expect(resolveIntegrationsStatePath({ WILLIAMOS_INTEGRATIONS_STATE: "/custom/x.json" } as NodeJS.ProcessEnv)).toBe("/custom/x.json")
-    const p = resolveIntegrationsStatePath({ USERPROFILE: "C:\\Users\\test" } as NodeJS.ProcessEnv)
+    expect(resolveIntegrationsStatePath({ WILLIAMOS_INTEGRATIONS_STATE: "/custom/x.json" } as unknown as NodeJS.ProcessEnv)).toBe("/custom/x.json")
+    const p = resolveIntegrationsStatePath({ USERPROFILE: "C:\\Users\\test" } as unknown as NodeJS.ProcessEnv)
     expect(p).toBe(path.join("C:\\Users\\test", ".williamos", "integrations.json"))
-    expect(resolveIntegrationsStatePath({} as NodeJS.ProcessEnv)).toContain(".williamos")
+    expect(resolveIntegrationsStatePath({} as unknown as NodeJS.ProcessEnv)).toContain(".williamos")
   })
 
   it("production entry: a real written record round-trips through the same projection the tests pin", () => {
