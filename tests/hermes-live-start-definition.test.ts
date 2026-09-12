@@ -414,48 +414,17 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(deploy).toContain("Get-LegacyCockpitRelayState")
     expect(deploy).toContain("Remove-LegacyCockpitRelay")
     expect(deploy).toContain("reserved by an unrelated portproxy target")
-    expect(deploy).toMatch(/version\s*=\s*7/)
+    expect(deploy).toMatch(/version\s*=\s*6/)
     expect(deploy).toContain("legacyRelay =")
     expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
     expect(deploy).toContain('"compatibility-relay"')
     expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
       .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
     expect(restore).toMatch(/\$manifestVersion\s+-ne\s+6/)
-    // v7 = the four request-time loose trees joined the rollback directory set. The check is
-    // split nowhere else: deploy's list and restore's version-gated list must name the SAME trees,
-    // or every rollback after a deploy throws "does not name the exact runtime directory set".
-    for (const tree of ["scripts\\execution-fabric", "scripts\\multi-agent-operator", "components\\operator", "config\\execution-fabric"]) {
-      expect(deploy).toContain(`"${tree}"`)
-      expect(restore).toContain(`"${tree}"`)
-    }
-    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+7/)
     expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
     expect(restore).toMatch(/if \(\$overlayRestoreMode -in @\("legacy-relay", "compatibility-relay"\)\)[\s\S]*portproxy add v4tov4/)
     expect(restore).toContain("Rollback manifest overlay mode contradicts the captured proxy and relay state")
     expect(restore.indexOf("$manifestVersion -ne 6")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
-  })
-
-  it("validates request-time loose trees before any capture or copy can self-vouch them", () => {
-    const code = executableOnly(deployText)
-    // Phase A (the read-only validation loop) must precede the rollback capture AND the task
-    // stop: the current capture is a copy of the present runtime, so validating after capture
-    // lets every runtime-only file vouch for itself and the guard can never fire.
-    const phaseA = code.indexOf("foreach ($tree in $looseTreeSyncs)")
-    const capture = code.indexOf("if (-not $SkipRollbackCapture) {")
-    const stop = code.indexOf("Stop-ScheduledTask -TaskName $HttpsTaskName")
-    const phaseB = code.indexOf("foreach ($action in $syncActions)")
-    expect(phaseA).toBeGreaterThan(-1)
-    expect(capture).toBeGreaterThan(-1)
-    expect(phaseB).toBeGreaterThan(-1)
-    expect(phaseA).toBeLessThan(capture)
-    expect(phaseA).toBeLessThan(stop)
-    expect(capture).toBeLessThan(phaseB)
-    // defense-in-depth: even if the order moved, the scan excludes the current capture
-    expect(code).toMatch(/-ne \[IO\.Path\]::GetFullPath\(\$rollbackRoot\)/)
-    // a required tree cannot be silently skipped
-    expect(code).toMatch(/required at request time but absent/)
-    // vouching only counts manifests that recorded the tree as present
-    expect(code).toMatch(/\$dirs\[0\]\.wasPresent/)
   })
 
   it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {

@@ -142,7 +142,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if (($manifestVersion -ne 6 -and $manifestVersion -ne 7) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if ($manifestVersion -ne 6 -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
 if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
@@ -188,15 +188,7 @@ $manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
   throw "Rollback manifest does not name the exact runtime file set"
 }
-# v7 added the four request-time loose trees (deploy now /MIRs them). The directory-set check is
-# version-gated exactly like the v4 node_modules/pnpm-lock carve-outs: a v6 manifest from before
-# that change stays restorable (today's captures included — an un-gated seven-tree check would
-# reject them), and a v7 manifest must name the exact seven-tree set.
 $expectedRollbackDirectories = @(".next", "public", "lib\fabric")
-if ($manifestVersion -ge 7) {
-  $expectedRollbackDirectories += @("scripts\execution-fabric", "scripts\multi-agent-operator",
-    "components\operator", "config\execution-fabric")
-}
 if ([bool]$manifest.withDependencies) { $expectedRollbackDirectories += "node_modules" }
 $manifestDirectoryPaths = @($manifest.directories | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackDirectories -DifferenceObject $manifestDirectoryPaths).Count -ne 0) {
