@@ -35,7 +35,7 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import { execFileSync, execSync } from "node:child_process"
+import { execFileSync, execSync, spawnSync } from "node:child_process"
 import { pathToFileURL } from "node:url"
 
 const ROOT = process.cwd()
@@ -68,6 +68,58 @@ function git(args, { cwd = ROOT } = {}) {
 function envGit() {
   return { ...process.env, GIT_SSH_COMMAND:
     `ssh -i "${LAB_SSH_KEY.replace(/\\/g, "/")}" -o UserKnownHostsFile="${LAB_KNOWN_HOSTS.replace(/\\/g, "/")}" -o BatchMode=yes` }
+}
+
+// ---------------------------------------------------------------- integration merge semantics
+
+/**
+ * Content for the single integration commit that advances lab main.
+ *
+ * The candidate describes a change against its SEALED BASE, not against the current tip of main.
+ * Another sealed integration can land between that base and this run (observed live: the #1231
+ * integration branched from 15667803 while main already held #1229 at 9f10645b, and adopting the
+ * candidate TREE wholesale silently reverted #1229's scripts). So the integration content must be
+ * a real three-way merge — base -> main, base -> candidate — and every outcome is checked before
+ * any ref moves:
+ *
+ *   - `FAST_FORWARD`: main is an ancestor of the candidate, so the candidate tree already carries
+ *     everything on main; the tree is adopted as-is.
+ *   - `THREE_WAY_MERGE`: `git merge-tree --write-tree --merge-base=<base>` — no working tree, no
+ *     index, deterministic. A conflict is a typed refusal (`INTEGRATION_MERGE_CONFLICT`), never a
+ *     silent side-pick.
+ *   - Belt-and-braces after the merge: every path main changed outside the sealed set must survive
+ *     byte-identical (`INTEGRATION_WOULD_REVERT`), and every sealed path must carry the
+ *     candidate's exact blob (`INTEGRATION_SEALED_CONTENT_LOST`).
+ */
+export function integrationTree({ baseSha, candSha, labMainBefore, sealedPaths, cwd = ROOT }) {
+  const run = (args) => spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: envGit() })
+  const blob = (rev, p) => {
+    const r = run(["rev-parse", "--verify", "--quiet", `${rev}:${p}`])
+    return r.status === 0 ? r.stdout.trim() : "(absent)"
+  }
+  if (run(["merge-base", "--is-ancestor", baseSha, candSha]).status !== 0) {
+    throw new Error(`BASE_NOT_CANDIDATE_ANCESTOR base=${baseSha.slice(0, 10)} cand=${candSha.slice(0, 10)}`)
+  }
+  if (run(["merge-base", "--is-ancestor", labMainBefore, candSha]).status === 0) {
+    return { tree: git(["rev-parse", `${candSha}^{tree}`], { cwd }).toLowerCase(), mode: "FAST_FORWARD" }
+  }
+  const merged = run(["merge-tree", "--write-tree", `--merge-base=${baseSha}`, labMainBefore, candSha])
+  if (merged.status !== 0) {
+    const conflicts = String(merged.stdout ?? "").split(/\r?\n/).slice(1, 9).filter(Boolean).join(" | ")
+    throw new Error(`INTEGRATION_MERGE_CONFLICT ${conflicts || "conflicting change against current lab main"}`)
+  }
+  const tree = String(merged.stdout ?? "").split(/\r?\n/)[0].trim().toLowerCase()
+  if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error("INTEGRATION_MERGE_TREE_INVALID")
+  const sealed = new Set(sealedPaths ?? [])
+  const mainChanged = git(["diff", "--name-only", baseSha, labMainBefore], { cwd }).split(/\r?\n/).filter(Boolean)
+  for (const p of mainChanged) {
+    if (sealed.has(p)) continue
+    if (blob(labMainBefore, p) !== blob(tree, p)) throw new Error(`INTEGRATION_WOULD_REVERT ${p}`)
+  }
+  for (const p of sealed) {
+    if (blob(candSha, p) !== blob(tree, p)) throw new Error(`INTEGRATION_SEALED_CONTENT_LOST ${p}`)
+  }
+  return { tree, mode: "THREE_WAY_MERGE" }
 }
 
 function nowIso() { return new Date().toISOString() }
@@ -221,18 +273,24 @@ async function main() {
     return
   }
 
-  // 6) INTEGRATION: squash into authoritative lab main. One commit, parent = lab main, tree = cand.
+  // 6) INTEGRATION: one commit advancing authoritative lab main. Content is computed from the
+  //    candidate's SEALED BASE against the CURRENT main (three-way), never the candidate tree
+  //    wholesale — a second sealed integration may have landed since the candidate branched
+  //    (#1231 branched from 15667803 while main held #1229 at 9f10645b; tree-wholesale reverted
+  //    #1229). Conflicts and would-be reverts refuse typed; nothing moves unless it is exact.
   git(["fetch", "--quiet", "lab", "main"])
   const labMainBefore = git(["rev-parse", "lab/main"]).toLowerCase()
   const title = flags.title ?? `integrate ${candSha.slice(0, 10)} (sealed ${seal.payload.keyId.slice(0, 8)})`
   const msg = `${title}\n\nWilliamOS delivery seal ${seal.payload.delivery.baseSha?.slice(0, 10) ?? baseSha.slice(0, 10)}..${candSha.slice(0, 10)} (${seal.payload.keyId}) reviewed CLEAN by sovereign reviewer ${attestation.payload.keyId}\nExecuted by lab integration authority at ${nowIso()}\n`
-  const tree = git(["rev-parse", `${candSha}^{tree}`])
-  const newSha = git(["commit-tree", tree, "-p", labMainBefore, "-m", msg])
+  const integrated = integrationTree({
+    baseSha, candSha, labMainBefore, sealedPaths: seal.payload.delivery.paths,
+  })
+  const newSha = git(["commit-tree", integrated.tree, "-p", labMainBefore, "-m", msg])
   git(["push", "lab", `${newSha}:refs/heads/main`], { })
   const labMainAfter = newSha.toLowerCase()
   // fast-forward local bookkeeping
   try { git(["fetch", "--quiet", "lab", "main"]) } catch {}
-  console.log(`LAB MAIN ADVANCED ${labMainBefore.slice(0, 10)} -> ${labMainAfter.slice(0, 10)} (${changed.length} files)`)
+  console.log(`LAB MAIN ADVANCED ${labMainBefore.slice(0, 10)} -> ${labMainAfter.slice(0, 10)} (${changed.length} files, ${integrated.mode})`)
 
   // 7) MIRROR SYNC — attempted, never authoritative.
   let mirror = { state: "OUT_OF_SYNC", detail: "not attempted" }
@@ -266,7 +324,10 @@ async function main() {
   void entry
 }
 
-main().catch((error) => {
-  console.error(`INTEGRATION_REFUSED: ${String(error.message ?? error)}`)
-  process.exitCode = 1
-})
+// Run only as a CLI. Tests import `integrationTree` to exercise the merge semantics directly.
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"))) {
+  main().catch((error) => {
+    console.error(`INTEGRATION_REFUSED: ${String(error.message ?? error)}`)
+    process.exitCode = 1
+  })
+}
