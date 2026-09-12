@@ -507,7 +507,7 @@ if (-not $SkipRollbackCapture) {
     "scripts\hermes-https-proxy.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
-  $rollbackDirectories = @(".next", "public", "lib\fabric")
+  $rollbackDirectories = @(".next", "public", "lib\fabric", "scripts\execution-fabric", "scripts\multi-agent-operator", "components\operator", "config\execution-fabric")
   if ($WithDependencies) { $rollbackDirectories += "node_modules" }
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
@@ -664,6 +664,50 @@ Get-ChildItem -LiteralPath $fabricTarget -Filter "*.mjs" -File -Recurse -ErrorAc
   Remove-Item -Force
 $null = robocopy $fabricSource $fabricTarget "*.mjs" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
+
+# Server-loaded loose trees beyond lib\fabric. The runtime loads three more trees at REQUEST time
+# (not boot): the dispatch seam imports `components/operator/multi-agent-capability-registry.ts`
+# and the operator scripts by file path under process.cwd(), the capability surface route does the
+# same, and the elastic-compute config lives under config\execution-fabric. Before this block,
+# deploys shipped none of them -- a freshly deployed door could serve a route whose imports were
+# absent until some agent hand-copied the trees (measured 2026-09-12: the first seam deploy needed
+# exactly that manual step, and /api/environment/capability would 503 without it). Hand-listing is
+# the same maintenance trap lib\fabric's note above describes, so whole trees are mirrored.
+# Census-verified 2026-09-12: each target tree currently equals its source exactly (zero
+# runtime-only files), so /MIR cannot destroy runtime-only content; the guard below keeps that
+# true for future generations instead of trusting it.
+$looseTreeSyncs = @(
+  "scripts\execution-fabric",
+  "scripts\multi-agent-operator",
+  "components\operator",
+  "config\execution-fabric"
+)
+foreach ($tree in $looseTreeSyncs) {
+  $treeSource = Join-Path $Source $tree
+  if (-not (Test-Path -LiteralPath $treeSource -PathType Container)) {
+    Write-Output "loose-tree sync skipped (no source $tree)"; continue
+  }
+  $treeTarget = Join-Path $Runtime $tree
+  # Refuse /MIR if the runtime holds files the source generation does not: those were placed by
+  # something outside the governed tree, and silently deleting them would be a destructive deploy
+  # the rollback manifest does not cover. A refusal here is a lane problem, not a script problem.
+  if (Test-Path -LiteralPath $treeTarget -PathType Container) {
+    $targetFull = (Resolve-Path -LiteralPath $treeTarget).Path
+    $runtimeFiles = @(Get-ChildItem -LiteralPath $treeTarget -Recurse -File |
+      ForEach-Object { $_.FullName.Substring($targetFull.Length) })
+    $sourceFull = (Resolve-Path -LiteralPath $treeSource).Path
+    $sourceFiles = @(Get-ChildItem -LiteralPath $treeSource -Recurse -File |
+      ForEach-Object { $_.FullName.Substring($sourceFull.Length) })
+    $extra = @($runtimeFiles | Where-Object { $sourceFiles -notcontains $_ })
+    if ($extra.Count -gt 0) {
+      throw "loose-tree $tree has $($extra.Count) runtime-only files (e.g. $($extra[0])); refusing /MIR that would delete ungoverned content. Reconcile them into the lane first."
+    }
+  }
+  $null = New-Item -ItemType Directory -Path $treeTarget -Force
+  $null = robocopy $treeSource $treeTarget /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying loose tree $tree (exit $LASTEXITCODE)" }
+  Write-Output "loose-tree synced: $tree"
+}
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"
 $resolverSource = Join-Path $Source $resolverCli
