@@ -414,13 +414,21 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(deploy).toContain("Get-LegacyCockpitRelayState")
     expect(deploy).toContain("Remove-LegacyCockpitRelay")
     expect(deploy).toContain("reserved by an unrelated portproxy target")
-    expect(deploy).toMatch(/version\s*=\s*6/)
+    expect(deploy).toMatch(/version\s*=\s*7/)
     expect(deploy).toContain("legacyRelay =")
     expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
     expect(deploy).toContain('"compatibility-relay"')
     expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
       .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
     expect(restore).toMatch(/\$manifestVersion\s+-ne\s+6/)
+    // v7 = the four request-time loose trees joined the rollback directory set. The check is
+    // split nowhere else: deploy's list and restore's version-gated list must name the SAME trees,
+    // or every rollback after a deploy throws "does not name the exact runtime directory set".
+    for (const tree of ["scripts\\execution-fabric", "scripts\\multi-agent-operator", "components\\operator", "config\\execution-fabric"]) {
+      expect(deploy).toContain(`"${tree}"`)
+      expect(restore).toContain(`"${tree}"`)
+    }
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+7/)
     expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
     expect(restore).toMatch(/if \(\$overlayRestoreMode -in @\("legacy-relay", "compatibility-relay"\)\)[\s\S]*portproxy add v4tov4/)
     expect(restore).toContain("Rollback manifest overlay mode contradicts the captured proxy and relay state")

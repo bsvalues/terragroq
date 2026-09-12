@@ -512,7 +512,7 @@ if (-not $SkipRollbackCapture) {
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 6
+    version = 7
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
@@ -693,10 +693,10 @@ foreach ($tree in $looseTreeSyncs) {
   # the rollback manifest does not cover. A refusal here is a lane problem, not a script problem.
   if (Test-Path -LiteralPath $treeTarget -PathType Container) {
     $targetFull = (Resolve-Path -LiteralPath $treeTarget).Path
-    $runtimeFiles = @(Get-ChildItem -LiteralPath $treeTarget -Recurse -File |
+    $runtimeFiles = @(Get-ChildItem -LiteralPath $treeTarget -Recurse -File -Force |
       ForEach-Object { $_.FullName.Substring($targetFull.Length) })
     $sourceFull = (Resolve-Path -LiteralPath $treeSource).Path
-    $sourceFiles = @(Get-ChildItem -LiteralPath $treeSource -Recurse -File |
+    $sourceFiles = @(Get-ChildItem -LiteralPath $treeSource -Recurse -File -Force |
       ForEach-Object { $_.FullName.Substring($sourceFull.Length) })
     $extra = @($runtimeFiles | Where-Object { $sourceFiles -notcontains $_ })
     if ($extra.Count -gt 0) {
