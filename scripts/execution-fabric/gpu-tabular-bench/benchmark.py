@@ -39,6 +39,19 @@ import traceback
 
 import numpy as np
 
+# The workload bodies are shared with the production dispatch worker: one implementation for the
+# measured capability and the dispatched jobs, so the two cannot silently diverge. The pair-runner
+# task_*() functions below keep their exact original timing structure (what loads inside vs outside
+# the timed closure); only the bodies moved. See gpu_tabular_workload.py.
+from gpu_tabular_workload import (
+    to_numpy,
+    workload_aggregation,
+    workload_clustering,
+    workload_decomposition,
+    workload_outlier,
+    workload_regression,
+)
+
 EVIDENCE_SCHEMA = "williamos-gpu-tabular-qualification/1"
 
 
@@ -173,22 +186,6 @@ def first_dist_version(*distribution_names: str) -> str | None:
     return None
 
 
-def to_numpy(value):
-    """Host NumPy view of a value that may be device-resident.
-
-    Two distinct device paths exist and both refuse implicit conversion:
-      * cuDF Series/DataFrame  -> .to_numpy()
-      * CuPy ndarray           -> .get()
-    np.asarray() on either raises in the installed versions, so each is handled explicitly. Applied
-    to every device result in this harness so the pattern cannot silently reappear on one path only.
-    """
-    if hasattr(value, "to_numpy"):
-        return value.to_numpy()
-    if (type(value).__module__ or "").split(".")[0] == "cupy" and hasattr(value, "get"):
-        return value.get()
-    return np.asarray(value)
-
-
 # ------------------------------------------------------------------------------------ synthetic data
 
 def make_parcels(n_rows: int, rng: np.random.Generator) -> dict:
@@ -254,38 +251,12 @@ def write_parquet(path: str, columns: dict) -> int:
 
 # ------------------------------------------------------------------------------------------ tasks
 
+
 def task_aggregation(tx_path: str, cpu_first: bool) -> dict:
     """Collection rollup per parcel — the 100M-row case (cuDF groupby vs pandas)."""
     result = {"task": "aggregation", "workload": "collection-transaction rollup per parcel"}
-
-    def cpu():
-        import pandas as pd
-
-        frame = pd.read_parquet(tx_path)
-        grouped = frame.groupby("parcel_id", as_index=False).agg(
-            total_amount=("amount", "sum"), tx_count=("amount", "size"), late_count=("late", "sum")
-        )
-        return {
-            "rows": int(len(frame)),
-            "groups": int(len(grouped)),
-            "sum": float(grouped["total_amount"].sum()),
-            "max_group_total": float(grouped["total_amount"].max()),
-        }
-
-    def gpu():
-        import cudf
-
-        frame = cudf.read_parquet(tx_path)
-        grouped = frame.groupby("parcel_id", as_index=False).agg(
-            {"amount": ["sum", "count"], "late": "sum"}
-        )
-        totals = to_numpy(grouped.iloc[:, 1].astype("float64"))
-        return {
-            "rows": int(len(frame)),
-            "groups": int(len(grouped)),
-            "sum": float(totals.sum()),
-            "max_group_total": float(totals.max()),
-        }
+    cpu = lambda: workload_aggregation("cpu", tx_path)
+    gpu = lambda: workload_aggregation("cuda", tx_path)
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")
@@ -308,22 +279,8 @@ def task_regression(parcels_path: str, cpu_first: bool) -> dict:
     target = frame["sale_price"].to_numpy(dtype="float32")
     result = {"task": "regression", "workload": "sale-price valuation model", "rows": int(len(frame))}
 
-    def cpu():
-        from sklearn.ensemble import RandomForestRegressor
-
-        model = RandomForestRegressor(n_estimators=40, max_depth=14, n_jobs=-1, random_state=7)
-        model.fit(features, target)
-        predictions = model.predict(features[:200000])
-        return float(np.sqrt(np.mean((predictions - target[:200000]) ** 2)))
-
-    def gpu():
-        from cuml.ensemble import RandomForestRegressor
-
-        model = RandomForestRegressor(n_estimators=40, max_depth=14, random_state=7)
-        model.fit(features, target)
-        predictions = model.predict(features[:200000])
-        predictions = to_numpy(predictions).ravel()
-        return float(np.sqrt(np.mean((predictions - target[:200000]) ** 2)))
+    cpu = lambda: workload_regression("cpu", features, target)
+    gpu = lambda: workload_regression("cuda", features, target)
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")
@@ -344,19 +301,8 @@ def task_clustering(parcels_path: str, cpu_first: bool) -> dict:
     features = frame.drop(columns=["sale_price"]).to_numpy(dtype="float32")
     result = {"task": "clustering", "workload": "valuation-zone grouping", "rows": int(len(frame))}
 
-    def cpu():
-        from sklearn.cluster import KMeans
-
-        model = KMeans(n_clusters=24, n_init=4, random_state=7)
-        model.fit(features)
-        return float(model.inertia_)
-
-    def gpu():
-        from cuml.cluster import KMeans
-
-        model = KMeans(n_clusters=24, n_init=4, random_state=7)
-        model.fit(features)
-        return float(model.inertia_)
+    cpu = lambda: workload_clustering("cpu", features)
+    gpu = lambda: workload_clustering("cuda", features)
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")
@@ -377,30 +323,8 @@ def task_decomposition(parcels_path: str, cpu_first: bool) -> dict:
     features = frame.drop(columns=["sale_price"]).to_numpy(dtype="float32")
     result = {"task": "decomposition", "workload": "parcel feature PCA", "rows": int(len(frame))}
 
-    def cpu():
-        from sklearn.decomposition import PCA
-
-        model = PCA(n_components=8, random_state=7)
-        model.fit(features)
-        # explained_variance_ratio_ sums to exactly 1.0 by construction, so it can never detect a
-        # wrong decomposition. Compare the dominant component's share and the magnitude of the
-        # leading variances instead.
-        return {
-            "pc1_explained_ratio": float(model.explained_variance_ratio_[0]),
-            "leading_variance_l2": float(np.linalg.norm(model.explained_variance_)),
-        }
-
-    def gpu():
-        from cuml.decomposition import PCA
-
-        model = PCA(n_components=8)
-        model.fit(features)
-        ratio = to_numpy(model.explained_variance_ratio_)
-        variance = to_numpy(model.explained_variance_)
-        return {
-            "pc1_explained_ratio": float(ratio[0]),
-            "leading_variance_l2": float(np.linalg.norm(variance)),
-        }
+    cpu = lambda: workload_decomposition("cpu", features)
+    gpu = lambda: workload_decomposition("cuda", features)
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")
@@ -422,20 +346,8 @@ def task_outlier(parcels_path: str, cpu_first: bool) -> dict:
     features = ratio.reshape(-1, 1)
     result = {"task": "outlier", "workload": "sales-ratio anomaly detection", "rows": int(len(ratio))}
 
-    def cpu():
-        from sklearn.ensemble import IsolationForest
-
-        model = IsolationForest(n_estimators=100, random_state=7, n_jobs=-1)
-        labels = model.fit_predict(features)
-        return int((labels == -1).sum())
-
-    def gpu():
-        from cuml.ensemble import IsolationForest
-
-        model = IsolationForest(n_estimators=100, random_state=7)
-        labels = model.fit_predict(features)
-        labels = to_numpy(labels).ravel()
-        return int((labels == -1).sum())
+    cpu = lambda: workload_outlier("cpu", features)
+    gpu = lambda: workload_outlier("cuda", features)
 
     order = (cpu, gpu) if cpu_first else (gpu, cpu)
     labels_order = ("cpu", "gpu") if cpu_first else ("gpu", "cpu")

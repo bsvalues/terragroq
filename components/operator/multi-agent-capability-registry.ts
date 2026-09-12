@@ -1123,7 +1123,7 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
     status: "PILOT_AUTHORIZED",
     executionClass: "EXECUTABLE_WORKER",
     coordinationEligible: true,
-    claim: "Measured cuML/RAPIDS regression on the DAEDALUS RTX 3090 binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured.",
+    claim: "Measured cuML/RAPIDS regression dispatches to the DAEDALUS accelerator at or above 50,000 rows through the live seam; below 50,000 the crossover is unmeasured and the CPU path is taken.",
     reasonCode: "GPU_TABULAR_MEASURED_PILOT_AUTHORIZED",
     adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
     authorityGrantRefs: [
@@ -1136,6 +1136,8 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
       "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
       "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
       "scripts/execution-fabric/gpu-tabular-capability.mjs",
+      "scripts/execution-fabric/gpu-tabular-dispatch.mjs",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/dispatch-acceptance.json",
     ],
     restrictions: [
       "Only the exact measured binding: RTX 3090 x cuML 26.08.00 x CUDA 13.4.49 in the isolated cuml-qual environment",
@@ -1153,7 +1155,7 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
     status: "PILOT_AUTHORIZED",
     executionClass: "EXECUTABLE_WORKER",
     coordinationEligible: true,
-    claim: "Measured cuML KMeans clustering on the DAEDALUS binding is authorized for accelerator placement at or above 50,000 rows; the crossover below that size is unmeasured.",
+    claim: "Measured cuML KMeans clustering dispatches to the DAEDALUS accelerator at or above 50,000 rows through the live seam; below 50,000 the crossover is unmeasured and the CPU path is taken.",
     reasonCode: "GPU_CLUSTERING_MEASURED_PILOT_AUTHORIZED",
     adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
     authorityGrantRefs: [
@@ -1166,6 +1168,8 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
       "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
       "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
       "scripts/execution-fabric/gpu-tabular-capability.mjs",
+      "scripts/execution-fabric/gpu-tabular-dispatch.mjs",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/dispatch-acceptance.json",
     ],
     restrictions: [
       "Only the exact measured binding: RTX 3090 x cuML 26.08.00 x CUDA 13.4.49 in the isolated cuml-qual environment",
@@ -1182,7 +1186,7 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
     status: "PILOT_AUTHORIZED",
     executionClass: "EXECUTABLE_WORKER",
     coordinationEligible: true,
-    claim: "Measured cuDF groupby aggregation on the DAEDALUS binding is authorized for accelerator placement at or above 100,000 rows; it is size-aware, never a blanket accelerator rule.",
+    claim: "Measured cuDF groupby aggregation dispatches to the DAEDALUS accelerator at or above 100,000 rows through the live seam; it is size-aware, never a blanket accelerator rule.",
     reasonCode: "GPU_AGGREGATION_MEASURED_PILOT_AUTHORIZED",
     adapterRef: "scripts/execution-fabric/gpu-tabular-capability.mjs",
     authorityGrantRefs: [
@@ -1195,6 +1199,8 @@ export const MULTI_AGENT_CAPABILITY_INVENTORY = Object.freeze([
       "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json",
       "scripts/execution-fabric/gpu-tabular-bench/verify_evidence.py",
       "scripts/execution-fabric/gpu-tabular-capability.mjs",
+      "scripts/execution-fabric/gpu-tabular-dispatch.mjs",
+      "scripts/execution-fabric/gpu-tabular-bench/evidence/dispatch-acceptance.json",
     ],
     restrictions: [
       "Eligible at or above 100,000 rows only; below that the dispatcher must use the CPU path",
