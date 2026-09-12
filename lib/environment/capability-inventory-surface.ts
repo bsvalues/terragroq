@@ -51,11 +51,21 @@ export const COMPUTE_CAPABILITY_WORKLOADS: Readonly<Record<string, string>> = Ob
   "gpu-dimensional-reduction": "decomposition",
 })
 
+// Native dynamic import the bundler must not rewrite: webpack's default treatment of a
+// non-literal import() is a context __webpack_require__, which cannot resolve a file:// URL of
+// a loose runtime file (measured on the deployed door: typed CAPABILITY_SURFACE_UNAVAILABLE with
+// the files present). webpackIgnore keeps the call native; @vite-ignore keeps the dev/vitest
+// pipeline from capturing it either. At runtime this is Node's own ESM loader - so the surface,
+// the CLI seam, and the door all read the identical loose files the registry lives in:
+// one source, one path, zero bundle capture.
+const importNative = (specifier: string) =>
+  import(/* webpackIgnore: true */ /* @vite-ignore */ specifier)
+
 async function loadSameModulesAsDispatch(root = process.cwd()) {
   const [registry, adapter, dispatch] = await Promise.all([
-    import(pathToFileURL(path.resolve(root, "components/operator/multi-agent-capability-registry.ts")).href),
-    import(pathToFileURL(path.resolve(root, "scripts/execution-fabric/gpu-tabular-capability.mjs")).href),
-    import(pathToFileURL(path.resolve(root, "scripts/execution-fabric/gpu-tabular-dispatch.mjs")).href),
+    importNative(pathToFileURL(path.resolve(root, "components/operator/multi-agent-capability-registry.ts")).href),
+    importNative(pathToFileURL(path.resolve(root, "scripts/execution-fabric/gpu-tabular-capability.mjs")).href),
+    importNative(pathToFileURL(path.resolve(root, "scripts/execution-fabric/gpu-tabular-dispatch.mjs")).href),
   ])
   return { registry, adapter, dispatch }
 }
