@@ -507,12 +507,12 @@ if (-not $SkipRollbackCapture) {
     "scripts\hermes-https-proxy.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
-  $rollbackDirectories = @(".next", "public", "lib\fabric")
+  $rollbackDirectories = @(".next", "public", "lib\fabric", "scripts\execution-fabric", "scripts\multi-agent-operator", "components\operator", "config\execution-fabric")
   if ($WithDependencies) { $rollbackDirectories += "node_modules" }
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
-    version = 6
+    version = 7
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
@@ -664,6 +664,90 @@ Get-ChildItem -LiteralPath $fabricTarget -Filter "*.mjs" -File -Recurse -ErrorAc
   Remove-Item -Force
 $null = robocopy $fabricSource $fabricTarget "*.mjs" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
+
+# Server-loaded loose trees beyond lib\fabric. The runtime loads three more trees at REQUEST time
+# (not boot): the dispatch seam imports `components/operator/multi-agent-capability-registry.ts`
+# and the operator scripts by file path under process.cwd(), the capability surface route does the
+# same, and the elastic-compute config lives under config\execution-fabric. Before this block,
+# deploys shipped none of them -- a freshly deployed door could serve a route whose imports were
+# absent until some agent hand-copied the trees (measured 2026-09-12: the first seam deploy needed
+# exactly that manual step, and /api/environment/capability would 503 without it). Hand-listing is
+# the same maintenance trap lib\fabric's note above describes, so whole trees are mirrored.
+# Census-verified 2026-09-12: each target tree currently equals its source exactly (zero
+# runtime-only files), so /MIR cannot destroy runtime-only content; the guard below keeps that
+# true for future generations instead of trusting it.
+$looseTreeSyncs = @(
+  "scripts\execution-fabric",
+  "scripts\multi-agent-operator",
+  "components\operator",
+  "config\execution-fabric"
+)
+# Two-phase by review finding (PR 1228 head 93cc009e): validating AFTER .next was already
+# replaced left the door stopped and half-updated on refusal. Phase A decides every tree with
+# read-only checks and refuses before anything in this loop mutates; Phase B copies. (The
+# compiled bundle copied earlier in the same run does not affect the RUNNING service until the
+# scheduled tasks restart at the end, so a Phase-A refusal always leaves the previous
+# generation fully in place and restorable.)
+#
+# The guard protects only what the rollback cannot: files NO governed generation ever shipped.
+# A target file missing from this source generation is EITHER ordinary lane churn (a tracked
+# file later removed or renamed in the lane: the previous deploy's rollback capture names it,
+# and /MIR dropping it is correct behavior, restorable from that capture) OR genuinely
+# ungoverned content (placed by hand outside any governed deploy -- refuse). Each extra file is
+# therefore judged against the union of the recent prior-generation rollback captures of THIS
+# tree. Unknown history fails closed: extras with no prior capture to vouch for them refuse.
+$looseTreeHistoryDepth = 24
+$syncActions = @()
+foreach ($tree in $looseTreeSyncs) {
+  $treeSource = Join-Path $Source $tree
+  if (-not (Test-Path -LiteralPath $treeSource -PathType Container)) {
+    Write-Output "loose-tree sync skipped (no source $tree)"
+    continue
+  }
+  $treeTarget = Join-Path $Runtime $tree
+  if (Test-Path -LiteralPath $treeTarget -PathType Container) {
+    $targetFull = (Resolve-Path -LiteralPath $treeTarget).Path
+    $runtimeFiles = @(Get-ChildItem -LiteralPath $treeTarget -Recurse -File -Force |
+      ForEach-Object { $_.FullName.Substring($targetFull.Length) })
+    $sourceFull = (Resolve-Path -LiteralPath $treeSource).Path
+    $sourceFiles = @(Get-ChildItem -LiteralPath $treeSource -Recurse -File -Force |
+      ForEach-Object { $_.FullName.Substring($sourceFull.Length) })
+    $extra = @($runtimeFiles | Where-Object { $sourceFiles -notcontains $_ })
+    if ($extra.Count -gt 0) {
+      $historyPaths = @()
+      $rootsParent = [IO.Path]::GetDirectoryName($Runtime)
+      $rootsName = [IO.Path]::GetFileName($Runtime)
+      $roots = @(Get-ChildItem -LiteralPath $rootsParent -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "$rootsName.rollback-*" } |
+        Sort-Object Name -Descending | Select-Object -First $looseTreeHistoryDepth)
+      foreach ($root in $roots) {
+        $mf = Join-Path $root.FullName "rollback-manifest.json"
+        if (-not (Test-Path -LiteralPath $mf -PathType Leaf)) { continue }
+        try { $manifest = Get-Content -LiteralPath $mf -Raw | ConvertFrom-Json } catch { continue }
+        $dirs = @($manifest.directories | Where-Object { [string]$_.path -eq $tree })
+        if ($dirs.Count -ne 1 -or -not [bool]$dirs[0].wasPresent) { continue }
+        $cap = Join-Path $root.FullName $tree
+        if (-not (Test-Path -LiteralPath $cap -PathType Container)) { continue }
+        $capFull = (Resolve-Path -LiteralPath $cap).Path
+        $historyPaths += @(Get-ChildItem -LiteralPath $cap -Recurse -File -Force |
+          ForEach-Object { $_.FullName.Substring($capFull.Length) })
+      }
+      $ungoverned = @($extra | Where-Object { $historyPaths -notcontains $_ })
+      if ($ungoverned.Count -gt 0) {
+        throw "loose-tree $tree has $($ungoverned.Count) files that no governed generation shipped (e.g. $($ungoverned[0])); refusing to mirror a tree containing ungoverned content. Reconcile them into the lane first."
+      }
+      Write-Output "loose-tree ${tree}: $($extra.Count) prior-generation file(s) removed from the lane will drop from the runtime (rollback captures vouch for them)"
+    }
+  }
+  $syncActions += ,@{ source = $treeSource; target = $treeTarget; tree = $tree }
+}
+# Phase B: only now does this loop mutate, after every computable refusal above.
+foreach ($action in $syncActions) {
+  $null = New-Item -ItemType Directory -Path $action.target -Force
+  $null = robocopy $action.source $action.target /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying loose tree $($action.tree) (exit $LASTEXITCODE)" }
+  Write-Output "loose-tree synced: $($action.tree)"
+}
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"
 $resolverSource = Join-Path $Source $resolverCli
