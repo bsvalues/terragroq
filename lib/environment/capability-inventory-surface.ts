@@ -84,7 +84,11 @@ export async function projectComputeCapabilities({
     : await dispatch.probeBinding({ computeNode: "daedalus", timeoutMs: 25_000 })
   const curvePath = path.resolve(root,
     "scripts/execution-fabric/gpu-tabular-bench/evidence/placement-curve.json")
-  const evidence = adapter.loadPlacementEvidence(curvePath, { now })
+  // Same expression the dispatch seam uses for its own evidence load (gpu-tabular-dispatch.mjs:52),
+  // so an operator-set WILLIAMOS_GPU_TABULAR_EVIDENCE_TTL_DAYS moves the banner and the placement
+  // rows together. The independent review named a banner-only default as drift; this closes it.
+  const evidenceTtlDays = Number(process.env.WILLIAMOS_GPU_TABULAR_EVIDENCE_TTL_DAYS ?? 90)
+  const evidence = adapter.loadPlacementEvidence(curvePath, { now, maxAgeDays: evidenceTtlDays })
   const identity = adapter.providerIdentity()
 
   const capabilities: CapabilitySurfaceRow[] = await Promise.all(
