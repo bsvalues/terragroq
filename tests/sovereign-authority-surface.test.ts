@@ -165,6 +165,17 @@ describe("sovereign authority surface", () => {
       delete process.env.WILLIAMOS_INTEGRATIONS_STATE
     }
 
+    // present-but-unreadable (a directory in the file's place): NOT reported as absent
+    const blocker = path.join(dir, "blocked.json")
+    fs.mkdirSync(blocker)
+    process.env.WILLIAMOS_INTEGRATIONS_STATE = blocker
+    try {
+      await expect(projectSovereignAuthority()).rejects.toMatchObject({ code: "AUTHORITY_RECORD_UNREADABLE" })
+    } finally {
+      delete process.env.WILLIAMOS_INTEGRATIONS_STATE
+      fs.rmSync(blocker, { recursive: true, force: true })
+    }
+
     // bad JSON on disk: the reader's code, distinct from the projection's
     fs.writeFileSync(file, "{ not json")
     process.env.WILLIAMOS_INTEGRATIONS_STATE = file
