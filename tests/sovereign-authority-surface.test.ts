@@ -97,12 +97,23 @@ describe("sovereign authority surface", () => {
     const head = SEALED.labMainAfter
     const dirty = projectAuthorityRecord({ integrations: [SEALED] }, { sha: `${head}-dirty`, builtAt: null }, "test://x")
     expect(dirty.runtime.provenanceState).toBe("BUILD_UNPROVEN")
+    // the real vector: 39 hex chars that would have prefix-matched the old code
+    const prefix39 = projectAuthorityRecord({ integrations: [SEALED] }, { sha: head.slice(0, 39), builtAt: null }, "test://x")
+    expect(prefix39.runtime.provenanceState).toBe("BUILD_UNPROVEN")
     const abbreviated = projectAuthorityRecord({ integrations: [SEALED] }, { sha: head.slice(0, 10), builtAt: null }, "test://x")
     expect(abbreviated.runtime.provenanceState).toBe("BUILD_UNPROVEN")
     const empty = projectAuthorityRecord({ integrations: [SEALED] }, { sha: "", builtAt: null }, "test://x")
     expect(empty.runtime.provenanceState).toBe("BUILD_UNPROVEN")
     const other = projectAuthorityRecord({ integrations: [SEALED] }, { sha: "f".repeat(40), builtAt: null }, "test://x")
     expect(other.runtime.provenanceState).toBe("BUILD_LAGS_AUTHORITY")
+  })
+
+  it("forged extra keys on a record never reach the surface (clean rebuild, not raw pass-through)", () => {
+    const forged = { ...SEALED, productStateOverride: "COMPLETE_AND_OWN_EVERYTHING", junk: { nested: true } }
+    const s = projectAuthorityRecord({ integrations: [forged] }, PROV(SEALED.labMainAfter), "test://x")
+    expect(s.recentPromotions[0]).toEqual(SEALED)
+    expect(Object.keys(s.recentPromotions[0]).sort().join(",")).toBe(
+      "at,base,candidate,labMainAfter,labMainBefore,mirrorDetail,mirrorState,productState,reviewerKey,sealKey")
   })
 
   it("strict shape: a record missing ANY writer field is malformed, never silently defaulted", () => {

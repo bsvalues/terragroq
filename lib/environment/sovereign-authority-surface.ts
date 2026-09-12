@@ -109,7 +109,20 @@ export function projectAuthorityRecord(
     if (missing.length > 0) {
       throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MALFORMED", `${source}.integrations[${i}] lacks required string field(s): ${missing.join(", ")}`)
     }
-    parsed.push(r as AuthorityRecord)
+    // Rebuild the clean projection — never pass the raw object through: extra keys the writer
+    // doesn't emit (a forged `productStateOverride`, junk fields) must not reach the response.
+    parsed.push({
+      at: r.at as string,
+      candidate: r.candidate as string,
+      base: r.base as string,
+      labMainBefore: r.labMainBefore as string,
+      labMainAfter: r.labMainAfter as string,
+      sealKey: r.sealKey as string,
+      reviewerKey: r.reviewerKey as string,
+      productState: r.productState as string,
+      mirrorState: r.mirrorState as string,
+      mirrorDetail: r.mirrorDetail as string,
+    })
   }
 
   const newest = parsed.at(-1) ?? null
