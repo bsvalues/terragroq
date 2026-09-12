@@ -7,6 +7,7 @@ import {
   AUTHORITY_RULE_ID,
   AuthoritySurfaceUnavailable,
   projectAuthorityRecord,
+  projectSovereignAuthority,
   resolveIntegrationsStatePath,
 } from "@/lib/environment/sovereign-authority-surface"
 
@@ -57,13 +58,14 @@ describe("sovereign authority surface", () => {
     expect(s.product.promotions).toBe(2)
   })
 
-  it("full history renders newest-first and the age window is computed, not assumed", () => {
+  it("full history renders newest-first and the record age is computed, not assumed", () => {
     const nowMs = Date.parse("2026-09-12T18:28:54Z")
     const s = projectAuthorityRecord({ integrations: [SEALED, LAGGED] }, PROV(LAGGED.labMainAfter), "test://x", nowMs)
     expect(s.recentPromotions.map((r) => r.labMainAfter[0])).toEqual(["4", "9"])
     expect(s.runtime.provenanceState).toBe("PROVEN_AT_AUTHORITY")
     expect(s.staleness.ageHours).toBe(2)
-    expect(s.staleness.withinWindow).toBe(true)
+    const stale = projectAuthorityRecord({ integrations: [SEALED, LAGGED] }, PROV(LAGGED.labMainAfter), "test://x", Date.parse("2026-09-14T18:28:54Z"))
+    expect(stale.staleness.ageHours).toBe(50)
   })
 
   it.each([
@@ -91,6 +93,37 @@ describe("sovereign authority surface", () => {
     expect(s.product.state).toBe("COMPLETE") // product verdict is independent of build identity
   })
 
+  it("dirty and abbreviated shas cannot fake PROVEN (exact full-sha equality only)", () => {
+    const head = SEALED.labMainAfter
+    const dirty = projectAuthorityRecord({ integrations: [SEALED] }, { sha: `${head}-dirty`, builtAt: null }, "test://x")
+    expect(dirty.runtime.provenanceState).toBe("BUILD_UNPROVEN")
+    const abbreviated = projectAuthorityRecord({ integrations: [SEALED] }, { sha: head.slice(0, 10), builtAt: null }, "test://x")
+    expect(abbreviated.runtime.provenanceState).toBe("BUILD_UNPROVEN")
+    const empty = projectAuthorityRecord({ integrations: [SEALED] }, { sha: "", builtAt: null }, "test://x")
+    expect(empty.runtime.provenanceState).toBe("BUILD_UNPROVEN")
+    const other = projectAuthorityRecord({ integrations: [SEALED] }, { sha: "f".repeat(40), builtAt: null }, "test://x")
+    expect(other.runtime.provenanceState).toBe("BUILD_LAGS_AUTHORITY")
+  })
+
+  it("strict shape: a record missing ANY writer field is malformed, never silently defaulted", () => {
+    const noMirror = { ...SEALED } as Record<string, string>
+    delete noMirror.mirrorState
+    expect(() => projectAuthorityRecord({ integrations: [noMirror] }, PROV(SEALED.labMainAfter), "test://x")).toThrowError(AuthoritySurfaceUnavailable)
+    try {
+      projectAuthorityRecord({ integrations: [noMirror] }, PROV(SEALED.labMainAfter), "test://x")
+    } catch (e) {
+      expect((e as AuthoritySurfaceUnavailable).code).toBe("AUTHORITY_RECORD_MALFORMED")
+      expect((e as AuthoritySurfaceUnavailable).message).toContain("mirrorState")
+    }
+    const emptyDetail = { ...SEALED, mirrorDetail: "" }
+    try {
+      projectAuthorityRecord({ integrations: [emptyDetail] }, PROV(SEALED.labMainAfter), "test://x")
+      expect.unreachable("empty writer field must refuse, not render blank")
+    } catch (e) {
+      expect((e as AuthoritySurfaceUnavailable).code).toBe("AUTHORITY_RECORD_MALFORMED")
+    }
+  })
+
   it("path resolution follows the writer's precedence and never hardcodes a home", () => {
     expect(resolveIntegrationsStatePath({ WILLIAMOS_INTEGRATIONS_STATE: "/custom/x.json" } as unknown as NodeJS.ProcessEnv)).toBe("/custom/x.json")
     const p = resolveIntegrationsStatePath({ USERPROFILE: "C:\\Users\\test" } as unknown as NodeJS.ProcessEnv)
@@ -98,14 +131,37 @@ describe("sovereign authority surface", () => {
     expect(resolveIntegrationsStatePath({} as unknown as NodeJS.ProcessEnv)).toContain(".williamos")
   })
 
-  it("production entry: a real written record round-trips through the same projection the tests pin", () => {
+  it("production entry round-trips a real file, and refuses typed on missing/malformed paths", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "authority-surface-"))
     const file = path.join(dir, "integrations.json")
+
     fs.writeFileSync(file, JSON.stringify({ integrations: [SEALED, LAGGED] }))
-    const s = projectAuthorityRecord(JSON.parse(fs.readFileSync(file, "utf8")), PROV(SEALED.labMainAfter), file)
-    expect(s.product.state).toBe("COMPLETE")
-    expect(s.mirror.state).toBe("OUT_OF_SYNC")
-    expect(s.mirror.laggingSince).toBe(LAGGED.at)
-    fs.rmSync(dir, { recursive: true, force: true })
+    process.env.WILLIAMOS_INTEGRATIONS_STATE = file
+    try {
+      const s = await projectSovereignAuthority()
+      expect(s.product.state).toBe("COMPLETE")
+      expect(s.mirror.state).toBe("OUT_OF_SYNC")
+      expect(s.mirror.laggingSince).toBe(LAGGED.at)
+    } finally {
+      delete process.env.WILLIAMOS_INTEGRATIONS_STATE
+    }
+
+    // missing file: a typed refusal, not ENOENT leaking through
+    process.env.WILLIAMOS_INTEGRATIONS_STATE = path.join(dir, "nope.json")
+    try {
+      await expect(projectSovereignAuthority()).rejects.toMatchObject({ code: "AUTHORITY_RECORD_MISSING" })
+    } finally {
+      delete process.env.WILLIAMOS_INTEGRATIONS_STATE
+    }
+
+    // bad JSON on disk: the reader's code, distinct from the projection's
+    fs.writeFileSync(file, "{ not json")
+    process.env.WILLIAMOS_INTEGRATIONS_STATE = file
+    try {
+      await expect(projectSovereignAuthority()).rejects.toMatchObject({ code: "AUTHORITY_RECORD_UNPARSEABLE" })
+    } finally {
+      delete process.env.WILLIAMOS_INTEGRATIONS_STATE
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

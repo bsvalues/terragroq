@@ -36,7 +36,7 @@ type Surface = {
     mirrorState: string
     mirrorDetail: string
   }>
-  staleness: { newestRecordAt: string | null; ageHours: number | null; thresholdHours: number; withinWindow: boolean | null }
+  staleness: { newestRecordAt: string | null; ageHours: number | null }
 }
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 10) : "—")
@@ -149,12 +149,7 @@ export function AuthorityBoard() {
               <dd className="font-mono">
                 {surface.staleness.ageHours === null
                   ? "no record"
-                  : `${surface.staleness.ageHours}h of ${surface.staleness.thresholdHours}h window`}{" "}
-                {surface.staleness.withinWindow === true
-                  ? "· within"
-                  : surface.staleness.withinWindow === false
-                    ? "· stale: check the integration lane"
-                    : ""}
+                  : `${surface.staleness.ageHours}h since the last sealed integration`}
               </dd>
             </dl>
           </div>

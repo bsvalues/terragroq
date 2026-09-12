@@ -55,7 +55,7 @@ export type AuthoritySurface = Readonly<{
   product: Readonly<{ state: string; detail: string; at: string | null; promotions: number }>
   mirror: Readonly<{ state: string; detail: string; at: string | null; laggingSince: string | null }>
   recentPromotions: AuthorityRecord[]
-  staleness: Readonly<{ newestRecordAt: string | null; ageHours: number | null; thresholdHours: number; withinWindow: boolean | null }>
+  staleness: Readonly<{ newestRecordAt: string | null; ageHours: number | null }>
 }>
 
 export class AuthoritySurfaceUnavailable extends Error {
@@ -66,9 +66,11 @@ export class AuthoritySurfaceUnavailable extends Error {
 }
 
 /**
- * Resolve the state file the way the writer does (same precedence, no hardcoded home):
- * explicit env override, then USERPROFILE/HOME. Never a machine-specific literal — a test box
- * without the file must get a typed refusal, not ENOENT.
+ * Resolve the state file. The writer (integrate-lab-main.mjs) uses USERPROFILE only; this resolver
+ * matches it, with one deliberate addition: WILLIAMOS_INTEGRATIONS_STATE overrides for tests and
+ * operator probes, and HOME/homedir as a portable fallback on non-Windows hosts. On the lab host
+ * (USERPROFILE set, no override) the two paths are identical — that is the single-source condition;
+ * an explicit override is a declared operator action, not a silent divergence.
  */
 export function resolveIntegrationsStatePath(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.WILLIAMOS_INTEGRATIONS_STATE
@@ -96,51 +98,45 @@ export function projectAuthorityRecord(
   if (!Array.isArray(list)) {
     throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MALFORMED", `${source}.integrations is missing or not an array`)
   }
+  // Strict shape: the integration tool always writes every field (verified against every record
+  // written since the cutover). A record missing one is not this tool's record — refuse, never fill
+  // in a display value the writer never wrote.
+  const REQUIRED: (keyof AuthorityRecord)[] = ["at", "candidate", "base", "labMainBefore", "labMainAfter", "sealKey", "reviewerKey", "productState", "mirrorState", "mirrorDetail"]
   const parsed: AuthorityRecord[] = []
   for (const [i, item] of list.entries()) {
-    const r = item as Partial<AuthorityRecord>
-    if (!r || typeof r !== "object" || typeof r.labMainAfter !== "string" || typeof r.productState !== "string") {
-      throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MALFORMED", `${source}.integrations[${i}] lacks labMainAfter/productState`)
+    const r = item as Partial<Record<keyof AuthorityRecord, unknown>>
+    const missing = REQUIRED.filter((k) => typeof r?.[k] !== "string" || (r[k] as string).length === 0)
+    if (missing.length > 0) {
+      throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MALFORMED", `${source}.integrations[${i}] lacks required string field(s): ${missing.join(", ")}`)
     }
-    parsed.push({
-      at: String(r.at ?? "unknown"),
-      candidate: String(r.candidate ?? ""),
-      base: String(r.base ?? ""),
-      labMainBefore: String(r.labMainBefore ?? ""),
-      labMainAfter: r.labMainAfter,
-      sealKey: String(r.sealKey ?? ""),
-      reviewerKey: String(r.reviewerKey ?? ""),
-      productState: r.productState,
-      mirrorState: String(r.mirrorState ?? "UNKNOWN"),
-      mirrorDetail: String(r.mirrorDetail ?? ""),
-    })
+    parsed.push(r as AuthorityRecord)
   }
 
   const newest = parsed.at(-1) ?? null
-  const labMainHead = newest?.labMainAfter ?? null
 
-  // Deploy leg: compare the running artifact to the authoritative head. Only equality is asserted —
-  // ancestry would need a git call in a request path, and a guess dressed as a check is worse than
-  // an explicit "lags".
+  // Deploy leg: EXACT equality of full shas only — the #762 deploy doctrine treats anything but the
+  // built commit as unproven, "never as a pass". Prefix matching is deliberately absent: a "-dirty"
+  // build or an abbreviated sha must not read as proven at authority.
+  const fullHex = /^[0-9a-f]{40}$/i.test(provenance.sha)
   const unproven = provenance.sha === "development" || provenance.sha === "unknown"
+    || provenance.sha.endsWith("-dirty") || !fullHex
   let provenanceState: AuthoritySurface["runtime"]["provenanceState"]
   if (!newest) provenanceState = "NO_AUTHORITY_RECORD"
   else if (unproven) provenanceState = "BUILD_UNPROVEN"
-  else if (provenance.sha === labMainHead || provenance.sha.startsWith(labMainHead ?? "\0") || (labMainHead ?? "").startsWith(provenance.sha)) {
+  else if (provenance.sha === newest.labMainAfter) {
     provenanceState = "PROVEN_AT_AUTHORITY"
   } else provenanceState = "BUILD_LAGS_AUTHORITY"
 
-  // Mirror lag: the first record (newest-first) since the last IN_SYNC echo, if the latest is not in sync.
+  // Mirror lag: the OLDEST record of the current out-of-sync streak (newest-first walk until the
+  // last IN_SYNC echo). If nothing is in sync in the record, the oldest record is the honest floor.
   let laggingSince: string | null = null
   if (newest && newest.mirrorState !== "IN_SYNC") {
     for (const r of [...parsed].reverse()) {
       if (r.mirrorState === "IN_SYNC") break
       laggingSince = r.at
     }
-    if (laggingSince === null) laggingSince = parsed[0]?.at ?? null
   }
 
-  const STALENESS_HOURS = 24
   const newestMs = newest ? Date.parse(newest.at) : NaN
   const ageHours = Number.isFinite(newestMs) ? (nowMs - newestMs) / 3.6e6 : null
 
@@ -151,7 +147,7 @@ export function projectAuthorityRecord(
       source,
       note: "Local Git is authoritative; GitHub is a downstream mirror and never gates product progression.",
     },
-    runtime: { buildSha: provenance.sha, builtAt: provenance.builtAt, provenanceState, labMainHead },
+    runtime: { buildSha: provenance.sha, builtAt: provenance.builtAt, provenanceState, labMainHead: newest?.labMainAfter ?? null },
     product: {
       state: newest?.productState ?? "NO_AUTHORITY_RECORD",
       detail: newest ? `lab main ${newest.labMainAfter.slice(0, 10)} via sealed integration ${newest.candidate.slice(0, 10)}` : "no sealed integration recorded yet",
@@ -159,17 +155,17 @@ export function projectAuthorityRecord(
       promotions: parsed.length,
     },
     mirror: {
-      state: newest?.mirrorState ?? "UNKNOWN",
+      state: newest?.mirrorState ?? "NO_AUTHORITY_RECORD",
       detail: newest?.mirrorDetail ?? "no mirror attempt recorded",
       at: newest?.at ?? null,
       laggingSince,
     },
     recentPromotions: parsed.slice(-10).reverse(),
+    // Facts only: age of the newest record. No threshold verdict — the doctrine defines no staleness
+    // window, and a surface-invented one would be a second policy source.
     staleness: {
       newestRecordAt: newest?.at ?? null,
       ageHours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
-      thresholdHours: STALENESS_HOURS,
-      withinWindow: ageHours === null ? null : ageHours <= STALENESS_HOURS,
     },
   }
 }
@@ -183,8 +179,14 @@ export async function projectSovereignAuthority(): Promise<AuthoritySurface> {
   let text: string
   try {
     text = fs.readFileSync(source, "utf8")
-  } catch {
-    throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MISSING", `${source} not found; nothing has been promoted through the lab authority yet, or the record moved`)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    // Absent and unreadable are different failures with different remedies; asserting "not found"
+    // on a permission error would misreport system state.
+    if (code === "ENOENT") {
+      throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_MISSING", `${source} not found; nothing has been promoted through the lab authority yet, or the record moved`)
+    }
+    throw new AuthoritySurfaceUnavailable("AUTHORITY_RECORD_UNREADABLE", `${source} exists but could not be read (${String(code ?? error)})`)
   }
   let raw: unknown
   try {
