@@ -435,6 +435,29 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(restore.indexOf("$manifestVersion -ne 6")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
   })
 
+  it("validates request-time loose trees before any capture or copy can self-vouch them", () => {
+    const code = executableOnly(deployText)
+    // Phase A (the read-only validation loop) must precede the rollback capture AND the task
+    // stop: the current capture is a copy of the present runtime, so validating after capture
+    // lets every runtime-only file vouch for itself and the guard can never fire.
+    const phaseA = code.indexOf("foreach ($tree in $looseTreeSyncs)")
+    const capture = code.indexOf("if (-not $SkipRollbackCapture) {")
+    const stop = code.indexOf("Stop-ScheduledTask -TaskName $HttpsTaskName")
+    const phaseB = code.indexOf("foreach ($action in $syncActions)")
+    expect(phaseA).toBeGreaterThan(-1)
+    expect(capture).toBeGreaterThan(-1)
+    expect(phaseB).toBeGreaterThan(-1)
+    expect(phaseA).toBeLessThan(capture)
+    expect(phaseA).toBeLessThan(stop)
+    expect(capture).toBeLessThan(phaseB)
+    // defense-in-depth: even if the order moved, the scan excludes the current capture
+    expect(code).toMatch(/-ne \[IO\.Path\]::GetFullPath\(\$rollbackRoot\)/)
+    // a required tree cannot be silently skipped
+    expect(code).toMatch(/required at request time but absent/)
+    // vouching only counts manifests that recorded the tree as present
+    expect(code).toMatch(/\$dirs\[0\]\.wasPresent/)
+  })
+
   it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
     const code = executableOnly(deployText)
     const finalStart = code.lastIndexOf("Start-ScheduledTask -TaskName $HttpsTaskName")
