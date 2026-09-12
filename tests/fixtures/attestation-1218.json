@@ -1,0 +1,19 @@
+{
+  "payload": {
+    "artifactType": "WILLIAMOS_SOVEREIGN_REVIEW",
+    "schemaVersion": 1,
+    "reviewerRole": "INDEPENDENT_CODE_REVIEWER",
+    "reviewerContextId": "aegis-independent-reviewer-gpu-tabular",
+    "builderContextId": "hermes-builder-gpu-tabular-lane",
+    "repository": "bsvalues/terragroq",
+    "pullRequest": 1217,
+    "reviewedHeadSha": "84576f8d63b0ffa09a34a1a0663a62b8fc7d31a7",
+    "verdict": "CLEAN",
+    "findingsDigest": "sha256:23f4c102eeaeee296bb6fa523381354b107f9e1085ce4d03008151423bf11c97",
+    "requirementsDigest": "sha256:1b2731139cb874c3b9e87a4d76e35d9d2208f26f0a8e02622a85acd7d44fd4e1",
+    "testEvidenceDigest": "sha256:a6b8567586136d2f228e30358c1f732cb88722b633f0ee2b4b86dff9100fea03",
+    "issuedAt": "2026-09-11T19:23:28.053Z",
+    "keyId": "sovereign-reviewer-710e2a49a3da3d76b1aba0b9"
+  },
+  "signature": "OB_VUy58I7S2Dh8s_rtAMtJuzH5pGdetOCLN8zkAlEcyPj6IunsrtDIcFirwShG9O345uxKuMzRP9nj_XqkKAA"
+}
