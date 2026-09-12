@@ -11,7 +11,10 @@ import { COMPUTE_CAPABILITY_WORKLOADS, projectComputeCapabilities, type Capabili
  * unreachable device is shown as unhealthy — never assumed).
  */
 
-const HEALTHY = { deviceHealthy: true, deviceQuerySucceeded: true, cuml: "26.08.00" }
+const HEALTHY = {
+  deviceHealthy: true, deviceQuerySucceeded: true,
+  cumlVersion: "26.08.00", cudfVersion: "26.08.01",
+}
 const DOWN = { deviceHealthy: false, deviceQuerySucceeded: false, probeError: "forced-offline" }
 
 async function project(probe: () => Promise<Record<string, unknown>>) {
@@ -55,6 +58,16 @@ describe("capability inventory surface", () => {
     expect(byId.get("gpu-anomaly-screening")!.placementProbe!.placement).toBe("SCREENING_ONLY")
     expect(byId.get("gpu-dimensional-reduction")!.placementProbe!.placement).toBe("CPU")
     for (const row of result.capabilities) expect(row.binding.healthy).toBe(true)
+    // Contract 3 (review thread, P2): the LIVE probe observation is displayed, not just the
+    // reviewed constants, and agreement with the reviewed binding is explicit.
+    const gpu = byId.get("gpu-tabular-ml")!
+    expect(gpu.binding.observed).toBe("cuml 26.08.00 · cudf 26.08.01")
+    expect(gpu.binding.matchesReview).toBe(true)
+    // Contract 3 (review thread, P2): curve validity is scoped to curve-gated capabilities. The
+    // screening and measured-refusal rows' decisions read no curve, so the banner must not claim
+    // curve evidence for them.
+    expect(byId.get("gpu-anomaly-screening")!.evidenceState.state).toBe("DECISION_INDEPENDENT_OF_CURVE")
+    expect(byId.get("gpu-dimensional-reduction")!.evidenceState.state).toBe("DECISION_INDEPENDENT_OF_CURVE")
   }, 120_000)
 
   it("device state change reaches the surface from the probe, and recovery restores it (contracts 4/5)", async () => {

@@ -37,7 +37,7 @@ export type CapabilitySurfaceRow = {
   evidenceState: CapabilityEvidenceState
   thresholdRows: number | null
   thresholdIsAtMeasurementFloor: boolean | null
-  binding: { nodeId: string; device: string; healthy: boolean; queriedAt: string; detail: string }
+  binding: { nodeId: string; device: string; observed: string | null; matchesReview: boolean | null; healthy: boolean; queriedAt: string; detail: string }
   placementProbe: { workload: string; rows: number; placement: string; reasonCode: string } | null
   restrictions: string[]
   evidenceRefs: string[]
@@ -132,16 +132,32 @@ export async function projectComputeCapabilities({
             allowed: decision.allowed,
             reasonCode: decision.reasonCode,
           },
-          evidenceState: evidence.ok
-            ? { state: "VALID", finishedAt: evidence.finishedAt, digest: evidence.digest }
-            : { state: evidence.reasonCode, detail: evidence.detail ?? null, ageDays: evidence.ageDays ?? null },
+          evidenceState: !workload || !adapter.TABULAR_WORKLOAD_CLASSES?.[workload]?.thresholdKey
+            // The curve's validity is evidence for ROW-GATED capabilities only: the adapter decides
+            // screening and measured-refusal rows before it ever consults the curve, so stamping
+            // those rows "evidence valid" would credit an artifact their decision does not read.
+            // Their measured basis is the typed reason plus the registry's own evidence refs.
+            ? { state: "DECISION_INDEPENDENT_OF_CURVE", detail: "not curve-gated; see reason and evidence refs", ageDays: null }
+            : evidence.ok
+              ? { state: "VALID", finishedAt: evidence.finishedAt, digest: evidence.digest }
+              : { state: evidence.reasonCode, detail: evidence.detail ?? null, ageDays: evidence.ageDays ?? null },
           thresholdRows: Number.isFinite(threshold) ? threshold : null,
           thresholdIsAtMeasurementFloor: evidence.ok && workload
             ? (evidence.thresholds?.[workload]?.thresholdIsAtMeasurementFloor ?? null)
             : null,
           binding: {
             nodeId: identity.nodeId,
-            device: `${identity.device.model} · cuml ${identity.runtime.cuml} · CUDA ${identity.runtime.cudaRuntime}`,
+            // The reviewed binding is what dispatch gates on (adapter/providerIdentity), but the
+            // LIVE observation must sit beside it: after a driver or RAPIDS upgrade the health
+            // probe can still pass while the machine drifts from what was measured. A "live" label
+            // hiding reviewed constants would be a stale banner wearing a timestamp.
+            device: `${identity.device.model} · reviewed cuml ${identity.runtime.cuml}/CUDA ${identity.runtime.cudaRuntime}`,
+            observed: health?.deviceQuerySucceeded
+              ? `cuml ${health.cumlVersion ?? "?"} · cudf ${health.cudfVersion ?? "?"}`
+              : null,
+            matchesReview: health?.deviceQuerySucceeded === true
+              ? health.cumlVersion === identity.runtime.cuml && health.cudfVersion === identity.runtime.cudf
+              : null,
             healthy: health?.deviceHealthy === true,
             queriedAt: new Date().toISOString(),
             detail: health?.deviceQuerySucceeded
