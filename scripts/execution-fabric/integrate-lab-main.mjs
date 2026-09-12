@@ -49,7 +49,12 @@ const MIRROR_REPO = "bsvalues/terragroq"
 const STATE_PATH = path.join(process.env.USERPROFILE ?? "", ".williamos", "integrations.json")
 
 function envValue(name) {
-  const raw = fs.readFileSync(RUNTIME_ENV, "utf8")
+  // Resolution order: process environment, then the lab runtime env file. Machines without either
+  // (e.g. CI runners) get null -> the typed SEAL_KEY_UNAVAILABLE / REVIEWER_RING_UNAVAILABLE
+  // refusals, never a raw ENOENT crash.
+  if (process.env[name]) return process.env[name]
+  let raw
+  try { raw = fs.readFileSync(RUNTIME_ENV, "utf8") } catch { return null }
   const m = raw.match(new RegExp(`^${name}=(.*)$`, "m"))
   return m ? m[1].trim() : null
 }

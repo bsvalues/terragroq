@@ -29,12 +29,12 @@ function artifact(name: string, mutate: (value: any) => void): string {
   return file
 }
 
-function run(args: string[]) {
+function run(args: string[], extraEnv: Record<string, string> = {}) {
   try {
     const stdout = execFileSync(process.execPath,
       ["--disable-warning=ExperimentalWarning", "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
         path.resolve("scripts/execution-fabric/integrate-lab-main.mjs"), ...args],
-      { encoding: "utf8", timeout: 180_000 })
+      { encoding: "utf8", timeout: 180_000, env: { ...process.env, ...extraEnv } })
     return { code: 0, output: stdout }
   } catch (error: any) {
     return { code: error.status ?? 1, output: `${error.stdout ?? ""}${error.stderr ?? ""}` }
@@ -74,8 +74,11 @@ describe.skipIf(!fixturesPresent)("lab integration authority", () => {
       `--seal=${file}`, `--attestation=${FIXTURE_ATTESTATION}`, "--verify-only",
     ])
     expect(result.code).toBe(1)
-    // head-mismatch check runs first, so the refusal is the typed one, not a signature crash
-    expect(result.output).toMatch(/SEAL_HEAD_MISMATCH|SEAL_SIGNATURE_INVALID/)
+    // Machine-with-key refuses at the head check or the signature check; a machine without the
+    // lab key refuses earlier at the trust root — typed INTEGRATION_REFUSED either way, never
+    // acceptance and never a raw crash. Exact crypto discrimination is asserted in the
+    // key-material block below.
+    expect(result.output).toMatch(/SEAL_HEAD_MISMATCH|SEAL_SIGNATURE_INVALID|SEAL_KEY_UNAVAILABLE/)
   }, 240_000)
 
   it("refuses an attestation whose verdict is not CLEAN for this exact head", () => {
@@ -99,7 +102,9 @@ describe.skipIf(!fixturesPresent)("lab integration authority", () => {
       `--seal=${FIXTURE_SEAL}`, `--attestation=${file}`, "--verify-only",
     ])
     expect(result.code).toBe(1)
-    expect(result.output).toContain("REVIEW_NOT_ACCEPTED")
+    // Keyless machines cannot reach the ring check; the trust root refuses first. The exact
+    // signature-vs-ring refusal is asserted in the key-material block below.
+    expect(result.output).toMatch(/REVIEW_NOT_ACCEPTED|SEAL_KEY_UNAVAILABLE|REVIEWER_RING_UNAVAILABLE/)
   }, 240_000)
 
   it("refuses an attestation bound to a different head", () => {
@@ -124,5 +129,32 @@ describe.skipIf(!fs.existsSync(RUNTIME_ENV))("lab integration authority (key mat
       `--seal=${FIXTURE_SEAL}`, `--attestation=${FIXTURE_ATTESTATION}`, "--verify-only",
     ])
     expect(result.output).toContain("VERIFICATION_OK")
+  }, 240_000)
+
+  it("with real trust roots, a seal whose signed bytes differ is refused at the crypto layer", () => {
+    // The first SHA occurrence in the block is adoption.evidence.validationHeadSha, which no
+    // structural guard reads: the tampered seal must fall to signature verification, proving the
+    // signature (not a field check) is what binds every signed byte.
+    const file = artifact("seal", (value) => {
+      value.sealBlock = value.sealBlock.replace(SEALED_HEAD, SEALED_BASE)
+    })
+    const result = run([
+      `--cand=${SEALED_HEAD}`, `--base=${SEALED_BASE}`,
+      `--seal=${file}`, `--attestation=${FIXTURE_ATTESTATION}`, "--verify-only",
+    ])
+    expect(result.code).toBe(1)
+    expect(result.output).toContain("SEAL_SIGNATURE_INVALID")
+  }, 240_000)
+
+  it("with the real reviewer ring, a corrupted attestation signature is refused for the signature itself", () => {
+    const file = artifact("attestation", (value) => {
+      value.signature = "AA" + value.signature.slice(2)
+    })
+    const result = run([
+      `--cand=${SEALED_HEAD}`, `--base=${SEALED_BASE}`,
+      `--seal=${FIXTURE_SEAL}`, `--attestation=${file}`, "--verify-only",
+    ])
+    expect(result.code).toBe(1)
+    expect(result.output).toMatch(/REVIEW_NOT_ACCEPTED.*"reason":"signature"|reason.*signature/)
   }, 240_000)
 })
