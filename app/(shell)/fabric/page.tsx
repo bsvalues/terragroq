@@ -1,3 +1,4 @@
+import { AuthorityBoard } from "@/components/fabric/authority-board"
 import { CapabilityBoard } from "@/components/fabric/capability-board"
 import { NodeBoard } from "@/components/fabric/node-board"
 
@@ -15,6 +16,7 @@ export default function FabricPage() {
       </header>
       <NodeBoard />
       <CapabilityBoard />
+      <AuthorityBoard />
     </main>
   )
 }
