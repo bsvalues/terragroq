@@ -682,15 +682,29 @@ $looseTreeSyncs = @(
   "components\operator",
   "config\execution-fabric"
 )
+# Two-phase by review finding (PR 1228 head 93cc009e): validating AFTER .next was already
+# replaced left the door stopped and half-updated on refusal. Phase A decides every tree with
+# read-only checks and refuses before anything in this loop mutates; Phase B copies. (The
+# compiled bundle copied earlier in the same run does not affect the RUNNING service until the
+# scheduled tasks restart at the end, so a Phase-A refusal always leaves the previous
+# generation fully in place and restorable.)
+#
+# The guard protects only what the rollback cannot: files NO governed generation ever shipped.
+# A target file missing from this source generation is EITHER ordinary lane churn (a tracked
+# file later removed or renamed in the lane: the previous deploy's rollback capture names it,
+# and /MIR dropping it is correct behavior, restorable from that capture) OR genuinely
+# ungoverned content (placed by hand outside any governed deploy -- refuse). Each extra file is
+# therefore judged against the union of the recent prior-generation rollback captures of THIS
+# tree. Unknown history fails closed: extras with no prior capture to vouch for them refuse.
+$looseTreeHistoryDepth = 24
+$syncActions = @()
 foreach ($tree in $looseTreeSyncs) {
   $treeSource = Join-Path $Source $tree
   if (-not (Test-Path -LiteralPath $treeSource -PathType Container)) {
-    Write-Output "loose-tree sync skipped (no source $tree)"; continue
+    Write-Output "loose-tree sync skipped (no source $tree)"
+    continue
   }
   $treeTarget = Join-Path $Runtime $tree
-  # Refuse /MIR if the runtime holds files the source generation does not: those were placed by
-  # something outside the governed tree, and silently deleting them would be a destructive deploy
-  # the rollback manifest does not cover. A refusal here is a lane problem, not a script problem.
   if (Test-Path -LiteralPath $treeTarget -PathType Container) {
     $targetFull = (Resolve-Path -LiteralPath $treeTarget).Path
     $runtimeFiles = @(Get-ChildItem -LiteralPath $treeTarget -Recurse -File -Force |
@@ -700,13 +714,39 @@ foreach ($tree in $looseTreeSyncs) {
       ForEach-Object { $_.FullName.Substring($sourceFull.Length) })
     $extra = @($runtimeFiles | Where-Object { $sourceFiles -notcontains $_ })
     if ($extra.Count -gt 0) {
-      throw "loose-tree $tree has $($extra.Count) runtime-only files (e.g. $($extra[0])); refusing /MIR that would delete ungoverned content. Reconcile them into the lane first."
+      $historyPaths = @()
+      $rootsParent = [IO.Path]::GetDirectoryName($Runtime)
+      $rootsName = [IO.Path]::GetFileName($Runtime)
+      $roots = @(Get-ChildItem -LiteralPath $rootsParent -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "$rootsName.rollback-*" } |
+        Sort-Object Name -Descending | Select-Object -First $looseTreeHistoryDepth)
+      foreach ($root in $roots) {
+        $mf = Join-Path $root.FullName "rollback-manifest.json"
+        if (-not (Test-Path -LiteralPath $mf -PathType Leaf)) { continue }
+        try { $manifest = Get-Content -LiteralPath $mf -Raw | ConvertFrom-Json } catch { continue }
+        $dirs = @($manifest.directories | Where-Object { [string]$_.path -eq $tree })
+        if ($dirs.Count -ne 1 -or -not [bool]$dirs[0].wasPresent) { continue }
+        $cap = Join-Path $root.FullName $tree
+        if (-not (Test-Path -LiteralPath $cap -PathType Container)) { continue }
+        $capFull = (Resolve-Path -LiteralPath $cap).Path
+        $historyPaths += @(Get-ChildItem -LiteralPath $cap -Recurse -File -Force |
+          ForEach-Object { $_.FullName.Substring($capFull.Length) })
+      }
+      $ungoverned = @($extra | Where-Object { $historyPaths -notcontains $_ })
+      if ($ungoverned.Count -gt 0) {
+        throw "loose-tree $tree has $($ungoverned.Count) files that no governed generation shipped (e.g. $($ungoverned[0])); refusing to mirror a tree containing ungoverned content. Reconcile them into the lane first."
+      }
+      Write-Output "loose-tree ${tree}: $($extra.Count) prior-generation file(s) removed from the lane will drop from the runtime (rollback captures vouch for them)"
     }
   }
-  $null = New-Item -ItemType Directory -Path $treeTarget -Force
-  $null = robocopy $treeSource $treeTarget /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
-  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying loose tree $tree (exit $LASTEXITCODE)" }
-  Write-Output "loose-tree synced: $tree"
+  $syncActions += ,@{ source = $treeSource; target = $treeTarget; tree = $tree }
+}
+# Phase B: only now does this loop mutate, after every computable refusal above.
+foreach ($action in $syncActions) {
+  $null = New-Item -ItemType Directory -Path $action.target -Force
+  $null = robocopy $action.source $action.target /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying loose tree $($action.tree) (exit $LASTEXITCODE)" }
+  Write-Output "loose-tree synced: $($action.tree)"
 }
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"
