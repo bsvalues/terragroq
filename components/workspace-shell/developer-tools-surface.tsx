@@ -391,7 +391,15 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
           : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
-      if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
+      if (!response.ok) {
+        // The route refuses operations the selected repository cannot run, with a reason naming the
+        // cause. Showing only the status code would hide the one fact the operator can act on.
+        const refused = await response.json().catch(() => null) as { error?: unknown; detail?: unknown } | null
+        const detail = typeof refused?.detail === "string" ? refused.detail : null
+        const code = typeof refused?.error === "string" ? refused.error : null
+        throw new Error(detail ?? code ?? `RUN_${response.status}`)
+      }
+      if (!response.body) throw new Error(`RUN_${response.status}`)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""

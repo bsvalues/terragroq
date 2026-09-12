@@ -412,22 +412,81 @@
   box-shadow: inset 0 -1px 0 var(--cobalt);
 }
 
+/* Tab strip. The tablist owns only role="tab" children (aria-required-children). The visible X is
+   a glyph inside each tab; the real close button lives outside the tablist, visually hidden. */
+.tabStrip {
+  position: relative;
+  display: flex;
+}
+
 .tabs {
   display: flex;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   background: #111419;
   scrollbar-width: none;
 }
 
+/* The tab IS the item (it carries role="tab" and the item metrics). The 24px right padding
+   reserves the space the close glyph occupies, so the glyph can never cover the label. */
 .tabItem {
   min-width: 108px;
   max-width: 184px;
+  height: 33px;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
+  gap: 6px;
+  padding: 0 24px 0 10px;
+  border: 0;
   border-right: 1px solid var(--steel);
   color: #8d96a0;
   background: #14181d;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+/* Visual-only close affordance. It is decorative (aria-hidden on the element) and sits in the
+   padding the tab already reserved. */
+.tabCloseGlyph {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 2px;
+  color: #6f7780;
+}
+
+.tabItem:hover .tabCloseGlyph {
+  color: var(--fog);
+  background: var(--steel);
+}
+
+/* Real close controls: named and focusable for assistive technology and keyboard users, but kept
+   outside the tablist so the tablist's children remain exclusively role="tab". */
+.tabClosers {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.srOnlyClose {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .tab {
