@@ -10,14 +10,88 @@ param(
 
 $ErrorActionPreference = "Stop"
 $cockpitRoot = Split-Path -Parent $PSScriptRoot
-$mingwBin = "C:\msys64\mingw64\bin"
-if (-not (Test-Path -LiteralPath (Join-Path $mingwBin "dlltool.exe") -PathType Leaf)) {
-  throw "The pinned GNU native build requires $mingwBin\dlltool.exe"
+$pinnedToolchain = "1.88.0-x86_64-pc-windows-gnu"
+
+# rust-toolchain.toml intentionally contains only the valid version channel. The host tuple is an
+# installed toolchain selection, not valid TOML channel syntax, so activate it explicitly at this
+# command boundary and let Tauri's child cargo processes inherit the exact same compiler.
+$rustup = Get-Command rustup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $rustup -or -not $rustup.Source) {
+  throw "The pinned Cockpit native build requires rustup.exe."
+}
+& $rustup.Source toolchain install $pinnedToolchain --profile minimal
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$env:RUSTUP_TOOLCHAIN = $pinnedToolchain
+$rustcIdentity = (& rustc -vV) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $rustcIdentity -notmatch "(?m)^host: x86_64-pc-windows-gnu$") {
+  throw "The active Rust compiler is not the pinned x86_64-pc-windows-gnu host toolchain."
 }
 
-# Rust invokes dlltool while compiling Windows import libraries, before this package's build.rs can
-# run. The PATH therefore belongs at the command boundary, inherited by cargo and every dependency.
+# The County package is built both on workstation installations that use MSYS2's conventional path
+# and on GitHub's Windows image, where the same x64 MinGW tools are exposed from C:\mingw64\bin.
+# Accept an explicit source-pinned override first, then the two known layouts, then the current PATH.
+$mingwCandidates = [System.Collections.Generic.List[string]]::new()
+if ($env:WILLIAMOS_MINGW_BIN) {
+  $mingwCandidates.Add($env:WILLIAMOS_MINGW_BIN.Trim())
+}
+$mingwCandidates.Add("C:\msys64\mingw64\bin")
+$mingwCandidates.Add("C:\mingw64\bin")
+$discoveredDlltool = Get-Command dlltool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($discoveredDlltool -and $discoveredDlltool.Source) {
+  $mingwCandidates.Add((Split-Path -Parent $discoveredDlltool.Source))
+}
+
+$mingwBin = $null
+foreach ($candidate in $mingwCandidates) {
+  $hasDlltool = $candidate -and (Test-Path -LiteralPath (Join-Path $candidate "dlltool.exe") -PathType Leaf)
+  $hasCompiler = $candidate -and (Test-Path -LiteralPath (Join-Path $candidate "gcc.exe") -PathType Leaf)
+  if ($hasDlltool -and $hasCompiler) {
+    $mingwBin = (Resolve-Path -LiteralPath $candidate).Path
+    break
+  }
+}
+if (-not $mingwBin) {
+  $checked = ($mingwCandidates | Where-Object { $_ } | Select-Object -Unique) -join ", "
+  throw "The pinned GNU native build requires x64 MinGW gcc.exe and dlltool.exe. Checked: $checked"
+}
+
+# Rust invokes the MinGW linker and dlltool while compiling Windows binaries, before this package's
+# build.rs can run. PATH therefore belongs at the command boundary, inherited by cargo and every
+# dependency.
 $env:PATH = "$mingwBin;$env:PATH"
+
+# tauri-winres compiles the native icon/version resource through embed-resource, which launches a
+# bare "windres" from PATH on the GNU target. The MinGW directory selected above ships gcc and
+# dlltool but not always windres (GitHub's Windows image splits the two), so resolve windres from
+# the known MinGW layouts independently and add its directory to PATH for cargo and every build
+# script. Fail fast with the exact missing tool instead of the embed-resource NotAttempted panic.
+$windresCandidates = [System.Collections.Generic.List[string]]::new()
+$windresCandidates.Add($mingwBin)
+$windresCandidates.Add("C:\msys64\mingw64\bin")
+$windresCandidates.Add("C:\mingw64\bin")
+$discoveredWindres = Get-Command windres.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($discoveredWindres -and $discoveredWindres.Source) {
+  $windresCandidates.Add((Split-Path -Parent $discoveredWindres.Source))
+}
+$windresBin = $null
+foreach ($candidate in $windresCandidates | Where-Object { $_ } | Select-Object -Unique) {
+  if (Test-Path -LiteralPath (Join-Path $candidate "windres.exe") -PathType Leaf) {
+    $windresBin = (Resolve-Path -LiteralPath $candidate).Path
+    break
+  }
+}
+if (-not $windresBin) {
+  $checkedWindres = ($windresCandidates | Where-Object { $_ } | Select-Object -Unique) -join ", "
+  throw "The pinned GNU native build requires windres.exe for resource compilation. Checked: $checkedWindres"
+}
+if ($windresBin -ne $mingwBin) {
+  $env:PATH = "$windresBin;$env:PATH"
+}
+# The cockpit build script prepends these onto the inherited PATH before Tauri compiles the
+# application resource; pin the exact resolved directories so the build script never has to
+# guess the MinGW layout again.
+$env:WILLIAMOS_MINGW_BIN = $mingwBin
+$env:WILLIAMOS_WINDRES_BIN = $windresBin
 
 $manifest = Join-Path $cockpitRoot "src-tauri\Cargo.toml"
 # Staging reads the exact loader from Cargo's lockfile-pinned registry source. A fresh checkout has no
@@ -37,9 +111,31 @@ if ($Action -eq "stage") { exit 0 }
 if ($Action -eq "test") {
   & cargo test --manifest-path $manifest --locked @NativeArguments
 } else {
-  if ($Action -eq "build" -and (-not $NativeArguments -or $NativeArguments.Count -eq 0)) {
-    $NativeArguments = @("--bundles", "msi,nsis")
+  $deploymentProfile = if ($env:WILLIAMOS_COCKPIT_PROFILE) {
+    $env:WILLIAMOS_COCKPIT_PROFILE.Trim()
+  } else {
+    "hermes-anchor"
   }
+  if ($deploymentProfile -notin @("hermes-anchor", "county-development")) {
+    throw "Unsupported WILLIAMOS_COCKPIT_PROFILE: $deploymentProfile"
+  }
+
+  if ($Action -eq "build" -and (-not $NativeArguments -or $NativeArguments.Count -eq 0)) {
+    $NativeArguments = if ($deploymentProfile -eq "county-development") {
+      @("--bundles", "nsis")
+    } else {
+      @("--bundles", "msi,nsis")
+    }
+  }
+
+  if ($deploymentProfile -eq "county-development") {
+    $countyConfig = Join-Path $cockpitRoot "src-tauri\tauri.county-development.conf.json"
+    if (-not (Test-Path -LiteralPath $countyConfig -PathType Leaf)) {
+      throw "County Development Tauri config is missing: $countyConfig"
+    }
+    $NativeArguments = @("--config", $countyConfig) + @($NativeArguments)
+  }
+
   & pnpm exec tauri $Action @NativeArguments
 }
 exit $LASTEXITCODE
