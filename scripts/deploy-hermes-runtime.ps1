@@ -749,6 +749,13 @@ if (-not (Test-Path $trustKeyTarget)) {
     throw "No deployment attestation key at $trustKeyTarget (and no legacy copy at $trustKeyLegacy). Mint one before deploying: the door refuses to start without a signed artifact attestation (#1223)."
   }
 }
+# Validate the protected copy BEFORE deleting anything: the removals below are irreversible, so a
+# truncated or malformed trust key must fail the deploy here, not strand it with no key at all.
+$trustKeyRecord = $null
+try { $trustKeyRecord = Get-Content -Raw -LiteralPath $trustKeyTarget | ConvertFrom-Json } catch { $trustKeyRecord = $null }
+if (-not $trustKeyRecord -or -not $trustKeyRecord.keyId -or -not $trustKeyRecord.privateKeyBase64) {
+  throw "The protected trust key at $trustKeyTarget is missing keyId/privateKeyBase64; refusing to remove the legacy copy."
+}
 # Once the protected copy exists the home copy stops being authoritative: it is readable by the
 # runtime identity, so leaving it would re-open forged-manifest attacks.
 $legacyTrustRemovals = @()
