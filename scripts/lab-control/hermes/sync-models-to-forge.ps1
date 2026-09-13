@@ -53,7 +53,7 @@ param(
   # nothing written on either side. This is what lets the repair be proven while ATLAS is down.
   [switch]$ResolveOnly,
   # The canonical Ollama service definition -- the file that actually decides which store is live.
-  [string]$ServiceScript = "C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1",
+  [string]$ServiceScript = "C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1",
   # The non-destructive manifest installer this script sends to ATLAS. A parameter only so its
   # absence refusal can be exercised; there is no delete-and-replace fallback behind it. Resolved
   # below rather than here: Windows PowerShell 5.1 binds parameter defaults before $PSScriptRoot
@@ -67,7 +67,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$store   = "D:\HermesData\ollama"
+$store   = $null
 $remote  = "/forge/models/ollama"
 $fabric  = $FabricRoot
 $key     = "$fabric\keys\williamos-fabric"
@@ -118,8 +118,8 @@ $atlas = Resolve-AtlasEndpoint -Fabric $fabric
 # It fails closed in both directions. An unreadable service definition is not a licence to archive
 # whatever `$store` happens to say -- that is precisely how a green run came to protect a stale copy
 # -- so an absent or unparseable file refuses, and so does a disagreement.
-function Assert-LiveStore {
-  param([string]$Store, [string]$ServiceScript)
+function Resolve-LiveStore {
+  param([string]$ServiceScript)
   if (-not (Test-Path -LiteralPath $ServiceScript -PathType Leaf)) {
     throw "SERVICE_CONFIG_UNREADABLE: $ServiceScript does not exist, so the live model store cannot be confirmed. Point -ServiceScript at the canonical Ollama service definition; do not archive an unverified store."
   }
@@ -127,12 +127,15 @@ function Assert-LiveStore {
   if (-not $line) {
     throw "SERVICE_CONFIG_UNREADABLE: $ServiceScript declares no `$ModelsDir, so the live model store cannot be confirmed."
   }
-  $serviceModels = $line.Matches[0].Groups[1].Value.TrimEnd('\')
-  $ourModels = (Join-Path $Store "models").TrimEnd('\')
-  if ($serviceModels -ne $ourModels) {
-    throw "MODEL_STORE_DISAGREEMENT: this script would archive '$ourModels' but the Ollama service serves '$serviceModels'. Archiving the store the runtime does not use is how a green sync comes to protect nothing."
+  $serviceModels = [IO.Path]::GetFullPath($line.Matches[0].Groups[1].Value).TrimEnd('\')
+  if ((Split-Path -Leaf $serviceModels) -ne 'models') {
+    throw "SERVICE_CONFIG_UNREADABLE: the canonical `$ModelsDir '$serviceModels' is not a models directory. Refusing to infer an archive root."
   }
-  return $serviceModels
+  $resolvedStore = Split-Path -Parent $serviceModels
+  if (-not $resolvedStore -or -not (Test-Path -LiteralPath $serviceModels -PathType Container)) {
+    throw "MODEL_STORE_UNREADABLE: canonical model store '$serviceModels' is absent. Nothing was archived."
+  }
+  return [pscustomobject]@{ Store=$resolvedStore; Models=$serviceModels }
 }
 
 # Native commands do not raise on failure, so every call is checked. Without this the script
@@ -150,7 +153,9 @@ function Invoke-Atlas([string]$Command) {
 
 if (-not $ManifestInstaller) { $ManifestInstaller = Join-Path $PSScriptRoot "install-forge-manifests.sh" }
 
-$serviceModels = Assert-LiveStore -Store $store -ServiceScript $ServiceScript
+$liveStore = Resolve-LiveStore -ServiceScript $ServiceScript
+$store = $liveStore.Store
+$serviceModels = $liveStore.Models
 
 # The manifest install is a separate file sent to ATLAS by content, and there is deliberately no
 # delete-and-replace fallback behind it. So its absence is a PREFLIGHT refusal, before any ssh:

@@ -76,6 +76,26 @@ function evaluate(observation) {
 }
 
 describe("HERMES appliance doctrine comparator (stable-vs-ephemeral, #1034/#1035)", () => {
+  it.each([
+    ["100.64.0.1", true], ["100.127.255.254", true], ["fd7a:115c:a1e0::1234", true],
+    ["fd7a:115c:a1e0:ab12:4843:cd96:1234:5678", true],
+    ["100.63.255.254", false], ["100.128.0.1", false], ["0.0.0.0", false],
+    ["127.0.0.1", false], ["192.168.1.154", false],
+  ])("bounds Tailscale TCP session exception at %s", (address, exempt) => {
+    const obs = baseObservation({ listeners: [
+      ...baseObservation().inventory.listeners,
+      listener("tcp", address, 43123, "c:\\program files\\tailscale\\tailscaled.exe"),
+    ] })
+    expect(evaluate(obs).status).toBe(exempt ? "PASS" : "FAIL")
+  })
+
+  it("keeps tailnet listener drift for a non-Tailscale owner", () => {
+    const obs = baseObservation({ listeners: [
+      ...baseObservation().inventory.listeners,
+      listener("tcp", "100.64.0.1", 43123, "c:\\other.exe"),
+    ] })
+    expect(evaluate(obs).status).toBe("FAIL")
+  })
   it("passes on an identical fresh observation", () => {
     const result = evaluate(baseObservation())
     expect(result.status).toBe("PASS")

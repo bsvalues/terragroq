@@ -93,8 +93,8 @@ export const GOLDEN = Object.freeze({
       OLLAMA_LLM_LIBRARY: "cuda_v11",
       OLLAMA_NOPRUNE: "1",
     },
-    serviceScriptSha256: "179a917dca12fd498558872e9941581115a498786f24d89835f448454aa1054b",
-    modelsPath: "D:\\HermesData\\ollama\\models",
+      serviceScriptSha256: "e15cad93f53848d2bc3b8d9e12140da9ae7a1dd8e7dba87fddec3013ec97257e",
+    modelsPath: "G:\\HermesData\\ollama\\models",
     gpuUuid: "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
   },
   containers: {
@@ -646,7 +646,7 @@ function inferenceDrift(facts) {
   if (!object(ollama.value.task) || ollama.value.task.name !== "WilliamOS-HERMES-Ollama" || !rootTaskPath(ollama.value.task) || ollama.value.task.state !== "Running"
     || !object(ollama.value.task.principal) || String(ollama.value.task.principal.user).toUpperCase() !== "SYSTEM"
     || String(ollama.value.task.principal.runLevel).toLowerCase() !== "highest"
-    || !exactPowerShellAction(ollama.value.task, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1"])
+    || !exactPowerShellAction(ollama.value.task, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\ollama-service\\hermes-ollama-service.ps1"])
     || !exactActiveTriggers(ollama.value.task, [["MSFT_TaskBootTrigger"], ["MSFT_TaskTimeTrigger", "PT2M"]], ollama.freshness.observedAt)) return true
   const declaredNames = Object.keys(GOLDEN.containers)
   if (declaredNames.some((name) => containers.value.filter((container) => container.name === name).length !== 1)) return true
@@ -659,12 +659,12 @@ function inferenceDrift(facts) {
     || !Array.isArray(container.inferenceCollisionReasons) || container.inferenceCollisionReasons.length !== 0)) return true
   const expectedGuards = {
     HermesP40Guard: {
-      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\p40-guard.ps1", "-Quiet"],
+      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\p40-guard.ps1", "-Quiet", "-StateRoot", "C:\\ProgramData\\Hermes\\p40"],
       state: ["Ready", "Running"],
       triggers: [["MSFT_TaskBootTrigger"], ["MSFT_TaskTimeTrigger", "PT1H"]],
     },
     HermesP40Watch: {
-      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\p40-guard.ps1", "-Watch", "-WatchIntervalS", "30", "-Quiet"],
+      arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\ProgramData\\Hermes\\runtime\\p40-guard.ps1", "-Watch", "-WatchIntervalS", "30", "-Quiet", "-StateRoot", "C:\\ProgramData\\Hermes\\p40"],
       state: ["Running"],
       triggers: [["MSFT_TaskBootTrigger"]],
     },

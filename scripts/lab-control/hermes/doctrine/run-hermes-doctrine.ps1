@@ -7,13 +7,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$HermesDir   = 'C:\HermesLab\hermes'
+$HermesDir   = Split-Path -Parent $PSScriptRoot
 $DoctrineDir = 'C:\ProgramData\Hermes\doctrine'
 $ObsPath     = Join-Path $DoctrineDir 'observation.raw.json'
 $NormPath    = Join-Path $DoctrineDir 'observation.normalized.json'
 $ResultPath  = Join-Path $DoctrineDir 'current-result.json'
 $DoctrineJson= Join-Path $DoctrineDir 'doctrine.json'
-$NodeExe     = 'C:\Users\bs\AppData\Local\hermes\node\node.exe'  # resolved path; SYSTEM task has no user PATH
+$NodeExe     = 'C:\Program Files\nodejs\node.exe'  # protected machine installation; SYSTEM task has no user PATH
 
 New-Item -ItemType Directory -Force -Path $DoctrineDir | Out-Null
 
@@ -26,9 +26,10 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
 [IO.File]::WriteAllText($ObsPath, ($raw -join "`n"), [Text.UTF8Encoding]::new($false))
 
 # 2. Normalize raw -> observation schema (node ESM)
+$normalizeModuleUri = ([uri](Join-Path $HermesDir 'doctrine\normalize-hermes-observation.mjs')).AbsoluteUri
 $normScript = @"
 import { readFile, writeFile } from 'node:fs/promises'
-import { normalizeHermesRawObservation } from 'file:///C:/HermesLab/hermes/doctrine/normalize-hermes-observation.mjs'
+import { normalizeHermesRawObservation } from '$normalizeModuleUri'
 const raw = JSON.parse(await readFile('$($ObsPath -replace '\\','/')', 'utf8'))
 const obs = normalizeHermesRawObservation(raw)
 await writeFile('$($NormPath -replace '\\','/')', JSON.stringify(obs))

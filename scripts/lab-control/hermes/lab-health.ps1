@@ -1,8 +1,48 @@
 ﻿# One-pane lab health: Hermes local checks + Atlas over SSH. Exit 0=ok, 1=warn, 2=fail.
+param(
+  [string]$OllamaBaseUrl = 'http://127.0.0.1:11434',
+  [string]$CanonicalOwnerStatePath = 'C:\ProgramData\Hermes\inference\current-owner.json',
+  [string]$OutputRoot = 'C:\ProgramData\Hermes\health',
+  [string]$P40StateRoot = 'C:\ProgramData\Hermes\p40',
+  [switch]$LocalOnly
+)
 $ErrorActionPreference = "SilentlyContinue"
 $script:overall = "ok"; $script:problems = @()
 function Bump($sev){ if($sev -eq "fail"){$script:overall="fail"; return}; if($sev -eq "warn" -and $script:overall -ne "fail"){$script:overall="warn"} }
 function P($sev,$msg){ if($sev -ne "ok"){ $script:problems += $msg } }
+function Write-HealthResult([string]$Overall, [object[]]$Problems, [object]$HermesDomain){
+  New-Item -ItemType Directory -Force -Path $OutputRoot -ErrorAction Stop | Out-Null
+  if((Get-Item -LiteralPath $OutputRoot -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'HERMES_HEALTH_ROOT_REPARSE_POINT'}
+  $currentPath = Join-Path $OutputRoot 'lab-health.json'
+  $previousOverall = $null
+  try { $previousOverall = [string](Get-Content -LiteralPath $currentPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).overall } catch {}
+  $obj = [ordered]@{
+    schema='hermes-native-health/1'
+    timestamp=(Get-Date -Format o)
+    overall=$Overall
+    problems=@($Problems)
+    domains=[ordered]@{ hermes=$HermesDomain }
+  }
+  $json = $obj | ConvertTo-Json -Depth 8 -Compress
+  $temporary = Join-Path $OutputRoot ('.lab-health.' + [guid]::NewGuid().ToString('n') + '.tmp')
+  try {
+    [IO.File]::WriteAllText($temporary,($json+"`n"),[Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $currentPath -Force -ErrorAction Stop
+  } finally {Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}
+  Add-Content -LiteralPath (Join-Path $OutputRoot 'health-history.jsonl') -Value $json -Encoding UTF8 -ErrorAction Stop
+  if($Overall -ne $previousOverall -and ($null -ne $previousOverall -or $Overall -ne 'ok')){
+    $severity = if($Overall -eq 'fail'){'FAIL'}elseif($Overall -eq 'warn'){'WARN'}else{'RECOVERY'}
+    $message = if($Overall -eq 'ok'){"Native HERMES health recovered from $previousOverall"}else{($Problems -join '; ')}
+    $alertPath = Join-Path $OutputRoot 'alerts.log'
+    $alertWriter = Join-Path $PSScriptRoot 'send-hermes-alert.ps1'
+    if(Test-Path -LiteralPath $alertWriter -PathType Leaf){
+      & $alertWriter -Severity $severity -Message $message -AlertPath $alertPath | Out-Null
+    } else {
+      $fallback = "Native HERMES health changed to $Overall"
+      ("{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'),$severity,$fallback) | Add-Content $alertPath
+    }
+  }
+}
 
 Write-Host ("="*64)
 Write-Host ("  LAB HEALTH  -  {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'))
@@ -50,9 +90,12 @@ function Resolve-OrReport($what, [scriptblock]$action){
   }
 }
 $archiveRoot = Resolve-OrReport "archive volume '$archiveVolumeLabel'" { Resolve-ArchiveRoot -Label $archiveVolumeLabel }
-$atlasNode   = Resolve-OrReport "atlas address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'atlas' }
-$aegisNode   = Resolve-OrReport "aegis address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'aegis' }
-$fabricSsh   = Resolve-OrReport "fabric ssh identity" { Resolve-FabricSshIdentity -Fabric $fabricRoot }
+$atlasNode = $null; $aegisNode = $null; $fabricSsh = $null
+if(-not $LocalOnly){
+  $atlasNode = Resolve-OrReport "atlas address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'atlas' }
+  $aegisNode = Resolve-OrReport "aegis address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'aegis' }
+  $fabricSsh = Resolve-OrReport "fabric ssh identity" { Resolve-FabricSshIdentity -Fabric $fabricRoot }
+}
 # Every remote probe below uses the fabric identity, not the calling account's ~/.ssh. That
 # known_hosts pins 192.168.88.5 and has never seen 192.168.88.8: resolving the new address while
 # keeping the old identity would turn "unreachable" into "Host key verification failed" and change
@@ -91,16 +134,65 @@ $os=Get-CimInstance Win32_OperatingSystem; $ramPct=[math]::Round($os.FreePhysica
 $s= if($ramPct -lt 8){"warn"}else{"ok"}; Bump $s; P $s "Hermes RAM ${ramPct}%"; "  RAM     : {0,3}% free ({1} GB total)   [{2}]" -f $ramPct,[math]::Round($os.TotalVisibleMemorySize/1MB),$s.ToUpper()
 $cpu=(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; "  CPU     : {0}% load" -f $cpu
 
+# The P40 envelope is owned by p40-guard.ps1. This monitor consumes that state rather than carrying
+# a second set of thermal and power thresholds.
+$guard = Join-Path $PSScriptRoot 'p40-guard.ps1'
+if(Test-Path -LiteralPath $guard){
+  $null = & $guard -Quiet -StateRoot $P40StateRoot 2>&1; $grc = $LASTEXITCODE
+  $gj = Get-Content -LiteralPath (Join-Path $P40StateRoot 'p40-guard.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+  $gs = switch($grc){ 2 {'fail'} 1 {'warn'} default {'ok'} }
+  Bump $gs
+  if($gj){
+    "  P40     : {0}C @ {1} load | cap {2}W (target {3}W) | {4} | chassis ~{5}C   [{6}]" -f `
+      $gj.temp_c,$gj.load_class,$gj.power_limit_w,$gj.power_limit_target_w,$gj.driver_model,$gj.chassis_proxy_c,$gs.ToUpper()
+    foreach($pr in $gj.problems){ P $gs $pr }
+  } else { "  P40     : guard produced no state   [WARN]"; Bump "warn"; P "warn" "p40-guard produced no state" }
+} else { "  P40     : p40-guard.ps1 MISSING -- inference GPU unmonitored   [FAIL]"; Bump "fail"; P "fail" "p40-guard.ps1 missing" }
+
 $g = nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>$null
 if($g){ foreach($line in $g){ $p=$line -split ',\s*'; if($p[0] -match '3050'){ $gt=[int]$p[1]; $s= if($gt -gt 85){"warn"}else{"ok"}; Bump $s; "  GPU     : {0} | {1}C | {2}/{3} MB | {4}% util   [{5}]" -f $p[0],$p[1],$p[2],$p[3],$p[4],$s.ToUpper() } } } else { "  GPU     : nvidia-smi n/a" }
 
-# Compute services (this is what Hermes is FOR)
-# Ollama is a Windows service now (#997), not a container -- ask the API, not Docker.
-$ollamaOk=$false; try{ $null=Invoke-RestMethod http://127.0.0.1:11434/api/version -TimeoutSec 6; $ollamaOk=$true }catch{}
-if($ollamaOk){ "  Ollama  : running (native 127.0.0.1:11434)   [OK]" } else { "  Ollama  : DOWN   [FAIL]"; Bump "fail"; P "fail" "Ollama down" }
+# Compute services (this is what Hermes is FOR). A healthy endpoint is necessary but not sufficient:
+# the protected owner receipt proves it belongs to the canonical SYSTEM task, not a hand-started copy.
+$owner = $null
+try { $owner = Get-Content -LiteralPath $CanonicalOwnerStatePath -Raw | ConvertFrom-Json -ErrorAction Stop } catch {}
+$ownerAgeSeconds = $null
+if($owner){ try { $ownerAgeSeconds = ((Get-Date).ToUniversalTime() - ([datetime]$owner.observedAt).ToUniversalTime()).TotalSeconds } catch {} }
+$listenerPid = $null
+$ollamaListeners = @()
+foreach($line in @(netstat -ano -p tcp 2>$null)){
+  if($line -match '^\s*TCP\s+(\S+):11434\s+\S+\s+LISTENING\s+(\d+)\s*$'){
+    $ollamaListeners += [pscustomobject]@{ Address=$Matches[1]; Pid=[int]$Matches[2] }
+  }
+}
+$loopbackListenerExact = $ollamaListeners.Count -eq 1 -and $ollamaListeners[0].Address -eq '127.0.0.1'
+if($loopbackListenerExact){ $listenerPid = $ollamaListeners[0].Pid }
+$ownerExact = $owner -and
+  [string]$owner.schema -eq 'hermes-ollama-owner-state/1' -and
+  [string]$owner.owner -eq 'WilliamOS-HERMES-Ollama' -and
+  [string]$owner.state -eq 'SERVING' -and
+  [string]$owner.listen -eq '127.0.0.1:11434' -and
+  [string]$owner.executable -eq 'D:\HermesServices\ollama\v0.9.2\ollama.exe' -and
+  [string]$owner.models -eq 'G:\HermesData\ollama\models' -and  # WO-HERMES-APPL-006B: serving store is G:; D: is verified rollback
+  [string]$owner.gpuUuid -eq 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2' -and
+  [int]$owner.powerCapWatts -eq 150 -and
+  $null -ne $ownerAgeSeconds -and $ownerAgeSeconds -ge -60 -and $ownerAgeSeconds -le 120 -and
+  $loopbackListenerExact -and $null -ne $listenerPid -and [int]$owner.pid -eq $listenerPid
+if(-not $ownerExact){
+  "  Ollama  : canonical owner receipt missing, stale, or inconsistent   [FAIL]"
+  Bump 'fail'; P 'fail' 'Ollama canonical owner unproven'
+}
+$ollamaState = 'DOWN'
+try{
+  $tags = Invoke-RestMethod "$OllamaBaseUrl/api/tags" -TimeoutSec 10
+  $ollamaState = if($tags.models -and $tags.models.Count -gt 0){ "OK:" + $tags.models.Count } else { 'EMPTY_CATALOGUE' }
+}catch{}
+if($ollamaState -like 'OK:*' -and $ownerExact){ "  Ollama  : canonical owner serving, {0} models   [OK]" -f $ollamaState.Split(':')[1] }
+elseif($ollamaState -eq 'EMPTY_CATALOGUE'){ "  Ollama  : responding but knows NO models -- model store lost   [FAIL]"; Bump 'fail'; P 'fail' 'Ollama empty catalogue' }
+else { "  Ollama  : endpoint unavailable or ownership unproven   [FAIL]"; Bump 'fail'; P 'fail' 'Ollama canonical endpoint down' }
 try { $r=Invoke-WebRequest http://localhost:3000/health -TimeoutSec 6 -UseBasicParsing; "  OpenWebUI: HTTP $($r.StatusCode)   [OK]" } catch { "  OpenWebUI: not responding   [WARN]"; Bump "warn"; P "warn" "Open WebUI down" }
 
-foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"))){
+foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"),@("Model-sync","HermesModelForgeSync"))){
   $i=Get-ScheduledTaskInfo -TaskName $t[1]
   if($i){
     $res=$i.LastTaskResult
@@ -112,6 +204,12 @@ foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBack
       "  {0,-7} : last {1}h ago, result {2}   [{3}]" -f $t[0],$age,$res,$s.ToUpper() }
   }
   else { "  {0,-7} : task MISSING   [WARN]" -f $t[0]; Bump "warn"; P "warn" "$($t[0]) task missing" }
+}
+
+$hermesDomain = [ordered]@{ overall=$script:overall; problems=@($script:problems) }
+if($LocalOnly){
+  Write-HealthResult -Overall $script:overall -Problems $script:problems -HermesDomain $hermesDomain
+  switch($script:overall){ 'fail'{exit 2}; 'warn'{exit 1}; default{exit 0} }
 }
 
 # ---------------- ATLAS ----------------
@@ -176,16 +274,5 @@ Write-Host ("  OVERALL: {0}" -f $script:overall.ToUpper())
 if($script:problems.Count){ Write-Host ("  Attention: {0}" -f ($script:problems -join "; ")) }
 Write-Host ("="*64)
 
-# machine-readable combined status
-$obj = [ordered]@{ timestamp=(Get-Date -Format o); overall=$script:overall; problems=$script:problems }
-$obj | ConvertTo-Json -Compress | Out-File "C:\HermesLab\hermes\lab-health.json" -Encoding utf8
-$obj | ConvertTo-Json -Compress | Add-Content "C:\HermesLab\hermes\health-history.jsonl"
-
-# ALERT on failure/warn (things that actually matter). Persistent alert log; ntfy push if a topic is configured.
-if($script:overall -ne "ok"){
-  $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $script:overall.ToUpper(), ($script:problems -join '; ')
-  $line | Add-Content "C:\HermesLab\hermes\alerts.log"
-  $ntfy = "$env:HERMES_NTFY_TOPIC"   # set this env var to a ntfy.sh topic to get phone push alerts
-  if($ntfy){ try { Invoke-RestMethod -Uri "https://ntfy.sh/$ntfy" -Method Post -Body "LAB $($script:overall.ToUpper()): $($script:problems -join '; ')" -Headers @{Title="Lab needs attention"; Priority="high"} -TimeoutSec 10 } catch {} }
-}
+Write-HealthResult -Overall $script:overall -Problems $script:problems -HermesDomain $hermesDomain
 switch($script:overall){ "fail"{exit 2}; "warn"{exit 1}; default{exit 0} }
