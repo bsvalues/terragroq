@@ -127,7 +127,16 @@ export function integrationTree({ baseSha, candSha, labMainBefore, sealedPaths, 
   // whose content equals base slip past the revert guard (the merge would then quietly prefer the
   // candidate's stale lineage over main's newer work — the exact harm class this function exists
   // to prevent).
-  const natural = git(["merge-base", labMainBefore, candSha], { cwd }).toLowerCase()
+  // Hardening (follow-up 5): a disjoint-history candidate (orphan lineage, or a lab main rebuilt
+  // outside this repository) makes merge-base exit non-zero with "fatal: no merge base". That is a
+  // reachable operator mistake and must refuse TYPED — raw execFileSync text is not an authority
+  // reason, and nothing may fall back to comparing unrelated histories.
+  let natural
+  try {
+    natural = git(["merge-base", labMainBefore, candSha], { cwd }).toLowerCase()
+  } catch {
+    throw new Error(`INTEGRATION_BASE_UNRELATED lab_main=${labMainBefore.slice(0, 10)} cand=${candSha.slice(0, 10)}: no common ancestor between lab main and the candidate`)
+  }
   if (natural !== baseSha.toLowerCase()) {
     throw new Error(`INTEGRATION_BASE_NOT_MERGE_BASE declared=${baseSha.slice(0, 10)} natural=${natural.slice(0, 10)}`)
   }
@@ -183,6 +192,45 @@ export function integrationTree({ baseSha, candSha, labMainBefore, sealedPaths, 
     }
   }
   return { tree, mode: "THREE_WAY_MERGE" }
+}
+
+/**
+ * Hardening (follow-up 3): the local full-suite record is the OPERATIVE evidence for a real
+ * integration, so it is parsed, not merely stat-ed. A path that is a directory, an empty file, or
+ * package.json used to satisfy the gate; so did a record with failing tests, and nothing bound the
+ * record to the candidate it claims to prove. Fail-closed typed reasons, one per real defect:
+ *   LOCAL_TESTS_RECORD_MISSING / _UNPARSEABLE / _NO_SUITES / _NOT_PASSED / _UNBOUND / _HEAD_MISMATCH
+ * The record is vitest's JSON reporter output with a `headSha` stamped by the suite runner at the
+ * exact candidate head (see the runbook's deploy/evidence recipe). Returns the audited evidence
+ * that is written into the integration record.
+ */
+export function localTestEvidence(file, candSha) {
+  if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    throw new Error("LOCAL_TESTS_RECORD_MISSING run the suite and pass --localTests=<file>; the lab record is the operative evidence, not CI's echo")
+  }
+  const raw = fs.readFileSync(file, "utf8")
+  let record
+  try { record = JSON.parse(raw) } catch { throw new Error(`LOCAL_TESTS_RECORD_UNPARSEABLE ${path.basename(String(file))}: not JSON`) }
+  const total = record?.numTotalTests, failed = record?.numFailedTests, passed = record?.numPassedTests
+  if (!Number.isInteger(total) || !Number.isInteger(failed) || !Number.isInteger(passed)) {
+    throw new Error("LOCAL_TESTS_RECORD_UNPARSEABLE missing vitest summary fields (numTotalTests/numFailedTests/numPassedTests)")
+  }
+  if (total <= 0) throw new Error("LOCAL_TESTS_RECORD_UNPARSEABLE the record ran zero tests")
+  if (failed !== 0) throw new Error(`LOCAL_TESTS_NOT_PASSED failed=${failed} of ${total}`)
+  const suites = Array.isArray(record.testResults) ? record.testResults.map((t) => String(t?.name ?? "")).filter(Boolean) : []
+  if (suites.length === 0) throw new Error("LOCAL_TESTS_NO_SUITES the record names no test files")
+  const recordedHead = String(record.headSha ?? "").toLowerCase()
+  const candidate = String(candSha ?? "").toLowerCase()
+  if (!/^[0-9a-f]{40}$/.test(recordedHead)) {
+    throw new Error("LOCAL_TESTS_UNBOUND the record carries no full headSha; run the suite at the exact candidate head and stamp it (the runbook recipe does this)")
+  }
+  if (recordedHead !== candidate) {
+    throw new Error(`LOCAL_TESTS_HEAD_MISMATCH record=${recordedHead.slice(0, 10)} cand=${candidate.slice(0, 10)}`)
+  }
+  return {
+    digest: `sha256:${crypto.createHash("sha256").update(raw).digest("hex")}`,
+    total, passed, failed, suites: suites.length,
+  }
 }
 
 function nowIso() { return new Date().toISOString() }
@@ -321,13 +369,16 @@ async function main() {
   }
 
   // 5) local full-suite evidence: CI runs are a mirror-side echo; require the lab's own record
-  //    (Hardening GAP-3: an enforced gate for real integrations, advisory only for rehearsal).
-  const localTest = flags.localTests ?? null
-  if (!localTest || !fs.existsSync(localTest)) {
+  //    (Hardening GAP-3 + follow-up 3: parsed, success-checked, suite-identified, head-bound for
+  //    real integrations; advisory only for rehearsal).
+  let localEvidence = null
+  try {
+    localEvidence = localTestEvidence(flags.localTests ?? null, candSha)
+  } catch (error) {
     if (flags.verifyOnly) {
-      console.log("NOTE: --localTests not provided (verify-only rehearsal does not advance any ref).")
+      console.log(`NOTE: ${String(error.message ?? error).slice(0, 160)} (verify-only rehearsal does not advance any ref).`)
     } else {
-      throw new Error("LOCAL_TESTS_RECORD_MISSING run the suite and pass --localTests=<file>; the lab record is the operative evidence, not CI's echo")
+      throw error
     }
   }
 
@@ -356,29 +407,51 @@ async function main() {
   console.log(`LAB MAIN ADVANCED ${labMainBefore.slice(0, 10)} -> ${labMainAfter.slice(0, 10)} (${changed.length} files, ${integrated.mode})`)
 
   // 7) MIRROR SYNC — attempted, never authoritative.
+  // Hardening (follow-up 4): the governed merge is BOUND to the sealed head, and IN_SYNC is
+  // recorded only after fetching the mirror and proving its tree equals the lab main tree this run
+  // produced. A wrong PR, a head that moved after verification, or a mirror that lacks earlier
+  // lab-only work can no longer read as sync.
   let mirror = { state: "OUT_OF_SYNC", detail: "not attempted" }
-  try {
-    const pr = flags.pr
-    if (pr) {
-      // fast-forward the PR head to lab main and merge via the governed path where possible
-      execSync(`gh pr merge ${pr} --repo ${MIRROR_REPO} --squash --admin`, { stdio: "pipe" })
-      mirror = { state: "IN_SYNC", detail: `PR #${pr} merged via governed path` }
-    } else {
-      throw new Error("no --pr supplied")
-    }
-  } catch (error) {
+  const mirrorPr = flags.pr
+  if (!mirrorPr) {
+    mirror = { state: "OUT_OF_SYNC", detail: "no --pr supplied" }
+  } else {
+    let mirrorHead = null
     try {
-      const branch = `mirror/${labMainAfter.slice(0, 10)}`
-      git(["push", "--quiet", "--force", MIRROR_REMOTE, `${labMainAfter}:refs/heads/${branch}`])
-      mirror = { state: "OUT_OF_SYNC", detail: `PR merge unavailable (${String(error.message ?? error).slice(0, 120)}); pushed lab main to mirror branch ${branch}` }
-    } catch (fallbackError) {
-      mirror = { state: "OUT_OF_SYNC", detail: `mirror unreachable: ${String(fallbackError.message ?? fallbackError).slice(0, 160)}` }
+      const meta = JSON.parse(execSync(`gh api repos/${MIRROR_REPO}/pulls/${mirrorPr}`, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }))
+      mirrorHead = String(meta?.head?.sha ?? "").toLowerCase()
+    } catch (error) {
+      mirror = { state: "OUT_OF_SYNC", detail: `mirror unreachable: ${String(error.message ?? error).slice(0, 160)}` }
+    }
+    if (mirrorHead !== null) {
+      if (mirrorHead !== candSha) {
+        mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_HEAD_MISMATCH pr#${mirrorPr} head=${mirrorHead.slice(0, 10)} cand=${candSha.slice(0, 10)}: merge refused rather than merging an unbound head` }
+      } else {
+        try {
+          execSync(`gh pr merge ${mirrorPr} --repo ${MIRROR_REPO} --squash --admin`, { stdio: "pipe" })
+          git(["fetch", "--quiet", MIRROR_REMOTE, "main"])
+          const mirrorTree = git(["rev-parse", "FETCH_HEAD^{tree}"]).toLowerCase()
+          const labTree = git(["rev-parse", `${labMainAfter}^{tree}`]).toLowerCase()
+          mirror = mirrorTree === labTree
+            ? { state: "IN_SYNC", detail: `PR #${mirrorPr} merged via governed path at sealed head ${candSha.slice(0, 10)}; mirror tree ${mirrorTree.slice(0, 10)} verified equal to lab main tree` }
+            : { state: "OUT_OF_SYNC", detail: `MIRROR_TREE_MISMATCH mirror=${mirrorTree.slice(0, 10)} lab=${labTree.slice(0, 10)}` }
+        } catch (error) {
+          try {
+            const branch = `mirror/${labMainAfter.slice(0, 10)}`
+            git(["push", "--quiet", "--force", MIRROR_REMOTE, `${labMainAfter}:refs/heads/${branch}`])
+            mirror = { state: "OUT_OF_SYNC", detail: `PR merge unavailable (${String(error.message ?? error).slice(0, 120)}); pushed lab main to mirror branch ${branch}` }
+          } catch (fallbackError) {
+            mirror = { state: "OUT_OF_SYNC", detail: `mirror unreachable: ${String(fallbackError.message ?? fallbackError).slice(0, 160)}` }
+          }
+        }
+      }
     }
   }
 
   const entry = recordState({
     at: nowIso(), candidate: candSha, base: baseSha,
     labMainBefore, labMainAfter, sealKey: seal.payload.keyId, reviewerKey: review.payload?.keyId,
+    localTests: localEvidence ? { digest: localEvidence.digest, total: localEvidence.total, passed: localEvidence.passed, suites: localEvidence.suites } : null,
     productState: "COMPLETE", mirrorState: mirror.state, mirrorDetail: mirror.detail,
   })
   console.log(`PRODUCT STATE: COMPLETE`)

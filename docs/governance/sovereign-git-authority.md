@@ -66,6 +66,14 @@ pure verification code runs locally before it advances.
    completion, hosted reviewers are optional additions.
 4. **Seal** — the Environment issues the delivery seal over the exact head (adoption PREVIEW →
    AUTHORIZE → ISSUE), unchanged. The seal remains the authority artifact of record.
+   **Seal authoring rule (mandatory):** the recorded `baseSha` MUST be the lab main **tip at the
+   moment the lane is cut** — i.e. the candidate's actual fork point. The lab integration authority
+   hard-refuses a declared base that is not the natural merge-base against current lab main
+   (`INTEGRATION_BASE_NOT_MERGE_BASE`), because a stale or laterally-chosen base lets a path whose
+   content equals the base slip past the revert guard and silently prefer the candidate's lineage
+   over main's newer work. The remedy is always to **re-cut the lane on current lab main and re-seal
+   (with re-review)** — never to weaken the check. Branch from the tip, not from an old PR branch
+   tip or a stale mirror commit.
 5. **Merge = `scripts/execution-fabric/integrate-lab-main.mjs`** — the lab integration authority:
    re-verifies the seal signature, the receipt, the re-measured sealed patch, and the attestation
    **using the production verifier modules** (the local authority can never be laxer than the gate
@@ -74,6 +82,13 @@ pure verification code runs locally before it advances.
    mirror sync — a PR merge via the governed path where available, otherwise a `mirror/<sha>`
    branch — and records `PRODUCT STATE` / `MIRROR STATE` honestly in
    `~/.williamos/integrations.json`. Mirror failure never reopens the product transition.
+   Tool guarantees as of the follow-up hardening pass: the local full-suite record is **parsed**
+   (vitest JSON), success-checked, suite-identified and **head-bound** to the candidate
+   (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory); the governed mirror merge
+   is **bound to the sealed head** and `IN_SYNC` is recorded only after the mirror tree is fetched
+   and proven tree-equal to the lab main tree this run produced (`MIRROR_HEAD_MISMATCH` /
+   `MIRROR_TREE_MISMATCH`); a candidate sharing no ancestor with lab main refuses typed
+   (`INTEGRATION_BASE_UNRELATED`) instead of surfacing a raw git error.
 6. **Deploy / observe / FINALIZE** — the merged lab main deploys to the HERMES door, runtime
    verification as usual, then the seal chain is FINALIZE'd (slot release).
 7. **Reconciliation (mirror → lab)** — for anything that landed on GitHub main outside this
