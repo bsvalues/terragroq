@@ -140,6 +140,8 @@ function Deny-Boot {
   exit 1
 }
 
+?\n' | Select-Object -Last 1)"
+
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
@@ -155,6 +157,35 @@ if (-not (Test-Path -LiteralPath $declaredRoot -PathType Container)) {
 }
 $resolvedProjectRoot = (Resolve-Path -LiteralPath $declaredRoot).ProviderPath.TrimEnd('\')
 $resolvedAppRoot = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\')
+
+# ---------------------------------------------------------------------------------------------
+# THE DOOR PROVENANCE GATE (#1223, owner-stated 2026-09-12): the door may start only a revision
+# proven to be an integrated lab-main revision with valid integration provenance. The git path
+# already refuses to integrate anything else; this closes the filesystem path — a robocopied tree
+# whose built provenance names a revision absent from the authoritative integration ledger cannot
+# become the live door. Fail-closed: missing gate file, missing provenance, unreadable ledger, or
+# an unlisted revision all deny boot. No network, no fallback.
+# ---------------------------------------------------------------------------------------------
+$provenanceGate = Join-Path $resolvedAppRoot "scripts\hermes-bridge\verify-door-provenance.mjs"
+if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
+  Deny-Boot "DOOR_PROVENANCE_GATE_MISSING" "the deployed bundle does not carry scripts/hermes-bridge/verify-door-provenance.mjs, so this boot cannot prove its revision is an authorized integrated lab-main revision (#1223)."
+}
+$gatePreviousPreference = $ErrorActionPreference
+try {
+  # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed
+  # refusal behind a PowerShell error instead of the reason code. Read the exit code; fold the
+  # captured stream by joining, not by regex-splitting (this warning is earned).
+  $ErrorActionPreference = "Continue"
+  $gateOutput = & $node $provenanceGate --app-root="$resolvedAppRoot" 2>&1
+  $gateExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $gatePreviousPreference
+}
+$gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+if ($gateExit -ne 0) {
+  Deny-Boot "DOOR_PROVENANCE_REFUSED" $gateSummary
+}
+Write-Boot "BOOT_ALLOWED $gateSummary"
 
 # The exact defect being closed: the deployed bundle standing in for the workspace.
 if ($resolvedProjectRoot -ieq $resolvedAppRoot) {

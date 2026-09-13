@@ -26,6 +26,29 @@ foreach ($required in @($node, $proxy)) {
   }
 }
 
+# THE DOOR PROVENANCE GATE (#1223) — the proxy listener is part of the door: refusing only the
+# cockpit task would leave "robocopy + restart :3443" as a live bypass. Same gate, same ledger,
+# same fail-closed contract as start-williamos-live.ps1; a tree whose built provenance is not an
+# authorized integrated lab-main revision cannot become the HTTPS surface either.
+$appRootResolved = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\')
+$provenanceGate = Join-Path $appRootResolved "scripts\hermes-bridge\verify-door-provenance.mjs"
+if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
+  throw "Refusing to start WilliamOS HTTPS: the deployed bundle does not carry scripts/hermes-bridge/verify-door-provenance.mjs (#1223 fail-closed)."
+}
+$gatePreviousPreference = $ErrorActionPreference
+try {
+  # Native stderr is not an error here; the exit code is the verdict. (PS 5.1 traps, twice now.)
+  $ErrorActionPreference = "Continue"
+  $gateOutput = & $node $provenanceGate --app-root="$appRootResolved" 2>&1
+  $gateExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $gatePreviousPreference
+}
+$gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+if ($gateExit -ne 0) {
+  throw "Refusing to start WilliamOS HTTPS: $gateSummary"
+}
+
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
 Set-Location -LiteralPath $AppRoot
 
