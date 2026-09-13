@@ -115,7 +115,10 @@ describe("the gate refuses structurally invalid sha values (F6 typing)", () => {
 // assertions green while booting a bogus revision (M7). Both fail THIS test: a launcher that
 // crashes, skips the gate, or reaches project validation instead of the ledger verdict exits
 // without BOOT_REFUSED DOOR_PROVENANCE_REFUSED in its boot log.
-describe("the live launcher really refuses a non-ledger revision when executed (#1236)", () => {
+// Host-gated: executing a Windows PowerShell launcher requires the real thing (the hosted CI
+// runner is linux; CI caught the ungated version failing in 8ms).
+const HOST_POWERSHELL = process.platform === "win32" && fs.existsSync("C:\\Program Files\\nodejs\\node.exe")
+describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger revision when executed (#1236)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "door-prov-exec-"))
   const appRoot = path.join(dir, "runtime")
   const logs = path.join(dir, "logs")
