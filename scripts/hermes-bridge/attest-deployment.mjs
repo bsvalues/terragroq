@@ -31,7 +31,7 @@
  *
  * Fail-closed typed reasons: MANIFEST_MISSING / MANIFEST_MALFORMED / MANIFEST_UNSIGNED /
  * MANIFEST_SIGNER_UNKNOWN / MANIFEST_TREE_MISMATCH / MANIFEST_BODY_MISMATCH /
- * MANIFEST_SHA_NOT_BUILDSALED / SEAL_RECEIPT_INVALID / NO_TRUST_ROOT. A missing trust root
+ * MANIFEST_SHA_NOT_BUILD_SEALED / SEAL_RECEIPT_INVALID / NO_TRUST_ROOT. A missing trust root
  * REFUSES — it is never a silent downgrade to self-reported provenance.
  */
 import crypto, { createPublicKey } from "node:crypto"
@@ -233,10 +233,10 @@ export function verify(appRoot) {
   const provPath = path.join(appRoot, "lib", "generated", "build-provenance.json")
   let prov
   try { prov = JSON.parse(fs.readFileSync(provPath, "utf8")) }
-  catch { return { ok: false, code: "MANIFEST_SHA_NOT_BUILDSALED", detail: "build-provenance.json unreadable" } }
+  catch { return { ok: false, code: "MANIFEST_SHA_NOT_BUILD_SEALED", detail: "build-provenance.json unreadable" } }
   const sha = typeof prov?.sha === "string" ? prov.sha.toLowerCase() : ""
   if (sha !== manifest.sha) {
-    return { ok: false, code: "MANIFEST_SHA_NOT_BUILDSALED", detail: `provenance claims ${sha.slice(0, 12)}… but the attested artifact is ${manifest.sha.slice(0, 12)}…` }
+    return { ok: false, code: "MANIFEST_SHA_NOT_BUILD_SEALED", detail: `provenance claims ${sha.slice(0, 12)}… but the attested artifact is ${manifest.sha.slice(0, 12)}…` }
   }
   return { ok: true, sha, treeDigest, keyId: String(manifest.keyId), source: "manifest" }
 }
