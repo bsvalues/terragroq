@@ -189,6 +189,19 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
     expect(() => localTestEvidence(record({ headSha: undefined }), HEAD)).toThrow(/LOCAL_TESTS_UNBOUND/)
     expect(() => localTestEvidence(record({ headSha: "a".repeat(40) }), HEAD)).toThrow(/LOCAL_TESTS_HEAD_MISMATCH/)
   })
+  it("refuses evidence from a worktree that is not checked out at the candidate (stale re-stamp, thread 2)", () => {
+    expect(() => localTestEvidence(record(), HEAD, { worktreeHead: "b".repeat(40) }))
+      .toThrow(/LOCAL_TESTS_WORKTREE_HEAD_MISMATCH/)
+    // matching worktree head passes
+    expect(localTestEvidence(record(), HEAD, { worktreeHead: HEAD }).total).toBe(18)
+  })
+  it("refuses when the candidate changed a test file the record does not cover (thread 2 inventory)", () => {
+    expect(() => localTestEvidence(record(), HEAD, {
+      changedTests: ["tests/brand-new-suite.test.ts"],
+    })).toThrow(/LOCAL_TESTS_CHANGED_TESTS_UNCOVERED/)
+    // full coverage of the changed inventory passes
+    expect(localTestEvidence(record(), HEAD, { changedTests: [REAL_SUITE] }).suites).toBe(1)
+  })
 })
 
 describe.skipIf(!fs.existsSync(RUNTIME_ENV))(

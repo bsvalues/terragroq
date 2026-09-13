@@ -228,7 +228,8 @@ const MAX_TEST_COUNTER = 1_000_000
  * that is written into the integration record — including the record's own path and head, so an
  * auditor can locate the exact bytes the digest attests.
  */
-export function localTestEvidence(file, candSha) {
+export function localTestEvidence(file, candSha, opts = {}) {
+  const cwd = opts.cwd ?? ROOT
   if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     throw new Error("LOCAL_TESTS_RECORD_MISSING run the suite and pass --localTests=<file>; the lab record is the operative evidence, not CI's echo")
   }
@@ -277,6 +278,24 @@ export function localTestEvidence(file, candSha) {
   }
   if (recordedHead !== candidate) {
     throw new Error(`LOCAL_TESTS_HEAD_MISMATCH record=${recordedHead.slice(0, 10)} cand=${candidate.slice(0, 10)}`)
+  }
+  // Mechanical closure of reviewer thread 2 (stale-report re-stamping): the stamp alone is a
+  // self-declared string, so the WORKTREE must independently agree that it sits at the candidate
+  // (git rev-parse HEAD), and the record's suite inventory must cover every TEST file the
+  // candidate actually changed (git diff of candidate vs its merge-base with lab main, when the
+  // caller supplies changedTests). A stale report re-stamped to a new head fails one of these two
+  // unless the new commits touched no tests and the checkout was refreshed — the honest case.
+  const worktreeHead = String(opts.worktreeHead ?? "").toLowerCase()
+  if (worktreeHead && worktreeHead !== candidate) {
+    throw new Error(`LOCAL_TESTS_WORKTREE_HEAD_MISMATCH checkout=${worktreeHead.slice(0, 10)} cand=${candidate.slice(0, 10)}: run the suite at the exact candidate, do not integrate evidence from another checkout`)
+  }
+  const changedTests = Array.isArray(opts.changedTests) ? opts.changedTests : null
+  if (changedTests && changedTests.length > 0) {
+    const recorded = new Set(rooted.map((n) => path.relative(path.resolve(cwd), path.resolve(cwd, n)).split(path.sep).join("/")))
+    const missing = changedTests.filter((t) => !recorded.has(t.split(path.sep).join("/")))
+    if (missing.length > 0) {
+      throw new Error(`LOCAL_TESTS_CHANGED_TESTS_UNCOVERED the candidate changed ${changedTests.length} test file(s) but the record does not cover: ${missing.slice(0, 5).join(", ")}`)
+    }
   }
   return {
     digest: `sha256:${crypto.createHash("sha256").update(raw).digest("hex")}`,
@@ -421,11 +440,19 @@ async function main() {
   }
 
   // 5) local full-suite evidence: CI runs are a mirror-side echo; require the lab's own record
-  //    (Hardening GAP-3 + follow-up 3: parsed, success-checked, suite-identified, head-bound for
-  //    real integrations; advisory only for rehearsal).
+  //    (Hardening GAP-3 + follow-up 3: parsed, success-checked, suite-identified, head-bound,
+  //    worktree-confirmed and test-inventory-covering for real integrations; advisory only for
+  //    rehearsal).
   let localEvidence = null
   try {
-    localEvidence = localTestEvidence(flags.localTests ?? null, candSha)
+    let worktreeHead = ""
+    try { worktreeHead = git(["rev-parse", "HEAD"]) } catch { worktreeHead = "" }
+    let changedTests = []
+    try {
+      changedTests = git(["diff", "--name-only", `${baseSha}..${candSha}`], { encoding: "utf8" })
+        .split(/\r?\n/).filter((f) => f && (/\.test\.[cm]?[tj]sx?$/.test(f) || f.startsWith("tests/")))
+    } catch { changedTests = [] }
+    localEvidence = localTestEvidence(flags.localTests ?? null, candSha, { worktreeHead, changedTests })
   } catch (error) {
     if (flags.verifyOnly) {
       console.log(`NOTE: ${String(error.message ?? error).slice(0, 160)} (verify-only rehearsal does not advance any ref).`)
@@ -468,19 +495,32 @@ async function main() {
   const rawPr = flags.pr
   // Strict decimal parse: Number() accepts 0x10 -> 16, so an operator typo could target a
   // different PR. Digits only, nothing else.
-  const mirrorPr = typeof rawPr === "string" && /^[1-9][0-9]*$/.test(rawPr.trim()) ? Number(rawPr.trim()) : Number.NaN
-  if (!Number.isSafeInteger(mirrorPr) || mirrorPr <= 0) {
-    mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_PR_INVALID ${JSON.stringify(String(rawPr ?? ""))}: --pr must be a positive pull-request number` }
+  const mirrorPr = typeof rawPr === "string" && /^[1-9][0-9]*$/.test(rawPr.trim()) ? Number(rawPr.trim()) : null
+  let remoteUrl = ""
+  try { remoteUrl = git(["remote", "get-url", MIRROR_REMOTE]) } catch { remoteUrl = "" }
+  // Full URL form binding: host AND repo. A path-suffix test would accept
+  // https://evil.example/bsvalues/terragroq.git and let a foreign origin fake IN_SYNC.
+  const MIRROR_URL_FORM = /^(https?:\/\/(www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)bsvalues\/terragroq(\.git)?$/i
+  if (!MIRROR_URL_FORM.test(remoteUrl.trim())) {
+    // The convergence proof compares "the mirror's main tree" against the lab main tree; if
+    // MIRROR_REMOTE does not actually point at MIRROR_REPO, that comparison is circular. The
+    // binding gates EVERY mirror-side action, including the documented fallback push.
+    mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_REMOTE_MISMATCH ${MIRROR_REMOTE} -> ${remoteUrl.trim().slice(0, 80) || "(unset)"} is not ${MIRROR_REPO} (no mirror-side action attempted)` }
   } else {
-    let remoteUrl = ""
-    try { remoteUrl = git(["remote", "get-url", MIRROR_REMOTE]) } catch { remoteUrl = "" }
-    // Full URL form binding: host AND repo. A path-suffix test would accept
-    // https://evil.example/bsvalues/terragroq.git and let a foreign origin fake IN_SYNC.
-    const MIRROR_URL_FORM = /^(https?:\/\/(www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)bsvalues\/terragroq(\.git)?$/i
-    if (!MIRROR_URL_FORM.test(remoteUrl.trim())) {
-      // The convergence proof compares "the mirror's main tree" against the lab main tree; if
-      // MIRROR_REMOTE does not actually point at MIRROR_REPO, that comparison is circular.
-      mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_REMOTE_MISMATCH ${MIRROR_REMOTE} -> ${remoteUrl.trim().slice(0, 80) || "(unset)"} is not ${MIRROR_REPO}` }
+    // Reviewer thread (P2) closure: the documented mirror/<sha> fallback runs whenever the
+    // governed PR merge is unavailable — bad/absent --pr, a head that does not bind, or a failed
+    // merge — so a successful lab integration is always exposed on the mirror when transport works.
+    const fallbackPush = (reason) => {
+      try {
+        const branch = `mirror/${labMainAfter.slice(0, 10)}`
+        git(["push", "--quiet", "--force", MIRROR_REMOTE, `${labMainAfter}:refs/heads/${branch}`])
+        mirror = { state: "OUT_OF_SYNC", detail: `${reason}; pushed lab main to mirror branch ${branch}` }
+      } catch (fallbackError) {
+        mirror = { state: "OUT_OF_SYNC", detail: `${reason}; mirror unreachable: ${String(fallbackError.message ?? fallbackError).slice(0, 140)}` }
+      }
+    }
+    if (mirrorPr === null) {
+      fallbackPush(`MIRROR_PR_INVALID ${JSON.stringify(String(rawPr ?? ""))}: --pr must be a positive pull-request number`)
     } else {
       let mirrorHead = null
       try {
@@ -512,16 +552,9 @@ async function main() {
             mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_VERIFY_FAILED_AFTER_MERGE PR #${mirrorPr} merged but the mirror tree could not be verified: ${String(error.message ?? error).slice(0, 120)}` }
           }
         } else {
-          const reason = mergeError
+          fallbackPush(mergeError
             ? `PR merge unavailable (${String(mergeError.message ?? mergeError).slice(0, 120)})`
-            : `MIRROR_HEAD_MISMATCH pr#${mirrorPr} head=${mirrorHead.slice(0, 10)} cand=${candSha.slice(0, 10)}: merge refused rather than merging an unbound head`
-          try {
-            const branch = `mirror/${labMainAfter.slice(0, 10)}`
-            git(["push", "--quiet", "--force", MIRROR_REMOTE, `${labMainAfter}:refs/heads/${branch}`])
-            mirror = { state: "OUT_OF_SYNC", detail: `${reason}; pushed lab main to mirror branch ${branch}` }
-          } catch (fallbackError) {
-            mirror = { state: "OUT_OF_SYNC", detail: `${reason}; mirror unreachable: ${String(fallbackError.message ?? fallbackError).slice(0, 140)}` }
-          }
+            : `MIRROR_HEAD_MISMATCH pr#${mirrorPr} head=${mirrorHead.slice(0, 10)} cand=${candSha.slice(0, 10)}: merge refused rather than merging an unbound head`)
         }
       }
     }

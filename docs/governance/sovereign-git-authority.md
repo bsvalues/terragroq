@@ -88,7 +88,10 @@ pure verification code runs locally before it advances.
    resolve to a real file CONTAINED in the integration worktree — existence alone is not binding)
    and **head-bound** to the
    candidate (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory), and the recorded
-   evidence carries the record's own path and head so the digest is locatable; the governed mirror
+   evidence carries the record's own path and head so the digest is locatable; the worktree must
+   independently sit at the candidate (`LOCAL_TESTS_WORKTREE_HEAD_MISMATCH`) and the record must
+   cover every test file the candidate changed (`LOCAL_TESTS_CHANGED_TESTS_UNCOVERED`), so a stale
+   report re-stamped to a new head cannot pass; the governed mirror
    merge is **bound to the sealed head** — strict decimal PR, `origin` bound by full URL form
    (github.com host AND `bsvalues/terragroq`, not a path suffix),
    and `--match-head-commit` so a head that moves between read and merge is refused — and `IN_SYNC`
@@ -98,6 +101,12 @@ pure verification code runs locally before it advances.
    happened from a merge that failed); a candidate sharing no ancestor with lab main refuses typed
    (`INTEGRATION_BASE_UNRELATED`), while a merge-base probe that cannot answer refuses
    `INTEGRATION_BASE_PROBE_FAILED` instead of claiming unrelated history.
+   Declared trust boundary (reviewer threads on #1234): the local record is anti-mistake evidence,
+   not anti-forgery — its producer is the lab operator, who already holds the seal key and the
+   state file, so a forged record grants nothing the operator lacks. What the tool guarantees is
+   that an honest run cannot accidentally integrate on missing, stale, zero-executed, foreign, or
+   head-mismatched evidence; the head-bound seal, independent review, and post-merge CI remain the
+   anti-forgery layer because they are signature-checked.
    The sealed-content guard carries ONE declared relaxation: when main deletes a sealed path whose
    candidate blob still exists **somewhere** in the merged tree (the rename/modify resolution),
    integration proceeds; the allowance is content-equality based, deliberately not rename-aware, is
