@@ -35,6 +35,7 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
   [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
+  [string]$HttpsStartTarget = "C:\ProgramData\WilliamOS\start-williamos-https.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443,
   [switch]$WithDependencies,
@@ -363,6 +364,10 @@ $liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-william
 if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
 }
+$httpsStartSource = Join-Path $Source "deploy\hermes\williamos-https\start-williamos-https.ps1"
+if (-not (Test-Path -LiteralPath $httpsStartSource -PathType Leaf)) {
+  throw "Missing repository-owned WilliamOS HTTPS start script: $httpsStartSource"
+}
 # `-SkipRollbackCapture` is for an empty installation. The task launcher lives outside `$Runtime`,
 # so an empty runtime can still have an older hand-placed launcher. Overwriting that file without a
 # manifest would make the flag silently destructive. Refuse before stopping either task or changing
@@ -595,18 +600,22 @@ if (-not $SkipRollbackCapture) {
     "pnpm-lock.yaml",
     "lib\generated\build-provenance.json",
     "scripts\hermes-https-proxy.mjs",
+    "scripts\hermes-bridge\verify-door-provenance.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
   $rollbackDirectories = @(".next", "public", "lib\fabric", "scripts\execution-fabric", "scripts\multi-agent-operator", "components\operator", "config\execution-fabric")
   if ($WithDependencies) { $rollbackDirectories += "node_modules" }
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
+  $httpsStartBackup = "external\start-williamos-https.ps1"
+  $httpsStartWasPresent = Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf
   $rollbackManifest = [ordered]@{
     version = 7
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
+    httpsStart = [ordered]@{ target = $HttpsStartTarget; backupPath = $httpsStartBackup; wasPresent = $httpsStartWasPresent }
     legacyRelay = [ordered]@{ wasPresent = [bool]$legacyRelayState.wasPresent; listenAddress = $HermesOverlayAddress; listenPort = $HttpsPort; connectAddress = $HermesLanAddress; connectPort = $HttpsPort }
     overlayRestoreMode = $rollbackOverlayMode
   }
@@ -635,6 +644,11 @@ if (-not $SkipRollbackCapture) {
     $null = New-Item -ItemType Directory -Path (Split-Path -Parent $liveStartRollbackFile) -Force
     Copy-Item -LiteralPath $LiveStartTarget -Destination $liveStartRollbackFile -Force
   }
+  if ($httpsStartWasPresent) {
+    $httpsStartRollbackFile = Join-Path $rollbackRoot $httpsStartBackup
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsStartRollbackFile) -Force
+    Copy-Item -LiteralPath $HttpsStartTarget -Destination $httpsStartRollbackFile -Force
+  }
   $rollbackManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
@@ -646,7 +660,7 @@ if (-not $SkipRollbackCapture) {
   $liveStartTargetLiteral = ConvertTo-PowerShellLiteral $LiveStartTarget
   $portLiteral = ConvertTo-PowerShellLiteral ([string]$Port)
   $httpsPortLiteral = ConvertTo-PowerShellLiteral ([string]$HttpsPort)
-  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -Port $portLiteral -HttpsPort $httpsPortLiteral"
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -HttpsStartTarget $HttpsStartTarget -Port $portLiteral -HttpsPort $httpsPortLiteral"
 }
 
 if ($WithDependencies -and $rollbackRoot -and (Get-PhysicalVolumeIdentity -Path $rollbackRoot) -ne (Get-PhysicalVolumeIdentity -Path $Runtime)) {
@@ -689,6 +703,10 @@ if ($WithDependencies) {
 # displaced bytes are part of the rollback manifest above.
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
 Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
+# #1223: the HTTPS listener is part of the door; the repository-owned, gate-wired launcher is
+# installed the same way with the same rollback coverage, so a deploy cannot leave :3443 booting a
+# gateless generation.
+Copy-Item -LiteralPath $httpsStartSource -Destination $HttpsStartTarget -Force
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
@@ -716,6 +734,17 @@ if (-not (Test-Path $httpsProxySource)) { throw "Missing HTTPS proxy in the sour
 $httpsProxyTarget = Join-Path $Runtime $httpsProxyRelative
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget) -Force
 Copy-Item $httpsProxySource $httpsProxyTarget -Force
+
+# #1223: the door provenance gate is likewise part of the deployed product, not optional tooling.
+# The installed launchers call it before exec'ing node and fail closed when it is absent, so a
+# deploy that shipped the launchers but not the gate would take the cockpit down at the first
+# restart after merge. It ships with the same strictness as the proxy it protects alongside.
+$provenanceGateRelative = "scripts\hermes-bridge\verify-door-provenance.mjs"
+$provenanceGateSource = Join-Path $Source $provenanceGateRelative
+if (-not (Test-Path $provenanceGateSource)) { throw "Missing door provenance gate in the source tree: $provenanceGateSource" }
+$provenanceGateTarget = Join-Path $Runtime $provenanceGateRelative
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $provenanceGateTarget) -Force
+Copy-Item $provenanceGateSource $provenanceGateTarget -Force
 
 # Static assets and public/ live outside the standalone tree by design.
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP

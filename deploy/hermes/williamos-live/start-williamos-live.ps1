@@ -140,7 +140,6 @@ function Deny-Boot {
   exit 1
 }
 
-?\n' | Select-Object -Last 1)"
 
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"

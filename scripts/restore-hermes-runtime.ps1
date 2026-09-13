@@ -9,6 +9,7 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
   [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
+  [string]$HttpsStartTarget = "C:\ProgramData\WilliamOS\start-williamos-https.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443
 )
@@ -223,6 +224,20 @@ if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartR
   throw "Rollback is incomplete: $liveStartRollbackFile is missing"
 }
 Assert-LauncherMutationAccess -TargetPath $LiveStartTarget -WillBePresent ([bool]$manifest.liveStart.wasPresent)
+# #1223: deploys at/after the provenance gate capture the HTTPS launcher too; when the capture
+# names it, restoring must replace it, or rollback silently reinstalls a gateless :3443 boot.
+$httpsStartWasCaptured = ($null -ne $manifest.httpsStart)
+if ($httpsStartWasCaptured) {
+  $expectedHttpsStartBackup = "external\start-williamos-https.ps1"
+  if (([string]$manifest.httpsStart.target -ne $HttpsStartTarget) -or ([string]$manifest.httpsStart.backupPath -ne $expectedHttpsStartBackup) -or ($null -eq $manifest.httpsStart.wasPresent)) {
+    throw "Rollback manifest does not name the exact WilliamOS HTTPS start definition"
+  }
+  $httpsStartRollbackFile = Join-Path $RollbackRoot $expectedHttpsStartBackup
+  if ($manifest.httpsStart.wasPresent -and -not (Test-Path -LiteralPath $httpsStartRollbackFile -PathType Leaf)) {
+    throw "Rollback is incomplete: $httpsStartRollbackFile is missing"
+  }
+  Assert-LauncherMutationAccess -TargetPath $HttpsStartTarget -WillBePresent ([bool]$manifest.httpsStart.wasPresent)
+}
 $currentLegacyRelay = Get-CurrentLegacyRelayState
 
 $v4ModuleEntry = @()
@@ -292,6 +307,14 @@ if ($manifest.liveStart.wasPresent) {
   Copy-Item -LiteralPath $liveStartRollbackFile -Destination $LiveStartTarget -Force
 } elseif (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
   Remove-Item -LiteralPath $LiveStartTarget -Force
+}
+if ($httpsStartWasCaptured) {
+  if ($manifest.httpsStart.wasPresent) {
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $HttpsStartTarget) -Force
+    Copy-Item -LiteralPath $httpsStartRollbackFile -Destination $HttpsStartTarget -Force
+  } elseif (Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf) {
+    Remove-Item -LiteralPath $HttpsStartTarget -Force
+  }
 }
 
 Start-ScheduledTask -TaskName $TaskName

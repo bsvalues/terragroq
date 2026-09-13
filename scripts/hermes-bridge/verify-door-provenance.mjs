@@ -44,9 +44,13 @@ const provPath = path.join(appRoot, "lib", "generated", "build-provenance.json")
 let prov
 try { prov = JSON.parse(fs.readFileSync(provPath, "utf8")) }
 catch (error) { fail("PROVENANCE_FILE_UNREADABLE", `${provPath}: ${error?.message ?? error}`) }
-const sha = String(prov?.sha ?? "").toLowerCase()
+const shaRaw = prov?.sha
+if (typeof shaRaw !== "string") {
+  fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha type=${Array.isArray(shaRaw) ? "array" : typeof shaRaw} value=${JSON.stringify(String(shaRaw).slice(0, 64))}`)
+}
+const sha = shaRaw.toLowerCase()
 if (!/^[0-9a-f]{40}$/.test(sha)) {
-  fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha=${JSON.stringify(String(prov?.sha ?? "").slice(0, 64))}`)
+  fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha=${JSON.stringify(shaRaw.slice(0, 64))}`)
 }
 
 const ledgerPath = argv["ledger"]
