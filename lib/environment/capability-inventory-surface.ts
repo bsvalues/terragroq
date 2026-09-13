@@ -59,11 +59,22 @@ export const COMPUTE_CAPABILITY_WORKLOADS: Readonly<Record<string, string>> = Ob
  * never disagree — an inventoried-but-not-owner-runnable capability (screening/rejected paths)
  * shows no run control, and a forged POST against it is refused by name.
  */
-export const OWNER_RUNNABLE_COMPUTE: Readonly<Record<string, string>> = Object.freeze({
-  "gpu-tabular-ml": "regression",
-  "gpu-clustering": "clustering",
-  "gpu-aggregation": "aggregation",
-})
+export const OWNER_RUNNABLE_COMPUTE: Readonly<Record<string, string>> = Object.freeze(
+  (["gpu-tabular-ml", "gpu-clustering", "gpu-aggregation"] as const).reduce<Record<string, string>>(
+    (runnable, capabilityId) => {
+      // Derived from the parent map, never restated: the workload string has exactly one source,
+      // so the inventory's projected row and the POST gate cannot drift apart.
+      const workload = COMPUTE_CAPABILITY_WORKLOADS[capabilityId]
+      if (workload) runnable[capabilityId] = workload
+      return runnable
+    },
+    {},
+  ),
+)
+
+/** Owner-run row budget: crosses every promoted threshold, far below the seam's 10M ceiling. */
+export const OWNER_RUN_MIN_ROWS = 50_000
+export const OWNER_RUN_MAX_ROWS = 250_000
 
 // Native dynamic import the bundler must not rewrite: webpack's default treatment of a
 // non-literal import() is a context __webpack_require__, which cannot resolve a file:// URL of
@@ -210,6 +221,8 @@ export async function projectComputeCapabilities({
   return {
     // The surface's own identity: which source produced it. Same file dispatch reads.
     source: "components/operator/multi-agent-capability-registry.ts (same module dispatch imports)",
+    // The run control's displayed bounds come from here, so the client never restates them.
+    ownerRun: { minRows: OWNER_RUN_MIN_ROWS, maxRows: OWNER_RUN_MAX_ROWS },
     capabilities,
-  } satisfies { source: string; capabilities: CapabilitySurfaceRow[] }
+  } satisfies { source: string; ownerRun: { minRows: number; maxRows: number }; capabilities: CapabilitySurfaceRow[] }
 }

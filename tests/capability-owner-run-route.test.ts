@@ -78,13 +78,15 @@ describe("capability owner-run POST", () => {
   })
 
   it("refuses out-of-bound row counts; the seam never sees them", async () => {
-    for (const parcels of [49_999, 250_001, -5, 1.5, "60000"]) {
+    // Every arm asserts, including the non-integer and string arms: an earlier version skipped
+    // the status assertion for 1.5 and "60000" and leaned on the trailing dispatch check, which
+    // is how a defaulting regression could have hidden inside this test.
+    for (const parcels of [49_999, 250_001, -5, 1.5, "60000", null]) {
       const response = await POST(jsonRequest({ capabilityId: "gpu-tabular-ml", parcels }))
-      if (typeof parcels === "number" && Number.isInteger(parcels)) {
-        expect(response.status).toBe(400)
-        expect(await response.json()).toMatchObject({ error: "PARCELS_OUT_OF_BOUNDS" })
-      }
+      expect(response.status, `parcels=${JSON.stringify(parcels)} must be refused`).toBe(400)
+      expect(await response.json()).toMatchObject({ error: "PARCELS_OUT_OF_BOUNDS" })
     }
+    expect(seams.admit).not.toHaveBeenCalled()
     expect(seams.dispatch).not.toHaveBeenCalled()
   })
 

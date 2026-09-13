@@ -58,6 +58,7 @@ type RunOutcome = {
 
 export function CapabilityBoard() {
   const [rows, setRows] = useState<CapabilityRow[] | null>(null)
+  const [ownerRun, setOwnerRun] = useState<{ minRows: number; maxRows: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
@@ -75,6 +76,7 @@ export function CapabilityBoard() {
       }
       const data = await response.json()
       setRows(Array.isArray(data.capabilities) ? data.capabilities : [])
+      setOwnerRun(data.ownerRun && typeof data.ownerRun.minRows === "number" ? data.ownerRun : null)
       setCheckedAt(new Date().toISOString())
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause))
@@ -199,21 +201,25 @@ export function CapabilityBoard() {
               ) : null}
 
               <div className="mt-1 flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => void runOnce(row.capabilityId)}
-                  disabled={runningId !== null}
-                  title="Dispatches one bounded synthetic workload through the governed seam (50,000 rows). The seam — registry, curve evidence, trust gate — decides where it runs and may refuse."
-                  className={`self-start rounded-md border px-3 py-1 text-xs disabled:opacity-40 ${
-                    row.ownerRunnable ? "border-border" : "border-amber-500/40 text-amber-600"
-                  }`}
-                >
-                  {runningId === row.capabilityId
-                    ? "Dispatching… (this runs on the node)"
-                    : row.ownerRunnable
-                      ? "Run once (synthetic 50k)"
-                      : "Owner-run not offered for this capability"}
-                </button>
+                {row.ownerRunnable ? (
+                  <button
+                    type="button"
+                    onClick={() => void runOnce(row.capabilityId)}
+                    disabled={runningId !== null}
+                    title={`Dispatches one bounded synthetic workload through the governed seam (${ownerRun?.minRows ? ownerRun.minRows.toLocaleString() : "the floor"} rows). The seam — registry, curve evidence, trust gate — decides where it runs and may refuse.`}
+                    className="self-start rounded-md border border-border px-3 py-1 text-xs disabled:opacity-40"
+                  >
+                    {runningId === row.capabilityId
+                      ? "Dispatching… (this runs on the node)"
+                      : `Run once (synthetic ${ownerRun?.minRows ? `${Math.round(ownerRun.minRows / 1000)}k` : "bounded"})`}
+                  </button>
+                ) : (
+                  // No run control where the gate refuses: the board says so rather than offering
+                  // a button whose only possible outcome is a typed 400.
+                  <p className="text-[11px] text-muted-foreground">
+                    Owner-run not offered for this capability (not in the owner-runnable vocabulary).
+                  </p>
+                )}
                 {runResults[row.capabilityId] ? (
                   <RunResultView outcome={runResults[row.capabilityId]} />
                 ) : null}

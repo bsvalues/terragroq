@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/session"
-import { projectComputeCapabilities } from "@/lib/environment/capability-inventory-surface"
+import { OWNER_RUNNABLE_COMPUTE, projectComputeCapabilities } from "@/lib/environment/capability-inventory-surface"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import {
@@ -91,7 +91,8 @@ export async function POST(request: Request) {
   if (!workload) {
     return reply({
       error: "CAPABILITY_NOT_OWNER_RUNNABLE",
-      detail: `${capabilityId || "(missing)"} is not an owner-runnable compute capability. Runnable: gpu-tabular-ml, gpu-clustering, gpu-aggregation.`,
+      // The runnable list is read off the same map the gate consults — never restated here.
+      detail: `${capabilityId || "(missing)"} is not an owner-runnable compute capability. Runnable: ${Object.keys(OWNER_RUNNABLE_COMPUTE).join(", ")}.`,
     }, 400)
   }
   // An ABSENT parcels defaults to the measurement floor; a PRESENT-but-malformed one (fraction,
@@ -117,12 +118,15 @@ export async function POST(request: Request) {
       devicePolicy: "auto",
     })
   } catch (error) {
-    // A throw (vs a typed refusal) still must settle the grant; report it as itself.
-    await settleOwnerRunGrant(admission.woId, "owner-run dispatch threw; authorization settled")
+    // A throw (vs a typed refusal) still must settle the grant, and the settle's own outcome is
+    // reported even here: "may still be live" is exactly what the caller must be told when
+    // settlement is incomplete.
+    const settle = await settleOwnerRunGrant(admission.woId, "owner-run dispatch threw; authorization settled")
     return reply({
       error: "DISPATCH_TRANSPORT_ERROR",
       detail: String(error instanceof Error ? error.message : error),
       workOrderRef: admission.woRef,
+      authorization: { woId: admission.woId, settled: settle.ok === true, ...(settle.ok ? {} : { settleError: settle.error, settleDetail: settle.detail }) },
     }, 502)
   }
 
@@ -133,6 +137,6 @@ export async function POST(request: Request) {
     ...outcome,
     workOrderRef: admission.woRef,
     syntheticDataOnly: true,
-    authorization: { woId: admission.woId, settled: settle.ok === true, ...(settle.ok ? {} : { settleError: settle.error }) },
+    authorization: { woId: admission.woId, settled: settle.ok === true, ...(settle.ok ? {} : { settleError: settle.error, settleDetail: settle.detail }) },
   })
 }

@@ -140,13 +140,14 @@ export type TransitionResult =
 export async function transitionWorkOrder(
   id: number,
   to: WoStatus,
-  opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
+  opts?: { approveDoctrine?: boolean; grantAuthority?: boolean; grantExpiresAt?: Date | null },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
   // Governed transitions continue through the shared lifecycle seam.
   const result = await db.transaction((transaction) => transitionWorkOrderInTransaction({
     transaction, userId, workOrderId: id, to, now: new Date(),
     grantAuthority: opts?.grantAuthority, approveDoctrine: opts?.approveDoctrine,
+    grantExpiresAt: opts?.grantExpiresAt,
   }))
   if (result.ok && result.authorityGrant) await writeAuthorityGrantArtifact(result.authorityGrant)
   return result.ok ? { ok: true, status: result.status } : result

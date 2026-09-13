@@ -31,18 +31,34 @@ import { pool } from "@/lib/db"
  *     never re-implements a line of that policy; it calls the seam and reports what the seam
  *     says. Placement refusals therefore arrive as the seam's own typed outcomes.
  *
- * The grant is bounded: `A2_WRITE_OWN` scoped to the seam's script directory (the
- * path-confinement vocabulary the reviewed trust gate reads), minted with a 24-hour expiry by
- * the governed transition, and REVOKED the moment one dispatch attempt returns — pass or fail.
- * The grant's working lifetime is exactly the job's lifetime; the expiry is the backstop for a
- * settle that never lands (process death mid-run), not the primary control.
+ * The grant is bounded: A2_WRITE_OWN scoped to the seam's script directory (the
+ * path-confinement vocabulary the reviewed trust gate reads), minted through the governed
+ * transition WITH an explicit 24-hour expiry (the transition seam has always supported
+ * grantExpiresAt; this lane threads it through the action rather than leaving the grant
+ * unbounded), and REVOKED the moment one dispatch attempt returns — pass or fail. The grant's
+ * working lifetime is exactly the job's lifetime; the expiry is the backstop for a settle that
+ * never lands (process death mid-run), not the primary control.
+ *
+ * The contract's agent is `local` — the matrix's registered local-capacity agent, capped at
+ * exactly A2_WRITE_OWN. Naming the seam as the agent was measured to be worse than wrong: the
+ * matrix refuses unknown agents, so admission died before dispatch and the run control could
+ * never reach the seam at all. The seam is the EXECUTOR named in the contract's description and
+ * validators; the agent field names the accountable registered principal.
  */
+
+/** The registered principal the matrix caps at exactly this lane's authority level. */
+export const OWNER_RUN_AGENT = "local"
+/** The lane's authority level: explicit operator approval required, grant minted on approval. */
+export const OWNER_RUN_AUTHORITY_LEVEL = "A2_WRITE_OWN"
+/** Backstop lifetime for the minted grant; the working control is revoke-on-settle. */
+export const OWNER_RUN_GRANT_TTL_MS = 24 * 60 * 60 * 1000
 
 export const OWNER_RUN_ALLOWED_PATH = "scripts/execution-fabric"
 
-/** Owner-run row budget: crosses every promoted threshold, far below the seam's 10M ceiling. */
-export const OWNER_RUN_MAX_ROWS = 250_000
-export const OWNER_RUN_MIN_ROWS = 50_000
+// The row bounds and the owner-runnable vocabulary live in the surface module (one source the
+// inventory projection, the POST gate, and this module all read); re-exported here because the
+// route and its tests import them from this module.
+export { OWNER_RUN_MAX_ROWS, OWNER_RUN_MIN_ROWS } from "@/lib/environment/capability-inventory-surface"
 
 /** The one source of the owner-runnable vocabulary is the surface map (no second map here). */
 export function ownerRunWorkloadFor(capabilityId: string): string | null {
@@ -74,8 +90,8 @@ export async function admitOwnerRunWorkOrder(
 
   await updateWorkOrderContract(woId, {
     scope: "one bounded synthetic tabular workload through the reviewed dispatch seam",
-    authorityLevel: "A2_WRITE_OWN",
-    agent: "gpu-tabular-dispatch",
+    authorityLevel: OWNER_RUN_AUTHORITY_LEVEL,
+    agent: OWNER_RUN_AGENT,
     allowedFiles: OWNER_RUN_ALLOWED_PATH,
     forbiddenFiles: `${OWNER_RUN_ALLOWED_PATH}/gpu-tabular-bench/evidence, docs/governance, app, components, lib, tests`,
     acceptanceCriteria: `dispatch outcome is SUCCEEDED or a typed refusal; an evidence_record exists on this work order when SUCCEEDED; synthetic input only, generated at the compute node by the reviewed worker`,
@@ -90,7 +106,13 @@ export async function admitOwnerRunWorkOrder(
   // grantAuthority=true is the explicit operator approval act the lifecycle demands for A2
   // (requiresExplicitApproval: rank > A1). It flows into the governed transition, which mints
   // the linked grant from the contract fields and writes the authority artifact.
-  const approved = await transitionWorkOrder(woId, "approved", { grantAuthority: true })
+  const approved = await transitionWorkOrder(woId, "approved", {
+    grantAuthority: true,
+    // The backstop the docstring promises, threaded through the action: without this the grant
+    // is minted with expiresAt = null, which isGrantActive reads as never-expiring — a crash
+    // before settle would leave an active A2 grant against the seam forever.
+    grantExpiresAt: new Date(Date.now() + OWNER_RUN_GRANT_TTL_MS),
+  })
   if (!approved.ok) {
     return {
       ok: false,
@@ -124,17 +146,36 @@ export async function settleOwnerRunGrant(
   woId: number,
   reason: string,
 ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: string; detail: string }>> {
+  const failures: string[] = []
+  const failed = (error: unknown) => String(error instanceof Error ? error.message : error)
+
+  // Ordered and independent: a revoke that throws must NOT skip the work-order settle, or the
+  // estate is left with an open WO nothing will ever close (the defect the second review round
+  // measured — revokeAuthorityGrant throws for an already-inactive grant, which is a benign
+  // race, not a reason to abandon the record).
+  let grantId: number | null = null
   try {
-    const grantId = await loadWorkOrderGrantId(woId)
-    if (grantId !== null) await revokeAuthorityGrant(grantId, reason)
-    const closed = await transitionWorkOrder(woId, "aborted")
-    if (!closed.ok) {
-      return { ok: false, error: "OWNER_RUN_WO_SETTLE_REFUSED", detail: closed.reason }
-    }
-    return { ok: true }
+    grantId = await loadWorkOrderGrantId(woId)
   } catch (error) {
-    return { ok: false, error: "OWNER_RUN_WO_SETTLE_FAILED", detail: String(error instanceof Error ? error.message : error) }
+    failures.push(`grant lookup: ${failed(error)}`)
   }
+  if (grantId !== null) {
+    try {
+      await revokeAuthorityGrant(grantId, reason)
+    } catch (error) {
+      failures.push(`grant revoke: ${failed(error)}`)
+    }
+  }
+  try {
+    const closed = await transitionWorkOrder(woId, "aborted")
+    if (!closed.ok) failures.push(`work order settle: ${closed.reason}`)
+  } catch (error) {
+    failures.push(`work order settle: ${failed(error)}`)
+  }
+
+  return failures.length === 0
+    ? { ok: true }
+    : { ok: false, error: "OWNER_RUN_SETTLE_INCOMPLETE", detail: failures.join("; ") }
 }
 
 /**
