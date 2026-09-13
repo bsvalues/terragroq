@@ -371,6 +371,16 @@ if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
 $gateScriptNames = @("verify-door-provenance.mjs", "attest-deployment.mjs")
 $gateSourceDir = Join-Path $Source "scripts\hermes-bridge"
 $gateTargetDir = Join-Path (Split-Path -Parent $LiveStartTarget) "scripts\hermes-bridge"
+# #1223 R3: the trust root holds the attestation PRIVATE key and is readable only by
+# SYSTEM/Administrators; the ring (public keys) and the gate code live in the gate directory under
+# Users:RX. The runtime identity can read the public material but cannot rewrite any of it, so a
+# filesystem writer cannot substitute the judge, the keys, or the receipt that admits it.
+$trustRootDir = Join-Path (Split-Path -Parent $LiveStartTarget) "trust"
+$trustKeyTarget = Join-Path $trustRootDir "deployment-attestation-key.json"
+$trustKeyLegacy = Join-Path $env:USERPROFILE ".williamos\deployment-attestation-key.json"
+$ringTarget = Join-Path $gateTargetDir "deployment-attestation-keys.json"
+$receiptTarget = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation.json"
+$nodeExe = "C:\Program Files\nodejs\node.exe"
 foreach ($g in $gateScriptNames) {
   $gs = Join-Path $gateSourceDir $g
   if (-not (Test-Path $gs)) { throw "Missing door trust script in the source tree: $gs" }
@@ -727,6 +737,48 @@ $null = New-Item -ItemType Directory -Path $gateTargetDir -Force
 foreach ($g in $gateScriptNames) {
   Copy-Item -LiteralPath (Join-Path $gateSourceDir $g) -Destination (Join-Path $gateTargetDir $g) -Force
 }
+
+# #1223 R3 — trust-root installation (requires an elevated deployment; refuses rather than install a
+# forgeable anchor). Ordered so a failure leaves the previous generation's anchor intact.
+if (-not (Test-Path $trustRootDir)) { $null = New-Item -ItemType Directory -Path $trustRootDir -Force }
+if (-not (Test-Path $trustKeyTarget)) {
+  if (Test-Path $trustKeyLegacy) {
+    Copy-Item -LiteralPath $trustKeyLegacy -Destination $trustKeyTarget -Force
+    Write-Output "migrated the deployment attestation key into the protected trust root"
+  } else {
+    throw "No deployment attestation key at $trustKeyTarget (and no legacy copy at $trustKeyLegacy). Mint one before deploying: the door refuses to start without a signed artifact attestation (#1223)."
+  }
+}
+# Once the protected copy exists the home copy stops being authoritative: it is readable by the
+# runtime identity, so leaving it would re-open forged-manifest attacks.
+$legacyTrustRemovals = @()
+if (Test-Path $trustKeyLegacy) {
+  Remove-Item -LiteralPath $trustKeyLegacy -Force
+  $legacyTrustRemovals += $trustKeyLegacy
+}
+$legacySecretPath = Join-Path $env:USERPROFILE ".williamos\deployment-seal-secret.bin"
+if (Test-Path $legacySecretPath) {
+  Remove-Item -LiteralPath $legacySecretPath -Force
+  $legacyTrustRemovals += $legacySecretPath
+}
+if ($legacyTrustRemovals.Count -gt 0) {
+  Write-Output ("removed legacy trust material readable by the runtime identity: " + ($legacyTrustRemovals -join "; "))
+}
+
+# Publish the public ring beside the gate, derived from the private key so the two cannot desync.
+& $nodeExe -e "const c=require('crypto'),f=require('fs');const r=JSON.parse(f.readFileSync(process.argv[1],'utf8'));const pub=c.createPublicKey(c.createPrivateKey({key:Buffer.from(r.privateKeyBase64,'base64'),format:'der',type:'pkcs8'})).export({format:'der',type:'spki'}).toString('base64');f.writeFileSync(process.argv[2],JSON.stringify({[r.keyId]:pub},null,2)+'\n')" $trustKeyTarget $ringTarget
+if ($LASTEXITCODE -ne 0) { throw "Failed to derive the deployment attestation trust ring (exit $LASTEXITCODE)." }
+
+# ACLs: the runtime identity may read the anchors but never rewrite them. ProgramData's inherited
+# Users:(WD,AD,WEA) is exactly what would make these forgeable, so it is removed explicitly.
+$null = icacls $trustRootDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $trustRootDir (exit $LASTEXITCODE)." }
+$null = icacls $gateTargetDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" "BUILTIN\Users:(OI)(CI)RX" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $gateTargetDir (exit $LASTEXITCODE)." }
+foreach ($anchor in @($trustKeyTarget, $ringTarget)) {
+  $null = icacls $anchor /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $anchor (exit $LASTEXITCODE)." }
+}
 # #1223: the HTTPS listener is part of the door; the repository-owned, gate-wired launcher is
 # installed the same way with the same rollback coverage, so a deploy cannot leave :3443 booting a
 # gateless generation.
@@ -863,13 +915,16 @@ if ($envGuard) {
 # #1223 R2: attest the STAGED bytes (signed manifest) and seal an external receipt BEFORE any task
 # starts. The gate refuses boot without one, so a deploy that cannot attest fails here — loudly,
 # before production stops — rather than at the first restart after the copy.
-$nodeExe = "C:\Program Files\nodejs\node.exe"
 $stagedProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
 if (-not $stagedProvenance.sha) { throw "Deployed build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
 & $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") attest --app-root="$Runtime" --sha="$($stagedProvenance.sha)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "deployment attestation FAILED (exit $LASTEXITCODE): the staged runtime cannot be proven bootable. Check the attestation key under the operator home .williamos and the ring in C:\ProgramData\WilliamOS." }
 & $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") seal --app-root="$Runtime" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "external seal receipt FAILED (exit $LASTEXITCODE): refusing to start a door whose bytes are attested only inside themselves." }
+# The receipt must not be rewritable by the identity running the door, or it becomes a rollback
+# lever: seal it down before the task starts.
+$null = icacls $receiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
 Write-Output "deployment attested and sealed (manifest + external receipt)"
 
 Start-ScheduledTask -TaskName $TaskName

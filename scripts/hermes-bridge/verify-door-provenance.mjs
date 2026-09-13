@@ -38,7 +38,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { verify as verifyManifest, verifySealReceipt } from "./attest-deployment.mjs"
+import { verify as verifyManifest, verifySealReceipt, isWritableByThisIdentity, trustRingPath } from "./attest-deployment.mjs"
 
 const argv = Object.fromEntries(process.argv.slice(2).map((a) => {
   const i = a.indexOf("=")
@@ -64,6 +64,21 @@ if (!argv["allow-runtime-copy"]) {
   if (!self) fail("GATE_IDENTITY_UNKNOWN", "cannot resolve this verifier's own path; refusing to guess trust")
   if (self.toLowerCase() !== path.join(trustedDir, "verify-door-provenance.mjs").toLowerCase()) {
     fail("GATE_NOT_IN_TRUSTED_DIR", `${self} is not the trusted ${path.join(trustedDir, "verify-door-provenance.mjs")}`)
+  }
+}
+
+// Tamper check: an anchor is only an anchor if the identity running the door cannot rewrite it. A
+// non-elevated runtime writer that can write the verifier or the public-key ring can choose which
+// code judges it and which keys count as trusted — so refuse rather than pretend to audit. The
+// deploy installs both under an administrator-gated ACL (Users: read/execute only) for this reason.
+if (!argv["allow-runtime-copy"]) {
+  const selfPath = fileURLToPath(import.meta.url)
+  if (isWritableByThisIdentity(selfPath)) {
+    fail("GATE_TAMPERABLE", `${selfPath} is writable by the identity running the door; it cannot be the authority for bytes it can rewrite`)
+  }
+  const ring = trustRingPath()
+  if (fs.existsSync(ring) && isWritableByThisIdentity(ring)) {
+    fail("TRUST_RING_TAMPERABLE", `${ring} is writable by the identity running the door; its public keys prove nothing`)
   }
 }
 

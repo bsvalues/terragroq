@@ -143,30 +143,37 @@ pure verification code runs locally before it advances.
 A revision claim is not an artifact proof. `lib/generated/build-provenance.json` self-declares the
 integrated sha, but it lives inside the writable runtime tree: anything able to robocopy into the
 runtime root could carry a known-good sha alongside unreviewed bytes. The door gate therefore
-requires a second, independent proof of the exact bytes being admitted:
+requires a second, independent proof of the exact bytes being admitted, rooted outside the tree it
+audits.
 
-- **Signed deployment manifest** (`lib/generated/deployment-manifest.json`) — content digest over
-  the shipped subtrees (`server.js`, `package.json`, `.next`, `lib`, `scripts`, `config`,
-  `components`, `public`; volatile `node_modules`, `.next/cache`, `.next/diagnostics` excluded),
-  signed with an Ed25519 attestation key whose private half lies OUTSIDE the runtime (operator
-  home `.williamos`). Verification key ring: `C:\ProgramData\WilliamOS\deployment-attestation-keys.json`.
-- **External seal receipt** (`C:\ProgramData\WilliamOS\deployment-attestation.json`) — an
-  HMAC-sealed digest of the same tree, written by the governed deploy, verified with a secret held
-  only in the operator home. It exists so a restored generation can boot without re-signing, and
-  so authenticity survives a runtime-writer deleting the manifest.
-- **Verifier placement** — the gate and its attester run from the trusted directory
-  (`C:\ProgramData\WilliamOS\scripts\hermes-bridge`), installed by the deploy beside the
-  launchers under administrator-gated ACLs. A copy of the gate inside the runtime tree refuses to
-  run as trusted (`GATE_NOT_IN_TRUSTED_DIR`), so a stale or substituted in-tree copy cannot become
-  the authority it audits.
+**What is anchored, and where**
 
-The gate checks in order: trusted placement -> ledger authorization (the sha must be a COMPLETE
-integrated revision) -> artifact authenticity (signed manifest or external seal, whose tree digest
-must equal the freshly computed digest of the admitted bytes). Carried-over provenance, tampered
-bytes, forged receipts, deleted manifests, and stale in-tree verifiers all refuse boot and write
-`BOOT_REFUSED DOOR_PROVENANCE_REFUSED` to the boot log with a typed reason on stderr.
+| Piece | Lives | Protection |
+| --- | --- | --- |
+| Signed deployment manifest (tree digest + sha) | `lib/generated/deployment-manifest.json`, inside the runtime | signature only; the file is attacker-writable by construction, and that is fine |
+| External signed receipt (same tree digest + sha) | `C:\ProgramData\WilliamOS\deployment-attestation.json` | ACL `Users:R`; survives a runtime-writer deleting the manifest |
+| Public key ring | `C:\ProgramData\WilliamOS\scripts\hermes-bridge\deployment-attestation-keys.json` | ACL `Users:R`, derived from the private key at deploy time |
+| Gate + attester code | `C:\ProgramData\WilliamOS\scripts\hermes-bridge\` | ACL `Users:(OI)(CI)RX`; installed by an elevated deploy |
+| Attestation private key | `C:\ProgramData\WilliamOS\trust\` | ACL: SYSTEM/Administrators only — unreadable by the runtime identity |
 
-Accepted residual (unchanged from the ledger trust boundary): a writer running as the operator
-account can read the attestation key and the seal secret, exactly as it can already write the
-integration ledger. The gate defends the invariant against unreviewed content reaching the door
-through the filesystem/restart path; it is not an intra-operator privilege boundary.
+The digest covers the shipped subtrees (`server.js`, `package.json`, `.next`, `lib`, `scripts`,
+`config`, `components`, `public`); volatile `node_modules`, `.next/cache`, `.next/diagnostics` are
+excluded (measured: zero files in the hashed set change across a live door's operation).
+
+**Boot decision, in order** — trusted placement (the verifier must be the one installed in the gate
+directory: `GATE_NOT_IN_TRUSTED_DIR`) → tamper resistance (a gate, ring, or receipt the runtime
+identity can rewrite refuses to act as an anchor: `GATE_TAMPERABLE`, `TRUST_RING_TAMPERABLE`,
+`SEAL_RECEIPT_TAMPERABLE`) → ledger authorization (the sha must be the `labMainAfter` of a COMPLETE
+integrated revision) → artifact authenticity (signed manifest **or** external signed receipt, whose
+tree digest must equal the digest recomputed from the bytes about to be served). Every refusal is
+typed on stderr and recorded as `BOOT_REFUSED DOOR_PROVENANCE_REFUSED` in the boot log. No network,
+no fallback: an unstattested or unauthenticated revision cannot start the door.
+
+**Why the receipt is signed, not MAC'd.** An HMAC receipt would need its secret readable at boot —
+i.e. readable by the same identity the gate exists to distrust. A signed receipt needs only public
+material at the door, so the private key can live where that identity cannot reach it.
+
+**Accepted residual.** A writer that can read the protected trust root (i.e. one running elevated)
+can mint attestations for arbitrary bytes, exactly as it could already write the integration ledger
+directly. The gate defends the invariant against unreviewed content reaching the door through the
+filesystem/restart path by a non-privileged writer; it is not an intra-administrator boundary.

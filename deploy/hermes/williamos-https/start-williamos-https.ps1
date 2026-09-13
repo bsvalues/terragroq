@@ -41,6 +41,15 @@ if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenan
 if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
   throw "Refusing to start WilliamOS HTTPS: the trusted gate script is absent at $provenanceGate (#1223 fail-closed)."
 }
+# #1223 R3: same tamper check as the Live launcher — a writable verifier is not an anchor.
+$gateTamperProbe = $null
+try {
+  $gateTamperProbe = [System.IO.File]::Open($provenanceGate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+} catch { }
+if ($gateTamperProbe) {
+  $gateTamperProbe.Close()
+  throw "Refusing to start WilliamOS HTTPS: $provenanceGate is writable by the identity running the door (#1223 fail-closed)."
+}
 $gatePreviousPreference = $ErrorActionPreference
 try {
   # Native stderr is not an error here; the exit code is the verdict. (PS 5.1 traps, twice now.)

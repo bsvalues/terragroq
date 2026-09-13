@@ -178,6 +178,17 @@ if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenan
 if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
   Deny-Boot "DOOR_PROVENANCE_GATE_MISSING" "the trusted gate script is absent at $provenanceGate (installed beside this launcher by the deploy), so this boot cannot prove its revision is an authorized, attested, integrated lab-main revision (#1223)."
 }
+# #1223 R3: a verifier the door's own identity can rewrite is not a trust anchor — the deploy
+# installs it under an administrator-gated ACL (Users: read/execute only). If it is writable here,
+# a filesystem writer could substitute the judge that admits it, so refuse instead of pretending.
+$gateTamperProbe = $null
+try {
+  $gateTamperProbe = [System.IO.File]::Open($provenanceGate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+} catch { }
+if ($gateTamperProbe) {
+  $gateTamperProbe.Close()
+  Deny-Boot "DOOR_PROVENANCE_GATE_TAMPERABLE" "$provenanceGate is writable by the identity running the door, so it cannot be the authority for bytes it can rewrite (#1223)."
+}
 $gatePreviousPreference = $ErrorActionPreference
 try {
   # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed

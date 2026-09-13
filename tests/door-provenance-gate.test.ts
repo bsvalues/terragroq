@@ -16,6 +16,7 @@
  *     with typed reason codes (proven behaviorally in a scratch app root, not just by reading).
  */
 import { execFileSync, spawnSync } from "node:child_process"
+import { generateKeyPairSync } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -136,11 +137,29 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
   fs.writeFileSync(path.join(rt, "package.json"), "{}")
   fs.writeFileSync(path.join(rt, ".next", "server", "chunk.js"), "good bundle\n")
   fs.writeFileSync(LEDGER, JSON.stringify({ integrations: [{ productState: "COMPLETE", labMainAfter: GOOD }] }))
-  fs.copyFileSync("C:/ProgramData/WilliamOS/deployment-attestation-keys.json", RING)
+  // Self-contained trust material, exactly the shape the deploy installs: the private key lives in a
+  // protected trust root the runtime identity cannot read, the public ring ships beside the gate.
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+  const KEY = path.join(dir, "trust", "deployment-attestation-key.json")
+  fs.mkdirSync(path.dirname(KEY), { recursive: true })
+  fs.writeFileSync(KEY, JSON.stringify({
+    keyId: "deployment-attestation-test",
+    privateKeyBase64: privateKey.export({ format: "der", type: "pkcs8" }).toString("base64"),
+  }))
+  fs.writeFileSync(RING, JSON.stringify({
+    "deployment-attestation-test": publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+  }))
   fs.writeFileSync(path.join(rt, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: GOOD }))
+  // Production installs these under an administrator-gated ACL (Users: RX). The tamper checks read
+  // that as "not writable by the identity running the door"; emulate it with the read-only attribute.
+  const lock = (f: string) => fs.chmodSync(f, 0o444)
+  const unlock = (f: string) => fs.chmodSync(f, 0o666)
+  for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) lock(path.join(gateDir, f))
+  lock(RING)
   const cli = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(gateDir, script), ...args], {
     encoding: "utf8",
-    env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT },
+    env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
+      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY },
   })
   const gate = (extra: string[] = []) => cli("verify-door-provenance.mjs",
     [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, ...extra])
@@ -183,25 +202,58 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
       fs.copyFileSync(path.join(gateDir, f), path.join(strayDir, f))
     }
     const r = spawnSync(process.execPath, [path.join(strayDir, "verify-door-provenance.mjs"), `--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`], {
-      encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT } })
+      encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
+        WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY } })
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(/GATE_NOT_IN_TRUSTED_DIR/)
   })
-  it("external seal receipt accepts restored-exact bytes after manifest deletion", () => {
+  it("signed external receipt accepts restored-exact bytes after manifest deletion", () => {
     attest()
     const seal = cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
     expect(seal.status).toBe(0)
+    lock(RECEIPT) // the deploy locks the receipt before starting the door
     fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"))
     const r = gate()
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/attested_by=external-seal-receipt/)
   })
-  it("forged external receipt (no HMAC secret) is refused", () => {
+  it("an altered receipt is refused by signature, not by a secret the door holds", () => {
+    unlock(RECEIPT)
     const rec = JSON.parse(fs.readFileSync(RECEIPT, "utf8"))
     rec.treeDigest = "e".repeat(64)
     fs.writeFileSync(RECEIPT, JSON.stringify(rec))
+    lock(RECEIPT)
     const r = gate()
     expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/SEAL_RECEIPT_/)
+  })
+  it("a receipt the runtime identity could rewrite is refused outright", () => {
+    attest()
+    unlock(RECEIPT)
+    const seal = cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
+    expect(seal.status).toBe(0)
+    unlock(RECEIPT) // mis-installed: writable by the identity running the door
+    fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"))
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/SEAL_RECEIPT_TAMPERABLE/)
+    lock(RECEIPT)
+  })
+  it("a verifier the runtime identity could rewrite refuses to be the authority", () => {
+    attest()
+    unlock(path.join(gateDir, "verify-door-provenance.mjs"))
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/GATE_TAMPERABLE/)
+    lock(path.join(gateDir, "verify-door-provenance.mjs"))
+  })
+  it("a trust ring the runtime identity could rewrite refuses to vouch for keys", () => {
+    attest()
+    unlock(RING)
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/TRUST_RING_TAMPERABLE/)
+    lock(RING)
   })
 })
 
@@ -221,6 +273,9 @@ describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger
   for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
     fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f),
       path.join(appRoot, "scripts", "hermes-bridge", f))
+    // production installs these Users:RX; without the read-only attribute the launcher would stop
+    // at DOOR_PROVENANCE_GATE_TAMPERABLE and this test would never reach the ledger check.
+    fs.chmodSync(path.join(appRoot, "scripts", "hermes-bridge", f), 0o444)
   }
   fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: "f".repeat(40) }))
   const bootLog = path.join(logs, "williamos-live.boot.log")
@@ -258,18 +313,30 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
     { productState: "COMPLETE", labMainAfter: GOOD, sealKey: "seal-1", at: "2026-09-13T00:00:00Z" },
     { productState: "IN_PROGRESS_NOT_A_STATE_BUT_KEPT", labMainAfter: "c".repeat(40) },
   ] }))
+  // Self-contained trust material (the production key now lives in an administrator-protected
+  // trust root that a test must not depend on): scratch private key + published ring.
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+  const KEY = path.join(dir, "trust", "deployment-attestation-key.json")
+  const RING = path.join(dir, "ring.json")
+  fs.mkdirSync(path.dirname(KEY), { recursive: true })
+  fs.writeFileSync(KEY, JSON.stringify({ keyId: "deployment-attestation-test",
+    privateKeyBase64: privateKey.export({ format: "der", type: "pkcs8" }).toString("base64") }))
+  fs.writeFileSync(RING, JSON.stringify({ "deployment-attestation-test":
+    publicKey.export({ format: "der", type: "spki" }).toString("base64") }))
+  const trustEnv = { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING,
+    WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY }
   const runGate = (prov: unknown, ledgerPath = LEDGER) => {
     if (prov === null) fs.rmSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), { force: true })
     else fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify(prov))
     const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
-      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`, "--allow-runtime-copy"], { encoding: "utf8" })
+      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`, "--allow-runtime-copy"], { encoding: "utf8", env: trustEnv })
     return { exit: r.status, out: `${r.stdout}${r.stderr}` }
   }
   it("accepts exactly the COMPLETE-ledger revision and echoes its seal witness", () => {
     runGate({ sha: GOOD }) // write provenance
     const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
-      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8" })
-    expect(a.status).toBe(0) // real signing key + ProgramData-installed ring on this host
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8", env: trustEnv })
+    expect(a.status).toBe(0) // signed with the scratch key the gate's ring publishes
     const r = runGate({ sha: GOOD })
     expect(r.exit).toBe(0)
     expect(r.out).toContain("DOOR_PROVENANCE_OK")
@@ -296,7 +363,7 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
   it("refuses case-mismatched and padded shas only via exact match (40-hex)", () => {
     runGate({ sha: GOOD.toUpperCase() })
     const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
-      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8" })
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8", env: trustEnv })
     expect(a.status).toBe(0)
     const r = runGate({ sha: GOOD.toUpperCase() })
     expect(r.exit).toBe(0) // normalized lowercase — matching must not be case-fragile

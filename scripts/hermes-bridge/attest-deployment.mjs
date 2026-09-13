@@ -40,10 +40,16 @@ const VOLATILE_EXCLUDE = /(^|[/\\])(cache|diagnostics|node_modules)([/\\]|$)/
 const ATTESTATION_FILES = new Set([
   "lib/generated/deployment-manifest.json",
 ])
-const RING_PATH_DEFAULT = "C:\\ProgramData\\WilliamOS\\deployment-attestation-keys.json"
-const KEY_FILE_DEFAULT = path.join(process.env.USERPROFILE || process.env.HOME || "", ".williamos", "deployment-attestation-key.json")
-const SEAL_SECRET_DEFAULT = path.join(process.env.USERPROFILE || process.env.HOME || "", ".williamos", "deployment-seal-secret.bin")
+const RING_PATH_DEFAULT = process.env.WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS
+  || "C:\\ProgramData\\WilliamOS\\scripts\\hermes-bridge\\deployment-attestation-keys.json"
+// The signing key lives in an administrator-protected trust directory: a filesystem writer running
+// as the runtime identity can read neither it nor the home directory it used to sit in, so it
+// cannot mint a manifest for the bytes it substituted. There is deliberately no fallback path.
+const TRUST_ROOT_DEFAULT = "C:\\ProgramData\\WilliamOS\\trust"
+const KEY_FILE_DEFAULT = process.env.WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY
+  || path.join(TRUST_ROOT_DEFAULT, "deployment-attestation-key.json")
 const SEAL_RECEIPT_DEFAULT = process.env.WILLIAMOS_GATE_RECEIPT || "C:\\ProgramData\\WilliamOS\\deployment-attestation.json"
+const RECEIPT_VERSION = "williamos-door-receipt.v1"
 
 function* walkFiles(root, dir) {
   let entries
@@ -114,6 +120,14 @@ export function attest(appRoot, sha, builtAt) {
 function createPrivateKeyDer(b64) {
   return crypto.createPrivateKey({ key: Buffer.from(b64, "base64"), format: "der", type: "pkcs8" })
 }
+function createPublicKeyDer(b64) {
+  return crypto.createPublicKey({ key: Buffer.from(b64, "base64"), format: "der", type: "spki" })
+}
+function signBody(canonical) {
+  const record = JSON.parse(fs.readFileSync(KEY_FILE_DEFAULT, "utf8"))
+  const priv = createPrivateKeyDer(record.privateKeyBase64)
+  return { keyId: record.keyId, signature: crypto.sign(null, Buffer.from(canonical, "utf8"), priv).toString("base64") }
+}
 
 export function verify(appRoot) {
   const manifestPath = path.join(appRoot, "lib", "generated", "deployment-manifest.json")
@@ -157,35 +171,48 @@ export function verify(appRoot) {
   return { ok: true, sha, treeDigest, keyId: String(manifest.keyId), source: "manifest" }
 }
 
+/** True when THIS identity can open the path for writing — i.e. the anchor is forgeable by it. */
+export function trustRingPath() { return RING_PATH_DEFAULT }
+export function isWritableByThisIdentity(p) {
+  try { fs.closeSync(fs.openSync(p, "r+")); return true } catch { return false }
+}
+
+// The external receipt is SIGNED, not MAC'd: the door verifies it with the public ring alone, so no
+// secret ever has to be readable by the runtime identity. It is the anchor that survives a
+// runtime-writer deleting the in-runtime manifest, and its file ACL denies that identity write.
 export function sealReceipt(appRoot, target = SEAL_RECEIPT_DEFAULT) {
-  if (!fs.existsSync(SEAL_SECRET_DEFAULT)) throw new Error("SEAL_SECRET_MISSING " + SEAL_SECRET_DEFAULT)
   const prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8"))
   if (typeof prov?.sha !== "string" || !/^[0-9a-f]{40}$/i.test(prov.sha)) throw new Error("SEAL_SHA_MALFORMED")
   const { treeDigest } = hashTree(appRoot)
-  const receipt = { sha: prov.sha.toLowerCase(), treeDigest, sealedAt: new Date().toISOString() }
-  const mac = crypto.createHmac("sha256", fs.readFileSync(SEAL_SECRET_DEFAULT))
-    .update(JSON.stringify(receipt, Object.keys(receipt).sort())).digest("hex")
+  const body = { version: RECEIPT_VERSION, sha: prov.sha.toLowerCase(), treeDigest, sealedAt: new Date().toISOString() }
+  const { keyId, signature } = signBody(canonicalBody(body))
   fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.writeFileSync(target, JSON.stringify({ ...receipt, mac }, null, 2) + "\n")
-  return receipt
+  fs.writeFileSync(target, JSON.stringify({ ...body, keyId, signature }, null, 2) + "\n")
+  return body
 }
 
 export function verifySealReceipt(appRoot, target = SEAL_RECEIPT_DEFAULT) {
   if (!fs.existsSync(target)) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "no external sealed receipt at " + target }
-  if (!fs.existsSync(SEAL_SECRET_DEFAULT)) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "seal secret unavailable; cannot trust the receipt" }
+  if (isWritableByThisIdentity(target)) {
+    return { ok: false, code: "SEAL_RECEIPT_TAMPERABLE", detail: target + " is writable by the runtime identity, so its seal proves nothing" }
+  }
   let rec
   try { rec = JSON.parse(fs.readFileSync(target, "utf8")) } catch { return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "unreadable" } }
-  const { mac, ...receipt } = rec ?? {}
-  if (typeof mac !== "string" || !/^[0-9a-f]{64}$/.test(mac)) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "no HMAC" }
-  let want
+  if (rec?.version !== RECEIPT_VERSION) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "unexpected receipt version" }
+  const { keyId, signature, ...receipt } = rec
+  const ringPath = process.env.WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS || RING_PATH_DEFAULT
+  if (!fs.existsSync(ringPath)) return { ok: false, code: "NO_TRUST_ROOT", detail: "no readable trust ring at " + ringPath }
+  let ring
+  try { ring = JSON.parse(fs.readFileSync(ringPath, "utf8")) }
+  catch (error) { return { ok: false, code: "NO_TRUST_ROOT", detail: "ring unreadable: " + (error?.message ?? error) } }
+  const publicKey = ring[String(keyId)]
+  if (!publicKey) return { ok: false, code: "SEAL_RECEIPT_KEY_UNTRUSTED", detail: "keyId " + keyId + " is not in the trust ring" }
+  let signatureOk
   try {
-    want = Buffer.from(crypto.createHmac("sha256", fs.readFileSync(SEAL_SECRET_DEFAULT))
-      .update(JSON.stringify(receipt, Object.keys(receipt).sort())).digest("hex"))
+    signatureOk = crypto.verify(null, Buffer.from(canonicalBody(receipt), "utf8"),
+      createPublicKeyDer(publicKey), Buffer.from(String(signature ?? ""), "base64"))
   } catch (error) { return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: String(error?.message ?? error) } }
-  const got = Buffer.from(mac)
-  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) {
-    return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "HMAC does not verify" }
-  }
+  if (!signatureOk) return { ok: false, code: "SEAL_RECEIPT_SIGNATURE_INVALID", detail: "receipt signature does not verify against the trust ring" }
   const { treeDigest } = hashTree(appRoot)
   if (treeDigest !== receipt.treeDigest) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "booted tree differs from the externally sealed digest" }
   const prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8"))
