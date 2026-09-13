@@ -15,8 +15,10 @@ import {
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 // One bounded tabular workload on DAEDALUS measures single-digit minutes at threshold scale;
-// an early platform abort would strand a lease mid-flight, so this route opts out.
-export const maxDuration = 30 * 60
+// an early platform abort would strand a lease mid-flight, so this route opts out. Written as a
+// literal: Next.js route config must be a static value (a computed expression is refused with
+// Unsupported node type "BinaryExpression" and fails the production build).
+export const maxDuration = 1800
 
 /**
  * The capability inventory, read live from the same modules dispatch enforces (see
