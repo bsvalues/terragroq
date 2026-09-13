@@ -262,8 +262,8 @@ export function localTestEvidence(file, candSha, opts = {}) {
   // foreign path (C:/Windows/win.ini) must refuse. Names resolve inside this worktree only, and
   // the audited suiteFiles come from the rooted entries, never from rejected ones.
   const rooted = names.filter((n) => {
-    const abs = path.resolve(ROOT, n)
-    const rootDir = path.resolve(ROOT)
+    const abs = path.resolve(cwd, n)
+    const rootDir = path.resolve(cwd)
     if (abs !== rootDir && !abs.startsWith(rootDir + path.sep)) return false
     try { return fs.statSync(abs).isFile() } catch { return false }
   })
@@ -302,6 +302,18 @@ export function localTestEvidence(file, candSha, opts = {}) {
     total, passed, failed, pending, todo, suites: distinct.length,
     suiteFiles: distinct.slice(0, 8), record: path.resolve(String(file)), headSha: recordedHead,
   }
+}
+
+/**
+ * The candidate's own changed TEST files — added/modified/renamed, with DELETIONS excluded
+ * (--diff-filter=d) so a legitimate test deletion is never demanded coverage for. Feeds
+ * localTestEvidence's LOCAL_TESTS_CHANGED_TESTS_UNCOVERED binding (bot thread 2).
+ */
+export function changedTestInventory(baseSha, candSha, cwd = ROOT) {
+  try {
+    return git(["diff", "--name-only", "--diff-filter=d", `${baseSha}..${candSha}`], { cwd })
+      .split(/\r?\n/).filter((f) => f && (/\.test\.[cm]?[tj]sx?$/.test(f) || f.startsWith("tests/")))
+  } catch { return [] }
 }
 
 function nowIso() { return new Date().toISOString() }
@@ -447,11 +459,7 @@ async function main() {
   try {
     let worktreeHead = ""
     try { worktreeHead = git(["rev-parse", "HEAD"]) } catch { worktreeHead = "" }
-    let changedTests = []
-    try {
-      changedTests = git(["diff", "--name-only", `${baseSha}..${candSha}`], { encoding: "utf8" })
-        .split(/\r?\n/).filter((f) => f && (/\.test\.[cm]?[tj]sx?$/.test(f) || f.startsWith("tests/")))
-    } catch { changedTests = [] }
+    const changedTests = changedTestInventory(baseSha, candSha)
     localEvidence = localTestEvidence(flags.localTests ?? null, candSha, { worktreeHead, changedTests })
   } catch (error) {
     if (flags.verifyOnly) {

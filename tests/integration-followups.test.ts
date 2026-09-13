@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 
-import { integrationTree, localTestEvidence } from "../scripts/execution-fabric/integrate-lab-main.mjs"
+import { changedTestInventory, integrationTree, localTestEvidence } from "../scripts/execution-fabric/integrate-lab-main.mjs"
 
 // Same host gate as tests/git-integration-authority.test.ts: real-mode CLI runs need seal key
 // material that exists only on the lab host.
@@ -201,6 +201,38 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
     })).toThrow(/LOCAL_TESTS_CHANGED_TESTS_UNCOVERED/)
     // full coverage of the changed inventory passes
     expect(localTestEvidence(record(), HEAD, { changedTests: [REAL_SUITE] }).suites).toBe(1)
+  })
+})
+
+describe("follow-up 3: the changed-test inventory is real git computation (owner-required coverage)", () => {
+  it("includes added/modified tests but NEVER a deleted test — and a deletion-only lane accepts", () => {
+    const dir = repo()
+    write(dir, "tests/keep.test.ts", "x\n")
+    write(dir, "docs/a.md", "a\n")
+    const base = commit(dir, "base")
+    git(dir, "checkout", "-q", "-b", "lane")
+    // lane deletes one test, modifies another, adds a third, plus a non-test change
+    git(dir, "rm", "-q", "tests/keep.test.ts")
+    write(dir, "tests/mod.test.ts", "original\n")
+    write(dir, "docs/a.md", "b\n")
+    commit(dir, "lane: delete keep, add mod, touch doc")
+    write(dir, "tests/mod.test.ts", "changed\n")
+    write(dir, "tests/add.test.ts", "new\n")
+    const cand = commit(dir, "lane: modify mod, add add")
+    const inv = changedTestInventory(base, cand, dir)
+    expect(inv).toContain("tests/mod.test.ts")
+    expect(inv).toContain("tests/add.test.ts")
+    expect(inv).not.toContain("tests/keep.test.ts")
+    expect(inv).not.toContain("docs/a.md")
+    // the validator accepts a record covering exactly the inventory (no false refusal for deletion)
+    const recPath = path.join(dir, "inv-record.json")
+    fs.writeFileSync(recPath, JSON.stringify({
+      numTotalTests: 2, numPassedTests: 2, numFailedTests: 0,
+      testResults: [{ name: path.join(dir, "tests/mod.test.ts") }, { name: path.join(dir, "tests/add.test.ts") }],
+      headSha: cand,
+    }, null, 2))
+    const out = localTestEvidence(recPath, cand, { cwd: dir, worktreeHead: cand, changedTests: inv })
+    expect(out.suites).toBe(2)
   })
 })
 
