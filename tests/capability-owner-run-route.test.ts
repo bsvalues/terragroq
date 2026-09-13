@@ -23,8 +23,8 @@ vi.mock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
 vi.mock("@/lib/environment/owner-run-dispatch", async () => {
   const surface = await import("@/lib/environment/capability-inventory-surface")
   return {
-    OWNER_RUN_MAX_ROWS: 250_000,
-    OWNER_RUN_MIN_ROWS: 50_000,
+    OWNER_RUN_MAX_ROWS: surface.OWNER_RUN_MAX_ROWS,
+    OWNER_RUN_MIN_ROWS: surface.OWNER_RUN_MIN_ROWS,
     admitOwnerRunWorkOrder: seams.admit,
     ownerRunWorkloadFor: (id: string) =>
       Object.prototype.hasOwnProperty.call(surface.OWNER_RUNNABLE_COMPUTE, id)

@@ -141,5 +141,9 @@ describe("capability inventory surface", () => {
     // The rejected and screening-only paths appear on the board but offer no run affordance.
     expect(result.capabilities.find((r: CapabilitySurfaceRow) => r.capabilityId === "gpu-anomaly-screening")?.ownerRunnable).toBe(false)
     expect(result.capabilities.find((r: CapabilitySurfaceRow) => r.capabilityId === "gpu-dimensional-reduction")?.ownerRunnable).toBe(false)
+    // Pin the exact runnable set itself: a silent drop from the derived map is a product change,
+    // not a test detail. Compare against the registry so the list cannot drift from what exists.
+    const runnableIds = result.capabilities.filter((r: CapabilitySurfaceRow) => r.ownerRunnable).map((r: CapabilitySurfaceRow) => r.capabilityId)
+    expect(runnableIds.sort()).toEqual(["gpu-aggregation", "gpu-clustering", "gpu-tabular-ml"])
   }, 120_000)
 })
