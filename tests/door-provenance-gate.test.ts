@@ -176,25 +176,27 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
     dirProtected = false
   }
   for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) lock(path.join(gateDir, f))
+  // R5: trust paths are ARGUMENTS, never environment (reviewer A10 proved an env-selected ring
+  // is the B2 class under a new name). The test harness passes what the launcher would, plus
+  // the explicit --key/--ring/--target overrides the production constants cannot see.
+  const trustArgs = [`--key=${KEY}`, `--ring=${RING}`]
   const cli = (script: string, args: string[]) => {
     if (args[0] === "attest" || args[0] === "seal") unprotectDir() // the writer unlocks its target dir
-    return spawnSync(process.execPath, [path.join(gateDir, script), ...args], {
+    return spawnSync(process.execPath, [path.join(gateDir, script), ...args, ...trustArgs], {
       encoding: "utf8",
-      env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
-        WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY },
     })
   }
   const gate = (extra: string[] = []) => {
     lock(RING)
     protectDir() // the door's identity sees: no-create directory; file attrs govern the rest
     return cli("verify-door-provenance.mjs",
-      [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, ...extra])
+      [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, `--target=${RECEIPT}`, ...extra])
   }
   const attest = () => cli("attest-deployment.mjs", ["attest", `--app-root=${rt}`, `--sha=${GOOD}`])
-  const seal = () => cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`])
+  const seal = () => cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
   const rmManifest = () => fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"), { force: true })
   const gateDirect = () => cli("verify-door-provenance.mjs",
-    [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`])
+    [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, `--target=${RECEIPT}`])
 
   it("refuses a ledger-authorized revision whose bytes were never attested (the P1)", () => {
     const r = gate()
@@ -252,8 +254,7 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
       fs.copyFileSync(path.join(gateDir, f), path.join(strayDir, f))
     }
     const r = spawnSync(process.execPath, [path.join(strayDir, "verify-door-provenance.mjs"), `--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`], {
-      encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
-        WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY } })
+      encoding: "utf8" })
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(/GATE_NOT_IN_TRUSTED_DIR/)
   })
@@ -332,26 +333,32 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
     expect(`${r.stdout}${r.stderr}`).toMatch(/TRUST_RING_TAMPERABLE/)
     lock(RING)
   })
-  it("the env escape hatch to ledger-only boot no longer exists (round-3 BLOCKING: HKCU forgeable)", () => {
-    // The gate cannot tell an operator from the runtime-writer identity, and that identity can set
-    // HKCU\\Environment persistently — any env-var downgrade of the authenticity half is a bypass.
-    const gateText = fs.readFileSync(path.join(gateDir, "verify-door-provenance.mjs"), "utf8")
-    expect(gateText).not.toMatch(/ALLOW_UNSIGNED_LEDGER_ONLY|LEDGER_ONLY_ESCAPER/)
+  it("NO environment variable selects trust: the A10 env-redirect class is refused (round-4 BLOCKING)", () => {
+    // Round-3 deleted the escape LITERAL; round-4 proved the CLASS lived on in env-selected
+    // anchors (WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS pointing the ring at an attacker key).
+    // The door task runs as the identity that owns HKCU\\Environment — env must select NOTHING.
+    const bridge = fs.readFileSync(path.join(gateDir, "verify-door-provenance.mjs"), "utf8")
+      + fs.readFileSync(path.join(gateDir, "attest-deployment.mjs"), "utf8")
+    expect(bridge).not.toMatch(/process\.env\.WILLIAMOS_/)
     attest()
     rmManifest()
     fs.rmSync(RECEIPT, { force: true }) // unattested state
-    lock(RECEIPT) // absent files cannot be tampered; keep the install healthy so the ESCAPE path
-    // (not a tamper probe) is what the refusal must come from — with the escape gone: NO_ARTIFACT
     lock(RING)
     protectDir()
+    // Even a fully populated forged environment changes nothing: the honest install refuses
+    // NO_ARTIFACT (no manifest, no receipt) rather than reading the forged ring the env names.
     const r = spawnSync(process.execPath, [path.join(gateDir, "verify-door-provenance.mjs"),
       `--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`],
-    { encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING,
-      WILLIAMOS_GATE_RECEIPT: RECEIPT, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY,
+    { encoding: "utf8", env: { ...process.env,
+      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: path.join(dir, "attacker-ring.json"),
+      WILLIAMOS_GATE_RECEIPT: path.join(dir, "attacker-receipt.json"),
+      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: path.join(dir, "attacker-key.json"),
+      WILLIAMOS_TRUSTED_GATE_DIR: path.join(dir, "attacker-dir"),
+      WILLIAMOS_INTEGRATIONS_LEDGER: path.join(dir, "attacker-ledger.json"),
       WILLIAMOS_GATE_ALLOW_UNSIGNED_LEDGER_ONLY: "1" } })
     expect(r.status).toBe(1)
     expect(`${r.stdout}${r.stderr}`).toMatch(/NO_ARTIFACT_ATTESTATION/)
-    lock(RECEIPT) // absent file: lock() would throw; guard for re-run stability
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/DOOR_PROVENANCE_OK/)
   })
 })
 
@@ -412,6 +419,19 @@ describe("the deploy and its restore script agree on the rollback contract (#123
     expect(deploy).toMatch(/icacls \$trustRootDir \/inheritance:r \/grant:r "SYSTEM:\(OI\)\(CI\)F" "BUILTIN\\Administrators:\(OI\)\(CI\)F"/)
     expect(deploy).toMatch(/icacls \$receiptTarget \/inheritance:r/)
   })
+  it("hands every anchor to BUILTIN\\Administrators and audits ownership (R5: an owner keeps WRITE_DAC)", () => {
+    // A mask-only lock on an anchor the door identity OWNS is theatre: the owner retains implicit
+    // WRITE_DAC and rewrites the ACL at leisure. The elevated deploy must /setowner every trust
+    // object and verify ownership before starting the door; restore must re-hand anchors after
+    // robocopy re-created them (round-4 review's enabling mechanism for the A10 bypass).
+    expect(deploy).toMatch(/icacls \$anchor \/setowner "BUILTIN\\\\Administrators"/)
+    expect(deploy).toMatch(/is owned by \$owner, not an administrator principal/)
+    expect(restore).toMatch(/icacls \$anchor \/setowner "BUILTIN\\\\Administrators"/)
+    // and the admission ledger is the copy inside the locked gate dir, never the home original
+    expect(deploy).toMatch(/Copy-Item -LiteralPath \$ledgerSource -Destination \(Join-Path \$gateTargetDir "integrations.json"\)/)
+    expect(gateText).toMatch(/LEDGER_FILENAME/)
+    expect(gateText).not.toMatch(/USERPROFILE/)
+  })
 })
 
 describe("the gate refuses structurally hostile provenance without ever coercing it (round-2 O1)", () => {
@@ -458,6 +478,11 @@ describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger
     // R4 probes stop at DOOR_PROVENANCE_GATE_TAMPERABLE and the ledger check never runs.
     fs.chmodSync(path.join(scratchGateDir, f), 0o444)
   }
+  // R5: the admission ledger is the copy inside the locked gate dir (never the home original);
+  // created BEFORE the dir deny so the scratch install can still stage it.
+  fs.writeFileSync(path.join(scratchGateDir, "integrations.json"), JSON.stringify({ integrations: [
+    { productState: "COMPLETE", labMainAfter: "b".repeat(40), at: "2026-09-13T00:00:00Z" } ] }))
+  fs.chmodSync(path.join(scratchGateDir, "integrations.json"), 0o444)
   if (process.platform === "win32") {
     const acl = spawnSync("icacls", [scratchGateDir, "/deny", "Everyone:(CI)(AD,WD)"], { encoding: "utf8" })
     if (acl.status !== 0) throw new Error(`icacls deny failed: ${acl.stdout}${acl.stderr}`)
@@ -508,19 +533,19 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
     privateKeyBase64: privateKey.export({ format: "der", type: "pkcs8" }).toString("base64") }))
   fs.writeFileSync(RING, JSON.stringify({ "deployment-attestation-test":
     publicKey.export({ format: "der", type: "spki" }).toString("base64") }))
-  const trustEnv = { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING,
-    WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY }
+  // R5: --key/--ring arguments only — the gate reads no trust paths from the environment.
+  const trustArgs = [`--ring=${RING}`]
   const runGate = (prov: unknown, ledgerPath = LEDGER) => {
     if (prov === null) fs.rmSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), { force: true })
     else fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify(prov))
     const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
-      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`, "--allow-runtime-copy"], { encoding: "utf8", env: trustEnv })
+      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`, "--allow-runtime-copy", ...trustArgs], { encoding: "utf8" })
     return { exit: r.status, out: `${r.stdout}${r.stderr}` }
   }
   it("accepts exactly the COMPLETE-ledger revision and echoes its seal witness", () => {
     runGate({ sha: GOOD }) // write provenance
     const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
-      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8", env: trustEnv })
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`, `--key=${KEY}`], { encoding: "utf8" })
     expect(a.status).toBe(0) // signed with the scratch key the gate's ring publishes
     const r = runGate({ sha: GOOD })
     expect(r.exit).toBe(0)
@@ -548,7 +573,7 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
   it("refuses case-mismatched and padded shas only via exact match (40-hex)", () => {
     runGate({ sha: GOOD.toUpperCase() })
     const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
-      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8", env: trustEnv })
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`, `--key=${KEY}`], { encoding: "utf8" })
     expect(a.status).toBe(0)
     const r = runGate({ sha: GOOD.toUpperCase() })
     expect(r.exit).toBe(0) // normalized lowercase — matching must not be case-fragile

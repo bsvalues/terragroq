@@ -9,41 +9,38 @@
  * TWO independent proofs must BOTH hold before the door starts:
  *
  *  A. AUTHORITY (revision): the bundle's build-provenance.json sha must equal the labMainAfter
- *     of a productState COMPLETE entry in the authoritative ledger
- *     (~/.williamos/integrations.json — written only by integrate-lab-main.mjs after
- *     seal + signed review + tree verification). Without this, an unauthorized revision cannot
- *     boot even WITH a valid manifest (a re-attested tree is still not an integrated revision).
+ *     of a productState COMPLETE entry in the ledger copy installed INSIDE the administrator-
+ *     locked gate directory by the deploy (~/.williamos/integrations.json is the integration
+ *     tool's write-side record; a runtime-identity-writable file can never be the admission
+ *     authority — the door's identity is the same one that owns HOME).
  *
- *  B. AUTHENTICITY (bytes): the booted tree's content must match what was attested. Accepted
- *     via either of two mechanisms whose trust roots live OUTSIDE the robocopy target:
- *       - a signed deployment manifest (verify-door-provenance calls attest-deployment.verify):
- *         signed by the deployment attestation key, whose private half lives only in the
- *         administrator-only trust dir and whose public ring sits beside the installed gate —
- *         a runtime-writer can copy or forge manifest bytes but cannot produce a valid
- *         signature; and
- *       - an external SIGNED seal receipt (the same administrator-locked gate directory,
- *         outside the robocopy target) for the same tree digest + sha, verified with the
- *         public ring only — no secret is readable at the door. Recorded by deploy/restore.
- *     Without B, carrying a known-good provenance file over unauthorized bytes works — the
- *     owner's P1 on the round-1 design: self-declared sha inside the writable tree is not
- *     authenticity.
+ *  B. AUTHENTICITY (bytes): the booted tree's content must match what was attested, accepted via
+ *     either of two mechanisms whose trust anchors live OUTSIDE the robocopy target AND outside
+ *     anything the door identity can rewrite: a signed deployment manifest verified against the
+ *     ring inside the gate dir, or an external SIGNED seal receipt in the same locked dir.
  *
- * Fail-closed, typed refusals, no network, no fallback. Exit 0 ONLY on
- * DOOR_PROVENANCE_OK with both proofs; the accepted line echoes the ledger seal witness AND the
- * authenticity source so the boot log is self-describing.
+ * R5 (round-4 review): trust paths are selected by ARGUMENT ONLY, never by environment variable —
+ * the door task runs as the identity that owns HKCU\Environment, so env-selected anchors were the
+ * B2 downgrade class under a new name. And every anchor must pass BOTH a write probe AND an
+ * OWNER check when production-scoped: an access mask alone cannot tell "an administrator locked
+ * this" from "the attacker locked it against itself" (deny entries are revocable by their owner;
+ * ownership is not re-takable without elevation — empirically verified on this box).
  *
- * Env: WILLIAMOS_INTEGRATIONS_LEDGER overrides the ledger path (tests only).
- *      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS overrides the ring path (tests only).
+ * Fail-closed, typed refusals, no network, no fallback. Exit 0 ONLY on DOOR_PROVENANCE_OK with
+ * both proofs; the accepted line echoes the ledger seal witness AND the authenticity source.
  */
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
-import { verify as verifyManifest, verifySealReceipt, isWritableByThisIdentity, trustRingPath } from "./attest-deployment.mjs"
+import { fileURLToPath } from "node:url"
+import {
+  verify as verifyManifest, verifySealReceipt, isWritableByThisIdentity, anchorUntrustedReason,
+  parseFlags, PRODUCTION_GATE_DIR, RING_FILENAME, LEDGER_FILENAME,
+} from "./attest-deployment.mjs"
 
-const argv = Object.fromEntries(process.argv.slice(2).map((a) => {
-  const i = a.indexOf("=")
-  return i < 0 ? [a.replace(/^--/, ""), "true"] : [a.slice(2, i), a.slice(i + 1)]
-}))
+const argv = parseFlags(process.argv.slice(2))
+const armed = (v) => v === true || (typeof v === "string" && !/^(0|false|off)$/i.test(v))
+const allowRuntimeCopy = argv["allow-runtime-copy"] === true
+
 const fail = (code, detail) => {
   console.error(`DOOR_PROVENANCE_REFUSED ${code} ${String(detail).slice(0, 300)}`)
   process.exit(1)
@@ -53,32 +50,45 @@ const appRoot = argv["app-root"]
 if (!appRoot) fail("ARGS_INVALID", "--app-root=<runtime root> is required")
 
 // Placement check: this verifier is trusted BYTES, so it must run from the trusted directory it
-// ships in (ProgramData, beside the launchers, administrator-gated). An old copy carried inside a
-// robocopied runtime — e.g. a previous generation's scripts/hermes-bridge — may be stale code
-// that predates today's checks; running it would let an attacker pick which verifier admits them.
-// --allow-runtime-copy is reserved for tests and emergency repair.
-const trustedDir = argv["gate-dir"] || process.env.WILLIAMOS_TRUSTED_GATE_DIR || "C:\\ProgramData\\WilliamOS\\scripts\\hermes-bridge"
-if (!argv["allow-runtime-copy"]) {
+// ships in (ProgramData, beside the launchers, administrator-owned). An old copy carried inside a
+// robocopied runtime may be stale code that predates today's checks; running it would let an
+// attacker pick which verifier admits them. --allow-runtime-copy is reserved for tests/repair.
+const trustedDir = typeof argv["gate-dir"] === "string" && argv["gate-dir"]
+  ? argv["gate-dir"] : PRODUCTION_GATE_DIR
+if (!allowRuntimeCopy) {
   let self
   try { self = fs.realpathSync(fileURLToPath(import.meta.url)) } catch { self = "" }
   if (!self) fail("GATE_IDENTITY_UNKNOWN", "cannot resolve this verifier's own path; refusing to guess trust")
-  if (self.toLowerCase() !== path.join(trustedDir, "verify-door-provenance.mjs").toLowerCase()) {
+  const trustedSelf = path.join(trustedDir, "verify-door-provenance.mjs")
+  if (self.toLowerCase() !== trustedSelf.toLowerCase()) {
     fail("GATE_NOT_IN_TRUSTED_DIR", `${self} is not the trusted ${path.join(trustedDir, "verify-door-provenance.mjs")}`)
   }
 }
 
-// Tamper check: an anchor is only an anchor if the identity running the door cannot rewrite it. A
-// non-elevated runtime writer that can write the verifier or the public-key ring can choose which
-// code judges it and which keys count as trusted — so refuse rather than pretend to audit. The
-// deploy installs both under an administrator-gated ACL (Users: read/execute only) for this reason.
-if (!argv["allow-runtime-copy"]) {
-  const selfPath = fileURLToPath(import.meta.url)
-  if (isWritableByThisIdentity(selfPath)) {
-    fail("GATE_TAMPERABLE", `${selfPath} is writable by the identity running the door; it cannot be the authority for bytes it can rewrite`)
-  }
-  const ring = trustRingPath()
-  if (fs.existsSync(ring) && isWritableByThisIdentity(ring)) {
-    fail("TRUST_RING_TAMPERABLE", `${ring} is writable by the identity running the door; its public keys prove nothing`)
+// Anchor probes. An anchor is only an anchor if the identity running the door cannot rewrite it
+// AND cannot re-take what it "locked" against itself. Check every file the verdict will read:
+// this verifier, the attester beside it (verify() executes through that import), the ring, and
+// the ledger copy — each under the same rule.
+// Probe the ring that will ACTUALLY be read (argv override or the gate-dir default) — a probe of
+// a constant file the run never loads would vouch for a ring an attacker still controls.
+const ringAnchor = typeof argv["ring"] === "string" && argv["ring"] ? argv["ring"] : path.join(trustedDir, RING_FILENAME)
+const anchorsToProbe = [
+  { path: fileURLToPath(import.meta.url), writableCode: "GATE_TAMPERABLE" },
+  { path: path.join(trustedDir, "attest-deployment.mjs"), writableCode: "GATE_TAMPERABLE" },
+  { path: ringAnchor, writableCode: "TRUST_RING_TAMPERABLE" },
+  { path: path.join(trustedDir, LEDGER_FILENAME), writableCode: "ANCHOR_TAMPERABLE" },
+]
+if (!allowRuntimeCopy) {
+  for (const anchor of anchorsToProbe) {
+    if (!fs.existsSync(anchor.path)) continue // absence is handled by the typed check that reads it
+    const reason = anchorUntrustedReason(anchor.path)
+    if (reason === "writable") {
+      fail(anchor.writableCode,
+        `${anchor.path} is writable by the identity running the door; it cannot be the authority for bytes it can rewrite`)
+    }
+    if (reason) {
+      fail("ANCHOR_OWNER_NOT_TRUSTED", `${anchor.path} anchor ${reason}; an owner can revoke its own deny — only an administrator-owned anchor proves anything`)
+    }
   }
 }
 
@@ -101,9 +111,18 @@ if (!/^[0-9a-f]{40}$/.test(sha)) {
   fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha=${JSON.stringify(shaRaw.slice(0, 64))}`)
 }
 
-const ledgerPath = argv["ledger"]
-  || process.env.WILLIAMOS_INTEGRATIONS_LEDGER
-  || path.join(process.env.USERPROFILE || process.env.HOME || "", ".williamos", "integrations.json")
+// R5: the admission ledger is the copy the elevated deploy installed INSIDE the locked gate dir.
+// --ledger exists for tests/repair only (it pairs with --allow-runtime-copy; a production boot
+// never passes either).
+let ledgerPath
+if (typeof argv["ledger"] === "string" && argv["ledger"]) {
+  // argv overrides are the tests/repair surface: the production launcher hardcodes its call and
+  // a filesystem-writer cannot inject arguments into the scheduled-task boot path (only env,
+  // which R5 removed as a trust channel entirely).
+  ledgerPath = argv["ledger"]
+} else {
+  ledgerPath = path.join(trustedDir, LEDGER_FILENAME)
+}
 let ledger
 try { ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) }
 catch (error) { fail("LEDGER_UNREADABLE", `${ledgerPath}: ${error?.message ?? error}`) }
@@ -121,14 +140,16 @@ if (!authorized.has(sha)) {
 }
 
 // --- B. authenticity: attested bytes ------------------------------------------------------------
+const verifierFlags = { "gate-dir": trustedDir, "ring": typeof argv["ring"] === "string" ? argv["ring"] : undefined }
+const receiptTarget = typeof argv["target"] === "string" && argv["target"] ? argv["target"] : undefined
 let auth = null
 try {
-  const m = verifyManifest(appRoot)
+  const m = verifyManifest(appRoot, verifierFlags)
   if (m.ok) auth = { source: "signed-manifest", treeDigest: m.treeDigest, keyId: m.keyId }
   else auth = { failedManifest: m }
 } catch (error) { auth = { crashedManifest: String(error?.message ?? error) } }
 if (!auth || auth.failedManifest || auth.crashedManifest) {
-  const seal = verifySealReceipt(appRoot)
+  const seal = verifySealReceipt(appRoot, receiptTarget, verifierFlags)
   if (seal.ok) auth = { source: "external-seal-receipt", treeDigest: seal.treeDigest }
   else {
     const mf = auth?.failedManifest

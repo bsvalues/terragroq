@@ -786,6 +786,15 @@ if ($legacyTrustRemovals.Count -gt 0) {
   Write-Output ("removed legacy trust material readable by the runtime identity: " + ($legacyTrustRemovals -join "; "))
 }
 
+# #1223 R5: install the admission ledger COPY inside the locked gate directory. The home-dir
+# original (~\.williamos\integrations.json) is written by integrate-lab-main.mjs but is fully
+# writable by the door's own identity, so it can never be the boot-time authority; the gate reads
+# ONLY this copy. Rollback capture of the gate directory covers this file from the NEXT deploy on.
+$ledgerSource = Join-Path $env:USERPROFILE ".williamos\integrations.json"
+if (-not (Test-Path $ledgerSource -PathType Leaf)) { throw "No integration ledger at $ledgerSource; the gate would refuse every boot (LEDGER_UNREADABLE)." }
+Copy-Item -LiteralPath $ledgerSource -Destination (Join-Path $gateTargetDir "integrations.json") -Force
+Write-Output "installed the admission ledger copy into the trusted gate directory"
+
 # Publish the public ring beside the gate, derived from the private key so the two cannot desync.
 & $nodeExe -e "const c=require('crypto'),f=require('fs');const r=JSON.parse(f.readFileSync(process.argv[1],'utf8'));const pub=c.createPublicKey(c.createPrivateKey({key:Buffer.from(r.privateKeyBase64,'base64'),format:'der',type:'pkcs8'})).export({format:'der',type:'spki'}).toString('base64');f.writeFileSync(process.argv[2],JSON.stringify({[r.keyId]:pub},null,2)+'\n')" $trustKeyTarget $ringTarget
 if ($LASTEXITCODE -ne 0) { throw "Failed to derive the deployment attestation trust ring (exit $LASTEXITCODE)." }
@@ -799,6 +808,15 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $gateTargetDir (exit $LAST
 foreach ($anchor in @($trustKeyTarget, $ringTarget)) {
   $null = icacls $anchor /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $anchor (exit $LASTEXITCODE)." }
+}
+# #1223 R5: ownership, not just the mask. A file CREATED by a non-admin identity is owned by it,
+# and an OWNER keeps implicit WRITE_DAC even when the ACL grants it nothing — so it can rewrite
+# the ACL at leisure. Round-4 review proved an anchor the attacker owns and then /deny-s against
+# itself passes every mask probe. The elevated deploy hands every trust object to
+# BUILTIN\Administrators; the door identity cannot take ownership back without elevation.
+foreach ($anchor in @($trustRootDir, $gateTargetDir, $trustKeyTarget, $ringTarget, (Join-Path $gateTargetDir "integrations.json"), (Join-Path $gateTargetDir "verify-door-provenance.mjs"), (Join-Path $gateTargetDir "attest-deployment.mjs"), $LiveStartTarget, $HttpsStartTarget)) {
+  $null = icacls $anchor /setowner "BUILTIN\\Administrators" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on anchor $anchor (exit $LASTEXITCODE) - the deploy must run elevated for the trust anchors to mean anything." }
 }
 # #1223: the HTTPS listener is part of the door; the repository-owned, gate-wired launcher is
 # installed the same way with the same rollback coverage, so a deploy cannot leave :3443 booting a
@@ -952,7 +970,15 @@ if ($LASTEXITCODE -ne 0) { throw "external seal receipt FAILED (exit $LASTEXITCO
 # lever: seal it down before the task starts.
 $null = icacls $receiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
-Write-Output "deployment attested and sealed (manifest + external receipt)"
+$null = icacls $receiptTarget /setowner "BUILTIN\\Administrators" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on the seal receipt (exit $LASTEXITCODE)." }
+# Final anchor audit: every boot-time trust input must be BOTH unwritable AND administrator-owned
+# (the gate re-checks at boot; failing HERE names a mis-install at deploy time instead).
+foreach ($anchor in @((Join-Path $gateTargetDir "verify-door-provenance.mjs"), (Join-Path $gateTargetDir "attest-deployment.mjs"), $ringTarget, (Join-Path $gateTargetDir "integrations.json"), $receiptTarget, $trustKeyTarget)) {
+  $owner = (Get-Acl -LiteralPath $anchor).Owner
+  if ($owner -notin @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) { throw "Trust anchor $anchor is owned by $owner, not an administrator principal - an owner can always rewrite its own ACL; refusing to start a door on forgeable anchors (#1223)." }
+}
+Write-Output "deployment attested and sealed (manifest + external receipt); anchors administrator-owned"
 
 Start-ScheduledTask -TaskName $TaskName
 

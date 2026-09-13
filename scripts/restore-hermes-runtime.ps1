@@ -368,6 +368,15 @@ if (Test-Path -LiteralPath (Join-Path $gateRestoreDir "attest-deployment.mjs") -
   if ($LASTEXITCODE -ne 0) { throw "post-rollback seal FAILED (exit $LASTEXITCODE): refusing to start a door attested only inside itself." }
   $null = icacls $ReceiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
+  # R5: robocopy re-created these files with the restore runner as owner; a non-admin owner keeps
+  # implicit WRITE_DAC and can rewrite the ACL, so re-hand the anchors to BUILTIN\Administrators
+  # and refuse to start the door when that did not work (restore must run elevated too).
+  foreach ($anchor in @($ReceiptTarget, (Join-Path $gateRestoreDir "verify-door-provenance.mjs"), (Join-Path $gateRestoreDir "attest-deployment.mjs"), (Join-Path $gateRestoreDir "deployment-attestation-keys.json"), (Join-Path $gateRestoreDir "integrations.json"))) {
+    if (Test-Path -LiteralPath $anchor -PathType Leaf) {
+      $null = icacls $anchor /setowner "BUILTIN\\Administrators" 2>&1
+      if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on restored anchor $anchor (exit $LASTEXITCODE); refusing to boot a door on attacker-reclaimable anchors." }
+    }
+  }
   Write-Output "restored generation re-attested and sealed"
 }
 
