@@ -9,12 +9,19 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
   [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
+  [string]$ReceiptTarget = "C:\ProgramData\WilliamOS\scripts\hermes-bridge\deployment-attestation.json",
   [string]$HttpsStartTarget = "C:\ProgramData\WilliamOS\start-williamos-https.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443
 )
 
 $ErrorActionPreference = "Stop"
+# #1223 R4: rollback re-attests the restored bytes under the admin-only trust key; an unprivileged
+# run cannot read it — and must not be able to mint attestations anyway. Elevation is required.
+$restoreIdentity = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $restoreIdentity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "#1223: restoring the door runtime must run ELEVATED (it re-attests and re-seals the restored generation)."
+}
 $HermesLanAddress = "192.168.88.9"
 $HermesOverlayAddress = "100.97.194.84"
 
@@ -143,7 +150,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if (($manifestVersion -ne 6 -and $manifestVersion -ne 7) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if (($manifestVersion -ne 6 -and $manifestVersion -ne 7 -and $manifestVersion -ne 8) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
 if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
@@ -185,6 +192,9 @@ $expectedRollbackFiles = @(
   "scripts\fabric\resolve-authority-registry-url.mjs"
 )
 if ($manifestVersion -ge 4) { $expectedRollbackFiles += "pnpm-lock.yaml" }
+# v8 captures the signed deployment manifest so the restored generation's provenance, manifest and
+# receipt are one consistent set again — without it the gate would deny the rolled-back door.
+if ($manifestVersion -ge 8) { $expectedRollbackFiles += "lib\generated\deployment-manifest.json" }
 $manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
   throw "Rollback manifest does not name the exact runtime file set"
@@ -339,8 +349,30 @@ if ($trustDirCaptured) {
   }
 }
 
+# #1223 R4: a rollback must leave a door that can BOOT. The restored bytes differ from whatever
+# generation last ran, so re-attest the restored tree and re-seal the receipt with the same trust
+# key BEFORE starting; otherwise the gate denies its own rolled-back door (MAJOR finding).
+$gateRestoreDir = if ($trustDirCaptured -and $manifest.trustDir.wasPresent) {
+  [string]$manifest.trustDir.target
+} else {
+  Join-Path (Split-Path -Parent $LiveStartTarget) "scripts\hermes-bridge"
+}
+if (Test-Path -LiteralPath (Join-Path $gateRestoreDir "attest-deployment.mjs") -PathType Leaf) {
+  $attestCli = Join-Path $gateRestoreDir "attest-deployment.mjs"
+  $restoredProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
+  if (-not $restoredProvenance.sha) { throw "Restored build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
+  $nodeExe = "C:\Program Files\nodejs\node.exe"
+  & $nodeExe $attestCli attest --app-root="$Runtime" --sha="$($restoredProvenance.sha)" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "post-rollback attestation FAILED (exit $LASTEXITCODE): the restored runtime cannot be proven bootable." }
+  & $nodeExe $attestCli seal --app-root="$Runtime" --target="$ReceiptTarget" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "post-rollback seal FAILED (exit $LASTEXITCODE): refusing to start a door attested only inside itself." }
+  $null = icacls $ReceiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
+  Write-Output "restored generation re-attested and sealed"
+}
+
 Start-ScheduledTask -TaskName $TaskName
-$deadline = (Get-Date).AddSeconds(90)
+$deadline = (Get-Date).AddSeconds(300)
 do {
   try {
     $health = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 10

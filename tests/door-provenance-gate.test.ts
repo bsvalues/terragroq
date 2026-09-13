@@ -124,8 +124,9 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
   const rt = path.join(dir, "runtime")
   const gateDir = path.join(dir, "trusted") // simulates ProgramData\scripts\hermes-bridge
   const LEDGER = path.join(dir, "ledger.json")
-  const RING = path.join(dir, "ring.json")
-  const RECEIPT = path.join(dir, "receipt.json")
+  // Production layout (R4): ring and receipt live INSIDE the administrator-locked gate directory.
+  const RING = path.join(gateDir, "ring.json")
+  const RECEIPT = path.join(gateDir, "receipt.json")
   const GOOD = "b".repeat(40)
   fs.mkdirSync(path.join(rt, "lib", "generated"), { recursive: true })
   fs.mkdirSync(path.join(rt, ".next", "server"), { recursive: true })
@@ -137,10 +138,8 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
   fs.writeFileSync(path.join(rt, "package.json"), "{}")
   fs.writeFileSync(path.join(rt, ".next", "server", "chunk.js"), "good bundle\n")
   fs.writeFileSync(LEDGER, JSON.stringify({ integrations: [{ productState: "COMPLETE", labMainAfter: GOOD }] }))
-  // Self-contained trust material, exactly the shape the deploy installs: the private key lives in a
-  // protected trust root the runtime identity cannot read, the public ring ships beside the gate.
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
-  const KEY = path.join(dir, "trust", "deployment-attestation-key.json")
+  const KEY = path.join(dir, "trust", "deployment-attestation-key.json") // admin-only trust root
   fs.mkdirSync(path.dirname(KEY), { recursive: true })
   fs.writeFileSync(KEY, JSON.stringify({
     keyId: "deployment-attestation-test",
@@ -150,25 +149,57 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
     "deployment-attestation-test": publicKey.export({ format: "der", type: "spki" }).toString("base64"),
   }))
   fs.writeFileSync(path.join(rt, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: GOOD }))
-  // Production installs these under an administrator-gated ACL (Users: RX). The tamper checks read
-  // that as "not writable by the identity running the door"; emulate it with the read-only attribute.
-  const lock = (f: string) => fs.chmodSync(f, 0o444)
-  const unlock = (f: string) => fs.chmodSync(f, 0o666)
+  // Production installs the anchors under an administrator-gated ACL, and the R4 probes check TWO
+  // orthogonal properties (round-3 review: a read-only FILE in a writable DIRECTORY is substitutable):
+  //   file writability  -> the read-only attribute (chmod; Node's r+ probe respects it on Windows)
+  //   directory mutation -> icacls deny Everyone:(CI)(AD,WD) (container-inherited ONLY, so it
+  //                          blocks create/delete in the dir without touching file semantics)
+  // The deploy/seal side (elevated in production) lifts the directory protection while it writes.
+  const IS_WIN = process.platform === "win32"
+  const lock = (f: string) => { try { fs.chmodSync(f, 0o444) } catch { /* absent: nothing to lock */ } }
+  const unlock = (f: string) => { try { fs.chmodSync(f, 0o666) } catch { /* absent */ } }
+  let dirProtected = false
+  const protectDir = () => {
+    if (dirProtected) return
+    if (IS_WIN) {
+      const r = spawnSync("icacls", [gateDir, "/deny", "Everyone:(CI)(AD,WD)"], { encoding: "utf8" })
+      expect(r.status, `icacls deny failed: ${r.stdout}${r.stderr}`).toBe(0)
+    } else fs.chmodSync(gateDir, 0o555)
+    dirProtected = true
+  }
+  const unprotectDir = () => {
+    if (!dirProtected) return
+    if (IS_WIN) {
+      const r = spawnSync("icacls", [gateDir, "/remove:d", "Everyone"], { encoding: "utf8" })
+      expect(r.status, `icacls clear failed: ${r.stdout}${r.stderr}`).toBe(0)
+    } else fs.chmodSync(gateDir, 0o755)
+    dirProtected = false
+  }
   for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) lock(path.join(gateDir, f))
-  lock(RING)
-  const cli = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(gateDir, script), ...args], {
-    encoding: "utf8",
-    env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
-      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY },
-  })
-  const gate = (extra: string[] = []) => cli("verify-door-provenance.mjs",
-    [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, ...extra])
+  const cli = (script: string, args: string[]) => {
+    if (args[0] === "attest" || args[0] === "seal") unprotectDir() // the writer unlocks its target dir
+    return spawnSync(process.execPath, [path.join(gateDir, script), ...args], {
+      encoding: "utf8",
+      env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT,
+        WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY },
+    })
+  }
+  const gate = (extra: string[] = []) => {
+    lock(RING)
+    protectDir() // the door's identity sees: no-create directory; file attrs govern the rest
+    return cli("verify-door-provenance.mjs",
+      [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, ...extra])
+  }
   const attest = () => cli("attest-deployment.mjs", ["attest", `--app-root=${rt}`, `--sha=${GOOD}`])
+  const seal = () => cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`])
+  const rmManifest = () => fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"), { force: true })
+  const gateDirect = () => cli("verify-door-provenance.mjs",
+    [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`])
 
   it("refuses a ledger-authorized revision whose bytes were never attested (the P1)", () => {
     const r = gate()
     expect(r.status).toBe(1)
-    expect(r.stderr).toMatch(/NO_ARTIFACT_ATTESTATION/)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/NO_ARTIFACT_ATTESTATION/)
   })
   it("accepts after a valid signed attestation", () => {
     expect(attest().status).toBe(0)
@@ -183,8 +214,27 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
     expect(r.status).toBe(1)
     expect(`${r.stdout}${r.stderr}`).toMatch(/MANIFEST_TREE_MISMATCH/)
   })
-  it("refuses a forged signature", () => {
+  it("refuses a tampered dependency inside node_modules (round-3 BLOCKING: deps are bound now)", () => {
     fs.writeFileSync(path.join(rt, "server.js"), "good\n") // restore
+    fs.mkdirSync(path.join(rt, "node_modules", "next"), { recursive: true })
+    fs.writeFileSync(path.join(rt, "node_modules", "next", "index.js"), "module.exports = {}\n")
+    attest()
+    fs.writeFileSync(path.join(rt, "node_modules", "next", "index.js"), "module.exports = PWNED\n")
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/MANIFEST_TREE_MISMATCH/)
+  })
+  it("refuses an edited .env.local with the authorized manifest still in place (round-3 HIGH)", () => {
+    fs.writeFileSync(path.join(rt, "node_modules", "next", "index.js"), "module.exports = {}\n")
+    fs.writeFileSync(path.join(rt, ".env.local"), "DATABASE_URL=postgres://safe\n")
+    attest()
+    fs.writeFileSync(path.join(rt, ".env.local"), "DATABASE_URL=postgres://attacker\n")
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/MANIFEST_TREE_MISMATCH/)
+  })
+  it("refuses a forged signature", () => {
+    fs.writeFileSync(path.join(rt, ".env.local"), "DATABASE_URL=postgres://safe\n")
     attest()
     const mp = path.join(rt, "lib", "generated", "deployment-manifest.json")
     const mf = JSON.parse(fs.readFileSync(mp, "utf8"))
@@ -209,51 +259,99 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
   })
   it("signed external receipt accepts restored-exact bytes after manifest deletion", () => {
     attest()
-    const seal = cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
-    expect(seal.status).toBe(0)
+    expect(seal().status).toBe(0)
     lock(RECEIPT) // the deploy locks the receipt before starting the door
-    fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"))
+    rmManifest()
     const r = gate()
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/attested_by=external-seal-receipt/)
   })
   it("an altered receipt is refused by signature, not by a secret the door holds", () => {
-    unlock(RECEIPT)
+    attest()
+    unprotectDir()
+    fs.rmSync(RECEIPT, { force: true })
+    expect(seal().status).toBe(0) // fresh receipt matching the current tree
+    lock(RECEIPT)
     const rec = JSON.parse(fs.readFileSync(RECEIPT, "utf8"))
     rec.treeDigest = "e".repeat(64)
-    fs.writeFileSync(RECEIPT, JSON.stringify(rec))
+    unlock(RECEIPT)
+    fs.writeFileSync(RECEIPT, JSON.stringify(rec)) // attacker edits, then re-locks to hide intent
     lock(RECEIPT)
-    const r = gate()
+    rmManifest()
+    const r = gate() // protected install: only the ALTERED CONTENT can be what refuses it
     expect(r.status).toBe(1)
-    expect(`${r.stdout}${r.stderr}`).toMatch(/SEAL_RECEIPT_/)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/SEAL_RECEIPT_SIGNATURE_INVALID/)
   })
   it("a receipt the runtime identity could rewrite is refused outright", () => {
-    attest()
-    unlock(RECEIPT)
-    const seal = cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
-    expect(seal.status).toBe(0)
-    unlock(RECEIPT) // mis-installed: writable by the identity running the door
-    fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"))
-    const r = gate()
-    expect(r.status).toBe(1)
-    expect(`${r.stdout}${r.stderr}`).toMatch(/SEAL_RECEIPT_TAMPERABLE/)
+    unprotectDir()
+    rmManifest()
+    fs.rmSync(RECEIPT, { force: true }) // prior tests locked it; seal must write a fresh receipt
+    expect(seal().status).toBe(0)
+    lock(path.join(gateDir, "verify-door-provenance.mjs"))
+    lock(path.join(gateDir, "attest-deployment.mjs"))
+    lock(RING)
+    protectDir() // healthy directory...
+    // ...except the receipt FILE stays writable (never locked): substitution is possible -> refuse
+    const broken = gateDirect()
+    expect(broken.status).toBe(1)
+    expect(`${broken.stdout}${broken.stderr}`).toMatch(/SEAL_RECEIPT_TAMPERABLE/)
     lock(RECEIPT)
   })
   it("a verifier the runtime identity could rewrite refuses to be the authority", () => {
     attest()
+    lock(RECEIPT)
+    lock(RING)
     unlock(path.join(gateDir, "verify-door-provenance.mjs"))
-    const r = gate()
+    const r = gateDirect()
     expect(r.status).toBe(1)
     expect(`${r.stdout}${r.stderr}`).toMatch(/GATE_TAMPERABLE/)
     lock(path.join(gateDir, "verify-door-provenance.mjs"))
   })
+  it("a READ-ONLY verifier in a directory the door identity can write is still refused (R4 substitution)", () => {
+    // The round-3 BLOCKING probe: file attributes alone are not enough — directory substitution
+    // (delete the real verifier, re-add a stub printing DOOR_PROVENANCE_OK) is the actual attack.
+    attest()
+    lock(path.join(gateDir, "verify-door-provenance.mjs")) // explicitly read-only
+    lock(path.join(gateDir, "attest-deployment.mjs"))
+    lock(RING)
+    lock(RECEIPT)
+    unprotectDir() // the mis-install: anchor DIRECTORY writable while every FILE is read-only
+    const r = gateDirect()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/GATE_TAMPERABLE/)
+  })
   it("a trust ring the runtime identity could rewrite refuses to vouch for keys", () => {
     attest()
-    unlock(RING)
-    const r = gate()
-    expect(r.status).toBe(1)
+    lock(path.join(gateDir, "verify-door-provenance.mjs"))
+    lock(path.join(gateDir, "attest-deployment.mjs"))
+    lock(RECEIPT)
+    protectDir() // gate dir locked down...
+    unlock(RING) // ...but the ring file itself writable (dir deny covers creation, not chmod)
+    const r = gateDirect()
+    expect(r.status, "GATE_TAMPERABLE masking means an anchor lost its lock").toBe(1)
     expect(`${r.stdout}${r.stderr}`).toMatch(/TRUST_RING_TAMPERABLE/)
     lock(RING)
+  })
+  it("the env escape hatch to ledger-only boot no longer exists (round-3 BLOCKING: HKCU forgeable)", () => {
+    // The gate cannot tell an operator from the runtime-writer identity, and that identity can set
+    // HKCU\\Environment persistently — any env-var downgrade of the authenticity half is a bypass.
+    const gateText = fs.readFileSync(path.join(gateDir, "verify-door-provenance.mjs"), "utf8")
+    expect(gateText).not.toMatch(/ALLOW_UNSIGNED_LEDGER_ONLY|LEDGER_ONLY_ESCAPER/)
+    attest()
+    rmManifest()
+    fs.rmSync(RECEIPT, { force: true }) // unattested state
+    lock(RECEIPT) // absent files cannot be tampered; keep the install healthy so the ESCAPE path
+    // (not a tamper probe) is what the refusal must come from — with the escape gone: NO_ARTIFACT
+    lock(RING)
+    protectDir()
+    const r = spawnSync(process.execPath, [path.join(gateDir, "verify-door-provenance.mjs"),
+      `--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`],
+    { encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING,
+      WILLIAMOS_GATE_RECEIPT: RECEIPT, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY: KEY,
+      WILLIAMOS_GATE_ALLOW_UNSIGNED_LEDGER_ONLY: "1" } })
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/NO_ARTIFACT_ATTESTATION/)
+    lock(RECEIPT) // absent file: lock() would throw; guard for re-run stability
   })
 })
 
@@ -271,18 +369,32 @@ describe("the deploy and its restore script agree on the rollback contract (#123
   }
   const deployFiles = grab(deploy, "$rollbackFiles = @(")
   const restoreFiles = grab(restore, "$expectedRollbackFiles = @(")
-  const versionConditional = /if \(\$manifestVersion -ge (\d+)\) \{\s*\$expectedRollbackFiles \+= "([^"]+)"/.exec(restore)
+  const versionConditionals = [...restore.matchAll(/if \(\$manifestVersion -ge (\d+)\) \{\s*\$expectedRollbackFiles \+= "([^"]+)" \}/g)]
 
   it("names exactly the runtime file set the restore script will accept", () => {
-    const expected = new Set([...restoreFiles, ...(versionConditional ? [versionConditional[2]] : [])])
+    const expected = new Set([...restoreFiles, ...versionConditionals.map((m) => m[2])])
     expect([...deployFiles].sort()).toEqual([...expected].sort())
   })
-  it("keeps the version-conditional entry consistent with the manifest version it mints", () => {
-    // The deploy states its manifest version inline (version = N); restore adds pnpm-lock.yaml for
-    // v4+. A deploy minting a version below the conditional would write a manifest restore rejects.
+  it("keeps every version-conditional entry consistent with the manifest version it mints", () => {
+    // The deploy states its manifest version inline (version = N); restore adds conditional entries
+    // (v4 pnpm-lock, v8 deployment-manifest). A deploy minting a version below a conditional would
+    // write a manifest restore rejects (the round-2 N1 defect class).
     const mintedVersion = /version = (\d+)/.exec(deploy)
     expect(mintedVersion, "deploy must state the manifest version it writes").toBeTruthy()
-    expect(Number(mintedVersion![1])).toBeGreaterThanOrEqual(Number(versionConditional![1]))
+    expect(versionConditionals.length).toBeGreaterThanOrEqual(2)
+    for (const m of versionConditionals) {
+      expect(Number(mintedVersion![1]), `conditional entry ${m[2]} at v${m[1]}`).toBeGreaterThanOrEqual(Number(m[1]))
+    }
+  })
+  it("re-attests and re-seals the restored generation before starting the door", () => {
+    // A rollback rotates bytes back to a previous generation; without a fresh manifest+receipt the
+    // gate would deny its own rolled-back door (round-3 MAJOR). Restore must attest+seal after
+    // copying, before Start-ScheduledTask, and lock the receipt down again.
+    const i = restore.indexOf("restored generation re-attested and sealed")
+    expect(i, "restore must re-attest the restored bytes").toBeGreaterThan(-1)
+    expect(restore.slice(i).indexOf("Start-ScheduledTask")).toBeGreaterThan(-1)
+    expect(restore).toMatch(/attest --app-root=/)
+    expect(restore).toMatch(/icacls \$ReceiptTarget \/inheritance:r/)
   })
   it("ships the gate to the trusted ProgramData directory, never into the runtime", () => {
     // A runtime copy is substitutable by exactly the writer the gate distrusts (R2/R3 finding).
@@ -339,13 +451,17 @@ describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger
   fs.writeFileSync(path.join(appRoot, "package.json"), JSON.stringify({ name: "scratch" }))
   fs.writeFileSync(path.join(appRoot, ".env.local"), "WILLIAMOS_TERRAFUSION_ROOT=" + path.join(dir, "ws") + "\n")
   fs.writeFileSync(path.join(appRoot, "scripts", "fabric", "resolve-authority-registry-url.mjs"), "// scratch\n")
+  const scratchGateDir = path.join(appRoot, "scripts", "hermes-bridge")
   for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
-    fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f),
-      path.join(appRoot, "scripts", "hermes-bridge", f))
-    // production installs these Users:RX; without the read-only attribute the launcher would stop
-    // at DOOR_PROVENANCE_GATE_TAMPERABLE and this test would never reach the ledger check.
-    fs.chmodSync(path.join(appRoot, "scripts", "hermes-bridge", f), 0o444)
+    fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f), path.join(scratchGateDir, f))
+    // production installs these Users:RX (read-only files, no-create directory). Without BOTH the
+    // R4 probes stop at DOOR_PROVENANCE_GATE_TAMPERABLE and the ledger check never runs.
+    fs.chmodSync(path.join(scratchGateDir, f), 0o444)
   }
+  if (process.platform === "win32") {
+    const acl = spawnSync("icacls", [scratchGateDir, "/deny", "Everyone:(CI)(AD,WD)"], { encoding: "utf8" })
+    if (acl.status !== 0) throw new Error(`icacls deny failed: ${acl.stdout}${acl.stderr}`)
+  } else fs.chmodSync(scratchGateDir, 0o555)
   fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: "f".repeat(40) }))
   const bootLog = path.join(logs, "williamos-live.boot.log")
 

@@ -63,7 +63,7 @@ if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
 if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }
 
 function Test-Cockpit {
-  param([int]$Port, [int]$TimeoutSeconds = 90)
+  param([int]$Port, [int]$TimeoutSeconds = 300)
   # Polling rather than sleeping a fixed amount: a cold start is not a fixed cost, and "we waited long
   # enough" is the assumption this function exists to replace.
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -379,7 +379,7 @@ $trustRootDir = Join-Path (Split-Path -Parent $LiveStartTarget) "trust"
 $trustKeyTarget = Join-Path $trustRootDir "deployment-attestation-key.json"
 $trustKeyLegacy = Join-Path $env:USERPROFILE ".williamos\deployment-attestation-key.json"
 $ringTarget = Join-Path $gateTargetDir "deployment-attestation-keys.json"
-$receiptTarget = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation.json"
+$receiptTarget = Join-Path $gateTargetDir "deployment-attestation.json"
 $nodeExe = "C:\Program Files\nodejs\node.exe"
 foreach ($g in $gateScriptNames) {
   $gs = Join-Path $gateSourceDir $g
@@ -620,6 +620,7 @@ if (-not $SkipRollbackCapture) {
     "package.json",
     "pnpm-lock.yaml",
     "lib\generated\build-provenance.json",
+    "lib\generated\deployment-manifest.json",
     "scripts\hermes-https-proxy.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
@@ -632,7 +633,7 @@ if (-not $SkipRollbackCapture) {
   $trustDirBackup = "external\scripts-hermes-bridge"
   $trustDirWasPresent = Test-Path -LiteralPath $gateTargetDir -PathType Container
   $rollbackManifest = [ordered]@{
-    version = 7
+    version = 8
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
@@ -766,6 +767,20 @@ $legacySecretPath = Join-Path $env:USERPROFILE ".williamos\deployment-seal-secre
 if (Test-Path $legacySecretPath) {
   Remove-Item -LiteralPath $legacySecretPath -Force
   $legacyTrustRemovals += $legacySecretPath
+}
+# Pre-R3 ring left in a USER-WRITABLE ProgramData path: inert on current code (the ring now lives
+# beside the gate) but it is pollutable decoy trust material — remove it.
+$legacyProgramDataRing = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation-keys.json"
+if (Test-Path -LiteralPath $legacyProgramDataRing -PathType Leaf) {
+  Remove-Item -LiteralPath $legacyProgramDataRing -Force
+  $legacyTrustRemovals += $legacyProgramDataRing
+}
+# pre-R4 receipt at the user-writable ProgramData root: superseded by the copy locked inside the
+# gate directory; leave nothing writable behind.
+$legacyReceipt = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation.json"
+if ((Test-Path -LiteralPath $legacyReceipt -PathType Leaf) -and ($legacyReceipt -ne $receiptTarget)) {
+  Remove-Item -LiteralPath $legacyReceipt -Force
+  $legacyTrustRemovals += $legacyReceipt
 }
 if ($legacyTrustRemovals.Count -gt 0) {
   Write-Output ("removed legacy trust material readable by the runtime identity: " + ($legacyTrustRemovals -join "; "))
@@ -904,6 +919,18 @@ if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {
   throw "The runtime lost its .env.local. Restore it before starting: the cockpit cannot resolve the owner without WILLIAMOS_OWNER_EMAIL."
 }
 
+# #1223 R4: the anchor chain only means something if it is owned by admins, not by the identity
+# being audited. An unaugmented non-elevated run would create anchors OWNED by that identity,
+# which can re-grant itself write access (implicit WRITE_DAC) — so the gate refuses this whole
+# pipeline, rather than fail silently.
+$deployIdentity = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $deployIdentity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "#1223: the door provenance deploy must run ELEVATED: it installs administrator-owned trust anchors that the door's own identity must not be able to rewrite. Run from an elevated PowerShell."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $trustRootDir "deployment-attestation-key.json"))) {
+  Write-Output "trust key absent: minting a new deployment attestation key under $trustRootDir"
+}
+
 # Prove the configuration survived the copy rather than assuming it did.
 if ($envGuard) {
   $envNow = if (Test-Path $envPath) { (Get-FileHash $envPath -Algorithm SHA256).Hash } else { $null }
@@ -918,7 +945,7 @@ if ($envGuard) {
 $stagedProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
 if (-not $stagedProvenance.sha) { throw "Deployed build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
 & $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") attest --app-root="$Runtime" --sha="$($stagedProvenance.sha)" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "deployment attestation FAILED (exit $LASTEXITCODE): the staged runtime cannot be proven bootable. Check the attestation key under the operator home .williamos and the ring in C:\ProgramData\WilliamOS." }
+if ($LASTEXITCODE -ne 0) { throw "deployment attestation FAILED (exit $LASTEXITCODE): the staged runtime cannot be proven bootable. Check the admin-only trust key under the trust root (C:\ProgramData\WilliamOS\trust) and the published ring beside the gate under the gate directory." }
 & $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") seal --app-root="$Runtime" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "external seal receipt FAILED (exit $LASTEXITCODE): refusing to start a door whose bytes are attested only inside themselves." }
 # The receipt must not be rewritable by the identity running the door, or it becomes a rollback

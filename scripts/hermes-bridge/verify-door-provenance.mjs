@@ -17,11 +17,13 @@
  *  B. AUTHENTICITY (bytes): the booted tree's content must match what was attested. Accepted
  *     via either of two mechanisms whose trust roots live OUTSIDE the robocopy target:
  *       - a signed deployment manifest (verify-door-provenance calls attest-deployment.verify):
- *         signed by the deployment attestation key, whose private half is in the operator home
- *         and whose public ring sits in the administrator-gated ProgramData — a runtime-writer
- *         can copy or forge manifest bytes but cannot produce a valid signature; and
- *       - an external HMAC seal receipt (ProgramData, outside the tree) for the same tree
- *         digest + sha, recorded by the deploy procedure after staging.
+ *         signed by the deployment attestation key, whose private half lives only in the
+ *         administrator-only trust dir and whose public ring sits beside the installed gate —
+ *         a runtime-writer can copy or forge manifest bytes but cannot produce a valid
+ *         signature; and
+ *       - an external SIGNED seal receipt (the same administrator-locked gate directory,
+ *         outside the robocopy target) for the same tree digest + sha, verified with the
+ *         public ring only — no secret is readable at the door. Recorded by deploy/restore.
  *     Without B, carrying a known-good provenance file over unauthorized bytes works — the
  *     owner's P1 on the round-1 design: self-declared sha inside the writable tree is not
  *     authenticity.
@@ -32,8 +34,6 @@
  *
  * Env: WILLIAMOS_INTEGRATIONS_LEDGER overrides the ledger path (tests only).
  *      WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS overrides the ring path (tests only).
- *      WILLIAMOS_GATE_ALLOW_UNSIGNED_LEDGER_ONLY=1 downgrades B to advisory — used ONLY as the
- *      operator escape during catastrophic key loss; it is LOUDLY logged and is not a test hook.
  */
 import fs from "node:fs"
 import path from "node:path"
@@ -130,10 +130,7 @@ try {
 if (!auth || auth.failedManifest || auth.crashedManifest) {
   const seal = verifySealReceipt(appRoot)
   if (seal.ok) auth = { source: "external-seal-receipt", treeDigest: seal.treeDigest }
-  else if (process.env.WILLIAMOS_GATE_ALLOW_UNSIGNED_LEDGER_ONLY === "1") {
-    console.error(`DOOR_PROVENANCE_WARNING authenticity not attested (manifest: ${JSON.stringify((auth?.failedManifest ?? auth?.crashedManifest))}, seal: ${seal.code} ${seal.detail}); ledger-only boot authorized by WILLIAMOS_GATE_ALLOW_UNSIGNED_LEDGER_ONLY`)
-    auth = { source: "LEDGER_ONLY_ESCAPER" }
-  } else {
+  else {
     const mf = auth?.failedManifest
     const mfDetail = mf ? `${mf.code} ${mf.detail}` : (auth?.crashedManifest ?? "no manifest attempt")
     fail("NO_ARTIFACT_ATTESTATION", `revision ${sha.slice(0, 12)} is in the ledger, but the booted bytes are not attested: manifest [${mfDetail}]; seal receipt [${seal.code} ${seal.detail}]`)

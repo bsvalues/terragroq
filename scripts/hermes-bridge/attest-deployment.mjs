@@ -6,25 +6,28 @@
  * not prove the booted BYTES are that revision — a runtime-writer can carry a known-good
  * provenance file along with unauthorized code. This binds the artifact to its CONTENT:
  *
- *   attest:  hashes every file of the product bundle the door boots (.next/** minus
- *            cache/diagnostics, server.js, package.json, and the loose trees lib, scripts,
- *            config, components, public), EXCLUDING generated attestation files. The summary is
- *            signed (Ed25519) with the deployment attestation key whose PRIVATE half lives
- *            OUTSIDE the runtime (~/.williamos), written to lib/generated/deployment-manifest.json.
+ *   attest:  hashes every file of the product bundle the door boots — .next/** (excluding the
+ *            generated cache/diagnostics dirs), server.js, package.json, .env.local, the loose
+ *            trees lib, scripts, config, components, public, AND node_modules (round-3 review:
+ *            the boot REQUIRES next from there, so unbound dependencies were the bypass). The
+ *            summary is signed (Ed25519) with the deployment attestation key whose PRIVATE half
+ *            lives only in the administrator-gated trust dir (C:\ProgramData\WilliamOS\trust —
+ *            unreadable by the runtime identity), written to lib/generated/deployment-manifest.json.
  *            The gate and this attester are installed OUTSIDE the runtime (ProgramData) by the
  *            deploy, so their bytes are protected by directory ACL, not self-hashing.
  *
  *   verify:  the launcher's gate re-hashes the booted tree, recomputes the summary, checks the
- *            signature against the trust ring at
- *            C:\ProgramData\WilliamOS\deployment-attestation-keys.json (administrator-gated
- *            location, same placement as the launcher and task definitions), and requires
+ *            signature against the trust ring published beside the installed gate under
+ *            C:\ProgramData\WilliamOS\scripts\hermes-bridge (administrator-locked directory;
+ *            Users:RX), and requires
  *            manifest.sha == build-provenance sha == a COMPLETE ledger entry. Each single input
  *            is forgeable by a runtime-writer; the triple is not, because the signing key is not
  *            inside the tree being admitted.
  *
- *   seal:    records the same fact in an EXTERNAL HMAC-bound receipt (ProgramData, outside the
- *            robocopy target), used as a second accepted attestation source and to stamp a fresh
- *            build after staging but before it is ever booted.
+ *   seal:    records the same fact in an EXTERNAL SIGNED receipt (ProgramData, outside the
+ *            robocopy target) verified with the PUBLIC ring only — no secret is ever readable at
+ *            the door. It is the second accepted attestation source and stamps a fresh build
+ *            after staging but before it is ever booted.
  *
  * Fail-closed typed reasons: MANIFEST_MISSING / MANIFEST_MALFORMED / MANIFEST_UNSIGNED /
  * MANIFEST_SIGNER_UNKNOWN / MANIFEST_TREE_MISMATCH / MANIFEST_BODY_MISMATCH /
@@ -36,7 +39,9 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-const VOLATILE_EXCLUDE = /(^|[/\\])(cache|diagnostics|node_modules)([/\\]|$)/
+// Round-3 review (BLOCKING 1): node_modules CONTENT must be bound — server.js requires next at
+// boot from it. Only generated build caches are excluded (.next/cache, .next/diagnostics).
+const VOLATILE_EXCLUDE = /(^|[/\\])\.next[/\\](cache|diagnostics)([/\\]|$)/
 const ATTESTATION_FILES = new Set([
   "lib/generated/deployment-manifest.json",
 ])
@@ -48,44 +53,98 @@ const RING_PATH_DEFAULT = process.env.WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS
 const TRUST_ROOT_DEFAULT = "C:\\ProgramData\\WilliamOS\\trust"
 const KEY_FILE_DEFAULT = process.env.WILLIAMOS_DEPLOYMENT_ATTESTATION_KEY
   || path.join(TRUST_ROOT_DEFAULT, "deployment-attestation-key.json")
-const SEAL_RECEIPT_DEFAULT = process.env.WILLIAMOS_GATE_RECEIPT || "C:\\ProgramData\\WilliamOS\\deployment-attestation.json"
-const RECEIPT_VERSION = "williamos-door-receipt.v1"
+// The receipt lives INSIDE the administrator-locked gate directory (round-3 review: the probe that
+// checks the containing directory correctly flagged the old user-writable ProgramData location).
+// That also makes rollback capture/restore cover it with the trusted-dir robocopy.
+const SEAL_RECEIPT_DEFAULT = process.env.WILLIAMOS_GATE_RECEIPT || "C:\\ProgramData\\WilliamOS\\scripts\\hermes-bridge\\deployment-attestation.json"
+const RECEIPT_VERSION = "williamos-door-receipt.v2"
 
-function* walkFiles(root, dir) {
-  let entries
-  try { entries = fs.readdirSync(path.join(root, dir), { withFileTypes: true }) } catch { return }
-  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-  for (const e of entries) {
-    const rel = dir ? `${dir}/${e.name}` : e.name
-    if (VOLATILE_EXCLUDE.test(rel)) continue
-    const abs = path.join(root, rel)
-    let st
-    try { st = fs.lstatSync(abs) } catch { continue }
-    if (st.isSymbolicLink()) continue // junction targets are not part of the artifact
-    if (st.isDirectory()) yield* walkFiles(root, rel)
-    else if (st.isFile()) yield rel
-  }
+const MAX_HASH_FILES = 300_000
+
+function hashFile(abs) {
+  return crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex")
 }
 
+/**
+ * Bind every byte the boot can execute (round-3 review: pnpm lays node_modules out as
+ * directories of links; a link whose TARGET is outside the attested root was a free-bytes
+ * channel — repoint or swap its content and no hashed file changed). Rules:
+ *  - a link resolving INSIDE the tree: its canonical content is hashed by the real walk, so
+ *    the link itself adds no line;
+ *  - a link resolving OUTSIDE: the resolved FILE's bytes are hashed under the link's name, and
+ *    a resolved DIRECTORY is walked (cycle-guarded) — the reachable code is bound wherever it
+ *    lives; an unresolvable link is bound by name;
+ *  - every path is sorted, so the digest is order-stable.
+ */
 export function hashTree(appRoot) {
-  const roots = [".next", "lib", "scripts", "config", "components", "public"]
-  const singles = ["server.js", "package.json"]
+  // v2 (round-3 review): binds node_modules content (including links that resolve OUTSIDE the
+  // root) and .env.local per the header above; a junctioned top-level node_modules is refused.
+  const roots = [".next", "lib", "scripts", "config", "components", "public", "node_modules"]
+  const singles = ["server.js", "package.json", ".env.local"]
   const lines = []
   let fileCount = 0
+  let baseReal
+  try { baseReal = fs.realpathSync(appRoot) } catch { baseReal = path.resolve(appRoot) }
+  const basePrefix = baseReal.toLowerCase() + path.sep
+  const insideTree = (real) => real.toLowerCase().startsWith(basePrefix)
+  const visitedExtDirs = new Set()
+  const bump = () => {
+    if (++fileCount > MAX_HASH_FILES) {
+      throw new Error(`HASH_FILE_BUDGET_EXCEEDED ${fileCount}>${MAX_HASH_FILES}; refusing an unbounded digest`)
+    }
+  }
+  const bind = (rel, abs) => { lines.push(`${rel}\t${hashFile(abs)}`); bump() }
+  function walk(rel, abs) {
+    let entries
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }) } catch { return }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    for (const e of entries) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name
+      if (VOLATILE_EXCLUDE.test(childRel)) continue
+      const childAbs = path.join(abs, e.name)
+      let st
+      try { st = fs.lstatSync(childAbs) } catch { continue }
+      if (st.isSymbolicLink()) {
+        let real
+        try { real = fs.realpathSync(childAbs) } catch { lines.push(`${childRel}\tLINK_UNRESOLVED`); bump(); continue }
+        if (insideTree(real)) continue // canonical bytes are walked once from inside the tree
+        let realSt
+        try { realSt = fs.statSync(real) } catch { lines.push(`${childRel}\tLINK_UNRESOLVED`); bump(); continue }
+        if (realSt.isDirectory()) {
+          if (visitedExtDirs.has(real)) continue
+          visitedExtDirs.add(real)
+          walk(childRel, childAbs) // readdir follows the link; content bound under this name
+        } else if (realSt.isFile()) {
+          bind(childRel, real)
+        }
+        continue
+      }
+      if (st.isDirectory()) { walk(childRel, childAbs); continue }
+      if (st.isFile()) {
+        if (ATTESTATION_FILES.has(childRel)) continue
+        bind(childRel, childAbs)
+      }
+    }
+  }
   for (const f of singles) {
     const abs = path.join(appRoot, f)
-    if (!fs.existsSync(abs)) continue
-    lines.push(`${f}\t${crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex")}`)
-    fileCount++
+    let st
+    try { st = fs.lstatSync(abs) } catch { continue }
+    if (st.isSymbolicLink()) {
+      let real
+      try { real = fs.realpathSync(abs) } catch { real = null }
+      if (real && insideTree(real) && fs.statSync(real).isFile()) bind(f, real)
+      else if (real && fs.statSync(real).isFile()) bind(f, real)
+      continue
+    }
+    if (st.isFile()) bind(f, abs)
   }
   for (const r of roots) {
     const abs = path.join(appRoot, r)
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) continue
-    for (const rel of walkFiles(appRoot, r)) {
-      if (ATTESTATION_FILES.has(rel)) continue
-      lines.push(`${rel}\t${crypto.createHash("sha256").update(fs.readFileSync(path.join(appRoot, rel))).digest("hex")}`)
-      fileCount++
-    }
+    let st
+    try { st = fs.lstatSync(abs) } catch { continue }
+    if (st.isSymbolicLink()) continue // attest() refuses a reparse-point node_modules outright
+    if (st.isDirectory()) walk(r, abs)
   }
   const treeDigest = crypto.createHash("sha256").update(lines.sort().join("\n")).digest("hex")
   return { treeDigest, fileCount }
@@ -103,11 +162,22 @@ function canonicalBody(body) {
 export function attest(appRoot, sha, builtAt) {
   if (!sha || !/^[0-9a-f]{40}$/i.test(sha)) throw new Error("ATTEST_SHA_REQUIRED 40-hex sha of the integrated revision")
   if (!fs.existsSync(KEY_FILE_DEFAULT)) throw new Error("ATTEST_KEY_MISSING " + KEY_FILE_DEFAULT)
+  // A junctioned/symlinked node_modules keeps its bytes OUTSIDE the tree (walkFiles skips links),
+  // so a manifest minted over it would claim to bind dependencies it cannot see. Refuse; the
+  // deploy materializes real files for exactly this reason.
+  const modules = path.join(appRoot, "node_modules")
+  try {
+    if (fs.existsSync(modules) && fs.lstatSync(modules).isSymbolicLink()) {
+      throw new Error("ATTEST_MODULES_NOT_PHYSICAL node_modules is a reparse point; materialize it before attesting")
+    }
+  } catch (error) {
+    if (String(error?.message ?? error).startsWith("ATTEST_MODULES_NOT_PHYSICAL")) throw error
+  }
   const record = JSON.parse(fs.readFileSync(KEY_FILE_DEFAULT, "utf8"))
   const priv = createPrivateKeyDer(record.privateKeyBase64)
   const { treeDigest, fileCount } = hashTree(appRoot)
   const body = {
-    version: "williamos-deployment-manifest.v1",
+    version: "williamos-deployment-manifest.v2",
     sha: sha.toLowerCase(), builtAt: builtAt ?? new Date().toISOString(),
     treeDigest, fileCount,
   }
@@ -135,7 +205,7 @@ export function verify(appRoot) {
   let manifest
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) }
   catch { return { ok: false, code: "MANIFEST_MALFORMED", detail: "deployment-manifest.json is not JSON" } }
-  if (manifest?.version !== "williamos-deployment-manifest.v1" || typeof manifest.treeDigest !== "string"
+  if (manifest?.version !== "williamos-deployment-manifest.v2" || typeof manifest.treeDigest !== "string"
     || typeof manifest.sha !== "string") {
     return { ok: false, code: "MANIFEST_MALFORMED", detail: "version/shape" }
   }
@@ -171,17 +241,29 @@ export function verify(appRoot) {
   return { ok: true, sha, treeDigest, keyId: String(manifest.keyId), source: "manifest" }
 }
 
-/** True when THIS identity can open the path for writing — i.e. the anchor is forgeable by it. */
+/**
+ * True when THIS identity can modify the anchor — writing the file itself, OR creating/deleting
+ * entries in its parent directory (a read-only file inside a writable directory can simply be
+ * substituted; round-3 review). The directory probe creates and removes a unique temp file.
+ */
 export function trustRingPath() { return RING_PATH_DEFAULT }
 export function isWritableByThisIdentity(p) {
-  try { fs.closeSync(fs.openSync(p, "r+")); return true } catch { return false }
+  try { fs.closeSync(fs.openSync(p, "r+")); return true } catch { /* file not openable r+; try the directory */ }
+  try {
+    const probe = path.join(path.dirname(p), `.tamper-probe-${process.pid}-${Date.now()}`)
+    fs.writeFileSync(probe, "")
+    fs.unlinkSync(probe)
+    return true
+  } catch { return false }
 }
 
 // The external receipt is SIGNED, not MAC'd: the door verifies it with the public ring alone, so no
 // secret ever has to be readable by the runtime identity. It is the anchor that survives a
 // runtime-writer deleting the in-runtime manifest, and its file ACL denies that identity write.
 export function sealReceipt(appRoot, target = SEAL_RECEIPT_DEFAULT) {
-  const prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8"))
+  let prov
+  try { prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8")) }
+  catch (error) { throw new Error("SEAL_PROVENANCE_UNREADABLE " + String(error?.message ?? error)) }
   if (typeof prov?.sha !== "string" || !/^[0-9a-f]{40}$/i.test(prov.sha)) throw new Error("SEAL_SHA_MALFORMED")
   const { treeDigest } = hashTree(appRoot)
   const body = { version: RECEIPT_VERSION, sha: prov.sha.toLowerCase(), treeDigest, sealedAt: new Date().toISOString() }
@@ -213,9 +295,13 @@ export function verifySealReceipt(appRoot, target = SEAL_RECEIPT_DEFAULT) {
       createPublicKeyDer(publicKey), Buffer.from(String(signature ?? ""), "base64"))
   } catch (error) { return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: String(error?.message ?? error) } }
   if (!signatureOk) return { ok: false, code: "SEAL_RECEIPT_SIGNATURE_INVALID", detail: "receipt signature does not verify against the trust ring" }
-  const { treeDigest } = hashTree(appRoot)
+  let treeDigest
+  try { treeDigest = hashTree(appRoot).treeDigest }
+  catch (error) { return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "booted tree unreadable: " + String(error?.message ?? error) } }
   if (treeDigest !== receipt.treeDigest) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "booted tree differs from the externally sealed digest" }
-  const prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8"))
+  let prov
+  try { prov = JSON.parse(fs.readFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), "utf8")) }
+  catch { return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "build-provenance.json unreadable at seal check" } }
   if (String(prov?.sha).toLowerCase() !== receipt.sha) return { ok: false, code: "SEAL_RECEIPT_INVALID", detail: "provenance sha differs from sealed sha" }
   return { ok: true, sha: String(receipt.sha).toLowerCase(), treeDigest, source: "seal-receipt" }
 }
