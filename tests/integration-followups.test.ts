@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest"
 
 import { integrationTree, localTestEvidence } from "../scripts/execution-fabric/integrate-lab-main.mjs"
 
+// Same host gate as tests/git-integration-authority.test.ts: real-mode CLI runs need seal key
+// material that exists only on the lab host.
+const RUNTIME_ENV = "C:/HermesLab/williamos-runtime-64034e93-flat/.env.local"
+
 /**
  * Follow-up hardening tests (owner-acknowledged 2026-09-12, after #1232's first live integration),
  * extended with the adversarial reviewer's findings:
@@ -187,8 +191,10 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
   })
 })
 
-describe("follow-up 3: the CLI ENFORCES the record in real mode (no in-repo coverage before)", () => {
-  const HEAD = "84576f8d63" // fixture candidate (tests/fixtures/sealed-1218.json)
+describe.skipIf(!fs.existsSync(RUNTIME_ENV))(
+  "follow-up 3: the CLI ENFORCES the record in real mode (host-gated: needs seal key material and the local state file — the hosted CI runner has neither, and coverage must not turn the merge gate red)",
+  () => {
+  const STATE = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".williamos", "integrations.json")
   const run = (extra: string[]): { status: number | null; output: string } => {
     const r = spawnSync(process.execPath, [
       "scripts/execution-fabric/integrate-lab-main.mjs",
@@ -200,7 +206,7 @@ describe("follow-up 3: the CLI ENFORCES the record in real mode (no in-repo cove
     ], { encoding: "utf8", cwd: process.cwd(), env: process.env })
     return { status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` }
   }
-  const before = (): string => fs.readFileSync(path.join(process.env.USERPROFILE ?? "", ".williamos", "integrations.json"), "utf8")
+  const before = (): string => (fs.existsSync(STATE) ? fs.readFileSync(STATE, "utf8") : "(absent)")
 
   it("refuses real-mode integration when the record is missing, and writes nothing", () => {
     const baseline = before()
@@ -214,9 +220,5 @@ describe("follow-up 3: the CLI ENFORCES the record in real mode (no in-repo cove
     const r = run(["--verify-only"])
     expect(r.status).toBe(0)
     expect(r.output).toMatch(/VERIFICATION_OK|NOTE: LOCAL_TESTS_/)
-  })
-
-  it("keeps the fixture candidate constant so this test cannot silently drift", () => {
-    expect(HEAD).toHaveLength(10)
   })
 })

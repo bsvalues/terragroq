@@ -256,14 +256,20 @@ export function localTestEvidence(file, candSha) {
     throw new Error(`LOCAL_TESTS_RECORD_INCONSISTENT passed+failed=${passed + failed} but total-pending-todo=${total - pending - todo}`)
   }
   const names = Array.isArray(record.testResults) ? record.testResults.map((t) => String(t?.name ?? "")).filter(Boolean) : []
-  const distinct = [...new Set(names.map((n) => path.basename(n)))]
-  if (distinct.length === 0) throw new Error("LOCAL_TESTS_NO_SUITES the record names no test files")
+  if (names.length === 0) throw new Error("LOCAL_TESTS_NO_SUITES the record names no test files")
+  // The binding is CONTAINMENT, not bare existence: a record whose only "suite" is an existing
+  // foreign path (C:/Windows/win.ini) must refuse. Names resolve inside this worktree only, and
+  // the audited suiteFiles come from the rooted entries, never from rejected ones.
   const rooted = names.filter((n) => {
-    try { return fs.statSync(path.isAbsolute(n) ? n : path.resolve(ROOT, n)).isFile() } catch { return false }
+    const abs = path.resolve(ROOT, n)
+    const rootDir = path.resolve(ROOT)
+    if (abs !== rootDir && !abs.startsWith(rootDir + path.sep)) return false
+    try { return fs.statSync(abs).isFile() } catch { return false }
   })
   if (rooted.length === 0) {
-    throw new Error("LOCAL_TESTS_SUITE_UNRESOLVED none of the recorded suite files exists in this worktree; the record is not evidence for this repository")
+    throw new Error("LOCAL_TESTS_SUITE_UNRESOLVED none of the recorded suite files resolves to a real file inside this worktree; the record is not evidence for this repository")
   }
+  const distinct = [...new Set(rooted.map((n) => path.basename(n)))]
   const recordedHead = String(record.headSha ?? "").toLowerCase()
   const candidate = String(candSha ?? "").toLowerCase()
   if (!/^[0-9a-f]{40}$/.test(recordedHead)) {
@@ -460,13 +466,18 @@ async function main() {
   // mirror/<sha> fallback still runs when the governed merge cannot be bound.
   let mirror = { state: "OUT_OF_SYNC", detail: "not attempted" }
   const rawPr = flags.pr
-  const mirrorPr = rawPr === undefined || rawPr === true ? Number.NaN : Number(rawPr)
+  // Strict decimal parse: Number() accepts 0x10 -> 16, so an operator typo could target a
+  // different PR. Digits only, nothing else.
+  const mirrorPr = typeof rawPr === "string" && /^[1-9][0-9]*$/.test(rawPr.trim()) ? Number(rawPr.trim()) : Number.NaN
   if (!Number.isSafeInteger(mirrorPr) || mirrorPr <= 0) {
     mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_PR_INVALID ${JSON.stringify(String(rawPr ?? ""))}: --pr must be a positive pull-request number` }
   } else {
     let remoteUrl = ""
     try { remoteUrl = git(["remote", "get-url", MIRROR_REMOTE]) } catch { remoteUrl = "" }
-    if (!/bsvalues\/terragroq(\.git)?$/i.test(remoteUrl.trim())) {
+    // Full URL form binding: host AND repo. A path-suffix test would accept
+    // https://evil.example/bsvalues/terragroq.git and let a foreign origin fake IN_SYNC.
+    const MIRROR_URL_FORM = /^(https?:\/\/(www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)bsvalues\/terragroq(\.git)?$/i
+    if (!MIRROR_URL_FORM.test(remoteUrl.trim())) {
       // The convergence proof compares "the mirror's main tree" against the lab main tree; if
       // MIRROR_REMOTE does not actually point at MIRROR_REPO, that comparison is circular.
       mirror = { state: "OUT_OF_SYNC", detail: `MIRROR_REMOTE_MISMATCH ${MIRROR_REMOTE} -> ${remoteUrl.trim().slice(0, 80) || "(unset)"} is not ${MIRROR_REPO}` }

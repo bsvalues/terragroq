@@ -84,10 +84,13 @@ pure verification code runs locally before it advances.
    `~/.williamos/integrations.json`. Mirror failure never reopens the product transition.
    Tool guarantees as of the follow-up hardening pass: the local full-suite record is **parsed**
    (vitest JSON), success-checked (tests must have EXECUTED and passed — `failed===0` on an
-   all-skipped record is not success), counter-consistent, suite-identified and **head-bound** to the
+   all-skipped record is not success), counter-consistent, suite-identified (each named suite must
+   resolve to a real file CONTAINED in the integration worktree — existence alone is not binding)
+   and **head-bound** to the
    candidate (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory), and the recorded
    evidence carries the record's own path and head so the digest is locatable; the governed mirror
-   merge is **bound to the sealed head** — numeric PR, `origin` verified to be the mirror repository,
+   merge is **bound to the sealed head** — strict decimal PR, `origin` bound by full URL form
+   (github.com host AND `bsvalues/terragroq`, not a path suffix),
    and `--match-head-commit` so a head that moves between read and merge is refused — and `IN_SYNC`
    is recorded only after the mirror tree is fetched and proven tree-equal to the lab main tree this
    run produced (`MIRROR_PR_INVALID` / `MIRROR_REMOTE_MISMATCH` / `MIRROR_HEAD_MISMATCH` /
