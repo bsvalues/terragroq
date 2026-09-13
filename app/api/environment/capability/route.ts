@@ -113,6 +113,7 @@ export async function POST(request: Request) {
   try {
     outcome = await runOwnerDispatch({
       workOrderRef: admission.woRef,
+      workOrderId: admission.woId,
       workload,
       synthetic: { parcels, seed: ownerRunSeed() },
       devicePolicy: "auto",

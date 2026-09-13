@@ -102,6 +102,9 @@ describe("capability owner-run POST", () => {
     const submission = seams.dispatch.mock.calls[0][0]
     expect(submission).toEqual({
       workOrderRef: "WO-1",
+      // admitted row's own id travels with the ref: `ref` is a per-user counter, so
+      // the seam loads by (id, ref) PAIRED, never ref alone (review P1 on #1237)
+      workOrderId: 7,
       workload: "clustering",
       synthetic: { parcels: 60_000, seed: 4242 },
       devicePolicy: "auto",

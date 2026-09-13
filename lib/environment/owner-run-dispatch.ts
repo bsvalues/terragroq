@@ -179,6 +179,24 @@ export async function settleOwnerRunGrant(
 }
 
 /**
+ * (id, ref) PAIRED loader — `ref` is a per-user counter (WO-0001 repeats across users; the
+ * schema puts no uniqueness on it), so a ref-only lookup could load another user's
+ * same-numbered work order and bind their grant row. The admitted record is fetched by its
+ * own id and the ref must agree, or nothing is returned. (Review P1, chatgpt-codex-connector
+ * on #1237.)
+ */
+export async function loadWorkOrderByIdRef(
+  workOrderId: number,
+  ref: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await pool.query(
+    `SELECT id, ref, status, "userId", "allowedFiles", evidence FROM work_order WHERE id = $1 AND ref = $2 LIMIT 1`,
+    [workOrderId, ref],
+  )
+  return (result.rows[0] as Record<string, unknown> | undefined) ?? null
+}
+
+/**
  * Run one dispatch through the literal modules the surface (and therefore dispatch) enforces —
  * registry, adapter, and seam loaded via the same `loadSameModulesAsDispatch` the board reads,
  * so the button and the inventory cannot govern against different sources. The seam owns
@@ -186,13 +204,13 @@ export async function settleOwnerRunGrant(
  * exactly the contract `projectEvidenceToWorkOrder` and the loaders use ($1 placeholders).
  */
 export async function runOwnerDispatch(
-  submission: Readonly<{ workOrderRef: string; workload: string; synthetic: { parcels: number; seed: number }; devicePolicy?: string }>,
+  submission: Readonly<{ workOrderRef: string; workOrderId: number; workload: string; synthetic: { parcels: number; seed: number }; devicePolicy?: string }>,
 ): Promise<Record<string, unknown>> {
   const { registry, adapter, dispatch } = await loadSameModulesAsDispatch()
   const bindings = await dispatch.loadLedgerBindings()
   const leaseMod = await dispatch.loadLeaseBindings()
   return dispatch.dispatchComputeJob(
-    { ...submission },
+    { workOrderRef: submission.workOrderRef, workload: submission.workload, synthetic: submission.synthetic, devicePolicy: submission.devicePolicy },
     {
       registry,
       adapter,
@@ -201,13 +219,7 @@ export async function runOwnerDispatch(
       maxAttempts: 1,
       runQuery: (text: string, params?: unknown[]) =>
         pool.query(text, params as never[]),
-      loadWorkOrder: async (ref: string) => {
-        const result = await pool.query(
-          `SELECT id, ref, status, "userId", "allowedFiles", evidence FROM work_order WHERE ref = $1 LIMIT 1`,
-          [ref],
-        )
-        return result.rows[0] ?? null
-      },
+      loadWorkOrder: (ref: string) => loadWorkOrderByIdRef(submission.workOrderId, ref),
       loadActiveGrant: async (workOrderId: number) => {
         const result = await pool.query(
           `SELECT id, ref, status, "allowedActions", "expiresAt" FROM authority_grant
