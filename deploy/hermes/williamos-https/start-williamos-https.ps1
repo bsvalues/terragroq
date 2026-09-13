@@ -45,7 +45,10 @@ if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
 $gateTamperProbe = $null
 try {
   $gateTamperProbe = [System.IO.File]::Open($provenanceGate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-} catch { }
+} catch {
+  # not writable is the healthy case; the probe simply stays null
+  $gateTamperProbe = $null
+}
 if ($gateTamperProbe) {
   $gateTamperProbe.Close()
   throw "Refusing to start WilliamOS HTTPS: $provenanceGate is writable by the identity running the door (#1223 fail-closed)."
