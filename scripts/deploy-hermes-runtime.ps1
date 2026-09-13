@@ -364,6 +364,17 @@ $liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-william
 if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
 }
+# #1223 R2: the provenance gate + attester are boot-critical trust code. They install BESIDE the
+# launchers under ProgramData (administrator-gated, outside the robocopy target) — never inside
+# the runtime tree they exist to distrust, where a runtime-writer could substitute them. Refuse
+# before touching production if the source lacks them.
+$gateScriptNames = @("verify-door-provenance.mjs", "attest-deployment.mjs")
+$gateSourceDir = Join-Path $Source "scripts\hermes-bridge"
+$gateTargetDir = Join-Path (Split-Path -Parent $LiveStartTarget) "scripts\hermes-bridge"
+foreach ($g in $gateScriptNames) {
+  $gs = Join-Path $gateSourceDir $g
+  if (-not (Test-Path $gs)) { throw "Missing door trust script in the source tree: $gs" }
+}
 $httpsStartSource = Join-Path $Source "deploy\hermes\williamos-https\start-williamos-https.ps1"
 if (-not (Test-Path -LiteralPath $httpsStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS HTTPS start script: $httpsStartSource"
@@ -609,6 +620,8 @@ if (-not $SkipRollbackCapture) {
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
   $httpsStartBackup = "external\start-williamos-https.ps1"
   $httpsStartWasPresent = Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf
+  $trustDirBackup = "external\scripts-hermes-bridge"
+  $trustDirWasPresent = Test-Path -LiteralPath $gateTargetDir -PathType Container
   $rollbackManifest = [ordered]@{
     version = 7
     withDependencies = [bool]$WithDependencies
@@ -616,6 +629,7 @@ if (-not $SkipRollbackCapture) {
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
     httpsStart = [ordered]@{ target = $HttpsStartTarget; backupPath = $httpsStartBackup; wasPresent = $httpsStartWasPresent }
+    trustDir = [ordered]@{ target = $gateTargetDir; backupPath = $trustDirBackup; wasPresent = $trustDirWasPresent }
     legacyRelay = [ordered]@{ wasPresent = [bool]$legacyRelayState.wasPresent; listenAddress = $HermesOverlayAddress; listenPort = $HttpsPort; connectAddress = $HermesLanAddress; connectPort = $HttpsPort }
     overlayRestoreMode = $rollbackOverlayMode
   }
@@ -648,6 +662,10 @@ if (-not $SkipRollbackCapture) {
     $httpsStartRollbackFile = Join-Path $rollbackRoot $httpsStartBackup
     $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsStartRollbackFile) -Force
     Copy-Item -LiteralPath $HttpsStartTarget -Destination $httpsStartRollbackFile -Force
+  }
+  if ($trustDirWasPresent) {
+    $null = robocopy $gateTargetDir (Join-Path $rollbackRoot $trustDirBackup) /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback capture of the trusted gate directory failed (exit $LASTEXITCODE)" }
   }
   $rollbackManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
@@ -703,6 +721,12 @@ if ($WithDependencies) {
 # displaced bytes are part of the rollback manifest above.
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
 Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
+# #1223 R2: install the gate + attester INTO the trusted directory beside the launchers (validated
+# early beside $liveStartSource). The gate refuses to run from anywhere else.
+$null = New-Item -ItemType Directory -Path $gateTargetDir -Force
+foreach ($g in $gateScriptNames) {
+  Copy-Item -LiteralPath (Join-Path $gateSourceDir $g) -Destination (Join-Path $gateTargetDir $g) -Force
+}
 # #1223: the HTTPS listener is part of the door; the repository-owned, gate-wired launcher is
 # installed the same way with the same rollback coverage, so a deploy cannot leave :3443 booting a
 # gateless generation.
@@ -835,6 +859,18 @@ if ($envGuard) {
     throw "The deploy modified $envPath. Nothing here should touch it; restore it from the runtime backup before starting, or the cockpit will come up pointed at the wrong database."
   }
 }
+
+# #1223 R2: attest the STAGED bytes (signed manifest) and seal an external receipt BEFORE any task
+# starts. The gate refuses boot without one, so a deploy that cannot attest fails here — loudly,
+# before production stops — rather than at the first restart after the copy.
+$nodeExe = "C:\Program Files\nodejs\node.exe"
+$stagedProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
+if (-not $stagedProvenance.sha) { throw "Deployed build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
+& $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") attest --app-root="$Runtime" --sha="$($stagedProvenance.sha)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "deployment attestation FAILED (exit $LASTEXITCODE): the staged runtime cannot be proven bootable. Check the attestation key under the operator home .williamos and the ring in C:\ProgramData\WilliamOS." }
+& $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") seal --app-root="$Runtime" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "external seal receipt FAILED (exit $LASTEXITCODE): refusing to start a door whose bytes are attested only inside themselves." }
+Write-Output "deployment attested and sealed (manifest + external receipt)"
 
 Start-ScheduledTask -TaskName $TaskName
 

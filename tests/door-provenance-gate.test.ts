@@ -83,7 +83,7 @@ describe("the HTTPS proxy launcher also refuses an unintegrated revision (#1223,
     expect(gateAt).toBeLessThan(execAt)
   })
   it("fails closed when the gate file is missing and on any nonzero exit", () => {
-    expect(code).toMatch(/does not carry scripts\/hermes-bridge\/verify-door-provenance\.mjs/)
+    expect(code).toMatch(/trusted gate script is absent at/)
     expect(code).toMatch(/if \(\$gateExit -ne 0\) \{[\s\S]*?throw "Refusing to start WilliamOS HTTPS: \$gateSummary"/)
   })
 })
@@ -97,7 +97,7 @@ describe("the gate refuses structurally invalid sha values (F6 typing)", () => {
   const runGate = (prov: unknown) => {
     fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify(prov))
     const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
-      `--app-root=${appRoot}`, `--ledger=${LEDGER}`], { encoding: "utf8" })
+      `--app-root=${appRoot}`, `--ledger=${LEDGER}`, "--allow-runtime-copy"], { encoding: "utf8" })
     return { exit: r.status, out: `${r.stdout}${r.stderr}` }
   }
   it("refuses a single-element array sha instead of coercing it into a match", () => {
@@ -118,6 +118,93 @@ describe("the gate refuses structurally invalid sha values (F6 typing)", () => {
 // Host-gated: executing a Windows PowerShell launcher requires the real thing (the hosted CI
 // runner is linux; CI caught the ungated version failing in 8ms).
 const HOST_POWERSHELL = process.platform === "win32" && fs.existsSync("C:\\Program Files\\nodejs\\node.exe")
+describe("the gate enforces artifact authenticity, not just self-declared sha (#1223 R2)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "door-prov-auth-"))
+  const rt = path.join(dir, "runtime")
+  const gateDir = path.join(dir, "trusted") // simulates ProgramData\scripts\hermes-bridge
+  const LEDGER = path.join(dir, "ledger.json")
+  const RING = path.join(dir, "ring.json")
+  const RECEIPT = path.join(dir, "receipt.json")
+  const GOOD = "b".repeat(40)
+  fs.mkdirSync(path.join(rt, "lib", "generated"), { recursive: true })
+  fs.mkdirSync(path.join(rt, ".next", "server"), { recursive: true })
+  fs.mkdirSync(gateDir, { recursive: true })
+  for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
+    fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f), path.join(gateDir, f))
+  }
+  fs.writeFileSync(path.join(rt, "server.js"), "good\n")
+  fs.writeFileSync(path.join(rt, "package.json"), "{}")
+  fs.writeFileSync(path.join(rt, ".next", "server", "chunk.js"), "good bundle\n")
+  fs.writeFileSync(LEDGER, JSON.stringify({ integrations: [{ productState: "COMPLETE", labMainAfter: GOOD }] }))
+  fs.copyFileSync("C:/ProgramData/WilliamOS/deployment-attestation-keys.json", RING)
+  fs.writeFileSync(path.join(rt, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: GOOD }))
+  const cli = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(gateDir, script), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT },
+  })
+  const gate = (extra: string[] = []) => cli("verify-door-provenance.mjs",
+    [`--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`, ...extra])
+  const attest = () => cli("attest-deployment.mjs", ["attest", `--app-root=${rt}`, `--sha=${GOOD}`])
+
+  it("refuses a ledger-authorized revision whose bytes were never attested (the P1)", () => {
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/NO_ARTIFACT_ATTESTATION/)
+  })
+  it("accepts after a valid signed attestation", () => {
+    expect(attest().status).toBe(0)
+    const r = gate()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/attested_by=signed-manifest/)
+  })
+  it("refuses tampered application bytes carrying the known-good provenance file", () => {
+    attest()
+    fs.writeFileSync(path.join(rt, "server.js"), "MALICIOUS\n")
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/MANIFEST_TREE_MISMATCH/)
+  })
+  it("refuses a forged signature", () => {
+    fs.writeFileSync(path.join(rt, "server.js"), "good\n") // restore
+    attest()
+    const mp = path.join(rt, "lib", "generated", "deployment-manifest.json")
+    const mf = JSON.parse(fs.readFileSync(mp, "utf8"))
+    mf.signature = "AAAA" + mf.signature.slice(4)
+    fs.writeFileSync(mp, JSON.stringify(mf))
+    const r = gate()
+    expect(r.status).toBe(1)
+    expect(`${r.stdout}${r.stderr}`).toMatch(/MANIFEST_SIGNER_UNKNOWN/)
+  })
+  it("refuses when the verifier itself is an untrusted copy outside --gate-dir", () => {
+    attest() // regenerate good manifest first
+    const strayDir = path.join(dir, "stale-generation")
+    fs.mkdirSync(strayDir, { recursive: true })
+    for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
+      fs.copyFileSync(path.join(gateDir, f), path.join(strayDir, f))
+    }
+    const r = spawnSync(process.execPath, [path.join(strayDir, "verify-door-provenance.mjs"), `--app-root=${rt}`, `--ledger=${LEDGER}`, `--gate-dir=${gateDir}`], {
+      encoding: "utf8", env: { ...process.env, WILLIAMOS_DEPLOYMENT_ATTESTATION_KEYS: RING, WILLIAMOS_GATE_RECEIPT: RECEIPT } })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/GATE_NOT_IN_TRUSTED_DIR/)
+  })
+  it("external seal receipt accepts restored-exact bytes after manifest deletion", () => {
+    attest()
+    const seal = cli("attest-deployment.mjs", ["seal", `--app-root=${rt}`, `--target=${RECEIPT}`])
+    expect(seal.status).toBe(0)
+    fs.rmSync(path.join(rt, "lib", "generated", "deployment-manifest.json"))
+    const r = gate()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/attested_by=external-seal-receipt/)
+  })
+  it("forged external receipt (no HMAC secret) is refused", () => {
+    const rec = JSON.parse(fs.readFileSync(RECEIPT, "utf8"))
+    rec.treeDigest = "e".repeat(64)
+    fs.writeFileSync(RECEIPT, JSON.stringify(rec))
+    const r = gate()
+    expect(r.status).toBe(1)
+  })
+})
+
 describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger revision when executed (#1236)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "door-prov-exec-"))
   const appRoot = path.join(dir, "runtime")
@@ -131,17 +218,23 @@ describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger
   fs.writeFileSync(path.join(appRoot, "package.json"), JSON.stringify({ name: "scratch" }))
   fs.writeFileSync(path.join(appRoot, ".env.local"), "WILLIAMOS_TERRAFUSION_ROOT=" + path.join(dir, "ws") + "\n")
   fs.writeFileSync(path.join(appRoot, "scripts", "fabric", "resolve-authority-registry-url.mjs"), "// scratch\n")
-  fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
-    path.join(appRoot, "scripts", "hermes-bridge", "verify-door-provenance.mjs"))
+  for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
+    fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f),
+      path.join(appRoot, "scripts", "hermes-bridge", f))
+  }
   fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify({ sha: "f".repeat(40) }))
   const bootLog = path.join(logs, "williamos-live.boot.log")
 
   it("exits nonzero and records a typed provenance refusal before anything starts", () => {
     // NOTE: with -File, PowerShell binds space-separated argument VALUES; the -Name=value form
     // silently breaks binding and the script dies before any boot-log line exists.
+    // the launcher resolves its verifier beside itself; point it at the scratch copy (which is
+    // what a production ProgramData install looks like from the launcher's side).
+    const scratchGate = path.join(appRoot, "scripts", "hermes-bridge", "verify-door-provenance.mjs")
     const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
       path.join(ROOT, "deploy", "hermes", "williamos-live", "start-williamos-live.ps1"),
-      "-AppRoot", appRoot, "-LogRoot", logs, "-ProjectRoot", path.join(dir, "ws")],
+      "-AppRoot", appRoot, "-LogRoot", logs, "-ProjectRoot", path.join(dir, "ws"),
+      "-ProvenanceGate", scratchGate],
     { encoding: "utf8", timeout: 120000 })
     expect(r.status).toBe(1)
     expect(`${r.stdout}${r.stderr}`).toMatch(/DOOR_PROVENANCE_REFUSED REVISION_NOT_INTEGRATED/)
@@ -169,10 +262,14 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
     if (prov === null) fs.rmSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), { force: true })
     else fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify(prov))
     const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
-      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`], { encoding: "utf8" })
+      `--app-root=${appRoot}`, `--ledger=${ledgerPath}`, "--allow-runtime-copy"], { encoding: "utf8" })
     return { exit: r.status, out: `${r.stdout}${r.stderr}` }
   }
   it("accepts exactly the COMPLETE-ledger revision and echoes its seal witness", () => {
+    runGate({ sha: GOOD }) // write provenance
+    const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8" })
+    expect(a.status).toBe(0) // real signing key + ProgramData-installed ring on this host
     const r = runGate({ sha: GOOD })
     expect(r.exit).toBe(0)
     expect(r.out).toContain("DOOR_PROVENANCE_OK")
@@ -197,6 +294,10 @@ describe("the gate accepts only authorized integrated revisions (behavioral)", (
     expect(runGate({ sha: GOOD }, empty).out).toMatch(/LEDGER_EMPTY/)
   })
   it("refuses case-mismatched and padded shas only via exact match (40-hex)", () => {
+    runGate({ sha: GOOD.toUpperCase() })
+    const a = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "attest-deployment.mjs"),
+      `attest`, `--app-root=${appRoot}`, `--sha=${GOOD}`], { encoding: "utf8" })
+    expect(a.status).toBe(0)
     const r = runGate({ sha: GOOD.toUpperCase() })
     expect(r.exit).toBe(0) // normalized lowercase — matching must not be case-fragile
     expect(runGate({ sha: GOOD + "0" }).out).toMatch(/PROVENANCE_SHA_MALFORMED/)

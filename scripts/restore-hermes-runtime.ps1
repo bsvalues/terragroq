@@ -238,6 +238,15 @@ if ($httpsStartWasCaptured) {
   }
   Assert-LauncherMutationAccess -TargetPath $HttpsStartTarget -WillBePresent ([bool]$manifest.httpsStart.wasPresent)
 }
+# #1223 R2: deploys with the provenance gate capture the trusted gate directory; roll it back
+# alongside the launchers. Captures without the member (pre-gate v7) restore as before.
+$trustDirCaptured = ($null -ne $manifest.trustDir)
+if ($trustDirCaptured) {
+  $expectedTrustDirBackup = "external\scripts-hermes-bridge"
+  if (([string]$manifest.trustDir.backupPath -ne $expectedTrustDirBackup) -or ($null -eq $manifest.trustDir.wasPresent)) {
+    throw "Rollback manifest trustDir record is malformed"
+  }
+}
 $currentLegacyRelay = Get-CurrentLegacyRelayState
 
 $v4ModuleEntry = @()
@@ -314,6 +323,19 @@ if ($httpsStartWasCaptured) {
     Copy-Item -LiteralPath $httpsStartRollbackFile -Destination $HttpsStartTarget -Force
   } elseif (Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf) {
     Remove-Item -LiteralPath $HttpsStartTarget -Force
+  }
+}
+if ($trustDirCaptured) {
+  $trustDirTarget = [string]$manifest.trustDir.target
+  $trustDirRollback = Join-Path $RollbackRoot "external\scripts-hermes-bridge"
+  if ($manifest.trustDir.wasPresent) {
+    if (-not (Test-Path -LiteralPath $trustDirRollback -PathType Container)) {
+      throw "Rollback is incomplete: $trustDirRollback is missing"
+    }
+    $null = robocopy $trustDirRollback $trustDirTarget /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback of the trusted gate directory failed (exit $LASTEXITCODE)" }
+  } elseif (Test-Path -LiteralPath $trustDirTarget -PathType Container) {
+    Remove-Item -LiteralPath $trustDirTarget -Recurse -Force
   }
 }
 

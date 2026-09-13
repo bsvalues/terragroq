@@ -136,3 +136,37 @@ pure verification code runs locally before it advances.
 - **mirror main** — `origin/main` on GitHub: a replica and collaboration surface.
 - **integration** — advancing lab main under a verified seal. The word "merge" in older documents
   refers to this act wherever it previously assumed a GitHub PR button.
+
+
+## Deployment artifact authentication (#1223)
+
+A revision claim is not an artifact proof. `lib/generated/build-provenance.json` self-declares the
+integrated sha, but it lives inside the writable runtime tree: anything able to robocopy into the
+runtime root could carry a known-good sha alongside unreviewed bytes. The door gate therefore
+requires a second, independent proof of the exact bytes being admitted:
+
+- **Signed deployment manifest** (`lib/generated/deployment-manifest.json`) — content digest over
+  the shipped subtrees (`server.js`, `package.json`, `.next`, `lib`, `scripts`, `config`,
+  `components`, `public`; volatile `node_modules`, `.next/cache`, `.next/diagnostics` excluded),
+  signed with an Ed25519 attestation key whose private half lies OUTSIDE the runtime (operator
+  home `.williamos`). Verification key ring: `C:\ProgramData\WilliamOS\deployment-attestation-keys.json`.
+- **External seal receipt** (`C:\ProgramData\WilliamOS\deployment-attestation.json`) — an
+  HMAC-sealed digest of the same tree, written by the governed deploy, verified with a secret held
+  only in the operator home. It exists so a restored generation can boot without re-signing, and
+  so authenticity survives a runtime-writer deleting the manifest.
+- **Verifier placement** — the gate and its attester run from the trusted directory
+  (`C:\ProgramData\WilliamOS\scripts\hermes-bridge`), installed by the deploy beside the
+  launchers under administrator-gated ACLs. A copy of the gate inside the runtime tree refuses to
+  run as trusted (`GATE_NOT_IN_TRUSTED_DIR`), so a stale or substituted in-tree copy cannot become
+  the authority it audits.
+
+The gate checks in order: trusted placement -> ledger authorization (the sha must be a COMPLETE
+integrated revision) -> artifact authenticity (signed manifest or external seal, whose tree digest
+must equal the freshly computed digest of the admitted bytes). Carried-over provenance, tampered
+bytes, forged receipts, deleted manifests, and stale in-tree verifiers all refuse boot and write
+`BOOT_REFUSED DOOR_PROVENANCE_REFUSED` to the boot log with a typed reason on stderr.
+
+Accepted residual (unchanged from the ledger trust boundary): a writer running as the operator
+account can read the attestation key and the seal secret, exactly as it can already write the
+integration ledger. The gate defends the invariant against unreviewed content reaching the door
+through the filesystem/restart path; it is not an intra-operator privilege boundary.

@@ -75,7 +75,10 @@ param(
   [string]$WorkspaceAppCaPath = "C:\ProgramData\WilliamOS\williamos-preview-root-ca.pem",
   # The TerraFusion workspace the cockpit edits. Declared in .env.local; this legacy-named switch overrides it when a
   # deployment needs to say so explicitly. Never defaulted to a literal here -- see the header.
-  [string]$ProjectRoot
+  [string]$ProjectRoot,
+  # Optional override of the provenance verifier path (tests/repair). Production resolves it from
+  # $PSScriptRoot beside this launcher; leaving this unset is the norm.
+  [string]$ProvenanceGate
 )
 
 $ErrorActionPreference = "Stop"
@@ -165,9 +168,15 @@ $resolvedAppRoot = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\'
 # become the live door. Fail-closed: missing gate file, missing provenance, unreadable ledger, or
 # an unlisted revision all deny boot. No network, no fallback.
 # ---------------------------------------------------------------------------------------------
-$provenanceGate = Join-Path $resolvedAppRoot "scripts\hermes-bridge\verify-door-provenance.mjs"
+# Trust placement (#1223 R2): the verifier code must be bytes the runtime cannot rewrite, so it
+# resolves beside THIS launcher (C:\ProgramData\WilliamOS in production, administrator-gated like
+# the task definitions), never from inside the tree being admitted.
+if ($ProvenanceGate) { $provenanceGate = $ProvenanceGate }
+else { $provenanceGate = Join-Path $PSScriptRoot "scripts\hermes-bridge\verify-door-provenance.mjs" }
+$provenanceGateDir = (Resolve-Path -LiteralPath (Split-Path -Parent $provenanceGate) -ErrorAction SilentlyContinue)
+if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenanceGate } else { $provenanceGateDir = $provenanceGateDir.Path }
 if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
-  Deny-Boot "DOOR_PROVENANCE_GATE_MISSING" "the deployed bundle does not carry scripts/hermes-bridge/verify-door-provenance.mjs, so this boot cannot prove its revision is an authorized integrated lab-main revision (#1223)."
+  Deny-Boot "DOOR_PROVENANCE_GATE_MISSING" "the trusted gate script is absent at $provenanceGate (installed beside this launcher by the deploy), so this boot cannot prove its revision is an authorized, attested, integrated lab-main revision (#1223)."
 }
 $gatePreviousPreference = $ErrorActionPreference
 try {
@@ -175,7 +184,7 @@ try {
   # refusal behind a PowerShell error instead of the reason code. Read the exit code; fold the
   # captured stream by joining, not by regex-splitting (this warning is earned).
   $ErrorActionPreference = "Continue"
-  $gateOutput = & $node $provenanceGate --app-root="$resolvedAppRoot" 2>&1
+  $gateOutput = & $node $provenanceGate --app-root="$resolvedAppRoot" --gate-dir="$provenanceGateDir" 2>&1
   $gateExit = $LASTEXITCODE
 } finally {
   $ErrorActionPreference = $gatePreviousPreference

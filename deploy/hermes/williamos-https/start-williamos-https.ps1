@@ -11,7 +11,8 @@
 [CmdletBinding()]
 param(
   [string]$AppRoot = "C:\HermesLab\williamos-runtime-64034e93-flat",
-  [string]$LogRoot = "C:\ProgramData\WilliamOS\logs"
+  [string]$LogRoot = "C:\ProgramData\WilliamOS\logs",
+  [string]$ProvenanceGate
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,15 +32,20 @@ foreach ($required in @($node, $proxy)) {
 # same fail-closed contract as start-williamos-live.ps1; a tree whose built provenance is not an
 # authorized integrated lab-main revision cannot become the HTTPS surface either.
 $appRootResolved = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\')
-$provenanceGate = Join-Path $appRootResolved "scripts\hermes-bridge\verify-door-provenance.mjs"
+# Trust placement (#1223 R2): the verifier lives beside THIS launcher (ProgramData), not inside
+# the runtime tree the gate exists to distrust.
+if ($ProvenanceGate) { $provenanceGate = $ProvenanceGate }
+else { $provenanceGate = Join-Path $PSScriptRoot "scripts\hermes-bridge\verify-door-provenance.mjs" }
+$provenanceGateDir = (Resolve-Path -LiteralPath (Split-Path -Parent $provenanceGate) -ErrorAction SilentlyContinue)
+if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenanceGate } else { $provenanceGateDir = $provenanceGateDir.Path }
 if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
-  throw "Refusing to start WilliamOS HTTPS: the deployed bundle does not carry scripts/hermes-bridge/verify-door-provenance.mjs (#1223 fail-closed)."
+  throw "Refusing to start WilliamOS HTTPS: the trusted gate script is absent at $provenanceGate (#1223 fail-closed)."
 }
 $gatePreviousPreference = $ErrorActionPreference
 try {
   # Native stderr is not an error here; the exit code is the verdict. (PS 5.1 traps, twice now.)
   $ErrorActionPreference = "Continue"
-  $gateOutput = & $node $provenanceGate --app-root="$appRootResolved" 2>&1
+  $gateOutput = & $node $provenanceGate --app-root="$appRootResolved" --gate-dir="$provenanceGateDir" 2>&1
   $gateExit = $LASTEXITCODE
 } finally {
   $ErrorActionPreference = $gatePreviousPreference
