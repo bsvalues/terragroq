@@ -621,7 +621,6 @@ if (-not $SkipRollbackCapture) {
     "pnpm-lock.yaml",
     "lib\generated\build-provenance.json",
     "scripts\hermes-https-proxy.mjs",
-    "scripts\hermes-bridge\verify-door-provenance.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
   $rollbackDirectories = @(".next", "public", "lib\fabric", "scripts\execution-fabric", "scripts\multi-agent-operator", "components\operator", "config\execution-fabric")
@@ -818,16 +817,10 @@ $httpsProxyTarget = Join-Path $Runtime $httpsProxyRelative
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget) -Force
 Copy-Item $httpsProxySource $httpsProxyTarget -Force
 
-# #1223: the door provenance gate is likewise part of the deployed product, not optional tooling.
-# The installed launchers call it before exec'ing node and fail closed when it is absent, so a
-# deploy that shipped the launchers but not the gate would take the cockpit down at the first
-# restart after merge. It ships with the same strictness as the proxy it protects alongside.
-$provenanceGateRelative = "scripts\hermes-bridge\verify-door-provenance.mjs"
-$provenanceGateSource = Join-Path $Source $provenanceGateRelative
-if (-not (Test-Path $provenanceGateSource)) { throw "Missing door provenance gate in the source tree: $provenanceGateSource" }
-$provenanceGateTarget = Join-Path $Runtime $provenanceGateRelative
-$null = New-Item -ItemType Directory -Path (Split-Path -Parent $provenanceGateTarget) -Force
-Copy-Item $provenanceGateSource $provenanceGateTarget -Force
+# #1223 R3: the gate is deliberately NOT copied into the runtime. The installed launchers resolve it
+# beside themselves (ProgramData, Users:RX), which is what makes it a trust anchor rather than a file
+# the robocopy path can substitute; a runtime copy would be dead weight and a decoy a reader could
+# mistake for the authority. The ProgramData install happens with the launchers above.
 
 # Static assets and public/ live outside the standalone tree by design.
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP

@@ -257,6 +257,75 @@ describe("the gate enforces artifact authenticity, not just self-declared sha (#
   })
 })
 
+describe("the deploy and its restore script agree on the rollback contract (#1236 round-2 N1)", () => {
+  // N1: deploy@57e1df9c added a file to its rollback manifest that restore@57e1df9c did not expect,
+  // so restore rejected every manifest its paired deploy wrote. Text-level tests missed it because
+  // nothing coupled the two lists. These assertions make that drift impossible to ship again.
+  const deploy = fs.readFileSync(path.join(ROOT, "scripts", "deploy-hermes-runtime.ps1"), "utf8")
+  const restore = fs.readFileSync(path.join(ROOT, "scripts", "restore-hermes-runtime.ps1"), "utf8")
+  const grab = (text: string, marker: string) => {
+    const i = text.indexOf(marker)
+    expect(i, `missing ${marker}`).toBeGreaterThan(-1)
+    const j = text.indexOf(")", i)
+    return [...text.slice(i + marker.length, j).matchAll(/"([^"]+)"/g)].map((m) => m[1])
+  }
+  const deployFiles = grab(deploy, "$rollbackFiles = @(")
+  const restoreFiles = grab(restore, "$expectedRollbackFiles = @(")
+  const versionConditional = /if \(\$manifestVersion -ge (\d+)\) \{\s*\$expectedRollbackFiles \+= "([^"]+)"/.exec(restore)
+
+  it("names exactly the runtime file set the restore script will accept", () => {
+    const expected = new Set([...restoreFiles, ...(versionConditional ? [versionConditional[2]] : [])])
+    expect([...deployFiles].sort()).toEqual([...expected].sort())
+  })
+  it("keeps the version-conditional entry consistent with the manifest version it mints", () => {
+    // The deploy states its manifest version inline (version = N); restore adds pnpm-lock.yaml for
+    // v4+. A deploy minting a version below the conditional would write a manifest restore rejects.
+    const mintedVersion = /version = (\d+)/.exec(deploy)
+    expect(mintedVersion, "deploy must state the manifest version it writes").toBeTruthy()
+    expect(Number(mintedVersion![1])).toBeGreaterThanOrEqual(Number(versionConditional![1]))
+  })
+  it("ships the gate to the trusted ProgramData directory, never into the runtime", () => {
+    // A runtime copy is substitutable by exactly the writer the gate distrusts (R2/R3 finding).
+    expect(deploy).toMatch(/\$gateTargetDir = Join-Path \(Split-Path -Parent \$LiveStartTarget\) "scripts\\hermes-bridge"/)
+    expect(deploy).not.toMatch(/Copy-Item[^\n]*verify-door-provenance\.mjs[^\n]*\$Runtime/)
+    expect(deploy).not.toMatch(/\$provenanceGateRelative/)
+  })
+  it("captures the trusted gate directory and restores it with the launchers", () => {
+    expect(deploy).toMatch(/trustDir = \[ordered\]@\{ target = \$gateTargetDir/)
+    expect(restore).toMatch(/\$trustDirCaptured = \(\$null -ne \$manifest\.trustDir\)/)
+    expect(restore).toMatch(/if \(\$trustDirCaptured\) \{/)
+  })
+  it("locks every anchor to the runtime identity's read-only access", () => {
+    expect(deploy).toMatch(/icacls \$gateTargetDir \/inheritance:r \/grant:r .*Users:\(OI\)\(CI\)RX/)
+    expect(deploy).toMatch(/icacls \$trustRootDir \/inheritance:r \/grant:r "SYSTEM:\(OI\)\(CI\)F" "BUILTIN\\Administrators:\(OI\)\(CI\)F"/)
+    expect(deploy).toMatch(/icacls \$receiptTarget \/inheritance:r/)
+  })
+})
+
+describe("the gate refuses structurally hostile provenance without ever coercing it (round-2 O1)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "door-prov-o1-"))
+  const appRoot = path.join(dir, "runtime")
+  fs.mkdirSync(path.join(appRoot, "lib", "generated"), { recursive: true })
+  const LEDGER = path.join(dir, "ledger.json")
+  fs.writeFileSync(LEDGER, JSON.stringify({ integrations: [{ productState: "COMPLETE", labMainAfter: "b".repeat(40) }] }))
+  const runGate = (prov: unknown) => {
+    fs.writeFileSync(path.join(appRoot, "lib", "generated", "build-provenance.json"), JSON.stringify(prov))
+    const r = spawnSync(process.execPath, [path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs"),
+      `--app-root=${appRoot}`, `--ledger=${LEDGER}`, "--allow-runtime-copy"], { encoding: "utf8" })
+    return `${r.stdout}${r.stderr}`
+  }
+  it("an object with an uncoercible toString is a typed refusal, not a crash", () => {
+    const out = runGate({ sha: { toString: null, valueOf: null } })
+    expect(out).toMatch(/PROVENANCE_SHA_MALFORMED/)
+    expect(out).not.toMatch(/Cannot convert object to primitive value/)
+  })
+  it("arrays, numbers, null and short strings all refuse in the same typed way", () => {
+    for (const v of [["b".repeat(40)], 42, null, "deadbeef"]) {
+      expect(runGate({ sha: v })).toMatch(/PROVENANCE_SHA_MALFORMED/)
+    }
+  })
+})
+
 describe.skipIf(!HOST_POWERSHELL)("the live launcher really refuses a non-ledger revision when executed (#1236)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "door-prov-exec-"))
   const appRoot = path.join(dir, "runtime")

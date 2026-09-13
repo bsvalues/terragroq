@@ -89,7 +89,12 @@ try { prov = JSON.parse(fs.readFileSync(provPath, "utf8")) }
 catch (error) { fail("PROVENANCE_FILE_UNREADABLE", `${provPath}: ${error?.message ?? error}`) }
 const shaRaw = prov?.sha
 if (typeof shaRaw !== "string") {
-  fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha type=${Array.isArray(shaRaw) ? "array" : typeof shaRaw} value=${JSON.stringify(String(shaRaw).slice(0, 64))}`)
+  // Describe the value without ever coercing it: an object with an uncoercible toString would throw
+  // here, turning a typed refusal into crash text (round-2 review O1).
+  const kind = Array.isArray(shaRaw) ? "array" : typeof shaRaw
+  let rendered = "(unprintable)"
+  try { rendered = JSON.stringify(String(shaRaw)).slice(0, 80) } catch { rendered = `(uncoercible ${kind})` }
+  fail("PROVENANCE_SHA_MALFORMED", `build-provenance.json sha type=${kind} value=${rendered}`)
 }
 const sha = shaRaw.toLowerCase()
 if (!/^[0-9a-f]{40}$/.test(sha)) {
