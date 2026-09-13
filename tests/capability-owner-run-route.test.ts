@@ -136,6 +136,21 @@ describe("capability owner-run POST", () => {
     expect(seams.settle).toHaveBeenCalledTimes(1)
   })
 
+  it("a throw whose settle ALSO fails reports the settle outcome, never silently", async () => {
+    // GAP-B arm: the catch-block's failure spread was previously only pinned on the success
+    // path; a dead report branch on the 502 path would hide a live grant behind a transport error.
+    seams.dispatch.mockRejectedValue(new Error("ssh channel lost"))
+    seams.settle.mockResolvedValue({ ok: false, error: "OWNER_RUN_SETTLE_INCOMPLETE", detail: "revoke failed" })
+    const response = await POST(jsonRequest({ capabilityId: "gpu-tabular-ml", parcels: 60_000 }))
+    expect(response.status).toBe(502)
+    const body = await response.json()
+    expect(body).toMatchObject({
+      error: "DISPATCH_TRANSPORT_ERROR",
+      authorization: { settled: false, settleError: "OWNER_RUN_SETTLE_INCOMPLETE", settleDetail: "revoke failed" },
+    })
+    seams.settle.mockResolvedValue({ ok: true })
+  })
+
   it("admission refusals stop before any dispatch", async () => {
     seams.admit.mockResolvedValue({ ok: false, error: "OWNER_RUN_WO_APPROVE_REFUSED", detail: "A2 requires explicit approval" })
     const response = await POST(jsonRequest({ capabilityId: "gpu-tabular-ml", parcels: 60_000 }))
