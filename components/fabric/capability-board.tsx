@@ -10,6 +10,12 @@ import { useCallback, useEffect, useState } from "react"
  * through the dispatch transport. Nothing is a summary written earlier, and there is no second
  * configuration here to drift: if a capability cannot be read, the row says so instead of showing
  * yesterday's answer.
+ *
+ * The row-level Run control is the same discipline on the write side (POST, owner-gated): it
+ * dispatches one bounded synthetic workload through the seam and renders what the seam ANSWERED —
+ * status, placement, device binding, timings, result — inside this product. The client never
+ * decides which capability is runnable or where the job lands: a refusal comes back typed from
+ * the server and is displayed as received.
  */
 
 type CapabilityRow = {
@@ -28,6 +34,26 @@ type CapabilityRow = {
   binding: { nodeId: string; device: string; healthy: boolean; detail: string }
   placementProbe: { workload: string; rows: number; placement: string; reasonCode: string } | null
   restrictions: string[]
+  ownerRunnable: boolean
+}
+
+type RunOutcome = {
+  status?: string
+  outcome?: string
+  placement?: string
+  reasonCode?: string
+  capabilityId?: string
+  dispatchId?: string
+  workOrderRef?: string
+  result?: unknown
+  workloadSeconds?: number | null
+  bindingObserved?: { deviceHealthy?: boolean; cumlVersion?: string | null; probeError?: string } | null
+  evidenceRef?: string | null
+  executed?: boolean
+  syntheticDataOnly?: boolean
+  authorization?: { settled?: boolean; settleError?: string }
+  error?: string
+  detail?: string
 }
 
 export function CapabilityBoard() {
@@ -35,6 +61,8 @@ export function CapabilityBoard() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
+  const [runningId, setRunningId] = useState<string | null>(null)
+  const [runResults, setRunResults] = useState<Record<string, RunOutcome>>({})
 
   const load = useCallback(async () => {
     setBusy(true)
@@ -55,6 +83,34 @@ export function CapabilityBoard() {
       setBusy(false)
     }
   }, [])
+
+  const runOnce = useCallback(async (capabilityId: string) => {
+    setRunningId(capabilityId)
+    setRunResults((prev) => { const next = { ...prev }; delete next[capabilityId]; return next })
+    try {
+      const response = await fetch("/api/environment/capability", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ capabilityId }),
+        cache: "no-store",
+      })
+      const body = (await response.json().catch(() => null)) as RunOutcome | null
+      setRunResults((prev) => ({
+        ...prev,
+        [capabilityId]: body ?? { error: `HTTP ${response.status}`, detail: "the seam returned no body" },
+      }))
+    } catch (cause) {
+      setRunResults((prev) => ({
+        ...prev,
+        [capabilityId]: { error: "DISPATCH_UNREACHABLE", detail: String(cause instanceof Error ? cause.message : cause) },
+      }))
+    } finally {
+      setRunningId(null)
+      // The device may have recorded evidence while the job ran; refresh the inventory so the
+      // board's claim about the seam is no newer than the seam itself.
+      void load()
+    }
+  }, [load])
 
   useEffect(() => { void load() }, [load])
 
@@ -141,10 +197,77 @@ export function CapabilityBoard() {
                   {row.restrictions.map((restriction) => <li key={restriction}>{restriction}</li>)}
                 </ul>
               ) : null}
+
+              <div className="mt-1 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runOnce(row.capabilityId)}
+                  disabled={runningId !== null}
+                  title="Dispatches one bounded synthetic workload through the governed seam (50,000 rows). The seam — registry, curve evidence, trust gate — decides where it runs and may refuse."
+                  className={`self-start rounded-md border px-3 py-1 text-xs disabled:opacity-40 ${
+                    row.ownerRunnable ? "border-border" : "border-amber-500/40 text-amber-600"
+                  }`}
+                >
+                  {runningId === row.capabilityId
+                    ? "Dispatching… (this runs on the node)"
+                    : row.ownerRunnable
+                      ? "Run once (synthetic 50k)"
+                      : "Owner-run not offered for this capability"}
+                </button>
+                {runResults[row.capabilityId] ? (
+                  <RunResultView outcome={runResults[row.capabilityId]} />
+                ) : null}
+              </div>
             </article>
           ))}
         </div>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * Renders exactly what the seam returned — including refusals — as a compact evidence block.
+ * No client-side reinterpretation: status and reason codes are displayed verbatim, because the
+ * whole point of this board is that the displayed answer IS the enforced answer.
+ */
+function RunResultView({ outcome }: { outcome: RunOutcome }) {
+  const failed = Boolean(outcome.error) || (outcome.status && !["SUCCEEDED"].includes(String(outcome.status)))
+  const value = typeof outcome.result === "object" && outcome.result !== null
+    ? JSON.stringify(outcome.result)
+    : outcome.result != null ? String(outcome.result) : null
+  return (
+    <div
+      role="status"
+      className={`rounded-md border p-3 text-[11px] font-mono ${
+        failed ? "border-destructive/50 bg-destructive/5 text-destructive" : "border-emerald-600/40 bg-emerald-500/5"
+      }`}
+    >
+      <div className="flex flex-wrap gap-x-3">
+        <span>{outcome.error ? `error: ${outcome.error}` : `status: ${outcome.status} · ${outcome.outcome ?? ""}`}</span>
+        {outcome.placement ? <span>placement: {outcome.placement}</span> : null}
+        {outcome.reasonCode ? <span>reason: {outcome.reasonCode}</span> : null}
+        {typeof outcome.workloadSeconds === "number" ? <span>{outcome.workloadSeconds.toFixed(2)}s on workload</span> : null}
+      </div>
+      {outcome.bindingObserved ? (
+        <div className="mt-1 text-muted-foreground">
+          device: {String(outcome.bindingObserved.deviceHealthy)}
+          {outcome.bindingObserved.cumlVersion ? ` · cuML ${outcome.bindingObserved.cumlVersion}` : ""}
+          {outcome.bindingObserved.probeError ? ` · probe error ${outcome.bindingObserved.probeError}` : ""}
+        </div>
+      ) : null}
+      {value ? <div className="mt-1 break-all">result: {value}</div> : null}
+      {outcome.dispatchId ? (
+        <div className="mt-1 text-muted-foreground">
+          dispatch {String(outcome.dispatchId).slice(0, 13)}…
+          {outcome.workOrderRef ? ` · WO ${outcome.workOrderRef}` : ""}
+          {outcome.evidenceRef ? ` · evidence ${outcome.evidenceRef}` : ""}
+        </div>
+      ) : null}
+      {outcome.detail ? <div className="mt-1 break-all">{outcome.detail}</div> : null}
+      {outcome.authorization && outcome.authorization.settled === false ? (
+        <div className="mt-1 text-amber-600">authorization NOT settled: {outcome.authorization.settleError} — revoke it from the authority register</div>
+      ) : null}
+    </div>
   )
 }
