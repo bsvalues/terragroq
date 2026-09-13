@@ -66,6 +66,14 @@ pure verification code runs locally before it advances.
    completion, hosted reviewers are optional additions.
 4. **Seal** — the Environment issues the delivery seal over the exact head (adoption PREVIEW →
    AUTHORIZE → ISSUE), unchanged. The seal remains the authority artifact of record.
+   **Seal authoring rule (mandatory):** the recorded `baseSha` MUST be the lab main **tip at the
+   moment the lane is cut** — i.e. the candidate's actual fork point. The lab integration authority
+   hard-refuses a declared base that is not the natural merge-base against current lab main
+   (`INTEGRATION_BASE_NOT_MERGE_BASE`), because a stale or laterally-chosen base lets a path whose
+   content equals the base slip past the revert guard and silently prefer the candidate's lineage
+   over main's newer work. The remedy is always to **re-cut the lane on current lab main and re-seal
+   (with re-review)** — never to weaken the check. Branch from the tip, not from an old PR branch
+   tip or a stale mirror commit.
 5. **Merge = `scripts/execution-fabric/integrate-lab-main.mjs`** — the lab integration authority:
    re-verifies the seal signature, the receipt, the re-measured sealed patch, and the attestation
    **using the production verifier modules** (the local authority can never be laxer than the gate
@@ -74,6 +82,35 @@ pure verification code runs locally before it advances.
    mirror sync — a PR merge via the governed path where available, otherwise a `mirror/<sha>`
    branch — and records `PRODUCT STATE` / `MIRROR STATE` honestly in
    `~/.williamos/integrations.json`. Mirror failure never reopens the product transition.
+   Tool guarantees as of the follow-up hardening pass: the local full-suite record is **parsed**
+   (vitest JSON), success-checked (tests must have EXECUTED and passed — `failed===0` on an
+   all-skipped record is not success), counter-consistent, suite-identified (each named suite must
+   resolve to a real file CONTAINED in the integration worktree — existence alone is not binding)
+   and **head-bound** to the
+   candidate (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory), and the recorded
+   evidence carries the record's own path and head so the digest is locatable; the worktree must
+   independently sit at the candidate (`LOCAL_TESTS_WORKTREE_HEAD_MISMATCH`) and the record must
+   cover every test file the candidate changed (`LOCAL_TESTS_CHANGED_TESTS_UNCOVERED`), so a stale
+   report re-stamped to a new head cannot pass; the governed mirror
+   merge is **bound to the sealed head** — strict decimal PR, `origin` bound by full URL form
+   (github.com host AND `bsvalues/terragroq`, not a path suffix),
+   and `--match-head-commit` so a head that moves between read and merge is refused — and `IN_SYNC`
+   is recorded only after the mirror tree is fetched and proven tree-equal to the lab main tree this
+   run produced (`MIRROR_PR_INVALID` / `MIRROR_REMOTE_MISMATCH` / `MIRROR_HEAD_MISMATCH` /
+   `MIRROR_TREE_MISMATCH` / `MIRROR_VERIFY_FAILED_AFTER_MERGE`, the last distinguishing a merge that
+   happened from a merge that failed); a candidate sharing no ancestor with lab main refuses typed
+   (`INTEGRATION_BASE_UNRELATED`), while a merge-base probe that cannot answer refuses
+   `INTEGRATION_BASE_PROBE_FAILED` instead of claiming unrelated history.
+   Declared trust boundary (reviewer threads on #1234): the local record is anti-mistake evidence,
+   not anti-forgery — its producer is the lab operator, who already holds the seal key and the
+   state file, so a forged record grants nothing the operator lacks. What the tool guarantees is
+   that an honest run cannot accidentally integrate on missing, stale, zero-executed, foreign, or
+   head-mismatched evidence; the head-bound seal, independent review, and post-merge CI remain the
+   anti-forgery layer because they are signature-checked.
+   The sealed-content guard carries ONE declared relaxation: when main deletes a sealed path whose
+   candidate blob still exists **somewhere** in the merged tree (the rename/modify resolution),
+   integration proceeds; the allowance is content-equality based, deliberately not rename-aware, is
+   withheld for the empty blob, and is pinned in both directions by tests.
 6. **Deploy / observe / FINALIZE** — the merged lab main deploys to the HERMES door, runtime
    verification as usual, then the seal chain is FINALIZE'd (slot release).
 7. **Reconciliation (mirror → lab)** — for anything that landed on GitHub main outside this
