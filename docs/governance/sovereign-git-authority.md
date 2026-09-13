@@ -83,12 +83,22 @@ pure verification code runs locally before it advances.
    branch — and records `PRODUCT STATE` / `MIRROR STATE` honestly in
    `~/.williamos/integrations.json`. Mirror failure never reopens the product transition.
    Tool guarantees as of the follow-up hardening pass: the local full-suite record is **parsed**
-   (vitest JSON), success-checked, suite-identified and **head-bound** to the candidate
-   (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory); the governed mirror merge
-   is **bound to the sealed head** and `IN_SYNC` is recorded only after the mirror tree is fetched
-   and proven tree-equal to the lab main tree this run produced (`MIRROR_HEAD_MISMATCH` /
-   `MIRROR_TREE_MISMATCH`); a candidate sharing no ancestor with lab main refuses typed
-   (`INTEGRATION_BASE_UNRELATED`) instead of surfacing a raw git error.
+   (vitest JSON), success-checked (tests must have EXECUTED and passed — `failed===0` on an
+   all-skipped record is not success), counter-consistent, suite-identified and **head-bound** to the
+   candidate (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory), and the recorded
+   evidence carries the record's own path and head so the digest is locatable; the governed mirror
+   merge is **bound to the sealed head** — numeric PR, `origin` verified to be the mirror repository,
+   and `--match-head-commit` so a head that moves between read and merge is refused — and `IN_SYNC`
+   is recorded only after the mirror tree is fetched and proven tree-equal to the lab main tree this
+   run produced (`MIRROR_PR_INVALID` / `MIRROR_REMOTE_MISMATCH` / `MIRROR_HEAD_MISMATCH` /
+   `MIRROR_TREE_MISMATCH` / `MIRROR_VERIFY_FAILED_AFTER_MERGE`, the last distinguishing a merge that
+   happened from a merge that failed); a candidate sharing no ancestor with lab main refuses typed
+   (`INTEGRATION_BASE_UNRELATED`), while a merge-base probe that cannot answer refuses
+   `INTEGRATION_BASE_PROBE_FAILED` instead of claiming unrelated history.
+   The sealed-content guard carries ONE declared relaxation: when main deletes a sealed path whose
+   candidate blob still exists **somewhere** in the merged tree (the rename/modify resolution),
+   integration proceeds; the allowance is content-equality based, deliberately not rename-aware, is
+   withheld for the empty blob, and is pinned in both directions by tests.
 6. **Deploy / observe / FINALIZE** — the merged lab main deploys to the HERMES door, runtime
    verification as usual, then the seal chain is FINALIZE'd (slot release).
 7. **Reconciliation (mirror → lab)** — for anything that landed on GitHub main outside this

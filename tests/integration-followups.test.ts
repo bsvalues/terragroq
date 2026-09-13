@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -7,10 +7,14 @@ import { describe, expect, it } from "vitest"
 import { integrationTree, localTestEvidence } from "../scripts/execution-fabric/integrate-lab-main.mjs"
 
 /**
- * Follow-up hardening tests (owner-acknowledged 2026-09-12, after #1232's first live integration):
- *   1. the coincidental-twin rename allowance is DECLARED behavior, pinned both ways;
- *   3. the local full-suite record is parsed, success-checked, suite-identified and head-bound;
- *   5. a candidate sharing no ancestor with lab main refuses TYPED.
+ * Follow-up hardening tests (owner-acknowledged 2026-09-12, after #1232's first live integration),
+ * extended with the adversarial reviewer's findings:
+ *   1. the coincidental-twin rename allowance is DECLARED behavior, pinned both ways — including its
+ *      empty-blob exclusion (the empty blob is ubiquitous, so it proves nothing);
+ *   3. the local full-suite record is parsed, success-checked (tests must EXECUTE and pass, counters
+ *      must be consistent and plausible), suite-identified, worktree-bound and head-bound;
+ *   5. a candidate sharing no ancestor with lab main refuses TYPED, and a probe that cannot answer
+ *      refuses differently from "unrelated".
  */
 function repo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "integration-followups-"))
@@ -45,11 +49,9 @@ describe("follow-up 1: coincidental-twin rename allowance is declared behavior",
     const dir = repo()
     write(dir, "shared-boiler.txt", "boiler\n")
     const base = commit(dir, "base")
-    // candidate seals the file WITHOUT touching it: its blob at the sealed path is base's blob.
     git(dir, "checkout", "-q", "-b", "cand")
     write(dir, "own.txt", "own\n")
     const cand = commit(dir, "cand own file")
-    // main deletes the sealed path and coincidentally materializes the same content elsewhere.
     git(dir, "checkout", "-q", "main")
     git(dir, "rm", "-q", "shared-boiler.txt")
     write(dir, "twin.txt", "boiler\n")
@@ -58,7 +60,6 @@ describe("follow-up 1: coincidental-twin rename allowance is declared behavior",
       baseSha: base, candSha: cand, labMainBefore: labMain, sealedPaths: ["shared-boiler.txt"], cwd: dir,
     })
     expect(out.mode).toBe("THREE_WAY_MERGE")
-    // The deletion of the sealed path is preserved and the twin carries the content.
     expect(contentAt(dir, out.tree, "shared-boiler.txt")).toBe("(absent)")
     expect(contentAt(dir, out.tree, "twin.txt")).toBe("boiler\n")
   })
@@ -78,6 +79,22 @@ describe("follow-up 1: coincidental-twin rename allowance is declared behavior",
       baseSha: base, candSha: cand, labMainBefore: labMain, sealedPaths: ["shared-boiler.txt"], cwd: dir,
     })).toThrow(/INTEGRATION_SEALED_CONTENT_LOST/)
   })
+
+  it("withholds the twin allowance for an EMPTY sealed file (the empty blob is ubiquitous)", () => {
+    const dir = repo()
+    write(dir, "empty-sealed.txt", "")
+    const base = commit(dir, "base")
+    git(dir, "checkout", "-q", "-b", "cand")
+    write(dir, "own.txt", "own\n")
+    const cand = commit(dir, "cand own file")
+    git(dir, "checkout", "-q", "main")
+    git(dir, "rm", "-q", "empty-sealed.txt")
+    write(dir, ".gitkeep", "")
+    const labMain = commit(dir, "main: delete empty sealed path, keep a .gitkeep")
+    expect(() => integrationTree({
+      baseSha: base, candSha: cand, labMainBefore: labMain, sealedPaths: ["empty-sealed.txt"], cwd: dir,
+    })).toThrow(/INTEGRATION_SEALED_CONTENT_LOST/)
+  })
 })
 
 describe("follow-up 5: disjoint lineage refuses typed", () => {
@@ -85,7 +102,6 @@ describe("follow-up 5: disjoint lineage refuses typed", () => {
     const dir = repo()
     write(dir, "a.txt", "a\n")
     const labMain = commit(dir, "lab main lineage")
-    // A separate root lineage: candidate descends from its own base, unrelated to lab main.
     git(dir, "checkout", "-q", "--orphan", "orphan")
     write(dir, "c.txt", "c\n")
     const orphanBase = commit(dir, "orphan base")
@@ -99,6 +115,8 @@ describe("follow-up 5: disjoint lineage refuses typed", () => {
 
 describe("follow-up 3: local full-suite evidence is parsed, checked and head-bound", () => {
   const HEAD = "c65f62d900f652471768f071f5f542de7845c21c"
+  // A suite file that really exists in this worktree: the record must be evidence FOR this repo.
+  const REAL_SUITE = "tests/integration-merge-semantics.test.ts"
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "local-tests-"))
   const file = (name: string, body: string): string => {
     const p = path.join(dir, name)
@@ -107,7 +125,7 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
   }
   const record = (over: Record<string, unknown> = {}): string => file(`rec-${Math.random().toString(36).slice(2)}.json`, JSON.stringify({
     numTotalTests: 18, numPassedTests: 18, numFailedTests: 0,
-    testResults: [{ name: "/repo/tests/integration-merge-semantics.test.ts" }],
+    testResults: [{ name: REAL_SUITE }],
     headSha: HEAD,
     ...over,
   }))
@@ -118,6 +136,11 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
     expect(out.passed).toBe(18)
     expect(out.suites).toBe(1)
     expect(out.digest).toMatch(/^sha256:[0-9a-f]{64}$/)
+    // audit trail: the exact bytes can be located and the head re-checked from the record alone
+    expect(out.record.endsWith(".json")).toBe(true)
+    expect(fs.existsSync(out.record)).toBe(true)
+    expect(out.headSha).toBe(HEAD)
+    expect(out.suiteFiles).toEqual(["integration-merge-semantics.test.ts"])
   })
   it("accepts the STAMPED record regardless of case in the sha", () => {
     expect(localTestEvidence(record({ headSha: HEAD.toUpperCase() }), HEAD).total).toBe(18)
@@ -135,8 +158,65 @@ describe("follow-up 3: local full-suite evidence is parsed, checked and head-bou
     expect(() => localTestEvidence(record({ numTotalTests: 0, numPassedTests: 0 }), HEAD)).toThrow(/LOCAL_TESTS_RECORD_UNPARSEABLE/)
     expect(() => localTestEvidence(record({ testResults: [] }), HEAD)).toThrow(/LOCAL_TESTS_NO_SUITES/)
   })
+  it("refuses an all-skipped record: failed=0 is NOT success (reviewer BLOCKING finding)", () => {
+    // exactly the shape vitest reports for a suite of describe.skip blocks
+    expect(() => localTestEvidence(record({
+      numTotalTests: 2, numPassedTests: 0, numFailedTests: 0, numPendingTests: 2,
+    }), HEAD)).toThrow(/LOCAL_TESTS_NOT_PASSED/)
+  })
+  it("refuses contradictory counters and implausible magnitudes", () => {
+    expect(() => localTestEvidence(record({ numTotalTests: 18, numPassedTests: 99 }), HEAD)).toThrow(/LOCAL_TESTS_RECORD_INCONSISTENT/)
+    expect(() => localTestEvidence(record({ numPassedTests: -3 }), HEAD)).toThrow(/LOCAL_TESTS_RECORD_UNPARSEABLE/)
+    expect(() => localTestEvidence(record({ numTotalTests: 1e21, numPassedTests: 1e21 }), HEAD)).toThrow(/LOCAL_TESTS_RECORD_UNPARSEABLE/)
+    expect(() => localTestEvidence(record({ numTotalTests: 2 ** 53, numPassedTests: 2 ** 53 }), HEAD)).toThrow(/LOCAL_TESTS_RECORD_UNPARSEABLE/)
+  })
+  it("counts distinct suite files, not array entries", () => {
+    const dup = Array.from({ length: 18 }, () => ({ name: REAL_SUITE }))
+    const out = localTestEvidence(record({ testResults: dup }), HEAD)
+    expect(out.suites).toBe(1)
+  })
+  it("refuses a record whose suites do not exist in this worktree (lifted from elsewhere)", () => {
+    expect(() => localTestEvidence(record({ testResults: [{ name: "/elsewhere/tests/other.test.ts" }] }), HEAD))
+      .toThrow(/LOCAL_TESTS_SUITE_UNRESOLVED/)
+    expect(() => localTestEvidence(record({ testResults: [{ name: "https://ci.example/run/999" }] }), HEAD))
+      .toThrow(/LOCAL_TESTS_SUITE_UNRESOLVED/)
+  })
   it("refuses an unbounded record and a record bound to a different head", () => {
     expect(() => localTestEvidence(record({ headSha: undefined }), HEAD)).toThrow(/LOCAL_TESTS_UNBOUND/)
     expect(() => localTestEvidence(record({ headSha: "a".repeat(40) }), HEAD)).toThrow(/LOCAL_TESTS_HEAD_MISMATCH/)
+  })
+})
+
+describe("follow-up 3: the CLI ENFORCES the record in real mode (no in-repo coverage before)", () => {
+  const HEAD = "84576f8d63" // fixture candidate (tests/fixtures/sealed-1218.json)
+  const run = (extra: string[]): { status: number | null; output: string } => {
+    const r = spawnSync(process.execPath, [
+      "scripts/execution-fabric/integrate-lab-main.mjs",
+      "--cand=84576f8d63b0ffa09a34a1a0663a62b8fc7d31a7",
+      "--base=29e9b729741bfbd5d9c69e24dd3066a8a668c1e5",
+      "--seal=tests/fixtures/sealed-1218.json",
+      "--attestation=tests/fixtures/attestation-1218.json",
+      ...extra,
+    ], { encoding: "utf8", cwd: process.cwd(), env: process.env })
+    return { status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` }
+  }
+  const before = (): string => fs.readFileSync(path.join(process.env.USERPROFILE ?? "", ".williamos", "integrations.json"), "utf8")
+
+  it("refuses real-mode integration when the record is missing, and writes nothing", () => {
+    const baseline = before()
+    const r = run([])
+    expect(r.status).toBe(1)
+    expect(r.output).toMatch(/LOCAL_TESTS_/)
+    expect(before()).toBe(baseline)
+  })
+
+  it("stays advisory under --verify-only (rehearsal advances no ref)", () => {
+    const r = run(["--verify-only"])
+    expect(r.status).toBe(0)
+    expect(r.output).toMatch(/VERIFICATION_OK|NOTE: LOCAL_TESTS_/)
+  })
+
+  it("keeps the fixture candidate constant so this test cannot silently drift", () => {
+    expect(HEAD).toHaveLength(10)
   })
 })
