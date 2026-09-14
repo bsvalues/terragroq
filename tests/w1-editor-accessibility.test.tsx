@@ -187,6 +187,23 @@ describe("W1 editor accessibility contract", () => {
     expect(body).not.toMatch(/font:\s*inherit/)
   })
 
+  it("persists an explainable refusal reason instead of a bare INTERRUPTED", () => {
+    // The route's refusal reason used to be written only to transient error state while the saved
+    // transcript recorded a generic INTERRUPTED, so selecting or reloading the transcript lost the one
+    // fact the operator could act on. The source must put the reason in the saved lines and outcome.
+    const source = readFileSync(path.join(process.cwd(), "components/workspace-shell/developer-tools-surface.tsx"), "utf8")
+    // Anchor on the run() catch block, not the diff one: it is the one guarding an active tool run.
+    const anchor = source.indexOf('"TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED") {')
+    expect(anchor).toBeGreaterThan(-1)
+    const body = source.slice(anchor, source.indexOf("} finally {", anchor))
+    // the durable line and the outcome reason carry the real message, not the placeholder
+    expect(body).toMatch(/const reason = caught instanceof Error \? caught\.message/)
+    expect(body).toMatch(/\{ channel: "meta", text: reason \}/)
+    expect(body).toMatch(/settleRun\(current, \{ status: "interrupted", code: null, reason \}/)
+    expect(body).not.toMatch(/text: "INTERRUPTED"/)
+    expect(body).not.toMatch(/reason: "INTERRUPTED"/)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

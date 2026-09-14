@@ -467,10 +467,17 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
           controller.current?.abort()
           return
         }
-        const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
+        // A refusal is an explainable outcome, not an interruption. Persisting only "INTERRUPTED" made
+        // the actionable reason disappear as soon as the transcript was selected or restored, because
+        // the header prefers the saved transcript's truth over the transient error. The reason the route
+        // gave is what the operator can act on, so it belongs in the saved lines AND in the durable
+        // outcome: the persisted status stays "interrupted" (the stored schema's vocabulary) while the
+        // reason carries the real refusal text, which is what the header renders for that transcript.
+        const reason = caught instanceof Error ? caught.message : "RUN_UNAVAILABLE"
+        const next = [...current.lines, { channel: "meta", text: reason } satisfies ToolOutputLine]
         current.lines = next
         if (present) setLines(next)
-        settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
+        settleRun(current, { status: "interrupted", code: null, reason }, next)
       }
     } finally {
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
@@ -500,7 +507,9 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
   const visibleLines = selectedTranscript?.lines ?? lines
   const transcriptTruth = selectedTranscript?.outcome.status === "completed" ? "Saved browser transcript · not live evidence"
     : selectedTranscript?.outcome.status === "cancelled" ? "Cancelled · not completed or live evidence"
-      : selectedTranscript ? "Interrupted · not completed or live evidence" : null
+    : selectedTranscript?.outcome.reason && selectedTranscript.outcome.reason !== "INTERRUPTED"
+      ? selectedTranscript.outcome.reason
+    : selectedTranscript ? "Interrupted · not completed or live evidence" : null
   const title = kind === "tests" ? "Focused validation" : kind === "diff" ? "Current change" : "Project terminal"
   const surfaceRunning = activeRun.current?.kind === kind ? running : null
 
