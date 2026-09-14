@@ -431,8 +431,9 @@
 
 /* The tab IS the item (it carries role="tab" and the item metrics). The 24px right padding
    reserves the space the close glyph occupies, so the glyph can never cover the label. */
-/* Tab ITEM metrics (min/max width, padding that reserves the close glyph). Kept as a separate class
-   from the label styles so .tab's ellipsis rule still applies to the item's first span. */
+/* Tab ITEM metrics (min/max width, padding that reserves the close glyph), and the label typography
+   that used to live on `.tab`. The overflow/ellipsis rule applies to the item's first span, which is
+   the label, so sizing and label styles can share one class now that they are not competing. */
 .tabItem {
   position: relative;
   min-width: 108px;
@@ -493,22 +494,34 @@
   border: 0;
 }
 
-.tab {
-  min-width: 0;
-  height: 33px;
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  padding: 0 4px 0 10px;
-  border: 0;
-  color: inherit;
-  background: transparent;
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 10.5px;
+/* A keyboard user tabbing to a close control must be able to SEE it and know which file it closes.
+   Without this the control is a permanently clipped 1px focus stop. The glyph inside the tab is
+   decoration for assistive technology but is not independently focusable, so focus reveal is the only
+   way a sighted keyboard user can tell what they are about to close. */
+.srOnlyClose:focus-visible {
+  position: static;
+  width: 16px;
+  height: 16px;
+  margin: 0 4px 0 0;
+  align-self: center;
+  overflow: visible;
+  clip: auto;
+  border-radius: 2px;
+  color: var(--fog);
+  background: var(--steel);
+  cursor: pointer;
 }
 
-.tab > span:first-child {
+/* The label rule is scoped to the ITEM's first span, which is the label: `.tabItem` carries both the
+   sizing and the typography, so no second class (and no cascade order dependency) is needed. */
+.tabItem > span:first-child {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabItemText {
   overflow: hidden;
   flex: 1;
   text-overflow: ellipsis;

@@ -10,6 +10,8 @@
 // They assert the real DOM contract, so a regression fails here without a browser.
 
 import { cleanup, render, screen } from "@testing-library/react"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { EditorSurface } from "@/components/workspace-shell/editor-surface"
@@ -130,6 +132,48 @@ describe("W1 editor accessibility contract", () => {
     const lastChild = tab.lastElementChild
     expect(lastChild?.getAttribute("aria-hidden")).toBe("true")
     expect(lastChild?.querySelector("svg")).not.toBeNull()
+  })
+
+  it("the visible close glyph carries the close handler, so pointer users can still close a tab", () => {
+    // Regression guard: making the visible X aria-hidden for the tablist's ARIA ownership must not
+    // remove the pointer affordance. A glyph with no onClick presents a visible but dead control.
+    const { container } = render(
+      <EditorSurface project={project} projectKey="terrafusion" space={twoRepositorySpace()} onEditorChange={vi.fn()} />,
+    )
+    const glyph = Array.from(container.querySelectorAll('[aria-hidden="true"]'))
+      .find((g) => g.className.includes("tabCloseGlyph")) as HTMLElement
+    expect(glyph).toBeTruthy()
+    // React attaches the handler; jsdom exposes it through the internal props key.
+    const propsKey = Object.keys(glyph).find((k) => k.startsWith("__reactProps"))
+    expect(propsKey).toBeTruthy()
+    expect(typeof (glyph as unknown as Record<string, { onClick?: unknown }>)[propsKey!].onClick).toBe("function")
+  })
+
+  it("the tab item keeps its own sizing class and the label carries the truncation class", () => {
+    // Regression guard: adding a second class whose rules come later in the stylesheet silently
+    // overrode .tabItem's min-width/flex, letting tabs compress toward zero. The item must own its
+    // sizing alone, and the label must carry a class with the overflow/ellipsis rule.
+    const { container } = render(
+      <EditorSurface project={project} projectKey="terrafusion" space={twoRepositorySpace()} onEditorChange={vi.fn()} />,
+    )
+    const editorTablist = container.querySelector('div[aria-label$="editor tabs"]')
+    expect(editorTablist).not.toBeNull()
+    const tab = editorTablist!.querySelector('[role="tab"]') as HTMLElement
+    expect(tab).toBeTruthy()
+    // exactly the item class (plus the active modifier), never a competing typography class
+    expect(tab.className).toContain("tabItem")
+    expect(tab.className).not.toMatch(/(^|\s)tab(\s|$)/)
+    const label = tab.firstElementChild as HTMLElement
+    expect(label.className).toContain("tabItemText")
+  })
+
+  it("the real close control is revealable on keyboard focus", () => {
+    // Regression guard: the named close buttons are clipped to 1px, so without a :focus-visible rule a
+    // sighted keyboard user tabs through invisible focus stops. The stylesheet must define the reveal.
+    const css = readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.module.css"), "utf8")
+    expect(css).toMatch(/\.srOnlyClose:focus-visible\s*\{/)
+    const block = css.slice(css.indexOf(".srOnlyClose:focus-visible"))
+    expect(block.slice(0, block.indexOf("}"))).toMatch(/clip:\s*auto/)
   })
 
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {

@@ -735,7 +735,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                           type="button"
                           role="tab"
                           aria-selected={paneKey === openedFile.key}
-                          className={`${styles.tab} ${styles.tabItem} ${paneKey === openedFile.key ? styles.activeTab : ""}`}
+                          className={`${styles.tabItem} ${paneKey === openedFile.key ? styles.activeTab : ""}`}
                           onClick={() => {
                             const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, activePath: openedFile.path, activeFileRef: openedFile.fileRef } : item)
                             setActiveRepositoryKey(openedFile.repositoryKey)
@@ -745,7 +745,7 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                             }
                           }}
                         >
-                          <span>{repository && project?.repositories && project.repositories.length > 1 ? `${repository.label} · ` : ""}{openedFile.path.split("/").at(-1)}</span>
+                          <span className={styles.tabItemText}>{repository && project?.repositories && project.repositories.length > 1 ? `${repository.label} · ` : ""}{openedFile.path.split("/").at(-1)}</span>
                           {dirty ? <span className={styles.dirtyMark} aria-label="Unsaved">●</span> : null}
                           <span
                             className={styles.tabCloseGlyph}
