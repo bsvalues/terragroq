@@ -511,10 +511,14 @@
 .srOnlyClose:focus-visible {
   position: static;
   width: auto;
+  /* Bounded and ellipsized: a repository-relative path can be long, and `.tabClosers` does not shrink,
+     so an unbounded nowrap label would let keyboard focus collapse the tab list or push part of the
+     control off-screen. max-width keeps the distinguishing path while constraining the reveal. */
+  max-width: 260px;
   height: 16px;
   margin: 0 4px 0 0;
   align-self: center;
-  overflow: visible;
+  overflow: hidden;
   clip: auto;
   border-radius: 2px;
   color: var(--fog);
@@ -524,10 +528,15 @@
   font-family: var(--font-geist-mono), monospace;
   font-size: 10.5px;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
 .closeLabel {
   display: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .srOnlyClose:focus-visible .closeLabel {
