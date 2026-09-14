@@ -474,10 +474,15 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
         // outcome: the persisted status stays "interrupted" (the stored schema's vocabulary) while the
         // reason carries the real refusal text, which is what the header renders for that transcript.
         const reason = caught instanceof Error ? caught.message : "RUN_UNAVAILABLE"
+        // The persisted outcome schema bounds `reason` to 200 characters, and a preflight detail that
+        // embeds the checkout path routinely exceeds that. Oversize text makes the transcript fail
+        // validation and be dropped entirely -- losing the very explanation this path exists to keep.
+        // The saved line keeps the full text (its bound is far larger); only the outcome reason is cut.
+        const persistedReason = reason.length <= 200 ? reason : `${reason.slice(0, 197)}...`
         const next = [...current.lines, { channel: "meta", text: reason } satisfies ToolOutputLine]
         current.lines = next
         if (present) setLines(next)
-        settleRun(current, { status: "interrupted", code: null, reason }, next)
+        settleRun(current, { status: "interrupted", code: null, reason: persistedReason }, next)
       }
     } finally {
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }

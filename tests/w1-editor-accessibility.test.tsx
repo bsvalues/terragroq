@@ -199,9 +199,30 @@ describe("W1 editor accessibility contract", () => {
     // the durable line and the outcome reason carry the real message, not the placeholder
     expect(body).toMatch(/const reason = caught instanceof Error \? caught\.message/)
     expect(body).toMatch(/\{ channel: "meta", text: reason \}/)
-    expect(body).toMatch(/settleRun\(current, \{ status: "interrupted", code: null, reason \}/)
+    expect(body).toMatch(/settleRun\(current, \{ status: "interrupted", code: null, reason: persistedReason \}/)
     expect(body).not.toMatch(/text: "INTERRUPTED"/)
     expect(body).not.toMatch(/reason: "INTERRUPTED"/)
+    // The persisted outcome schema rejects reasons over 200 chars (tool-run-history.ts:156), and a
+    // preflight detail embedding the checkout path routinely exceeds that. The outcome reason must be
+    // bounded, or the whole transcript fails validation and the explanation is lost anyway.
+    expect(body).toMatch(/persistedReason/)
+    expect(body).toMatch(/reason\.length <= 200/)
+  })
+
+  it("a path-bearing refusal reason survives the 200-character outcome bound", () => {
+    // The real preflight detail embeds the full checkout path, so it routinely blows past the schema's
+    // 200-character `reason` limit -- which is exactly what codex caught in the first attempt at this fix.
+    // Compose it the way the route does rather than hand-counting characters.
+    const script = "node_modules/vitest/vitest.mjs"
+    const runner = script.split("/")[1]
+    const projectRoot = "C:/Users/somebody/very/deep/checkout/path/that/goes/on/and/on/for/a/while/longer/still/and/longer/yet"
+    const reason = `This repository has no ${runner} installed, so ${script} does not exist in `
+      + `${projectRoot}. Install the repository's dependencies, or select a checkout that has them.`
+    expect(reason.length).toBeGreaterThan(200)
+    // the bound the persisted schema enforces
+    const persisted = reason.length <= 200 ? reason : `${reason.slice(0, 197)}...`
+    expect(persisted.length).toBe(200)
+    expect(persisted.endsWith("...")).toBe(true)
   })
 
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
