@@ -166,7 +166,11 @@ guards would go with them."* A doorless capability is a gap. A deleted one is a 
 `runGovernedLoop` and `getClosureReport` were never deleted. The first two still have governed
 callers (`app/actions/goals.ts`, `app/actions/vault.ts`, `app/api/objective/route.ts`,
 `app/api/governance/workroom-authority/route.ts`); the rest are doorless and listed here for the same
-reason.
+reason — except `updateWorkOrderContract`, which gained a governed door with the owner-run seam
+(`lib/environment/owner-run-dispatch.ts`, reached from `POST /api/environment/capability`): the
+capability board's owner-run admits a work order, sets its contract bounds, approves it through
+`grantAuthority`, and dispatches within the minted authorization. `linkWorkOrderEvidence`,
+`runGovernedLoop` and `getClosureReport` remain doorless.
 
 ## 6. `/decisions`'s pending queues and correction inspection
 

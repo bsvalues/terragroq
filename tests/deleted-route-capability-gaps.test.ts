@@ -180,7 +180,9 @@ describe("5. the work-order release gates and closure result are alive and doorl
   const RESTORED = ["setWorkOrderGate", "recordWorkOrderResult", "deleteWorkOrder"] as const
 
   /** Never deleted, and still doorless. */
-  const UNREPLACED = ["updateWorkOrderContract", "linkWorkOrderEvidence", "getClosureReport"] as const
+  const UNREPLACED = ["linkWorkOrderEvidence", "getClosureReport"] as const
+  // updateWorkOrderContract left this ledger when the owner-run seam (lib/environment/
+  // owner-run-dispatch.ts, reached from POST /api/environment/capability) gave it a governed door.
 
   it("keeps every restored action alive, so the capability is recoverable", () => {
     const text = read(actions)
