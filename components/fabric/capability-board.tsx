@@ -48,7 +48,7 @@ type RunOutcome = {
   result?: unknown
   workloadSeconds?: number | null
   bindingObserved?: { deviceHealthy?: boolean; cumlVersion?: string | null; probeError?: string } | null
-  evidenceRef?: string | null
+  evidenceRef?: string | { ref?: string; evidenceId?: number } | null
   executed?: boolean
   syntheticDataOnly?: boolean
   authorization?: { settled?: boolean; settleError?: string }
@@ -87,32 +87,40 @@ export function CapabilityBoard() {
   }, [])
 
   const runOnce = useCallback(async (capabilityId: string) => {
-    setRunningId(capabilityId)
-    setRunResults((prev) => { const next = { ...prev }; delete next[capabilityId]; return next })
-    try {
-      const response = await fetch("/api/environment/capability", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ capabilityId }),
-        cache: "no-store",
-      })
-      const body = (await response.json().catch(() => null)) as RunOutcome | null
-      setRunResults((prev) => ({
-        ...prev,
-        [capabilityId]: body ?? { error: `HTTP ${response.status}`, detail: "the seam returned no body" },
-      }))
-    } catch (cause) {
-      setRunResults((prev) => ({
-        ...prev,
-        [capabilityId]: { error: "DISPATCH_UNREACHABLE", detail: String(cause instanceof Error ? cause.message : cause) },
-      }))
-    } finally {
-      setRunningId(null)
-      // The device may have recorded evidence while the job ran; refresh the inventory so the
-      // board's claim about the seam is no newer than the seam itself.
-      void load()
-    }
-  }, [load])
+      setRunningId(capabilityId)
+      setRunResults((prev) => { const next = { ...prev }; delete next[capabilityId]; return next })
+      // The measured placement curve decides GPU vs CPU by row count (aggregation's GPU
+      // threshold is 100k rows; the default floor is 50k). Send at least the capability's
+      // measured threshold so the run control can actually exercise the GPU path it labels.
+      const row = rows?.find((r) => r.capabilityId === capabilityId)
+      const minRows = ownerRun?.minRows ?? 50_000
+      const maxRows = ownerRun?.maxRows ?? 250_000
+      const thresholdRows = Number.isFinite(row?.thresholdRows) ? (row?.thresholdRows ?? minRows) : minRows
+      const parcels = Math.min(Math.max(thresholdRows, minRows), maxRows)
+      try {
+        const response = await fetch("/api/environment/capability", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ capabilityId, parcels }),
+          cache: "no-store",
+        })
+        const body = (await response.json().catch(() => null)) as RunOutcome | null
+        setRunResults((prev) => ({
+          ...prev,
+          [capabilityId]: body ?? { error: `HTTP ${response.status}`, detail: "the seam returned no body" },
+        }))
+      } catch (cause) {
+        setRunResults((prev) => ({
+          ...prev,
+          [capabilityId]: { error: "DISPATCH_UNREACHABLE", detail: String(cause instanceof Error ? cause.message : cause) },
+        }))
+      } finally {
+        setRunningId(null)
+        // The device may have recorded evidence while the job ran; refresh the inventory so the
+        // board's claim about the seam is no newer than the seam itself.
+        void load()
+      }
+    }, [load, rows, ownerRun])
 
   useEffect(() => { void load() }, [load])
 
@@ -267,7 +275,7 @@ function RunResultView({ outcome }: { outcome: RunOutcome }) {
         <div className="mt-1 text-muted-foreground">
           dispatch {String(outcome.dispatchId).slice(0, 13)}…
           {outcome.workOrderRef ? ` · WO ${outcome.workOrderRef}` : ""}
-          {outcome.evidenceRef ? ` · evidence ${outcome.evidenceRef}` : ""}
+          {outcome.evidenceRef ? ` · evidence ${typeof outcome.evidenceRef === "string" ? outcome.evidenceRef : (outcome.evidenceRef.ref ?? outcome.evidenceRef.evidenceId ?? JSON.stringify(outcome.evidenceRef))}` : ""}
         </div>
       ) : null}
       {outcome.detail ? <div className="mt-1 break-all">{outcome.detail}</div> : null}
