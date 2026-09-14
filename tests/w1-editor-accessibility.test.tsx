@@ -225,6 +225,24 @@ describe("W1 editor accessibility contract", () => {
     expect(persisted.endsWith("...")).toBe(true)
   })
 
+  it("the focused close control names the file it would close", () => {
+    // Every closer is absolutely positioned, so they all rest at the same spot; revealing only an icon
+    // there left the operator unable to tell which file Enter would close. The revealed control must
+    // carry a visible label naming its target.
+    const { container } = render(
+      <EditorSurface project={project} projectKey="terrafusion" space={twoRepositorySpace()} onEditorChange={vi.fn()} />,
+    )
+    const closers = Array.from(container.querySelectorAll('button[aria-label^="Close "]')) as HTMLElement[]
+    expect(closers.length).toBeGreaterThan(0)
+    for (const closer of closers) {
+      const label = closer.querySelector("span[aria-hidden='true']")
+      expect(label).not.toBeNull()
+      expect((label!.textContent ?? "").trim().length).toBeGreaterThan(0)
+    }
+    const css = readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.module.css"), "utf8")
+    expect(css).toMatch(/\.srOnlyClose:focus-visible \.closeLabel\s*\{/)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

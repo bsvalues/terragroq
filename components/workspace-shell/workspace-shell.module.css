@@ -499,10 +499,18 @@
 /* A keyboard user tabbing to a close control must be able to SEE it and know which file it closes.
    Without this the control is a permanently clipped 1px focus stop. The glyph inside the tab is
    decoration for assistive technology but is not independently focusable, so focus reveal is the only
-   way a sighted keyboard user can tell what they are about to close. */
+   way a sighted keyboard user can tell what they are about to close.
+
+   Every closer is absolutely positioned against .tabStrip, so they all rest at the same spot; if the
+   focused one only revealed its icon, the operator could not tell which file Enter would close. The
+   revealed control therefore expands in flow AND prints its accessible name, which already reads
+   "Close <repository> · <path>" — so the focused affordance names its own target. */
+/* No generated content here: the button's accessible name already comes from its aria-label, and
+   injecting the same text as content is a subtlety to avoid. The label is a real, aria-hidden span
+   inside the button, revealed together with the icon. */
 .srOnlyClose:focus-visible {
   position: static;
-  width: 16px;
+  width: auto;
   height: 16px;
   margin: 0 4px 0 0;
   align-self: center;
@@ -512,6 +520,19 @@
   color: var(--fog);
   background: var(--steel);
   cursor: pointer;
+  padding: 0 6px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.closeLabel {
+  display: none;
+}
+
+.srOnlyClose:focus-visible .closeLabel {
+  display: inline;
+  margin-left: 4px;
 }
 
 /* The label rule is scoped to the ITEM's first span, which is the label: `.tabItem` carries both the

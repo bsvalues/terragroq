@@ -771,6 +771,11 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                           onClick={() => closeTab(openedFile.key)}
                         >
                           <X size={11} />
+                          {/* Revealed only on keyboard focus, so the focused control names the file it
+                              would close. aria-hidden keeps the accessible name to a single source. */}
+                          <span className={styles.closeLabel} aria-hidden="true">
+                            {repository ? `${repository.label} · ` : ""}{openedFile.path.split("/").at(-1)}
+                          </span>
                         </button>
                       )
                     })}
