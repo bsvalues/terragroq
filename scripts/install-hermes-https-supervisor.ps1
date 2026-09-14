@@ -51,7 +51,13 @@ function Protect-DoorArtifactsAfterCopy {
   param([string]$Root = $InstallRoot)
   if (-not (Get-Command Protect-WilliamOSDoor -ErrorAction SilentlyContinue)) {
     $module = Join-Path $PSScriptRoot "hermes-bridge\protect-door-artifacts.ps1"
-    if (-not (Test-Path -LiteralPath $module)) { return }
+    # FAIL CLOSED. A rollback or restore that lands a launcher WITHOUT re-applying the invariant
+    # leaves the artifact writable by the identity the scheduled task runs as, which is precisely
+    # the condition this call exists to prevent. Silently returning here would report a successful
+    # recovery while leaving the door unprotected, so a missing module is an error everywhere.
+    if (-not (Test-Path -LiteralPath $module)) {
+      throw "DOOR_PROTECTION_MODULE_ABSENT cannot re-apply the #1223 door-artifact invariant after a copy: no protection module at $module. Refusing to treat this copy as complete."
+    }
     . $module
   }
   $null = Protect-WilliamOSDoor -InstallRoot $Root
@@ -356,9 +362,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $backupRoot "start-williamos-https.ps1") -Destination $launcherTarget -Force
     # #1223: the failure path restores the launcher with the same Copy-Item that re-inherits the
     # parent's ACEs, so re-apply the invariant here too. Wrapped because this runs inside a catch
-    # that is already handling a failure -- a protection error must not mask the original one.
+    # that is already handling a failure -- a protection error must not mask the original one -- but
+    # the warning names the consequence explicitly, because the restored artifact may be left
+    # writable by the identity the scheduled task runs as.
     try { Protect-DoorArtifactsAfterCopy } catch {
-      Write-Warning "door-artifact protection after rollback failed: $($_.Exception.Message)"
+      Write-Warning "door-artifact protection after rollback FAILED ($($_.Exception.Message)) -- the restored launcher in $InstallRoot may still be writable by the scheduled task's identity; re-run the installer elevated before the next door boot."
     }
   } elseif (Test-Path -LiteralPath $launcherTarget) {
     Remove-Item -LiteralPath $launcherTarget -Force
