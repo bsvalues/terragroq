@@ -176,6 +176,17 @@ describe("W1 editor accessibility contract", () => {
     expect(block.slice(0, block.indexOf("}"))).toMatch(/clip:\s*auto/)
   })
 
+  it("the tab item keeps the editor typography (mono, small) rather than inheriting the environment font", () => {
+    // Regression guard: removing the .tab class also removed its font-family/font-size. `.tabItem` then
+    // had `font: inherit`, so labels rendered at the environment's default size and ellipsized early.
+    const css = readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.module.css"), "utf8")
+    const block = css.slice(css.indexOf(".tabItem {"))
+    const body = block.slice(0, block.indexOf("}"))
+    expect(body).toMatch(/font-family:\s*var\(--font-geist-mono\)/)
+    expect(body).toMatch(/font-size:\s*10\.5px/)
+    expect(body).not.toMatch(/font:\s*inherit/)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

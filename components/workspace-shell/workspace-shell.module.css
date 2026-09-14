@@ -448,10 +448,12 @@
   border-right: 1px solid var(--steel);
   color: #8d96a0;
   background: #14181d;
-  font: inherit;
+  /* The typography that used to live on `.tab`. Inheriting the environment font here would take its
+     sans family at the default 16px, which ellipsizes multi-repository labels almost immediately. */
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10.5px;
   text-align: left;
   cursor: pointer;
-  position: relative;
 }
 
 /* Visual-only close affordance. It is decorative (aria-hidden on the element) and sits in the
