@@ -30,6 +30,7 @@ const {
   OWNER_RUN_AUTHORITY_LEVEL,
   OWNER_RUN_GRANT_TTL_MS,
   admitOwnerRunWorkOrder,
+  loadWorkOrderByIdRef,
   settleOwnerRunGrant,
 } = await import("@/lib/environment/owner-run-dispatch")
 
@@ -121,5 +122,48 @@ describe("owner-run settle completes the record even when the revoke is refused"
     expect(settle.ok).toBe(true)
     expect(authority.revokeAuthorityGrant).toHaveBeenCalledWith(9, "test settle")
     expect(actions.transitionWorkOrder).toHaveBeenCalledWith(1, "aborted")
+  })
+})
+
+/**
+ * GAP-C closure: the (id, ref) pairing of the ADMITTED record had no executing test — the route
+ * suite mocks `owner-run-dispatch` wholesale, so reverting the loader to a ref-only lookup left
+ * every test green. `ref` is a per-user counter (WO-0001 repeats across users; the schema puts no
+ * uniqueness on it), so a ref-only load can bind another user's same-numbered work order and its
+ * grant row. These tests execute the real loader and fail if the pairing is dropped.
+ */
+describe("owner-run loader binds the admitted record by (id, ref), never ref alone", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    poolQuery.mockResolvedValue({ rows: [{ id: 41, ref: "WO-41", status: "active" }] })
+  })
+
+  it("queries with BOTH the admitted id and the ref as bound parameters", async () => {
+    const row = await loadWorkOrderByIdRef(41, "WO-41")
+    expect(poolQuery).toHaveBeenCalledTimes(1)
+    const [sql, params] = poolQuery.mock.calls[0] as [string, unknown[]]
+    // mutation-proof: dropping `id = $1` (or reordering params) breaks these assertions
+    expect(sql).toMatch(/WHERE\s+id\s*=\s*\$1\s+AND\s+ref\s*=\s*\$2/i)
+    expect(params).toEqual([41, "WO-41"])
+    expect(row).toMatchObject({ id: 41, ref: "WO-41" })
+  })
+
+  it("returns null when the pairing matches no row (cross-user same-ref collision)", async () => {
+    // The DB honours the pairing; another user's WO-41 belongs to a different id.
+    poolQuery.mockImplementation(async (_sql: string, params?: unknown[]) =>
+      params?.[0] === 7 && params?.[1] === "WO-41"
+        ? { rows: [{ id: 7, ref: "WO-41", status: "active" }] }
+        : { rows: [] },
+    )
+    expect(await loadWorkOrderByIdRef(7, "WO-41")).toMatchObject({ id: 7 })
+    expect(await loadWorkOrderByIdRef(41, "WO-41")).toBeNull()
+  })
+
+  it("never falls back to a ref-only read when the id is absent from the result", async () => {
+    poolQuery.mockResolvedValue({ rows: [] })
+    const row = await loadWorkOrderByIdRef(41, "WO-41")
+    expect(row).toBeNull()
+    const [sql] = poolQuery.mock.calls[0] as [string]
+    expect(sql).not.toMatch(/WHERE\s+ref\s*=\s*\$1\s+LIMIT/i)
   })
 })
