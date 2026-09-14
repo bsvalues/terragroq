@@ -25,8 +25,14 @@ export function describeUnavailableNodeOperation(
   projectRoot: string,
   args: readonly string[],
 ): NodeOperationUnavailable | null {
-  const script = args.find((arg) => arg.endsWith(".mjs") || arg.endsWith(".cjs") || arg.endsWith(".js"))
-  if (!script) return null
+  // The spawned script is the first argument (node <script> [...args]); catalogue entries keep any
+  // subcommand after it. Node entry points are not always extension-qualified — Next.js ships
+  // `node_modules/next/dist/bin/next` with no suffix — so the scan must not require one. A bare
+  // subcommand such as `run` is not a path, so treat only a path-shaped first argument as the script.
+  const candidate = args.find((arg) => arg.endsWith(".mjs") || arg.endsWith(".cjs") || arg.endsWith(".js"))
+    ?? args.find((arg) => arg.includes("/"))
+  if (!candidate) return null
+  const script = candidate
 
   const absolute = resolve(projectRoot, script)
   // A path that escaped the checkout must never be executed, and is reported as a refusal rather than

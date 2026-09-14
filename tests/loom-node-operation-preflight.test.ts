@@ -53,6 +53,23 @@ describe("node operation preflight", () => {
     expect(verdict?.detail).toMatch(/outside the selected repository/)
   })
 
+  it("identifies a Node entry point that has no file extension (Next.js ships one)", () => {
+    // node_modules/next/dist/bin/next has no .js/.cjs/.mjs suffix. A checker that requires one finds no
+    // script and returns null, so the route spawns Node anyway and the operator sees the raw
+    // "Cannot find module" the preflight exists to replace.
+    const verdict = describeUnavailableNodeOperation(ROOT, ["node_modules/next/dist/bin/next", "build"])
+    expect(verdict?.code).toBe("OPERATION_NOT_RUNNABLE_IN_REPOSITORY")
+    expect(verdict?.detail).toMatch(/no next installed/)
+    expect(verdict?.detail).toContain("node_modules/next/dist/bin/next")
+  })
+
+  it("still allows an installed extensionless entry point", () => {
+    const installed = path.join(ROOT, "installed-next")
+    mkdirSync(path.join(installed, "node_modules", "next", "dist", "bin"), { recursive: true })
+    writeFileSync(path.join(installed, "node_modules", "next", "dist", "bin", "next"), "// stub")
+    expect(describeUnavailableNodeOperation(installed, ["node_modules/next/dist/bin/next", "build"])).toBeNull()
+  })
+
   it("says nothing about an operation that runs no script", () => {
     expect(describeUnavailableNodeOperation(ROOT, ["run", "--reporter=dot"])).toBeNull()
   })

@@ -431,7 +431,10 @@
 
 /* The tab IS the item (it carries role="tab" and the item metrics). The 24px right padding
    reserves the space the close glyph occupies, so the glyph can never cover the label. */
+/* Tab ITEM metrics (min/max width, padding that reserves the close glyph). Kept as a separate class
+   from the label styles so .tab's ellipsis rule still applies to the item's first span. */
 .tabItem {
+  position: relative;
   min-width: 108px;
   max-width: 184px;
   height: 33px;
@@ -463,6 +466,7 @@
   place-items: center;
   border-radius: 2px;
   color: #6f7780;
+  cursor: pointer;
 }
 
 .tabItem:hover .tabCloseGlyph {
