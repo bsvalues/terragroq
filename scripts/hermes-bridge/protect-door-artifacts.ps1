@@ -83,6 +83,8 @@ function Protect-WilliamOSDoor {
   foreach ($d in @($gateDir, $InstallRoot)) {
     if (Protect-WilliamOSDoorArtifact -Path $d -Directory) { $protected += $d }
   }
-  Write-Output ("DOOR_ARTIFACTS_PROTECTED " + $protected.Count + " paths")
+  # Emit ONLY the path list: a second pipeline object here would be captured alongside the array by
+  # any caller that assigns the result, and the array would silently become object[] instead of a list.
+  Write-Verbose ("DOOR_ARTIFACTS_PROTECTED " + $protected.Count + " paths")
   return $protected
 }
