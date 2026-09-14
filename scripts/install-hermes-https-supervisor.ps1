@@ -34,6 +34,29 @@ function ConvertTo-PowerShellLiteral {
   return "'{0}'" -f $Value.Replace("'", "''")
 }
 
+<#
+.SYNOPSIS
+  Re-apply the #1223 door-artifact invariant after a copy lands a door artifact.
+
+.DESCRIPTION
+  Every path in this script that lands a launcher -- the primary install AND both rollback
+  paths -- does so with `Copy-Item -Force`, which re-inherits the parent directory's ACEs and
+  leaves the artifact writable by the identity the scheduled task runs as. A restored copy is
+  therefore exactly as dangerous as a fresh one, so this wrapper is shared by every such path.
+
+  It loads the protection module on first use and is a no-op when the module is absent (the
+  primary install path asserts presence itself, because a missing module there must abort).
+#>
+function Protect-DoorArtifactsAfterCopy {
+  param([string]$Root = $InstallRoot)
+  if (-not (Get-Command Protect-WilliamOSDoor -ErrorAction SilentlyContinue)) {
+    $module = Join-Path $PSScriptRoot "hermes-bridge\protect-door-artifacts.ps1"
+    if (-not (Test-Path -LiteralPath $module)) { return }
+    . $module
+  }
+  $null = Protect-WilliamOSDoor -InstallRoot $Root
+}
+
 function Wait-HttpsHealthy {
   param([int]$TimeoutSeconds = 60)
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -214,6 +237,10 @@ if ($RestoreFrom) {
   if ($state.launcherWasPresent) {
     $null = New-Item -ItemType Directory -Path (Split-Path -Parent $launcherTarget) -Force
     Copy-Item -LiteralPath $launcherBackup -Destination $launcherTarget -Force
+    # #1223: a RESTORED copy re-inherits the parent's ACEs exactly like a fresh install, so the
+    # rollback must re-apply the invariant too -- otherwise recovering from one failure leaves the
+    # launcher writable by the identity the scheduled task runs as.
+    Protect-DoorArtifactsAfterCopy
   } else {
     Remove-Item -LiteralPath $launcherTarget -Force -ErrorAction SilentlyContinue
   }
@@ -297,6 +324,8 @@ try {
   # provenance gate writable by the identity that runs the door -- the next boot then refuses with
   # DOOR_PROVENANCE_GATE_TAMPERABLE. Re-apply the immutability invariant as part of the same install,
   # so a refresh cannot recreate the drift it was just repaired from.
+  # The shared definition lives just above this scope so the ROLLBACK paths below can re-apply the
+  # same invariant after they restore a launcher copy.
   $doorProtectionScript = Join-Path $PSScriptRoot "hermes-bridge\protect-door-artifacts.ps1"
   if (Test-Path -LiteralPath $doorProtectionScript) {
     . $doorProtectionScript
@@ -325,6 +354,12 @@ try {
     }
   if (Test-Path -LiteralPath (Join-Path $backupRoot "start-williamos-https.ps1")) {
     Copy-Item -LiteralPath (Join-Path $backupRoot "start-williamos-https.ps1") -Destination $launcherTarget -Force
+    # #1223: the failure path restores the launcher with the same Copy-Item that re-inherits the
+    # parent's ACEs, so re-apply the invariant here too. Wrapped because this runs inside a catch
+    # that is already handling a failure -- a protection error must not mask the original one.
+    try { Protect-DoorArtifactsAfterCopy } catch {
+      Write-Warning "door-artifact protection after rollback failed: $($_.Exception.Message)"
+    }
   } elseif (Test-Path -LiteralPath $launcherTarget) {
     Remove-Item -LiteralPath $launcherTarget -Force
   }
