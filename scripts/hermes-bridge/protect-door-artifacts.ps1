@@ -8,13 +8,26 @@
 #     1. the anchor FILE must refuse a write-open, and
 #     2. its PARENT DIRECTORY must refuse entry creation
 # because a read-only file inside a writable directory can simply be replaced.
-# A plain Copy-Item -Force re-inherits the parent's loose ACEs, so any refresh
-# that does not re-apply this lands the door in the refused state again.
+#
+# SCOPE -- WHAT IS DELIBERATELY *NOT* HARDENED, AND WHY:
+#   The install root `C:\ProgramData\WilliamOS` must stay writable, because both
+#   launchers write stdout/stderr/boot logs into `C:\ProgramData\WilliamOS\logs`
+#   (start-williamos-live.ps1 $LogRoot L69/L92-94; start-williamos-https.ps1
+#   $LogRoot L14/L21-22). Hardening the install root propagates read-only down
+#   into `logs`, the door identity can then no longer CREATE its log files
+#   (reproduced: "Access to the path '...\logs\.new-...' is denied"), and both
+#   launchers fail before serving traffic. `rollback`, `backups`, `tls` and
+#   `trust` likewise stay untouched except for the specific targets named below.
+#
+#   The governed deploy already locks down `$gateTargetDir` and `$trustRootDir`
+#   (deploy-hermes-runtime.ps1 L804-817) but only *verifies* the two launcher
+#   files; this helper closes that gap by hardening the launcher files too.
 #
 # WHAT IT GRANTS: SYSTEM and Administrators FullControl (sanctioned repairs),
-# BUILTIN\Users ReadAndExecute. The door runs RunLevel=Limited, so its token does
-# not carry Administrators' Allow ACEs -- Users read-only is therefore exactly
+# BUILTIN\Users ReadAndExecute. The door runs RunLevel=Limited, so its token
+# carries no Administrators Allow ACE -- Users read-only is therefore exactly
 # "can execute the door, cannot rewrite its anchors".
+#
 # It does NOT change the verifier's semantics, bypass it, or disable it.
 # ==============================================================================
 
@@ -22,6 +35,8 @@ function Protect-WilliamOSDoorArtifact {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Path,
+    # ContainerInherit|ObjectInherit on a DIRECTORY so a file later dropped inside it
+    # cannot come back loose; None on files so protection never reaches siblings.
     [switch]$Directory
   )
   if (-not (Test-Path -LiteralPath $Path)) { return $false }
@@ -31,15 +46,15 @@ function Protect-WilliamOSDoorArtifact {
   @($acl.Access) | ForEach-Object { $null = $acl.RemoveAccessRule($_) }
   $inherit = if ($Directory) { 'ContainerInherit, ObjectInherit' } else { 'None' }
   foreach ($grant in @(
-      @{ Id = 'NT AUTHORITY\SYSTEM';      Rights = 'FullControl' },
-      @{ Id = 'BUILTIN\Administrators';   Rights = 'FullControl' },
-      @{ Id = 'BUILTIN\Users';            Rights = 'ReadAndExecute' }
+      @{ Id = 'NT AUTHORITY\SYSTEM';    Rights = 'FullControl' },
+      @{ Id = 'BUILTIN\Administrators'; Rights = 'FullControl' },
+      @{ Id = 'BUILTIN\Users';          Rights = 'ReadAndExecute' }
     )) {
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
         $grant.Id, $grant.Rights, $inherit, 'None', 'Allow')))
   }
   Set-Acl -LiteralPath $Path -AclObject $acl
-  # The gate also requires a trusted (administrator) OWNER for anything under ProgramData\WilliamOS.
+  # Anything under ProgramData\WilliamOS also needs a trusted (administrator) owner.
   try {
     $cur = Get-Acl -LiteralPath $Path
     if ($cur.Owner -notmatch 'Administrators|S-1-5-32-544|SYSTEM') {
@@ -56,31 +71,35 @@ function Protect-WilliamOSDoorArtifact {
 
 .DESCRIPTION
   Call this AFTER any copy that lands a door artifact under ProgramData\WilliamOS.
-  It hardens the four anchors the gate probes, the launch scripts the door
-  executes, and the directories that contain them, so a subsequent boot does not
-  fail closed on a newly-inherited writable ACE.
+  It hardens the four anchors the gate probes, the two launcher files the door
+  executes, the gate directory and the trust ring root -- so a subsequent boot
+  does not fail closed on a newly-inherited writable ACE -- while leaving the
+  install root and its mutable subtrees (logs in particular) writable.
 #>
 function Protect-WilliamOSDoor {
   [CmdletBinding()]
   param([string]$InstallRoot = "C:\ProgramData\WilliamOS")
 
-  $gateDir = Join-Path $InstallRoot "scripts\hermes-bridge"
+  $gateDir    = Join-Path $InstallRoot "scripts\hermes-bridge"
+  $trustDir   = Join-Path $InstallRoot "trust"
+
   $anchors = @(
     (Join-Path $gateDir "verify-door-provenance.mjs"),
     (Join-Path $gateDir "attest-deployment.mjs"),
     (Join-Path $gateDir "deployment-attestation-keys.json"),
-    (Join-Path $gateDir "integrations.json")
+    (Join-Path $gateDir "integrations.json"),
+    (Join-Path $trustDir "deployment-attestation-key.json")
   )
   $launchers = @(
     (Join-Path $InstallRoot "start-williamos-live.ps1"),
     (Join-Path $InstallRoot "start-williamos-https.ps1")
   )
+
   $protected = @()
   foreach ($f in ($anchors + $launchers)) {
     if (Protect-WilliamOSDoorArtifact -Path $f) { $protected += $f }
   }
-  # The containing directories must also refuse entry creation, or a file is substitutable.
-  foreach ($d in @($gateDir, $InstallRoot)) {
+  foreach ($d in @($gateDir, $trustDir)) {
     if (Protect-WilliamOSDoorArtifact -Path $d -Directory) { $protected += $d }
   }
   # Emit ONLY the path list: a second pipeline object here would be captured alongside the array by
