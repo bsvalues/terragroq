@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder"
 
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { describeUnavailableNodeOperation } from "@/lib/loom/node-operation-preflight"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
 import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
@@ -60,6 +61,17 @@ export async function POST(request: Request) {
   const operationArgs = operation.id === "tests.run" && projectBinding.binding.projectKey === "williamos"
     ? [...operation.args, "--config", "vitest.ci.config.ts"]
     : [...operation.args]
+
+  // An operation that runs a file from inside the checkout must be checked before it is spawned. Without
+  // this the child process fails inside Node's module loader and the operator is shown a raw stack trace
+  // ("Cannot find module .../node_modules/vitest/vitest.mjs") that names no cause they can act on. The
+  // absence of a test runner is a fact about the repository, so it is reported as one.
+  if (operation.command === "node") {
+    const unavailable = describeUnavailableNodeOperation(projectRoot, operationArgs)
+    if (unavailable) {
+      return Response.json({ error: unavailable.code, detail: unavailable.detail, operation: operation.id }, { status: 409 })
+    }
+  }
 
   // Reading repository state or tailing a log proves nothing and changes nothing; restarting the
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that

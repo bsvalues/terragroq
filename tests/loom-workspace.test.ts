@@ -11,6 +11,7 @@ const terminalRouteSeams = vi.hoisted(() => ({
   recordLoomEnd: vi.fn(),
   deriveSpaceMutationAuthority: vi.fn(),
   resolveProject: vi.fn(),
+  describeUnavailableNodeOperation: vi.fn(),
 }))
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -28,6 +29,12 @@ vi.mock("@/lib/loom/receipts", () => ({
 vi.mock("@/lib/governance/space-mutation-authority", () => ({
   deriveSpaceMutationAuthority: terminalRouteSeams.deriveSpaceMutationAuthority,
   SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
+}))
+// The real preflight reads the filesystem, and these tests run against invented roots that do not
+// exist on the machine. Mocked so an unrelated assertion about argv is not quietly answering
+// "this repository has no test runner" instead.
+vi.mock("@/lib/loom/node-operation-preflight", () => ({
+  describeUnavailableNodeOperation: terminalRouteSeams.describeUnavailableNodeOperation,
 }))
 
 import { POST } from "@/app/api/loom/run/route"
@@ -58,6 +65,8 @@ describe("Experience V2 bounded Terminal route", () => {
       workspaceRoot: ROOT, projectId: 7, projectKey: "terrafusion",
       repositoryIdentity: "bsvalues/terrafusion_os_1.0", project: { identity: "c:/terrafusion" },
     } })
+    // Available unless a test says otherwise; the preflight has its own tests below.
+    terminalRouteSeams.describeUnavailableNodeOperation.mockReturnValue(null)
   })
 
   it("spawns the exact server-derived argv for an allowed read-only inspection command", async () => {
@@ -111,6 +120,49 @@ describe("Experience V2 bounded Terminal route", () => {
     } finally {
       process.env.NODE_ENV = originalNodeEnv
     }
+  })
+
+  it("refuses before spawning when the repository cannot run the operation, naming the cause", async () => {
+    // The live defect this covers: a repository with no test runner produced
+    // "Cannot find module .../node_modules/vitest/vitest.mjs" from Node's module loader, which names no
+    // cause the operator can act on. Nothing should be spawned at all.
+    terminalRouteSeams.describeUnavailableNodeOperation.mockReturnValue({
+      code: "OPERATION_NOT_RUNNABLE_IN_REPOSITORY",
+      detail: "This repository has no vitest installed, so node_modules/vitest/vitest.mjs does not exist in C:\\work\\repo.",
+    })
+
+    const response = await POST(terminalRequest({ operation: "tests.run" }))
+
+    expect(response.status).toBe(409)
+    const payload = await response.json()
+    expect(payload.error).toBe("OPERATION_NOT_RUNNABLE_IN_REPOSITORY")
+    expect(payload.detail).toMatch(/no vitest installed/)
+    expect(terminalRouteSeams.spawn).not.toHaveBeenCalled()
+  })
+
+  it("still spawns when the preflight says the operation is runnable", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+    terminalRouteSeams.describeUnavailableNodeOperation.mockReturnValue(null)
+
+    const response = await POST(terminalRequest({ operation: "tests.run" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.spawn).toHaveBeenCalled()
+    child.emit("close", 0)
+    await response.text()
+  })
+
+  it("does not preflight a git operation, which runs from PATH rather than the checkout", async () => {
+    const child = new FakeTerminalChild()
+    terminalRouteSeams.spawn.mockReturnValue(child)
+
+    const response = await POST(terminalRequest({ operation: "repo.status" }))
+
+    expect(response.status).toBe(200)
+    expect(terminalRouteSeams.describeUnavailableNodeOperation).not.toHaveBeenCalled()
+    child.emit("close", 0)
+    await response.text()
   })
 
   it("runs a WilliamOS Space operation only in its server-derived WilliamOS checkout", async () => {
