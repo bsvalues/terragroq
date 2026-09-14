@@ -243,6 +243,34 @@ describe("W1 editor accessibility contract", () => {
     expect(css).toMatch(/\.srOnlyClose:focus-visible \.closeLabel\s*\{/)
   })
 
+  it("the revealed close label identifies its file, not just a shared basename", () => {
+    // Every closer is absolutely positioned against the strip, so they all rest at the same spot: an
+    // icon-only reveal left the operator unable to tell which file Enter would close. And a basename
+    // alone is ambiguous -- two repositories (or two directories) can each hold README.md -- so the
+    // label must carry the repository as well as the repository-relative path.
+    //
+    // The strip renders one closer set PER PANE, so the same file legitimately appears more than once;
+    // what must hold is that each distinct (repository, path) pair has its own identifying label.
+    const space = twoRepositorySpace()
+    const { container } = render(
+      <EditorSurface project={project} projectKey="terrafusion" space={space} onEditorChange={vi.fn()} />,
+    )
+    const shown = Array.from(container.querySelectorAll('button[aria-label^="Close "] span[aria-hidden="true"]'))
+      .map((el) => (el.textContent ?? "").trim())
+    expect(shown.length).toBeGreaterThanOrEqual(2)
+    // each distinct open file yields a distinct label
+    expect(new Set(shown).size).toBeGreaterThanOrEqual(2)
+    // the label is not a bare basename -- it names repository and path
+    for (const text of new Set(shown)) {
+      expect(text).toContain("README.md")
+      expect(text).not.toBe("README.md")
+    }
+    // the per-file accessible names are distinct too
+    const names = Array.from(container.querySelectorAll('button[aria-label^="Close "]'))
+      .map((el) => el.getAttribute("aria-label") ?? "")
+    expect(new Set(names).size).toBeGreaterThanOrEqual(2)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

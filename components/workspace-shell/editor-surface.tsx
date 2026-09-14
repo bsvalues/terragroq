@@ -772,9 +772,12 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                         >
                           <X size={11} />
                           {/* Revealed only on keyboard focus, so the focused control names the file it
-                              would close. aria-hidden keeps the accessible name to a single source. */}
+                              would close. The FULL repository-relative path, not the basename: two open
+                              files can share a basename, and identical labels at the same strip position
+                              would leave the operator unable to tell which file Enter closes. aria-hidden
+                              keeps the accessible name to a single source. */}
                           <span className={styles.closeLabel} aria-hidden="true">
-                            {repository ? `${repository.label} · ` : ""}{openedFile.path.split("/").at(-1)}
+                            {repository ? `${repository.label} · ` : ""}{openedFile.path}
                           </span>
                         </button>
                       )
