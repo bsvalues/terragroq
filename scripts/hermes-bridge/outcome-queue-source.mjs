@@ -1355,24 +1355,82 @@ SELECT
         OR "acquisitionKey" IS NULL
         OR "fencingToken" <= 0
       )
-  )::integer AS "activeBindingViolationCount",
-  (
-    SELECT count(*)::integer
-    FROM (
-      SELECT "userId"
-      FROM "outcome_queue_item"
-      WHERE "lifecycleState" = 'active'
-      GROUP BY "userId"
-      HAVING count(*) > 1
-    ) AS duplicate_active_users
-  ) AS "multipleActiveUserCount"
+  )::integer AS "activeBindingViolationCount"
 FROM "outcome_queue_item"
 `,
-  ensureOneActiveOutcomeIndex: `
+  // The legacy one-active-outcome-per-user mutex is retired: multiple outcomes may be
+  // active/preparing at once. Boot now DROPS the old index if present and never recreates it.
+  dropLegacyOneActiveOutcomeIndex: `
 DROP INDEX IF EXISTS "outcome_queue_item_one_active_per_user_idx";
-CREATE UNIQUE INDEX "outcome_queue_item_one_active_per_user_idx"
-  ON "outcome_queue_item" ("userId")
-  WHERE "lifecycleState" = 'active'
+`,
+  // Narrow successor invariant: at most one LIVE promotion lease per authoritative target.
+  ensurePromotionLeaseTable: `
+CREATE TABLE IF NOT EXISTS "promotion_lease" (
+  "id" serial PRIMARY KEY,
+  "userId" text NOT NULL,
+  "repository" text NOT NULL,
+  "targetRef" text NOT NULL,
+  "pullRequest" integer NOT NULL,
+  "boundHeadSha" text NOT NULL,
+  "adoptionHash" text NOT NULL,
+  "grantRef" text,
+  "outcomeId" integer,
+  "workOrderId" integer,
+  "status" text NOT NULL DEFAULT 'live',
+  "reason" text,
+  "expiresAt" timestamptz,
+  "releasedAt" timestamptz,
+  "version" integer NOT NULL DEFAULT 0,
+  "createdAt" timestamptz NOT NULL DEFAULT now(),
+  "updatedAt" timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "promotion_lease_status_check" CHECK ("status" IN ('live', 'released')),
+  CONSTRAINT "promotion_lease_pull_request_check" CHECK ("pullRequest" > 0)
+);
+`,
+  ensurePromotionLeaseIndexes: `
+CREATE UNIQUE INDEX IF NOT EXISTS "promotion_lease_one_live_per_target_idx"
+  ON "promotion_lease" ("repository", "targetRef")
+  WHERE "status" = 'live';
+CREATE INDEX IF NOT EXISTS "promotion_lease_expiry_idx"
+  ON "promotion_lease" ("status", "expiresAt");
+`,
+  // Repair: a live lease whose delivery grant is gone/revoked/expired is a stale lock; release it.
+  sweepStalePromotionLeases: `
+UPDATE "promotion_lease" AS l
+SET "status" = 'released', "reason" = 'LEASE_STALE_GRANT', "releasedAt" = now(), "updatedAt" = now(), "version" = l."version" + 1
+WHERE l."status" = 'live' AND (
+  (l."expiresAt" IS NOT NULL AND l."expiresAt" <= now())
+  OR l."grantRef" IS NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM "authority_grant" g
+    WHERE g."userId" = l."userId" AND g."ref" = l."grantRef"
+      AND g."status" = 'active' AND g."revokedAt" IS NULL
+  )
+);
+`,
+  readStalePromotionLeaseCount: `
+SELECT count(*)::integer AS "staleLiveLeaseCount"
+FROM "promotion_lease" AS l
+WHERE l."status" = 'live' AND (
+  (l."expiresAt" IS NOT NULL AND l."expiresAt" <= now())
+  OR l."grantRef" IS NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM "authority_grant" g
+    WHERE g."userId" = l."userId" AND g."ref" = l."grantRef"
+      AND g."status" = 'active' AND g."revokedAt" IS NULL
+  )
+)
+`,
+  readPromotionLeaseLiveIndex: `
+SELECT i.indisunique AS "unique",
+       i.indisvalid AS "valid",
+       i.indisready AS "ready",
+       pg_get_indexdef(i.indexrelid, 1, true) AS "keyColumn",
+       pg_get_expr(i.indpred, i.indrelid, true) AS "predicate"
+FROM pg_index AS i
+JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
+WHERE i.indrelid = '"promotion_lease"'::regclass
+  AND index_class.relname = 'promotion_lease_one_live_per_target_idx'
 `,
   ensureOutcomeQueueItemCheckConstraints: `
 ALTER TABLE "outcome_queue_item"
@@ -1434,17 +1492,6 @@ WHERE conrelid = '"outcome_queue_item"'::regclass
   AND contype = 'c'
   AND conname = ANY($1::text[])
 ORDER BY conname ASC
-`,
-  readOneActiveOutcomeIndex: `
-SELECT i.indisunique AS "unique",
-       i.indisvalid AS "valid",
-       i.indisready AS "ready",
-       pg_get_indexdef(i.indexrelid, 1, true) AS "keyColumn",
-       pg_get_expr(i.indpred, i.indrelid, true) AS "predicate"
-FROM pg_index AS i
-JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
-WHERE i.indrelid = '"outcome_queue_item"'::regclass
-  AND index_class.relname = 'outcome_queue_item_one_active_per_user_idx'
 `,
   acquireLock: `SELECT pg_advisory_xact_lock(hashtext($1))`,
   readDependencyGraph: `
@@ -3230,12 +3277,12 @@ function receiptIndexesMatch(rows) {
   })
 }
 
-function oneActiveIndexMatches(row) {
+function promotionLeaseIndexMatches(row) {
   return row?.unique === true
     && row?.valid === true
     && row?.ready === true
-    && canonicalCatalogExpression(row.keyColumn) === "userid"
-    && canonicalCatalogExpression(row.predicate) === "lifecyclestate='active'"
+    && canonicalCatalogExpression(row.keyColumn) === "repository,targetref"
+    && canonicalCatalogExpression(row.predicate) === "status='live'"
 }
 
 function hardeningWall(code, details = null, cause = null) {
@@ -3343,7 +3390,6 @@ export async function ensureOutcomeQueueHardeningSchema({
       "authorityViolationCount",
       "nonnegativeViolationCount",
       "activeBindingViolationCount",
-      "multipleActiveUserCount",
     ].map((name) => [name, Number(violations?.[name] ?? Number.NaN)]))
     if (Object.values(violationCounts).some((count) => (
       !Number.isSafeInteger(count) || count < 0
@@ -3357,7 +3403,10 @@ export async function ensureOutcomeQueueHardeningSchema({
       )
     }
     phase = "constraints"
-    await connection.query(OUTCOME_QUEUE_SQL.ensureOneActiveOutcomeIndex)
+    await connection.query(OUTCOME_QUEUE_SQL.dropLegacyOneActiveOutcomeIndex)
+    await connection.query(OUTCOME_QUEUE_SQL.ensurePromotionLeaseTable)
+    await connection.query(OUTCOME_QUEUE_SQL.ensurePromotionLeaseIndexes)
+    await connection.query(OUTCOME_QUEUE_SQL.sweepStalePromotionLeases)
     await connection.query(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints)
     for (const sql of [
       OUTCOME_QUEUE_SQL.validateOutcomeQueueLifecycleConstraint,
@@ -3390,11 +3439,19 @@ export async function ensureOutcomeQueueHardeningSchema({
       })
     }
     const indexVerification = await connection.query(
-      OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex,
+      OUTCOME_QUEUE_SQL.readPromotionLeaseLiveIndex,
     )
     if (indexVerification?.rows?.length !== 1
-      || !oneActiveIndexMatches(indexVerification.rows[0])) {
+      || !promotionLeaseIndexMatches(indexVerification.rows[0])) {
       hardeningWall("OUTCOME_QUEUE_HARDENING_INDEX_WALL")
+    }
+    const staleLeases = await connection.query(
+      OUTCOME_QUEUE_SQL.readStalePromotionLeaseCount,
+    )
+    if (Number(staleLeases?.rows?.[0]?.staleLiveLeaseCount ?? 0) > 0) {
+      hardeningWall("OUTCOME_QUEUE_HARDENING_LEASE_WALL", {
+        observed: staleLeases?.rows ?? [],
+      })
     }
     phase = "commit"
     await connection.query("COMMIT")

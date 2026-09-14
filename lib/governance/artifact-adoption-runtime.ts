@@ -27,9 +27,37 @@ import {
 } from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
 import { hashRecord } from "@/lib/governance/hash"
+import { PROMOTION_TARGET_REF, acquirePromotionLease, validatePromotionLease, type PromotionLeaseClaim } from "@/lib/governance/promotion-lease"
 import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/repository-lifecycle.mjs"
 
 const runFile = promisify(execFile)
+
+function leaseClaimFrom(userId: string, authorization: ArtifactAdoptionAuthorization): PromotionLeaseClaim {
+  return {
+    userId,
+    repository: authorization.context.repository,
+    targetRef: PROMOTION_TARGET_REF,
+    pullRequest: authorization.artifact.pullRequest,
+    boundHeadSha: authorization.artifact.headSha,
+    adoptionHash: authorization.adoptionHash,
+    grantRef: authorization.deliveryGrant?.ref ?? null,
+    outcomeId: authorization.context.outcome.id,
+    workOrderId: authorization.context.workOrder.id,
+    expiresAt: authorization.deliveryGrant?.expiresAt ?? authorization.context.grant.expiresAt,
+  }
+}
+
+async function validatePromotionLeaseOrThrow(
+  database: Database,
+  userId: string,
+  authorization: ArtifactAdoptionAuthorization,
+): Promise<void> {
+  const ok = await validatePromotionLease(
+    { query: async (sql, params) => await database.query(sql, [...(params ?? [])]) },
+    leaseClaimFrom(userId, authorization),
+  )
+  if (!ok) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the promotion lease for the authoritative target is missing, stale, or released")
+}
 const SHA = /^[0-9a-f]{40}$/
 const DIGEST = /^[0-9a-f]{64}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
@@ -561,6 +589,11 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
             || hashRecord(persisted.artifact) !== hashRecord(authorization.artifact)) {
             fail("DELIVERY_SEAL_CONFIRMATION_STALE", "idempotency key is bound to another artifact")
           }
+          // Replay path: a lease predating this change (or lost) must be backfilled here or
+          // the paired ISSUE validation would refuse a valid idempotent re-authorization.
+          await acquirePromotionLease({
+            query: async (sql, params) => await client.query(sql, [...(params ?? [])]),
+          }, leaseClaimFrom(userId, persisted))
           await client.query("COMMIT")
           return { eventId: Number(prior.rows[0].id), authorization: persisted }
         }
@@ -592,6 +625,23 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
             expiresAt: grantRow.expiresAt == null ? null : iso(grantRow.expiresAt),
           },
         }
+        // Promotion lease: acquire atomically with the delivery grant, keyed to the
+        // authoritative target (repository + promotion ref), never to the user. Another
+        // live promotion holding the same target refuses this AUTHORIZE with 409.
+        await acquirePromotionLease({
+          query: async (sql, params) => await client.query(sql, [...(params ?? [])]),
+        }, {
+          userId,
+          repository: authorization.context.repository,
+          targetRef: PROMOTION_TARGET_REF,
+          pullRequest: authorization.artifact.pullRequest,
+          boundHeadSha: authorization.artifact.headSha,
+          adoptionHash: authorization.adoptionHash,
+          grantRef: persistedAuthorization.deliveryGrant.ref,
+          outcomeId: authorization.context.outcome.id,
+          workOrderId: authorization.context.workOrder.id,
+          expiresAt: persistedAuthorization.deliveryGrant.expiresAt,
+        })
         const inserted = await client.query(
           `INSERT INTO "governance_event" ("userId","eventType","entityType","entityId","actor","reason","metadata")
             VALUES ($1,$2,$3,$4,'williamos',$5,$6::jsonb) RETURNING "id"`,
@@ -781,6 +831,10 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     },
     issue: async (userId: string, worldId: string, idempotencyKey: string) => {
       const persisted = await findAuthorization(userId, worldId, idempotencyKey)
+      // Promotion lease revalidation before any seal mutation: the live lease must still be
+      // bound to this exact adoption + head, or the seal stops. A revoked/expired grant's
+      // lease self-heals to released by the sweep, so a dead lineage cannot re-seal.
+      await validatePromotionLeaseOrThrow(options.database, userId, persisted.authorization)
       const existing = await dependencies.loadSeal?.(userId, persisted.authorization.adoptionHash)
       if (existing) {
         const seal = await issueProspectiveArtifactAdoptionSeal({ userId, adoptionHash: persisted.authorization.adoptionHash }, dependencies)

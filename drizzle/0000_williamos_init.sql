@@ -747,7 +747,6 @@ CREATE UNIQUE INDEX "outcome_queue_item_issue_911_live_acceptance_singleton_idx"
 CREATE UNIQUE INDEX "outcome_queue_item_user_key_idx" ON "outcome_queue_item" USING btree ("userId","outcomeKey");--> statement-breakpoint
 CREATE UNIQUE INDEX "outcome_queue_item_user_acquisition_idx" ON "outcome_queue_item" USING btree ("userId","acquisitionKey");--> statement-breakpoint
 CREATE UNIQUE INDEX "outcome_queue_item_user_terminal_idx" ON "outcome_queue_item" USING btree ("userId","terminalKey");--> statement-breakpoint
-CREATE UNIQUE INDEX "outcome_queue_item_one_active_per_user_idx" ON "outcome_queue_item" USING btree ("userId") WHERE "outcome_queue_item"."lifecycleState" = 'active';--> statement-breakpoint
 CREATE INDEX "outcome_queue_item_selection_idx" ON "outcome_queue_item" USING btree ("userId","lifecycleState","approvalState","authorityState","queueOrder");--> statement-breakpoint
 CREATE INDEX "outcome_queue_item_lease_idx" ON "outcome_queue_item" USING btree ("userId","lifecycleState","leaseExpiresAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_item_goal_idx" ON "outcome_queue_item" USING btree ("goalId");--> statement-breakpoint
@@ -762,3 +761,28 @@ CREATE INDEX "project_resource_user_identity_idx" ON "project_resource" USING bt
 CREATE INDEX "workbench_thread_user_project_updated_idx" ON "workbench_thread" USING btree ("userId","projectId","updatedAt","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "workbench_thread_source_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","sourceType","sourceId") WHERE "workbench_thread_source"."role" = 'root';--> statement-breakpoint
 CREATE UNIQUE INDEX "workbench_thread_source_thread_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","threadId") WHERE "workbench_thread_source"."role" = 'root';
+--> statement-breakpoint
+CREATE TABLE "promotion_lease" (
+  "id" serial NOT NULL,
+  "userId" text NOT NULL,
+  "repository" text NOT NULL,
+  "targetRef" text NOT NULL,
+  "pullRequest" integer NOT NULL,
+  "boundHeadSha" text NOT NULL,
+  "adoptionHash" text NOT NULL,
+  "grantRef" text,
+  "outcomeId" integer,
+  "workOrderId" integer,
+  "status" text DEFAULT 'live' NOT NULL,
+  "reason" text,
+  "expiresAt" timestamp with time zone,
+  "releasedAt" timestamp with time zone,
+  "version" integer DEFAULT 0 NOT NULL,
+  "createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+  "updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "promotion_lease_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "promotion_lease_status_check" CHECK ("status" IN ('live', 'released')),
+  CONSTRAINT "promotion_lease_pull_request_check" CHECK ("pullRequest" > 0)
+);--> statement-breakpoint
+CREATE UNIQUE INDEX "promotion_lease_one_live_per_target_idx" ON "promotion_lease" USING btree ("repository","targetRef") WHERE "promotion_lease"."status" = 'live';--> statement-breakpoint
+CREATE INDEX "promotion_lease_expiry_idx" ON "promotion_lease" USING btree ("status","expiresAt");

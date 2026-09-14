@@ -519,9 +519,6 @@ export const outcomeQueueItem = pgTable(
     uniqueIndex("outcome_queue_item_issue_911_live_acceptance_singleton_idx")
       .on(table.userId)
       .where(sql`${table.acceptedContractIds} = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]`),
-    uniqueIndex("outcome_queue_item_one_active_per_user_idx")
-      .on(table.userId)
-      .where(sql`${table.lifecycleState} = 'active'`),
     index("outcome_queue_item_selection_idx").on(
       table.userId,
       table.lifecycleState,
@@ -564,6 +561,41 @@ export const outcomeQueueItem = pgTable(
         AND ${table.fencingToken} > 0
       )`,
     ),
+  ],
+)
+
+// The narrow successor to the retired one-active-outcome-per-user mutex: at most one LIVE
+// promotion lease per authoritative target (repository + target ref). Preparation holds no
+// lease; the seal AUTHORIZE step acquires it atomically with the delivery grant, and it is
+// released on FINALIZE, revocation, or expiry. Keyed per-target, never per-user.
+export const promotionLease = pgTable(
+  "promotion_lease",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    repository: text("repository").notNull(),
+    targetRef: text("targetRef").notNull(),
+    pullRequest: integer("pullRequest").notNull(),
+    boundHeadSha: text("boundHeadSha").notNull(),
+    adoptionHash: text("adoptionHash").notNull(),
+    grantRef: text("grantRef"),
+    outcomeId: integer("outcomeId"),
+    workOrderId: integer("workOrderId"),
+    status: text("status").default("live").notNull(),
+    reason: text("reason"),
+    expiresAt: timestamp("expiresAt", { withTimezone: true }),
+    releasedAt: timestamp("releasedAt", { withTimezone: true }),
+    version: integer("version").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("promotion_lease_one_live_per_target_idx")
+      .on(table.repository, table.targetRef)
+      .where(sql`${table.status} = 'live'`),
+    index("promotion_lease_expiry_idx").on(table.status, table.expiresAt),
+    check("promotion_lease_status_check", sql`${table.status} IN ('live', 'released')`),
+    check("promotion_lease_pull_request_check", sql`${table.pullRequest} > 0`),
   ],
 )
 

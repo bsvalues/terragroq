@@ -43,6 +43,54 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
     : paths)
   const events: Array<{ type: string; entity: string; entityId?: string; metadata: unknown }> = []
   const grants: Array<Record<string, unknown>> = []
+  const leases: Array<Record<string, unknown>> = []
+  const fixtureNow = new Date("2026-08-31T20:00:00.000Z")
+  const leaseSim = (sql: string, values?: readonly unknown[]) => {
+    if (sql.includes('UPDATE "promotion_lease" AS l')) {
+      for (const lease of leases.filter((entry) => entry.status === "live")) {
+        const grant = grants.find((g) => g.ref === lease.grantRef && g.status === "active" && g.revokedAt == null)
+        const expiry = new Date(String(lease.expiresAt))
+        if (!grant || expiry <= fixtureNow) {
+          lease.status = "released"
+          lease.reason = expiry <= fixtureNow ? "LEASE_EXPIRED" : "LEASE_STALE_GRANT"
+        }
+      }
+      return { rows: [] }
+    }
+    if (sql.includes("LEASE_REBOUND")) {
+      for (const lease of leases) {
+        if (lease.status === "live" && lease.repository === values?.[0] && lease.targetRef === values?.[1]
+          && lease.adoptionHash !== values?.[2] && lease.outcomeId === values?.[3] && lease.workOrderId === values?.[4]) {
+          lease.status = "released"; lease.reason = "LEASE_REBOUND"
+        }
+      }
+      return { rows: [] }
+    }
+    if (sql.includes('UPDATE "promotion_lease"') && sql.includes('"adoptionHash" = $1')) {
+      const changed: Array<{ id: unknown }> = []
+      for (const lease of leases) {
+        if (lease.status === "live" && lease.adoptionHash === values?.[0]) {
+          lease.status = "released"; lease.reason = values?.[1]; changed.push({ id: lease.id })
+        }
+      }
+      return { rows: changed }
+    }
+    if (sql.includes('FROM "promotion_lease"')) {
+      return { rows: leases.filter((l) => l.status === "live" && l.repository === values?.[0] && l.targetRef === values?.[1]) }
+    }
+    if (sql.includes('INSERT INTO "promotion_lease"')) {
+      if (leases.some((l) => l.status === "live" && l.repository === values?.[1] && l.targetRef === values?.[2])) return { rows: [] }
+      const row = {
+        id: 700 + leases.length, repository: values?.[1], targetRef: values?.[2],
+        pullRequest: values?.[3], boundHeadSha: values?.[4], adoptionHash: values?.[5],
+        grantRef: values?.[6] ?? null, outcomeId: values?.[7] ?? null, workOrderId: values?.[8] ?? null,
+        status: "live", reason: null, expiresAt: values?.[9] == null ? null : new Date(String(values?.[9])),
+      }
+      leases.push(row)
+      return { rows: [row] }
+    }
+    return null
+  }
   let expireGrantAtFence = false
   const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.includes("FROM \"working_world\" world")) return { rows: [row] }
@@ -115,6 +163,8 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
       events.push({ type, entity, entityId: String(values?.[3] ?? ""), metadata })
       return { rows: [{ id: 100 + events.length }] }
     }
+    const lease = leaseSim(sql, values)
+    if (lease) return lease
     return { rows: [] }
   })
   const txQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
@@ -148,6 +198,8 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
       if (values?.[1] === "ARTIFACT_ADOPTION_AUTHORIZED") events.push({ type: String(values[1]), entity: String(values[2]), metadata: JSON.parse(String(values[5])) })
       return { rows: [{ id: values?.[1] === "ARTIFACT_ADOPTION_AUTHORIZED" ? 101 : 104 }] }
     }
+    const lease = leaseSim(sql, values)
+    if (lease) return lease
     return { rows: [] }
   })
   const db = { query, connect: vi.fn(async () => ({ query: txQuery, release: vi.fn() })) }
@@ -166,7 +218,7 @@ function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = 
     signingKey: { keyId: "test-key", privateKey, publicKey },
     now: () => new Date("2026-08-31T20:00:00.000Z"),
   })
-  return { runtime, db, lifecycle, events, txQuery, deriveBaseSha, expireGrantAtFence: () => { expireGrantAtFence = true } }
+  return { runtime, db, lifecycle, events, leases, txQuery, deriveBaseSha, expireGrantAtFence: () => { expireGrantAtFence = true } }
 }
 
 describe("persisted prospective artifact adoption", () => {
