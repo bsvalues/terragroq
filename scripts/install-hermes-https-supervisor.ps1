@@ -293,6 +293,18 @@ try {
   $null = New-Item -ItemType Directory -Path $InstallRoot -Force
   Copy-Item -LiteralPath $launcherSource -Destination $launcherTarget -Force
 
+  # #1223: a fresh Copy-Item re-inherits the parent's ACEs, which leaves the launcher and the
+  # provenance gate writable by the identity that runs the door -- the next boot then refuses with
+  # DOOR_PROVENANCE_GATE_TAMPERABLE. Re-apply the immutability invariant as part of the same install,
+  # so a refresh cannot recreate the drift it was just repaired from.
+  $doorProtectionScript = Join-Path $PSScriptRoot "hermes-bridge\protect-door-artifacts.ps1"
+  if (Test-Path -LiteralPath $doorProtectionScript) {
+    . $doorProtectionScript
+    Protect-WilliamOSDoor -InstallRoot $InstallRoot
+  } else {
+    throw "Refusing to complete the install: door-artifact protection script is absent at $doorProtectionScript. Without it this refresh would leave the door unable to boot (#1223)."
+  }
+
   $userId = "$env:USERDOMAIN\$env:USERNAME"
   $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$launcherTarget`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId

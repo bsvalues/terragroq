@@ -823,6 +823,17 @@ foreach ($anchor in @($trustRootDir, $gateTargetDir, $trustKeyTarget, $ringTarge
 # gateless generation.
 Copy-Item -LiteralPath $httpsStartSource -Destination $HttpsStartTarget -Force
 
+# #1223: a refresh must not leave the door unable to boot. Copy-Item re-inherits the parent's ACEs,
+# which makes the launcher and the provenance gate writable by the identity that runs the door, and
+# the next boot then fails closed. Re-apply the immutability invariant here, in the same deploy.
+$doorProtectionScript = Join-Path $PSScriptRoot "hermes-bridge\protect-door-artifacts.ps1"
+if (Test-Path -LiteralPath $doorProtectionScript) {
+  . $doorProtectionScript
+  Protect-WilliamOSDoor -InstallRoot (Split-Path -Parent $LiveStartTarget)
+} else {
+  throw "Refusing to complete the deploy: door-artifact protection script is absent at $doorProtectionScript. Without it this refresh would leave the door unable to boot (#1223)."
+}
+
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
 $null = robocopy (Join-Path $standalone ".next") (Join-Path $Runtime ".next") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
