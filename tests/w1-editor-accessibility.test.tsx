@@ -305,6 +305,33 @@ describe("W1 editor accessibility contract", () => {
     expect(revealBody).not.toMatch(/max-width:\s*\d+px/)
   })
 
+  it("the closer row cannot starve the tablist of space", () => {
+    // `.tabs` is flex: 1 (zero basis) and a revealed closer has an auto basis, so a long path could let
+    // the closer consume the whole strip and collapse the tablist to 0px. The closer row must be capped
+    // so the tabs always retain a share of the strip.
+    const css = readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.module.css"), "utf8")
+    const closers = css.slice(css.indexOf(".tabClosers {"))
+    const body = closers.slice(0, closers.indexOf("}"))
+    expect(body).toMatch(/max-width:\s*50%/)
+    expect(body).toMatch(/min-width:\s*0/)
+  })
+
+  it("each pane's editor is named distinctly so assistive technology can tell them apart", () => {
+    // split() copies the primary file into the secondary pane, so both textboxes can hold the same path.
+    // A path-only accessible name gave AT two identically-named controls with no way to tell which pane
+    // was being edited. The editor surface must pass a pane identity through; the mocked SourceEditor
+    // below stands in for CodeMirror, so assert the real SourceEditor builds the name from it.
+    const real = readFileSync(path.join(process.cwd(), "components/workspace-shell/source-editor.tsx"), "utf8")
+    expect(real).toMatch(/paneLabel/)
+    expect(real).toMatch(/"aria-label":\s*paneLabel\s*\?/)
+    expect(real).toMatch(/\[path, paneLabel, onSave\]/)
+
+    const surface = readFileSync(path.join(process.cwd(), "components/workspace-shell/editor-surface.tsx"), "utf8")
+    expect(surface).toMatch(/paneLabel=/)
+    expect(surface).toMatch(/primary pane/)
+    expect(surface).toMatch(/secondary pane/)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

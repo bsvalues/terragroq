@@ -479,13 +479,17 @@
 
 /* Real close controls: named and focusable for assistive technology and keyboard users, but kept
    outside the tablist so the tablist's children remain exclusively role="tab".
-   The container must be allowed to SHRINK: a fixed-width reveal inside a non-shrinking row can exceed
-   the pane's own width near the 360px minimum, collapsing the tab list and pushing the control
-   off-screen. `min-width: 0` lets the reveal be capped by the space actually available instead. */
+
+   The closer row must not be able to starve the tablist. `.tabs` is `flex: 1` (zero flex-basis) while a
+   revealed closer has an auto basis from its label, so a long path could let the closer consume the whole
+   strip and leave the tablist at 0px. `max-width: 50%` caps the reveal's share so the tabs always keep at
+   least half the strip, and the percentage resolves against the strip (the flex container's width), which
+   is definite -- not against the closer's own content-derived width. */
 .tabClosers {
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 50%;
 }
 
 .srOnlyClose {

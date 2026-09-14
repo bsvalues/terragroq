@@ -790,6 +790,9 @@ export function EditorSurface({ project, projectName = project?.name ?? "Project
                       <SourceEditor
                         key={buffer.key}
                         path={buffer.path}
+                        paneLabel={space.editor.panes.length > 1
+                          ? (space.editor.panes[0]?.id === pane.id ? "primary pane" : "secondary pane")
+                          : undefined}
                         value={buffer.content}
                         selection={pane.selection}
                         onChange={(content) => {
