@@ -75,7 +75,10 @@ param(
   [string]$WorkspaceAppCaPath = "C:\ProgramData\WilliamOS\williamos-preview-root-ca.pem",
   # The TerraFusion workspace the cockpit edits. Declared in .env.local; this legacy-named switch overrides it when a
   # deployment needs to say so explicitly. Never defaulted to a literal here -- see the header.
-  [string]$ProjectRoot
+  [string]$ProjectRoot,
+  # Optional override of the provenance verifier path (tests/repair). Production resolves it from
+  # $PSScriptRoot beside this launcher; leaving this unset is the norm.
+  [string]$ProvenanceGate
 )
 
 $ErrorActionPreference = "Stop"
@@ -140,6 +143,7 @@ function Deny-Boot {
   exit 1
 }
 
+
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
 $declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_SPACE_IDENTITY"
@@ -155,6 +159,68 @@ if (-not (Test-Path -LiteralPath $declaredRoot -PathType Container)) {
 }
 $resolvedProjectRoot = (Resolve-Path -LiteralPath $declaredRoot).ProviderPath.TrimEnd('\')
 $resolvedAppRoot = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\')
+
+# ---------------------------------------------------------------------------------------------
+# THE DOOR PROVENANCE GATE (#1223, owner-stated 2026-09-12): the door may start only a revision
+# proven to be an integrated lab-main revision with valid integration provenance. The git path
+# already refuses to integrate anything else; this closes the filesystem path — a robocopied tree
+# whose built provenance names a revision absent from the authoritative integration ledger cannot
+# become the live door. Fail-closed: missing gate file, missing provenance, unreadable ledger, or
+# an unlisted revision all deny boot. No network, no fallback.
+# ---------------------------------------------------------------------------------------------
+# Trust placement (#1223 R2): the verifier code must be bytes the runtime cannot rewrite, so it
+# resolves beside THIS launcher (C:\ProgramData\WilliamOS in production, administrator-gated like
+# the task definitions), never from inside the tree being admitted.
+if ($ProvenanceGate) { $provenanceGate = $ProvenanceGate }
+else { $provenanceGate = Join-Path $PSScriptRoot "scripts\hermes-bridge\verify-door-provenance.mjs" }
+$provenanceGateDir = (Resolve-Path -LiteralPath (Split-Path -Parent $provenanceGate) -ErrorAction SilentlyContinue)
+if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenanceGate } else { $provenanceGateDir = $provenanceGateDir.Path }
+if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
+  Deny-Boot "DOOR_PROVENANCE_GATE_MISSING" "the trusted gate script is absent at $provenanceGate (installed beside this launcher by the deploy), so this boot cannot prove its revision is an authorized, attested, integrated lab-main revision (#1223)."
+}
+# #1223 R3: a verifier the door's own identity can rewrite is not a trust anchor — the deploy
+# installs it under an administrator-gated ACL (Users: read/execute only). If it is writable here,
+# a filesystem writer could substitute the judge that admits it, so refuse instead of pretending.
+$gateTamperProbe = $null
+try {
+  $gateTamperProbe = [System.IO.File]::Open($provenanceGate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+} catch {
+  # not writable is the healthy case; the probe simply stays null
+  $gateTamperProbe = $null
+}
+if ($gateTamperProbe) {
+  $gateTamperProbe.Close()
+  Deny-Boot "DOOR_PROVENANCE_GATE_TAMPERABLE" "$provenanceGate is writable by the identity running the door, so it cannot be the authority for bytes it can rewrite (#1223)."
+}
+
+# #1223 R6 (BLOCKING B6-1): never let the ambient environment inject code into the gate process.
+# node honours NODE_OPTIONS/NODE_PATH/NODE_REPL_EXTERNAL_MODULE for every child it starts; the door's
+# task runs as an interactive identity that owns HKCU\Environment, so a preload there can print
+# DOOR_PROVENANCE_OK and exit 0 without verifying anything. Clear them here, and the gate refuses
+# independently if any is still set (so a launcher regression cannot silently reopen the channel).
+foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE")) {
+  $nodeInjectValue = [Environment]::GetEnvironmentVariable($nodeInjectVar)
+  if (-not [string]::IsNullOrEmpty($nodeInjectValue)) {
+    Remove-Item -LiteralPath "Env:$nodeInjectVar" -ErrorAction SilentlyContinue
+    Write-Host "DOOR_NODE_INJECTION_ENV_CLEARED $nodeInjectVar=$nodeInjectValue"
+  }
+}
+$gatePreviousPreference = $ErrorActionPreference
+try {
+  # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed
+  # refusal behind a PowerShell error instead of the reason code. Read the exit code; fold the
+  # captured stream by joining, not by regex-splitting (this warning is earned).
+  $ErrorActionPreference = "Continue"
+  $gateOutput = & $node $provenanceGate --app-root="$resolvedAppRoot" --gate-dir="$provenanceGateDir" 2>&1
+  $gateExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $gatePreviousPreference
+}
+$gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+if ($gateExit -ne 0) {
+  Deny-Boot "DOOR_PROVENANCE_REFUSED" $gateSummary
+}
+Write-Boot "BOOT_ALLOWED $gateSummary"
 
 # The exact defect being closed: the deployed bundle standing in for the workspace.
 if ($resolvedProjectRoot -ieq $resolvedAppRoot) {

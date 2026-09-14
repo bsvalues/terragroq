@@ -414,7 +414,9 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(deploy).toContain("Get-LegacyCockpitRelayState")
     expect(deploy).toContain("Remove-LegacyCockpitRelay")
     expect(deploy).toContain("reserved by an unrelated portproxy target")
-    expect(deploy).toMatch(/version\s*=\s*7/)
+    // v8: the signed deployment manifest joined the captured file set so a rollback re-attests the
+    // restored generation (round-3 review: the gate denied its own rolled-back door).
+    expect(deploy).toMatch(/version\s*=\s*8/)
     expect(deploy).toContain("legacyRelay =")
     expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
     expect(deploy).toContain('"compatibility-relay"')

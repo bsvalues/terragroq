@@ -35,6 +35,7 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
   [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
+  [string]$HttpsStartTarget = "C:\ProgramData\WilliamOS\start-williamos-https.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443,
   [switch]$WithDependencies,
@@ -62,7 +63,7 @@ if ($Port -ne 3100 -or $HttpsPort -ne 3443) {
 if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }
 
 function Test-Cockpit {
-  param([int]$Port, [int]$TimeoutSeconds = 90)
+  param([int]$Port, [int]$TimeoutSeconds = 300)
   # Polling rather than sleeping a fixed amount: a cold start is not a fixed cost, and "we waited long
   # enough" is the assumption this function exists to replace.
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -363,6 +364,31 @@ $liveStartSource = Join-Path $Source "deploy\hermes\williamos-live\start-william
 if (-not (Test-Path -LiteralPath $liveStartSource -PathType Leaf)) {
   throw "Missing repository-owned WilliamOS Live start script: $liveStartSource"
 }
+# #1223 R2: the provenance gate + attester are boot-critical trust code. They install BESIDE the
+# launchers under ProgramData (administrator-gated, outside the robocopy target) — never inside
+# the runtime tree they exist to distrust, where a runtime-writer could substitute them. Refuse
+# before touching production if the source lacks them.
+$gateScriptNames = @("verify-door-provenance.mjs", "attest-deployment.mjs")
+$gateSourceDir = Join-Path $Source "scripts\hermes-bridge"
+$gateTargetDir = Join-Path (Split-Path -Parent $LiveStartTarget) "scripts\hermes-bridge"
+# #1223 R3: the trust root holds the attestation PRIVATE key and is readable only by
+# SYSTEM/Administrators; the ring (public keys) and the gate code live in the gate directory under
+# Users:RX. The runtime identity can read the public material but cannot rewrite any of it, so a
+# filesystem writer cannot substitute the judge, the keys, or the receipt that admits it.
+$trustRootDir = Join-Path (Split-Path -Parent $LiveStartTarget) "trust"
+$trustKeyTarget = Join-Path $trustRootDir "deployment-attestation-key.json"
+$trustKeyLegacy = Join-Path $env:USERPROFILE ".williamos\deployment-attestation-key.json"
+$ringTarget = Join-Path $gateTargetDir "deployment-attestation-keys.json"
+$receiptTarget = Join-Path $gateTargetDir "deployment-attestation.json"
+$nodeExe = "C:\Program Files\nodejs\node.exe"
+foreach ($g in $gateScriptNames) {
+  $gs = Join-Path $gateSourceDir $g
+  if (-not (Test-Path $gs)) { throw "Missing door trust script in the source tree: $gs" }
+}
+$httpsStartSource = Join-Path $Source "deploy\hermes\williamos-https\start-williamos-https.ps1"
+if (-not (Test-Path -LiteralPath $httpsStartSource -PathType Leaf)) {
+  throw "Missing repository-owned WilliamOS HTTPS start script: $httpsStartSource"
+}
 # `-SkipRollbackCapture` is for an empty installation. The task launcher lives outside `$Runtime`,
 # so an empty runtime can still have an older hand-placed launcher. Overwriting that file without a
 # manifest would make the flag silently destructive. Refuse before stopping either task or changing
@@ -594,6 +620,7 @@ if (-not $SkipRollbackCapture) {
     "package.json",
     "pnpm-lock.yaml",
     "lib\generated\build-provenance.json",
+    "lib\generated\deployment-manifest.json",
     "scripts\hermes-https-proxy.mjs",
     "scripts\fabric\resolve-authority-registry-url.mjs"
   )
@@ -601,12 +628,18 @@ if (-not $SkipRollbackCapture) {
   if ($WithDependencies) { $rollbackDirectories += "node_modules" }
   $liveStartBackup = "external\start-williamos-live.ps1"
   $liveStartWasPresent = Test-Path -LiteralPath $LiveStartTarget -PathType Leaf
+  $httpsStartBackup = "external\start-williamos-https.ps1"
+  $httpsStartWasPresent = Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf
+  $trustDirBackup = "external\scripts-hermes-bridge"
+  $trustDirWasPresent = Test-Path -LiteralPath $gateTargetDir -PathType Container
   $rollbackManifest = [ordered]@{
-    version = 7
+    version = 8
     withDependencies = [bool]$WithDependencies
     directories = @()
     files = @()
     liveStart = [ordered]@{ target = $LiveStartTarget; backupPath = $liveStartBackup; wasPresent = $liveStartWasPresent }
+    httpsStart = [ordered]@{ target = $HttpsStartTarget; backupPath = $httpsStartBackup; wasPresent = $httpsStartWasPresent }
+    trustDir = [ordered]@{ target = $gateTargetDir; backupPath = $trustDirBackup; wasPresent = $trustDirWasPresent }
     legacyRelay = [ordered]@{ wasPresent = [bool]$legacyRelayState.wasPresent; listenAddress = $HermesOverlayAddress; listenPort = $HttpsPort; connectAddress = $HermesLanAddress; connectPort = $HttpsPort }
     overlayRestoreMode = $rollbackOverlayMode
   }
@@ -635,6 +668,15 @@ if (-not $SkipRollbackCapture) {
     $null = New-Item -ItemType Directory -Path (Split-Path -Parent $liveStartRollbackFile) -Force
     Copy-Item -LiteralPath $LiveStartTarget -Destination $liveStartRollbackFile -Force
   }
+  if ($httpsStartWasPresent) {
+    $httpsStartRollbackFile = Join-Path $rollbackRoot $httpsStartBackup
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsStartRollbackFile) -Force
+    Copy-Item -LiteralPath $HttpsStartTarget -Destination $httpsStartRollbackFile -Force
+  }
+  if ($trustDirWasPresent) {
+    $null = robocopy $gateTargetDir (Join-Path $rollbackRoot $trustDirBackup) /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback capture of the trusted gate directory failed (exit $LASTEXITCODE)" }
+  }
   $rollbackManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
@@ -646,7 +688,7 @@ if (-not $SkipRollbackCapture) {
   $liveStartTargetLiteral = ConvertTo-PowerShellLiteral $LiveStartTarget
   $portLiteral = ConvertTo-PowerShellLiteral ([string]$Port)
   $httpsPortLiteral = ConvertTo-PowerShellLiteral ([string]$HttpsPort)
-  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -Port $portLiteral -HttpsPort $httpsPortLiteral"
+  Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File $restoreScriptLiteral -RollbackRoot $rollbackRootLiteral -Runtime $runtimeLiteral -TaskName $taskNameLiteral -HttpsTaskName $httpsTaskNameLiteral -LiveStartTarget $liveStartTargetLiteral -HttpsStartTarget $HttpsStartTarget -Port $portLiteral -HttpsPort $httpsPortLiteral"
 }
 
 if ($WithDependencies -and $rollbackRoot -and (Get-PhysicalVolumeIdentity -Path $rollbackRoot) -ne (Get-PhysicalVolumeIdentity -Path $Runtime)) {
@@ -689,6 +731,97 @@ if ($WithDependencies) {
 # displaced bytes are part of the rollback manifest above.
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
 Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
+# #1223 R2: install the gate + attester INTO the trusted directory beside the launchers (validated
+# early beside $liveStartSource). The gate refuses to run from anywhere else.
+$null = New-Item -ItemType Directory -Path $gateTargetDir -Force
+foreach ($g in $gateScriptNames) {
+  Copy-Item -LiteralPath (Join-Path $gateSourceDir $g) -Destination (Join-Path $gateTargetDir $g) -Force
+}
+
+# #1223 R3 — trust-root installation (requires an elevated deployment; refuses rather than install a
+# forgeable anchor). Ordered so a failure leaves the previous generation's anchor intact.
+if (-not (Test-Path $trustRootDir)) { $null = New-Item -ItemType Directory -Path $trustRootDir -Force }
+if (-not (Test-Path $trustKeyTarget)) {
+  if (Test-Path $trustKeyLegacy) {
+    Copy-Item -LiteralPath $trustKeyLegacy -Destination $trustKeyTarget -Force
+    Write-Output "migrated the deployment attestation key into the protected trust root"
+  } else {
+    throw "No deployment attestation key at $trustKeyTarget (and no legacy copy at $trustKeyLegacy). Mint one before deploying: the door refuses to start without a signed artifact attestation (#1223)."
+  }
+}
+# Validate the protected copy BEFORE deleting anything: the removals below are irreversible, so a
+# truncated or malformed trust key must fail the deploy here, not strand it with no key at all.
+$trustKeyRecord = $null
+try { $trustKeyRecord = Get-Content -Raw -LiteralPath $trustKeyTarget | ConvertFrom-Json } catch { $trustKeyRecord = $null }
+if (-not $trustKeyRecord -or -not $trustKeyRecord.keyId -or -not $trustKeyRecord.privateKeyBase64) {
+  throw "The protected trust key at $trustKeyTarget is missing keyId/privateKeyBase64; refusing to remove the legacy copy."
+}
+# Once the protected copy exists the home copy stops being authoritative: it is readable by the
+# runtime identity, so leaving it would re-open forged-manifest attacks.
+$legacyTrustRemovals = @()
+if (Test-Path $trustKeyLegacy) {
+  Remove-Item -LiteralPath $trustKeyLegacy -Force
+  $legacyTrustRemovals += $trustKeyLegacy
+}
+$legacySecretPath = Join-Path $env:USERPROFILE ".williamos\deployment-seal-secret.bin"
+if (Test-Path $legacySecretPath) {
+  Remove-Item -LiteralPath $legacySecretPath -Force
+  $legacyTrustRemovals += $legacySecretPath
+}
+# Pre-R3 ring left in a USER-WRITABLE ProgramData path: inert on current code (the ring now lives
+# beside the gate) but it is pollutable decoy trust material — remove it.
+$legacyProgramDataRing = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation-keys.json"
+if (Test-Path -LiteralPath $legacyProgramDataRing -PathType Leaf) {
+  Remove-Item -LiteralPath $legacyProgramDataRing -Force
+  $legacyTrustRemovals += $legacyProgramDataRing
+}
+# pre-R4 receipt at the user-writable ProgramData root: superseded by the copy locked inside the
+# gate directory; leave nothing writable behind.
+$legacyReceipt = Join-Path (Split-Path -Parent $LiveStartTarget) "deployment-attestation.json"
+if ((Test-Path -LiteralPath $legacyReceipt -PathType Leaf) -and ($legacyReceipt -ne $receiptTarget)) {
+  Remove-Item -LiteralPath $legacyReceipt -Force
+  $legacyTrustRemovals += $legacyReceipt
+}
+if ($legacyTrustRemovals.Count -gt 0) {
+  Write-Output ("removed legacy trust material readable by the runtime identity: " + ($legacyTrustRemovals -join "; "))
+}
+
+# #1223 R5: install the admission ledger COPY inside the locked gate directory. The home-dir
+# original (~\.williamos\integrations.json) is written by integrate-lab-main.mjs but is fully
+# writable by the door's own identity, so it can never be the boot-time authority; the gate reads
+# ONLY this copy. Rollback capture of the gate directory covers this file from the NEXT deploy on.
+$ledgerSource = Join-Path $env:USERPROFILE ".williamos\integrations.json"
+if (-not (Test-Path $ledgerSource -PathType Leaf)) { throw "No integration ledger at $ledgerSource; the gate would refuse every boot (LEDGER_UNREADABLE)." }
+Copy-Item -LiteralPath $ledgerSource -Destination (Join-Path $gateTargetDir "integrations.json") -Force
+Write-Output "installed the admission ledger copy into the trusted gate directory"
+
+# Publish the public ring beside the gate, derived from the private key so the two cannot desync.
+& $nodeExe -e "const c=require('crypto'),f=require('fs');const r=JSON.parse(f.readFileSync(process.argv[1],'utf8'));const pub=c.createPublicKey(c.createPrivateKey({key:Buffer.from(r.privateKeyBase64,'base64'),format:'der',type:'pkcs8'})).export({format:'der',type:'spki'}).toString('base64');f.writeFileSync(process.argv[2],JSON.stringify({[r.keyId]:pub},null,2)+'\n')" $trustKeyTarget $ringTarget
+if ($LASTEXITCODE -ne 0) { throw "Failed to derive the deployment attestation trust ring (exit $LASTEXITCODE)." }
+
+# ACLs: the runtime identity may read the anchors but never rewrite them. ProgramData's inherited
+# Users:(WD,AD,WEA) is exactly what would make these forgeable, so it is removed explicitly.
+$null = icacls $trustRootDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $trustRootDir (exit $LASTEXITCODE)." }
+$null = icacls $gateTargetDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "BUILTIN\Administrators:(OI)(CI)F" "BUILTIN\Users:(OI)(CI)RX" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $gateTargetDir (exit $LASTEXITCODE)." }
+foreach ($anchor in @($trustKeyTarget, $ringTarget)) {
+  $null = icacls $anchor /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock down $anchor (exit $LASTEXITCODE)." }
+}
+# #1223 R5: ownership, not just the mask. A file CREATED by a non-admin identity is owned by it,
+# and an OWNER keeps implicit WRITE_DAC even when the ACL grants it nothing — so it can rewrite
+# the ACL at leisure. Round-4 review proved an anchor the attacker owns and then /deny-s against
+# itself passes every mask probe. The elevated deploy hands every trust object to
+# BUILTIN\Administrators; the door identity cannot take ownership back without elevation.
+foreach ($anchor in @($trustRootDir, $gateTargetDir, $trustKeyTarget, $ringTarget, (Join-Path $gateTargetDir "integrations.json"), (Join-Path $gateTargetDir "verify-door-provenance.mjs"), (Join-Path $gateTargetDir "attest-deployment.mjs"), $LiveStartTarget, $HttpsStartTarget)) {
+  $null = icacls $anchor /setowner "BUILTIN\\Administrators" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on anchor $anchor (exit $LASTEXITCODE) - the deploy must run elevated for the trust anchors to mean anything." }
+}
+# #1223: the HTTPS listener is part of the door; the repository-owned, gate-wired launcher is
+# installed the same way with the same rollback coverage, so a deploy cannot leave :3443 booting a
+# gateless generation.
+Copy-Item -LiteralPath $httpsStartSource -Destination $HttpsStartTarget -Force
 
 # robocopy /MIR on .next, because stale route chunks from a previous build are still served: Next
 # resolves them by name, and a file nobody overwrote is a file that still answers.
@@ -716,6 +849,11 @@ if (-not (Test-Path $httpsProxySource)) { throw "Missing HTTPS proxy in the sour
 $httpsProxyTarget = Join-Path $Runtime $httpsProxyRelative
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $httpsProxyTarget) -Force
 Copy-Item $httpsProxySource $httpsProxyTarget -Force
+
+# #1223 R3: the gate is deliberately NOT copied into the runtime. The installed launchers resolve it
+# beside themselves (ProgramData, Users:RX), which is what makes it a trust anchor rather than a file
+# the robocopy path can substitute; a runtime copy would be dead weight and a decoy a reader could
+# mistake for the authority. The ProgramData install happens with the launchers above.
 
 # Static assets and public/ live outside the standalone tree by design.
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
@@ -799,12 +937,63 @@ if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {
   throw "The runtime lost its .env.local. Restore it before starting: the cockpit cannot resolve the owner without WILLIAMOS_OWNER_EMAIL."
 }
 
+# #1223 R4: the anchor chain only means something if it is owned by admins, not by the identity
+# being audited. An unaugmented non-elevated run would create anchors OWNED by that identity,
+# which can re-grant itself write access (implicit WRITE_DAC) — so the gate refuses this whole
+# pipeline, rather than fail silently.
+$deployIdentity = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $deployIdentity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "#1223: the door provenance deploy must run ELEVATED: it installs administrator-owned trust anchors that the door's own identity must not be able to rewrite. Run from an elevated PowerShell."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $trustRootDir "deployment-attestation-key.json"))) {
+  Write-Output "trust key absent: minting a new deployment attestation key under $trustRootDir"
+}
+
 # Prove the configuration survived the copy rather than assuming it did.
 if ($envGuard) {
   $envNow = if (Test-Path $envPath) { (Get-FileHash $envPath -Algorithm SHA256).Hash } else { $null }
   if ($envNow -ne $envGuard) {
     throw "The deploy modified $envPath. Nothing here should touch it; restore it from the runtime backup before starting, or the cockpit will come up pointed at the wrong database."
   }
+}
+
+# #1223 R2: attest the STAGED bytes (signed manifest) and seal an external receipt BEFORE any task
+# starts. The gate refuses boot without one, so a deploy that cannot attest fails here — loudly,
+# before production stops — rather than at the first restart after the copy.
+$stagedProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
+if (-not $stagedProvenance.sha) { throw "Deployed build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
+& $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") attest --app-root="$Runtime" --sha="$($stagedProvenance.sha)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "deployment attestation FAILED (exit $LASTEXITCODE): the staged runtime cannot be proven bootable. Check the admin-only trust key under the trust root (C:\ProgramData\WilliamOS\trust) and the published ring beside the gate under the gate directory." }
+& $nodeExe (Join-Path $gateTargetDir "attest-deployment.mjs") seal --app-root="$Runtime" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "external seal receipt FAILED (exit $LASTEXITCODE): refusing to start a door whose bytes are attested only inside themselves." }
+# The receipt must not be rewritable by the identity running the door, or it becomes a rollback
+# lever: seal it down before the task starts.
+$null = icacls $receiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
+$null = icacls $receiptTarget /setowner "BUILTIN\\Administrators" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on the seal receipt (exit $LASTEXITCODE)." }
+# Final anchor audit: every boot-time trust input must be BOTH unwritable AND administrator-owned
+# (the gate re-checks at boot; failing HERE names a mis-install at deploy time instead).
+foreach ($anchor in @((Join-Path $gateTargetDir "verify-door-provenance.mjs"), (Join-Path $gateTargetDir "attest-deployment.mjs"), $ringTarget, (Join-Path $gateTargetDir "integrations.json"), $receiptTarget, $trustKeyTarget)) {
+  $owner = (Get-Acl -LiteralPath $anchor).Owner
+  if ($owner -notin @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) { throw "Trust anchor $anchor is owned by $owner, not an administrator principal - an owner can always rewrite its own ACL; refusing to start a door on forgeable anchors (#1223)." }
+}
+Write-Output "deployment attested and sealed (manifest + external receipt); anchors administrator-owned"
+
+# #1223 R6 (BLOCKING B6-2): the scheduled-task DEFINITION is part of the boot path. The R5 audit
+# found "WilliamOS Live" owned by the door identity with Users:(I)(F), so that identity could rewrite
+# the action and repoint the scheduled restart at its own script — a route the gate never sees. Lock
+# both definitions to SYSTEM/Administrators and hand ownership to Administrators (elevated).
+foreach ($taskName in @($TaskName, $HttpsTaskName)) {
+  $taskXml = Join-Path -Path $env:windir -ChildPath "System32\Tasks\$taskName"
+  if (-not (Test-Path -LiteralPath $taskXml)) { throw "Task definition not found for $taskName at $taskXml" }
+  $null = icacls $taskXml /inheritance:r /grant:r "SYSTEM:(F)" "BUILTIN\Administrators:(F)" "BUILTIN\Users:(R)" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock the task definition ACL for $taskName (icacls exit $LASTEXITCODE)" }
+  $null = icacls $taskXml /setowner "BUILTIN\Administrators" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to set the owner of task definition $taskName (icacls exit $LASTEXITCODE; elevation is required)" }
+  $taskOwner = (Get-Acl -LiteralPath $taskXml).Owner
+  if ($taskOwner -ne "BUILTIN\Administrators") { throw "Task definition $taskName is owned by $taskOwner after setowner; refusing to start the door on a rewritable boot route (#1223)" }
+  Write-Host "BOOT_ROUTE_LOCKED $taskName owner=$taskOwner"
 }
 
 Start-ScheduledTask -TaskName $TaskName
