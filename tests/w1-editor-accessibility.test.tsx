@@ -287,6 +287,24 @@ describe("W1 editor accessibility contract", () => {
     expect(distinct.size).not.toBe(new Set(["README.md"]).size)
   })
 
+  it("the focused close reveal is bounded by available width, not a fixed pixel cap", () => {
+    // Near the 360px window minimum the editor pane can be narrower than any hard-coded maximum. A fixed
+    // cap inside a non-shrinking row overflows the pane and collapses the tab list. The reveal must be
+    // allowed to shrink with the space available.
+    const css = readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.module.css"), "utf8")
+    const closers = css.slice(css.indexOf(".tabClosers {"))
+    const closersBody = closers.slice(0, closers.indexOf("}"))
+    expect(closersBody).toMatch(/flex:\s*0 1 auto/)
+    expect(closersBody).toMatch(/min-width:\s*0/)
+
+    const reveal = css.slice(css.indexOf(".srOnlyClose:focus-visible {"))
+    const revealBody = reveal.slice(0, reveal.indexOf("}"))
+    expect(revealBody).toMatch(/max-width:\s*100%/)
+    expect(revealBody).toMatch(/min-width:\s*0/)
+    // no leftover magic number capping the label
+    expect(revealBody).not.toMatch(/max-width:\s*\d+px/)
+  })
+
   it("the element with role=textbox carries an accessible name and is keyboard reachable", () => {
     render(
       <SourceEditor

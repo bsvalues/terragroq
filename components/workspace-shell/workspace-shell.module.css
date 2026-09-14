@@ -478,10 +478,14 @@
 }
 
 /* Real close controls: named and focusable for assistive technology and keyboard users, but kept
-   outside the tablist so the tablist's children remain exclusively role="tab". */
+   outside the tablist so the tablist's children remain exclusively role="tab".
+   The container must be allowed to SHRINK: a fixed-width reveal inside a non-shrinking row can exceed
+   the pane's own width near the 360px minimum, collapsing the tab list and pushing the control
+   off-screen. `min-width: 0` lets the reveal be capped by the space actually available instead. */
 .tabClosers {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .srOnlyClose {
@@ -511,10 +515,11 @@
 .srOnlyClose:focus-visible {
   position: static;
   width: auto;
-  /* Bounded and ellipsized: a repository-relative path can be long, and `.tabClosers` does not shrink,
-     so an unbounded nowrap label would let keyboard focus collapse the tab list or push part of the
-     control off-screen. max-width keeps the distinguishing path while constraining the reveal. */
-  max-width: 260px;
+  /* Bounded by the space actually available, not a fixed pixel cap: near the 360px window minimum the
+     editor pane can be narrower than any magic number, and an unbounded nowrap label would collapse the
+     tab list. The label ellipsizes within whatever width the pane can give it. */
+  max-width: 100%;
+  min-width: 0;
   height: 16px;
   margin: 0 4px 0 0;
   align-self: center;
@@ -535,6 +540,7 @@
 .closeLabel {
   display: none;
   overflow: hidden;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
