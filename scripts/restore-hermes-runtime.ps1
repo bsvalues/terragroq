@@ -9,11 +9,19 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [string]$HttpsTaskName = "WilliamOS HTTPS",
   [string]$LiveStartTarget = "C:\ProgramData\WilliamOS\start-williamos-live.ps1",
+  [string]$ReceiptTarget = "C:\ProgramData\WilliamOS\scripts\hermes-bridge\deployment-attestation.json",
+  [string]$HttpsStartTarget = "C:\ProgramData\WilliamOS\start-williamos-https.ps1",
   [int]$Port = 3100,
   [int]$HttpsPort = 3443
 )
 
 $ErrorActionPreference = "Stop"
+# #1223 R4: rollback re-attests the restored bytes under the admin-only trust key; an unprivileged
+# run cannot read it — and must not be able to mint attestations anyway. Elevation is required.
+$restoreIdentity = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $restoreIdentity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "#1223: restoring the door runtime must run ELEVATED (it re-attests and re-seals the restored generation)."
+}
 $HermesLanAddress = "192.168.88.9"
 $HermesOverlayAddress = "100.97.194.84"
 
@@ -142,7 +150,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifestVersion = [int]$manifest.version
-if (($manifestVersion -ne 6 -and $manifestVersion -ne 7) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
+if (($manifestVersion -ne 6 -and $manifestVersion -ne 7 -and $manifestVersion -ne 8) -or $null -eq $manifest.withDependencies -or $null -eq $manifest.directories -or $null -eq $manifest.files -or $null -eq $manifest.liveStart) {
   throw "Rollback manifest is invalid: $manifestPath"
 }
 if ($null -eq $manifest.legacyRelay -or $null -eq $manifest.legacyRelay.wasPresent `
@@ -184,6 +192,9 @@ $expectedRollbackFiles = @(
   "scripts\fabric\resolve-authority-registry-url.mjs"
 )
 if ($manifestVersion -ge 4) { $expectedRollbackFiles += "pnpm-lock.yaml" }
+# v8 captures the signed deployment manifest so the restored generation's provenance, manifest and
+# receipt are one consistent set again — without it the gate would deny the rolled-back door.
+if ($manifestVersion -ge 8) { $expectedRollbackFiles += "lib\generated\deployment-manifest.json" }
 $manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
 if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
   throw "Rollback manifest does not name the exact runtime file set"
@@ -223,6 +234,29 @@ if ($manifest.liveStart.wasPresent -and -not (Test-Path -LiteralPath $liveStartR
   throw "Rollback is incomplete: $liveStartRollbackFile is missing"
 }
 Assert-LauncherMutationAccess -TargetPath $LiveStartTarget -WillBePresent ([bool]$manifest.liveStart.wasPresent)
+# #1223: deploys at/after the provenance gate capture the HTTPS launcher too; when the capture
+# names it, restoring must replace it, or rollback silently reinstalls a gateless :3443 boot.
+$httpsStartWasCaptured = ($null -ne $manifest.httpsStart)
+if ($httpsStartWasCaptured) {
+  $expectedHttpsStartBackup = "external\start-williamos-https.ps1"
+  if (([string]$manifest.httpsStart.target -ne $HttpsStartTarget) -or ([string]$manifest.httpsStart.backupPath -ne $expectedHttpsStartBackup) -or ($null -eq $manifest.httpsStart.wasPresent)) {
+    throw "Rollback manifest does not name the exact WilliamOS HTTPS start definition"
+  }
+  $httpsStartRollbackFile = Join-Path $RollbackRoot $expectedHttpsStartBackup
+  if ($manifest.httpsStart.wasPresent -and -not (Test-Path -LiteralPath $httpsStartRollbackFile -PathType Leaf)) {
+    throw "Rollback is incomplete: $httpsStartRollbackFile is missing"
+  }
+  Assert-LauncherMutationAccess -TargetPath $HttpsStartTarget -WillBePresent ([bool]$manifest.httpsStart.wasPresent)
+}
+# #1223 R2: deploys with the provenance gate capture the trusted gate directory; roll it back
+# alongside the launchers. Captures without the member (pre-gate v7) restore as before.
+$trustDirCaptured = ($null -ne $manifest.trustDir)
+if ($trustDirCaptured) {
+  $expectedTrustDirBackup = "external\scripts-hermes-bridge"
+  if (([string]$manifest.trustDir.backupPath -ne $expectedTrustDirBackup) -or ($null -eq $manifest.trustDir.wasPresent)) {
+    throw "Rollback manifest trustDir record is malformed"
+  }
+}
 $currentLegacyRelay = Get-CurrentLegacyRelayState
 
 $v4ModuleEntry = @()
@@ -293,9 +327,77 @@ if ($manifest.liveStart.wasPresent) {
 } elseif (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
   Remove-Item -LiteralPath $LiveStartTarget -Force
 }
+if ($httpsStartWasCaptured) {
+  if ($manifest.httpsStart.wasPresent) {
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $HttpsStartTarget) -Force
+    Copy-Item -LiteralPath $httpsStartRollbackFile -Destination $HttpsStartTarget -Force
+  } elseif (Test-Path -LiteralPath $HttpsStartTarget -PathType Leaf) {
+    Remove-Item -LiteralPath $HttpsStartTarget -Force
+  }
+}
+if ($trustDirCaptured) {
+  $trustDirTarget = [string]$manifest.trustDir.target
+  $trustDirRollback = Join-Path $RollbackRoot "external\scripts-hermes-bridge"
+  if ($manifest.trustDir.wasPresent) {
+    if (-not (Test-Path -LiteralPath $trustDirRollback -PathType Container)) {
+      throw "Rollback is incomplete: $trustDirRollback is missing"
+    }
+    $null = robocopy $trustDirRollback $trustDirTarget /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback of the trusted gate directory failed (exit $LASTEXITCODE)" }
+  } elseif (Test-Path -LiteralPath $trustDirTarget -PathType Container) {
+    Remove-Item -LiteralPath $trustDirTarget -Recurse -Force
+  }
+}
+
+# #1223 R4: a rollback must leave a door that can BOOT. The restored bytes differ from whatever
+# generation last ran, so re-attest the restored tree and re-seal the receipt with the same trust
+# key BEFORE starting; otherwise the gate denies its own rolled-back door (MAJOR finding).
+$gateRestoreDir = if ($trustDirCaptured -and $manifest.trustDir.wasPresent) {
+  [string]$manifest.trustDir.target
+} else {
+  Join-Path (Split-Path -Parent $LiveStartTarget) "scripts\hermes-bridge"
+}
+if (Test-Path -LiteralPath (Join-Path $gateRestoreDir "attest-deployment.mjs") -PathType Leaf) {
+  $attestCli = Join-Path $gateRestoreDir "attest-deployment.mjs"
+  $restoredProvenance = Get-Content -Raw -LiteralPath (Join-Path $Runtime "lib\generated\build-provenance.json") | ConvertFrom-Json
+  if (-not $restoredProvenance.sha) { throw "Restored build-provenance.json carries no sha; refusing to attest an anonymous artifact." }
+  $nodeExe = "C:\Program Files\nodejs\node.exe"
+  & $nodeExe $attestCli attest --app-root="$Runtime" --sha="$($restoredProvenance.sha)" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "post-rollback attestation FAILED (exit $LASTEXITCODE): the restored runtime cannot be proven bootable." }
+  & $nodeExe $attestCli seal --app-root="$Runtime" --target="$ReceiptTarget" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "post-rollback seal FAILED (exit $LASTEXITCODE): refusing to start a door attested only inside itself." }
+  $null = icacls $ReceiptTarget /inheritance:r /grant:r "SYSTEM:F" "BUILTIN\Administrators:F" "BUILTIN\Users:R" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock down the seal receipt (exit $LASTEXITCODE)." }
+  # R5: robocopy re-created these files with the restore runner as owner; a non-admin owner keeps
+  # implicit WRITE_DAC and can rewrite the ACL, so re-hand the anchors to BUILTIN\Administrators
+  # and refuse to start the door when that did not work (restore must run elevated too).
+  foreach ($anchor in @($ReceiptTarget, (Join-Path $gateRestoreDir "verify-door-provenance.mjs"), (Join-Path $gateRestoreDir "attest-deployment.mjs"), (Join-Path $gateRestoreDir "deployment-attestation-keys.json"), (Join-Path $gateRestoreDir "integrations.json"))) {
+    if (Test-Path -LiteralPath $anchor -PathType Leaf) {
+      $null = icacls $anchor /setowner "BUILTIN\\Administrators" 2>&1
+      if ($LASTEXITCODE -ne 0) { throw "Failed to set owner BUILTIN\Administrators on restored anchor $anchor (exit $LASTEXITCODE); refusing to boot a door on attacker-reclaimable anchors." }
+    }
+  }
+  Write-Output "restored generation re-attested and sealed"
+}
+
+# #1223 R6 (BLOCKING B6-2): the scheduled-task DEFINITION is part of the boot path. The R5 audit
+# found "WilliamOS Live" owned by the door identity with Users:(I)(F), so that identity could rewrite
+# the action and repoint the scheduled restart at its own script — a route the gate never sees. Lock
+# both definitions to SYSTEM/Administrators and hand ownership to Administrators (elevated).
+foreach ($taskName in @($TaskName, $HttpsTaskName)) {
+  $taskXml = Join-Path -Path $env:windir -ChildPath "System32\Tasks\$taskName"
+  if (-not (Test-Path -LiteralPath $taskXml)) { throw "Task definition not found for $taskName at $taskXml" }
+  $null = icacls $taskXml /inheritance:r /grant:r "SYSTEM:(F)" "BUILTIN\Administrators:(F)" "BUILTIN\Users:(R)" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock the task definition ACL for $taskName (icacls exit $LASTEXITCODE)" }
+  $null = icacls $taskXml /setowner "BUILTIN\Administrators" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to set the owner of task definition $taskName (icacls exit $LASTEXITCODE; elevation is required)" }
+  $taskOwner = (Get-Acl -LiteralPath $taskXml).Owner
+  if ($taskOwner -ne "BUILTIN\Administrators") { throw "Task definition $taskName is owned by $taskOwner after setowner; refusing to start the door on a rewritable boot route (#1223)" }
+  Write-Host "BOOT_ROUTE_LOCKED $taskName owner=$taskOwner"
+}
 
 Start-ScheduledTask -TaskName $TaskName
-$deadline = (Get-Date).AddSeconds(90)
+$deadline = (Get-Date).AddSeconds(300)
 do {
   try {
     $health = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 10
