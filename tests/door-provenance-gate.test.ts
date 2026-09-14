@@ -110,6 +110,76 @@ describe("the gate refuses structurally invalid sha values (F6 typing)", () => {
   })
 })
 
+// R6 (BLOCKING B6-1, found by an independent execution lane): node-injecting environment variables
+// are an AUTHORITY channel. Executed evidence: with NODE_OPTIONS=--require=<attacker>.cjs inherited
+// by the launcher, attacker code printed DOOR_PROVENANCE_OK and exited 0 before the gate ran, and the
+// door booted unattested code (ATTACK_LAUNCHER_EXIT=0 + UNATTESTED_PROXY_EXECUTED). The launchers now
+// clear those variables and the gate refuses any survivor or injected exec arg.
+describe("R6: node-injection channel is closed", () => {
+  const ROOT = process.cwd()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "r6-inject-"))
+  const appRoot = path.join(dir, "app")
+  fs.mkdirSync(path.join(appRoot, "lib", "generated"), { recursive: true })
+  fs.writeFileSync(path.join(appRoot, "server.js"), "console.log(1)\n")
+  const LEDGER = path.join(dir, "ledger.json")
+  fs.writeFileSync(LEDGER, JSON.stringify({ integrations: [] }))
+  const GATE = path.join(ROOT, "scripts", "hermes-bridge", "verify-door-provenance.mjs")
+  const args = [`--app-root=${appRoot}`, `--ledger=${LEDGER}`, "--allow-runtime-copy"]
+  const noopFile = path.join(dir, "env-noop.cjs")
+  fs.writeFileSync(noopFile, "// preload that returns instead of exiting\n")
+  it("refuses a surviving NODE_OPTIONS that loads code", () => {
+    const r = spawnSync(process.execPath, [GATE, ...args],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: `--require=${noopFile}` } })
+    expect(`${r.stdout}${r.stderr}`).toMatch(/NODE_INJECTION_ENV/)
+    expect(r.status).not.toBe(0)
+  })
+  it("tolerates a benign NODE_OPTIONS value (the check is narrow, not presence-based)", () => {
+    const r = spawnSync(process.execPath, [GATE, ...args],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "--no-warnings" } })
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/NODE_INJECTION_ENV/)
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/NODE_INJECTION_EXECARGV/)
+  })
+  it("does not refuse NODE_PATH (relative/builtin imports only; the launcher clears it anyway)", () => {
+    const r = spawnSync(process.execPath, [GATE, ...args],
+      { encoding: "utf8", env: { ...process.env, NODE_PATH: path.join(dir, "mods") } })
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/NODE_INJECTION_ENV/)
+  })
+  it("refuses when the process itself was started with a preload (execArgv)", () => {
+    const noop = path.join(dir, "noop.cjs")
+    fs.writeFileSync(noop, "// preload that returns instead of exiting\n")
+    const r = spawnSync(process.execPath, ["-r", noop, GATE, ...args], { encoding: "utf8" })
+    expect(`${r.stdout}${r.stderr}`).toMatch(/NODE_INJECTION_EXECARGV/)
+    expect(r.status).not.toBe(0)
+  })
+  it("refuses repair flags and trust-path overrides on the PRODUCTION gate (no relaxed modes)", () => {
+    // A gate dir whose path is production-scoped: the shipped verifier has no repair posture there,
+    // because a flag any caller may pass is not a boundary (executed bypass on the previous head).
+    // The predicate keys on where the RUNNING verifier lives, so stage a copy in a production-shaped
+    // path and drive that one (the lane copy legitimately keeps its repair posture for inspection).
+    const prodDir = path.join(dir, "ProgramData", "WilliamOS", "gate")
+    fs.mkdirSync(prodDir, { recursive: true })
+    for (const f of ["verify-door-provenance.mjs", "attest-deployment.mjs"]) {
+      fs.copyFileSync(path.join(ROOT, "scripts", "hermes-bridge", f), path.join(prodDir, f))
+    }
+    const prodGate = path.join(prodDir, "verify-door-provenance.mjs")
+    const withRepair = spawnSync(process.execPath, [prodGate, `--app-root=${appRoot}`, `--gate-dir=${prodDir}`, "--allow-runtime-copy"], { encoding: "utf8" })
+    expect(`${withRepair.stdout}${withRepair.stderr}`).toMatch(/REPAIR_FLAG_ON_PRODUCTION_GATE/)
+    const withLedger = spawnSync(process.execPath, [prodGate, `--app-root=${appRoot}`, `--gate-dir=${prodDir}`, `--ledger=${LEDGER}`], { encoding: "utf8" })
+    expect(`${withLedger.stdout}${withLedger.stderr}`).toMatch(/TRUST_OVERRIDE_ON_PRODUCTION_GATE/)
+    const withRing = spawnSync(process.execPath, [prodGate, `--app-root=${appRoot}`, `--gate-dir=${prodDir}`, `--ring=${path.join(dir, "ring.json")}`], { encoding: "utf8" })
+    expect(`${withRing.stdout}${withRing.stderr}`).toMatch(/TRUST_OVERRIDE_ON_PRODUCTION_GATE/)
+  })
+  it("both launchers clear the injection variables before invoking node", () => {
+    for (const rel of ["williamos-live/start-williamos-live.ps1", "williamos-https/start-williamos-https.ps1"]) {
+      const text = fs.readFileSync(path.join(ROOT, "deploy", "hermes", rel), "utf8")
+      expect(text, rel).toMatch(/NODE_OPTIONS/)
+      expect(text, rel).toMatch(/NODE_PATH/)
+      expect(text, rel).toMatch(/NODE_REPL_EXTERNAL_MODULE/)
+      expect(text, rel).toMatch(/DOOR_NODE_INJECTION_ENV_CLEARED/)
+    }
+  })
+})
+
 // BEHAVIORAL, not text: actually run the live launcher against a scratch app root. This is what
 // the round-1 review proved missing — an orphan splice fragment parsed clean under PSParser/AST
 // yet killed boot before the gate (F1), and a $false-wrapped gate block would keep all string

@@ -980,6 +980,22 @@ foreach ($anchor in @((Join-Path $gateTargetDir "verify-door-provenance.mjs"), (
 }
 Write-Output "deployment attested and sealed (manifest + external receipt); anchors administrator-owned"
 
+# #1223 R6 (BLOCKING B6-2): the scheduled-task DEFINITION is part of the boot path. The R5 audit
+# found "WilliamOS Live" owned by the door identity with Users:(I)(F), so that identity could rewrite
+# the action and repoint the scheduled restart at its own script — a route the gate never sees. Lock
+# both definitions to SYSTEM/Administrators and hand ownership to Administrators (elevated).
+foreach ($taskName in @($TaskName, $HttpsTaskName)) {
+  $taskXml = Join-Path -Path $env:windir -ChildPath "System32\Tasks\$taskName"
+  if (-not (Test-Path -LiteralPath $taskXml)) { throw "Task definition not found for $taskName at $taskXml" }
+  $null = icacls $taskXml /inheritance:r /grant:r "SYSTEM:(F)" "BUILTIN\Administrators:(F)" "BUILTIN\Users:(R)" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to lock the task definition ACL for $taskName (icacls exit $LASTEXITCODE)" }
+  $null = icacls $taskXml /setowner "BUILTIN\Administrators" 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to set the owner of task definition $taskName (icacls exit $LASTEXITCODE; elevation is required)" }
+  $taskOwner = (Get-Acl -LiteralPath $taskXml).Owner
+  if ($taskOwner -ne "BUILTIN\Administrators") { throw "Task definition $taskName is owned by $taskOwner after setowner; refusing to start the door on a rewritable boot route (#1223)" }
+  Write-Host "BOOT_ROUTE_LOCKED $taskName owner=$taskOwner"
+}
+
 Start-ScheduledTask -TaskName $TaskName
 
 if (-not (Test-Cockpit -Port $Port)) {

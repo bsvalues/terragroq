@@ -192,6 +192,19 @@ if ($gateTamperProbe) {
   $gateTamperProbe.Close()
   Deny-Boot "DOOR_PROVENANCE_GATE_TAMPERABLE" "$provenanceGate is writable by the identity running the door, so it cannot be the authority for bytes it can rewrite (#1223)."
 }
+
+# #1223 R6 (BLOCKING B6-1): never let the ambient environment inject code into the gate process.
+# node honours NODE_OPTIONS/NODE_PATH/NODE_REPL_EXTERNAL_MODULE for every child it starts; the door's
+# task runs as an interactive identity that owns HKCU\Environment, so a preload there can print
+# DOOR_PROVENANCE_OK and exit 0 without verifying anything. Clear them here, and the gate refuses
+# independently if any is still set (so a launcher regression cannot silently reopen the channel).
+foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE")) {
+  $nodeInjectValue = [Environment]::GetEnvironmentVariable($nodeInjectVar)
+  if (-not [string]::IsNullOrEmpty($nodeInjectValue)) {
+    Remove-Item -LiteralPath "Env:$nodeInjectVar" -ErrorAction SilentlyContinue
+    Write-Host "DOOR_NODE_INJECTION_ENV_CLEARED $nodeInjectVar=$nodeInjectValue"
+  }
+}
 $gatePreviousPreference = $ErrorActionPreference
 try {
   # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed

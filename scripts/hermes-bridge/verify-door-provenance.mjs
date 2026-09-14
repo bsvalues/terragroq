@@ -49,12 +49,61 @@ const fail = (code, detail) => {
 const appRoot = argv["app-root"]
 if (!appRoot) fail("ARGS_INVALID", "--app-root=<runtime root> is required")
 
+// #1223 R6 (BLOCKING B6-1): node-injecting environment variables are an authority channel, not a
+// convenience. Node honours NODE_OPTIONS/NODE_PATH/NODE_REPL_EXTERNAL_MODULE for the process itself,
+// so a value set in the door identity's own HKCU\Environment can --require attacker code into THIS
+// process, print DOOR_PROVENANCE_OK and exit 0 without verifying anything (executed on the real
+// launcher before this check existed). The launchers clear these; the gate refuses if any survived,
+// so a launcher edit cannot silently reopen the channel.
+// Only the CODE-LOADING channel is refused: a bare NODE_OPTIONS value (tuning flags such as
+// --no-warnings) is normal in build/test environments and must not block an honest boot, while
+// --require/-r/--import/--loader make this process's verdict manufacturable.
+const CODE_LOADING = /(^|\s)(--require|-r|--import|--loader|--experimental-loader)(=|\s|$)/
+for (const injectVar of ["NODE_OPTIONS", "NODE_REPL_EXTERNAL_MODULE"]) {
+  const injectValue = process.env[injectVar]
+  if (typeof injectValue === "string" && injectValue.trim() !== "" && (injectVar !== "NODE_OPTIONS" || CODE_LOADING.test(injectValue))) {
+    fail("NODE_INJECTION_ENV", `${injectVar}=${injectValue.slice(0, 120)} loads code into this process, so its verdict cannot be trusted as provenance; the launchers clear it (#1223 R6)`)
+  }
+}
+// NODE_PATH is deliberately NOT refused here: it only affects BARE specifiers, while this gate's
+// imports are relative or node: builtins, so it cannot manufacture this process's verdict. The
+// launchers still clear it (measured: vitest legitimately sets NODE_PATH in tooling environments,
+// so a presence-based refusal would refuse honest runs — narrowness is the point).
+// NODE_OPTIONS reaches node as real exec args, so read them directly: a preload that returns instead
+// of exiting is visible here. (A preload that exits 0 first is caught by the launcher's scrub — the
+// load-bearing control — not by this file, and this comment says so on purpose.)
+for (const execArg of process.execArgv) {
+  if (/^(--require|-r|--import|--loader|--experimental-loader)(=|$)/.test(execArg)) {
+    fail("NODE_INJECTION_EXECARGV", `this process was started with ${execArg}; an injected preload can manufacture a verdict, so no verdict from it counts (#1223)`)
+  }
+}
+
 // Placement check: this verifier is trusted BYTES, so it must run from the trusted directory it
 // ships in (ProgramData, beside the launchers, administrator-owned). An old copy carried inside a
 // robocopied runtime may be stale code that predates today's checks; running it would let an
 // attacker pick which verifier admits them. --allow-runtime-copy is reserved for tests/repair.
 const trustedDir = typeof argv["gate-dir"] === "string" && argv["gate-dir"]
   ? argv["gate-dir"] : PRODUCTION_GATE_DIR
+
+// #1223 R6 (B6-3): the PRODUCTION gate has no relaxed modes. An independent lane executed
+// `gate --app-root=<fake> --allow-runtime-copy --ledger=<attacker> --ring=<attacker>` and got
+// DOOR_PROVENANCE_OK for unattested bytes; with the boot route's argv reachable that is a bypass, and
+// a flag any caller may pass is not a boundary. Repair/inspection of a staged runtime uses the lane
+// copy of this verifier, never the installed one.
+// Keyed on where THIS verifier file actually lives, not on a defaulted --gate-dir: a lane/test copy
+// stays usable (it is not the installed gate), while the installed gate has no relaxed modes.
+const selfDir = path.dirname(fileURLToPath(import.meta.url))
+const productionScoped = /programdata[\\/]+williamos/i.test(selfDir)
+if (productionScoped) {
+  if (allowRuntimeCopy) {
+    fail("REPAIR_FLAG_ON_PRODUCTION_GATE", "--allow-runtime-copy is refused when the gate runs from the production trusted directory; inspect a staged runtime with the lane copy of this verifier instead (#1223 R6)")
+  }
+  for (const overrideFlag of ["ring", "ledger", "target"]) {
+    if (typeof argv[overrideFlag] === "string" && argv[overrideFlag] !== "") {
+      fail("TRUST_OVERRIDE_ON_PRODUCTION_GATE", `--${overrideFlag}= is refused on the production gate: trust anchors are fixed by the elevated deploy, and a caller-supplied anchor is exactly the bypass this gate exists to close (#1223 R6)`)
+    }
+  }
+}
 if (!allowRuntimeCopy) {
   let self
   try { self = fs.realpathSync(fileURLToPath(import.meta.url)) } catch { self = "" }

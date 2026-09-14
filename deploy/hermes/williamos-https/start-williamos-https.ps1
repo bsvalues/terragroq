@@ -53,6 +53,18 @@ if ($gateTamperProbe) {
   $gateTamperProbe.Close()
   throw "Refusing to start WilliamOS HTTPS: $provenanceGate is writable by the identity running the door (#1223 fail-closed)."
 }
+
+# #1223 R6 (BLOCKING B6-1): node honours NODE_OPTIONS/NODE_PATH/NODE_REPL_EXTERNAL_MODULE for every
+# child it starts; the door identity owns HKCU\Environment, so a preload there can print
+# DOOR_PROVENANCE_OK and exit 0 without verifying anything. Clear them, and the gate refuses
+# independently if any is still set.
+foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE")) {
+  $nodeInjectValue = [Environment]::GetEnvironmentVariable($nodeInjectVar)
+  if (-not [string]::IsNullOrEmpty($nodeInjectValue)) {
+    Remove-Item -LiteralPath "Env:$nodeInjectVar" -ErrorAction SilentlyContinue
+    Write-Host "DOOR_NODE_INJECTION_ENV_CLEARED $nodeInjectVar=$nodeInjectValue"
+  }
+}
 $gatePreviousPreference = $ErrorActionPreference
 try {
   # Native stderr is not an error here; the exit code is the verdict. (PS 5.1 traps, twice now.)
