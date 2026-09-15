@@ -931,8 +931,7 @@ describe("transactional durable outcome queue source", () => {
             unique: true,
             valid: true,
             ready: true,
-            keyColumn: '"repository","targetRef"',
-            predicate: `("status" = 'live'::text)`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
       }
@@ -1124,8 +1123,7 @@ describe("transactional durable outcome queue source", () => {
             unique: true,
             valid: true,
             ready: true,
-            keyColumn: `"repository","targetRef"`,
-            predicate: `"status" = 'live'`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
       }
@@ -1371,8 +1369,7 @@ describe("transactional durable outcome queue source", () => {
             unique: false,
             valid: true,
             ready: true,
-            keyColumn: '"repository","targetRef"',
-            predicate: `("status" = 'live'::text)`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
       }

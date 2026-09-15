@@ -1425,7 +1425,7 @@ WHERE l."status" = 'live' AND (
 SELECT i.indisunique AS "unique",
        i.indisvalid AS "valid",
        i.indisready AS "ready",
-       pg_get_indexdef(i.indexrelid, 1, true) AS "keyColumn",
+       pg_get_indexdef(i.indexrelid) AS "indexDef",
        pg_get_expr(i.indpred, i.indrelid, true) AS "predicate"
 FROM pg_index AS i
 JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
@@ -3278,11 +3278,16 @@ function receiptIndexesMatch(rows) {
 }
 
 function promotionLeaseIndexMatches(row) {
+  // Match against the FULL index definition: pg_get_indexdef(oid, 1, true) returns only the
+  // FIRST key expression, which made a correct two-column index read as one column and
+  // bricked every boot with HARDENING_INDEX_WALL (review P1 on #1244).
+  const def = canonicalCatalogExpression(row.indexDef)
   return row?.unique === true
     && row?.valid === true
     && row?.ready === true
-    && canonicalCatalogExpression(row.keyColumn) === "repository,targetref"
-    && canonicalCatalogExpression(row.predicate) === "status='live'"
+    && def.includes("promotion_lease")
+    && def.includes("repository,targetref")
+    && def.includes("status='live'")
 }
 
 function hardeningWall(code, details = null, cause = null) {

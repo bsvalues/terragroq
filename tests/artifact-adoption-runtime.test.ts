@@ -760,4 +760,21 @@ describe("persisted prospective artifact adoption", () => {
     const grantFence = String(candidate.txQuery.mock.calls.find(([statement]) => String(statement).includes('FROM "authority_grant"') && String(statement).includes("FOR UPDATE"))?.[0] ?? "")
     expect(grantFence).toContain('"expiresAt" > CURRENT_TIMESTAMP')
   })
+
+  it("releases the promotion lease when a seal attempt fails after authorization (P1 #1244)", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:lease-release", preview.previewDigest)
+    const live = candidate.leases.filter((lease) => lease.status === "live")
+    expect(live).toHaveLength(1)
+    // Evidence inspection fails for a non-lease reason; the wrapper must give the target
+    // back instead of holding it until grant expiry.
+    candidate.lifecycle.inspectPullRequest.mockRejectedValueOnce(new Error("evidence unavailable"))
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:lease-release"))
+      .rejects.toThrow("evidence unavailable")
+    const stillLive = candidate.leases.filter((lease) => lease.status === "live")
+    expect(stillLive).toEqual([])
+    const released = candidate.leases.filter((lease) => lease.status === "released")
+    expect(released.some((lease) => lease.reason === "LEASE_RELEASED_ON_FAILURE")).toBe(true)
+  })
 })
