@@ -72,7 +72,24 @@ function isEphemeralListener(item) {
   if (port >= 49152 && lower(item?.owner).includes("hermes-runtime") && isLoopbackAddress(lower(item?.address))) return true
   // Vendor-daemon loopback UDP telemetry (NVIDIA container helper) is host noise.
   if (protocol === "udp" && isLoopbackAddress(lower(item?.address)) && lower(item?.owner).includes("nvcontainer")) return true
+  // Tailscale direct-connection TCP session ports on tailnet-only addresses (CGNAT 100.64/10,
+  // ULA fd7a:115c:a1e0::) are assigned per peer session and rotate across sessions/boots - the
+  // same instance-noise class as the NetBIOS/vEthernet rebind #1141 already exempts. The overlay
+  // is authenticated end-to-end; the pinned UDP:41641 key and the tailscaled service binary hash
+  // stay exact-compare. A tailscaled TCP socket on ANY other address (LAN, wildcard, loopback)
+  // is ingress and stays drift.
+  if (protocol === "tcp" && owner.includes("tailscaled") && isTailnetAddress(normalizeAddress(item?.address)) && port !== 41641) return true
   return false
+}
+
+// Tailnet-only ranges Tailscale documents for CGNAT (100.64.0.0/10) and its ULA (fd7a:115c:a1e0::/64).
+function isTailnetAddress(address) {
+  if (typeof address !== "string") return false
+  if (address.startsWith("fd7a:115c:a1e0::")) return true
+  const m = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!m) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return a === 100 && b >= 64 && b <= 127
 }
 
 function isLoopbackAddress(address) {

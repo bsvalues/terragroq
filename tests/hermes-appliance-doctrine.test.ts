@@ -158,6 +158,47 @@ describe("HERMES appliance doctrine comparator (stable-vs-ephemeral, #1034/#1035
     expect(evaluate(obs).driftCount).toBe(0)
   })
 
+  it("tailscaled TCP session ports on tailnet-only addresses rotate per peer session and are never drift", () => {
+    // Doctrine froze the session port at 55332; the live overlay re-bound it at 59005 with the
+    // ULA sibling rotated too (2026-09-04). Both entries must cancel: no missing, no unexpected.
+    const declaredTail = [
+      listener("tcp", "100.97.194.84", 55332, "c:\\program files\\tailscale\\tailscaled.exe"),
+      listener("tcp", "fd7a:115c:a1e0::a401:c2cd", 47332, "c:\\program files\\tailscale\\tailscaled.exe"),
+      listener("udp", "0.0.0.0", 41641, "c:\\program files\\tailscale\\tailscaled.exe"),
+    ]
+    const observedTail = [
+      listener("tcp", "100.97.194.84", 59005, "c:\\program files\\tailscale\\tailscaled.exe"),
+      listener("tcp", "fd7a:115c:a1e0::a401:c2cd", 47999, "c:\\program files\\tailscale\\tailscaled.exe"),
+      listener("udp", "0.0.0.0", 41641, "c:\\program files\\tailscale\\tailscaled.exe"),
+    ]
+    const doctrine = doctrineFor(baseObservation({ listeners: [...baseObservation().inventory.listeners, ...declaredTail] }))
+    const obs = baseObservation({ listeners: [...baseObservation().inventory.listeners, ...observedTail] })
+    const result = evaluateHermesDoctrine(doctrine, obs, { now: NOW })
+    expect(result.driftCount, JSON.stringify(result.drift.listeners)).toBe(0)
+  })
+
+  it("tailscaled TCP on a LAN/wildcard address or the pinned 41641 UDP key stays exact-compare drift", () => {
+    const tailTcpLan = evaluate(baseObservation({
+      listeners: [...baseObservation().inventory.listeners,
+        listener("tcp", "192.168.88.9", 55332, "c:\\program files\\tailscale\\tailscaled.exe")],
+    }))
+    expect(tailTcpLan.code).toBe("HERMES_DOCTRINE_DRIFT")
+    const tailTcpWild = evaluate(baseObservation({
+      listeners: [...baseObservation().inventory.listeners,
+        listener("tcp", "0.0.0.0", 59005, "c:\\program files\\tailscale\\tailscaled.exe")],
+    }))
+    expect(tailTcpWild.code).toBe("HERMES_DOCTRINE_DRIFT")
+    // a MISSING declared 41641 UDP key is still drift: the exemption never excuses losing it
+    const doctrine = doctrineFor(baseObservation({
+      listeners: [...baseObservation().inventory.listeners,
+        listener("udp", "0.0.0.0", 41641, "c:\\program files\\tailscale\\tailscaled.exe")],
+    }))
+    const missing = evaluateHermesDoctrine(doctrine, baseObservation(), { now: NOW })
+    expect(missing.drift.listeners.missing.map((i) => i.key)).toContain(
+      "udp|0.0.0.0|41641|c:\\program files\\tailscale\\tailscaled.exe",
+    )
+  })
+
 
   it("strips the per-logon service suffix and treats service state as volatile", () => {
     const declared = baseObservation().inventory.services[0]
