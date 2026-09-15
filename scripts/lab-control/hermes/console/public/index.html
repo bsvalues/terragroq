@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07110f" />
+    <title>HERMES Console</title>
+    <meta name="description" content="Truthful local status for the HERMES AI appliance." />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true"></div>
+    <main>
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">HERMES · AI APPLIANCE</p>
+          <h1>Everything important.<br /><span>Nothing noisy.</span></h1>
+        </div>
+        <div class="clock" aria-label="Console time">
+          <strong id="clock">--:--</strong>
+          <span id="observed">Waiting for HERMES</span>
+        </div>
+      </header>
+
+      <section class="hero" aria-live="polite">
+        <div class="orb unknown" id="overall-orb"><span></span></div>
+        <div>
+          <p class="eyebrow">APPLIANCE STATE</p>
+          <h2 id="overall-title">Reading HERMES…</h2>
+          <p id="overall-summary">The Console is waiting for a current, validated host observation.</p>
+        </div>
+        <div class="owner-state" id="owner-state">
+          <span>NEEDS YOU</span>
+          <strong>Unknown</strong>
+        </div>
+      </section>
+
+      <section class="domain-grid" id="domain-grid" aria-label="HERMES health domains"></section>
+
+      <section class="alert-strip" aria-labelledby="alert-heading">
+        <p class="eyebrow" id="alert-heading">NATIVE ALERTS - LAST 48 HOURS</p>
+        <ul id="alert-list"><li class="clear"><strong>Reading alerts.log…</strong></li></ul>
+      </section>
+
+      <section class="work-strip">
+        <div>
+          <p class="eyebrow">ACTIVE WORK</p>
+          <strong id="work-headline">Loading current appliance work…</strong>
+        </div>
+        <span class="work-state" id="work-state">OBSERVING</span>
+      </section>
+
+      <footer>
+        <span>HERMES Appliance V1</span>
+        <span id="freshness">Evidence freshness unknown</span>
+      </footer>
+    </main>
+  </body>
+</html>

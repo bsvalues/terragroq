@@ -1,0 +1,91 @@
+# Hermes core stack. Boring and stable on purpose.
+# Start:   ..\start-hermes.ps1   (or: docker compose up -d)
+# Status:  docker compose ps
+# Logs:    docker compose logs -f <service>
+# Stop:    docker compose down   (data persists)
+#
+# Storage: native Ollama weights live on G:. Docker named volumes reside in
+# G:\DockerDesktopWSL\disk\docker_data.vhdx. G: is the active data store.
+#
+# ---------------------------------------------------------------------------------------------
+# OLLAMA IS DELIBERATELY NOT IN THIS FILE  (#997)
+#
+# Ollama on HERMES is owned by ONE canonical Windows service definition:
+#   scheduled task  WilliamOS-HERMES-Ollama   (SYSTEM, at startup, no execution time limit)
+#   startup path    C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1
+#   listens         127.0.0.1:11434  (loopback only)
+#   models          G:\HermesData\ollama\models   (the same store this file used to bind)
+#   GPU             Tesla P40 by UUID, in TCC mode, capped at 150 W on every boot
+#
+# It is not a container because it cannot be one on this host. The P40 runs in TCC mode, TCC devices
+# have no WDDM presence, and WSL2 reaches GPUs only through the WDDM stack. NVML enumerates every
+# adapter before answering any query, so nvidia-container-cli's prestart hook fails for EVERY card
+# here -- asking for only the RTX 3050 fails exactly as hard as asking for the P40. That is why the
+# old ollama container exited 128 and never came back.
+#
+# DO NOT re-add an ollama service here. Two owners of port 11434 and one model store is the failure
+# #997 was commissioned to end. To roll the whole change back, see C:\HermesLab\hermes\_997-rollback.
+# ---------------------------------------------------------------------------------------------
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5433:5432"   # host 5433 -> container 5432 (host 5432 is already in use); loopback-only (WO-HERMES-APPL-006C)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"  # loopback-only (WO-HERMES-APPL-006C)
+    volumes:
+      - redisdata:/data
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      # Was http://ollama:11434 over this project's bridge network. Ollama now runs on the Windows
+      # host bound to 127.0.0.1 only. Docker Desktop proxies host.docker.internal through a
+      # component on the host, so this reaches the loopback listener -- verified from inside this
+      # container, while the LAN address timed out. Do NOT add an extra_hosts host-gateway mapping:
+      # that would repoint this name at the bridge gateway, which cannot reach host loopback.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    volumes:
+      - webuidata:/app/backend/data
+    # depends_on: ollama  -- removed with the service. Ollama's availability is now the Windows
+    # service's business, and open-webui already tolerates the backend being down at start.
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000"  # loopback-only (WO-HERMES-APPL-006C)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainerdata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  webuidata:
+  portainerdata:
