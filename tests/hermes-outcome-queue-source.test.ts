@@ -913,7 +913,6 @@ describe("transactional durable outcome queue source", () => {
             authorityViolationCount: 0,
             nonnegativeViolationCount: 0,
             activeBindingViolationCount: 0,
-            multipleActiveUserCount: 0,
           }],
         }
       }
@@ -926,16 +925,18 @@ describe("transactional durable outcome queue source", () => {
           })),
         }
       }
-      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+      if (sql === OUTCOME_QUEUE_SQL.readPromotionLeaseLiveIndex) {
         return {
           rows: [{
             unique: true,
             valid: true,
             ready: true,
-            keyColumn: '"userId"',
-            predicate: `("lifecycleState" = 'active'::text)`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readStalePromotionLeaseCount) {
+        return { rows: [{ staleLiveLeaseCount: 0 }] }
       }
       return { rows: [] }
     })
@@ -962,7 +963,10 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.ensureMutationAttemptRequestIndex,
       OUTCOME_QUEUE_SQL.readReceiptIndexes,
       OUTCOME_QUEUE_SQL.inspectHardeningInvariantViolations,
-      OUTCOME_QUEUE_SQL.ensureOneActiveOutcomeIndex,
+      OUTCOME_QUEUE_SQL.dropLegacyOneActiveOutcomeIndex,
+      OUTCOME_QUEUE_SQL.ensurePromotionLeaseTable,
+      OUTCOME_QUEUE_SQL.ensurePromotionLeaseIndexes,
+      OUTCOME_QUEUE_SQL.sweepStalePromotionLeases,
       OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemCheckConstraints,
       OUTCOME_QUEUE_SQL.validateOutcomeQueueLifecycleConstraint,
       OUTCOME_QUEUE_SQL.validateOutcomeQueueApprovalConstraint,
@@ -970,7 +974,8 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.validateOutcomeQueueNonnegativeFenceConstraint,
       OUTCOME_QUEUE_SQL.validateOutcomeQueueActiveBindingConstraint,
       OUTCOME_QUEUE_SQL.readOutcomeQueueHardeningConstraints,
-      OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex,
+      OUTCOME_QUEUE_SQL.readPromotionLeaseLiveIndex,
+      OUTCOME_QUEUE_SQL.readStalePromotionLeaseCount,
       "COMMIT",
     ])
     expect(run.mock.calls[1][1]).toEqual(["williamos:outcome-queue:hardening-schema"])
@@ -1100,7 +1105,6 @@ describe("transactional durable outcome queue source", () => {
             authorityViolationCount: 0,
             nonnegativeViolationCount: 0,
             activeBindingViolationCount: 0,
-            multipleActiveUserCount: 0,
           }],
         }
       }
@@ -1113,16 +1117,18 @@ describe("transactional durable outcome queue source", () => {
           })),
         }
       }
-      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+      if (sql === OUTCOME_QUEUE_SQL.readPromotionLeaseLiveIndex) {
         return {
           rows: [{
             unique: true,
             valid: true,
             ready: true,
-            keyColumn: `"userId"`,
-            predicate: `"lifecycleState" = 'active'`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readStalePromotionLeaseCount) {
+        return { rows: [{ staleLiveLeaseCount: 0 }] }
       }
       return { rows: [] }
     })
@@ -1340,7 +1346,6 @@ describe("transactional durable outcome queue source", () => {
             authorityViolationCount: 0,
             nonnegativeViolationCount: 0,
             activeBindingViolationCount: 0,
-            multipleActiveUserCount: 0,
           }],
         }
       }
@@ -1358,14 +1363,13 @@ describe("transactional durable outcome queue source", () => {
           })),
         }
       }
-      if (sql === OUTCOME_QUEUE_SQL.readOneActiveOutcomeIndex) {
+      if (sql === OUTCOME_QUEUE_SQL.readPromotionLeaseLiveIndex) {
         return {
           rows: [{
             unique: false,
             valid: true,
             ready: true,
-            keyColumn: '"userId"',
-            predicate: `("lifecycleState" = 'active'::text)`,
+            indexDef: `CREATE UNIQUE INDEX promotion_lease_one_live_per_target_idx ON public.promotion_lease USING btree (repository, "targetRef") WHERE (status = 'live'::text)`,
           }],
         }
       }
@@ -1391,7 +1395,6 @@ describe("transactional durable outcome queue source", () => {
             authorityViolationCount: 0,
             nonnegativeViolationCount: 0,
             activeBindingViolationCount: 1,
-            multipleActiveUserCount: 0,
           }],
         }
       }
@@ -1804,14 +1807,12 @@ describe("transactional durable outcome queue source", () => {
       acquisitionKey: "acquire-next",
       activatedAt: now,
     }
-    let staleOwnsActiveSlot = true
     const run = vi.fn(async (sql: string, values: unknown[] = []) => {
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
-        staleOwnsActiveSlot = false
         return {
           rows: [{
             ...stale,
@@ -1834,11 +1835,8 @@ describe("transactional durable outcome queue source", () => {
         }
       }
       if (sql === OUTCOME_QUEUE_SQL.acquire) {
-        if (staleOwnsActiveSlot) {
-          throw Object.assign(new Error(
-            "duplicate key value violates unique constraint outcome_queue_item_one_active_per_user_idx",
-          ), { code: "23505" })
-        }
+        // The one-active-per-user constraint is retired; acquisition after stale-lease
+        // recovery simply lands. The recovery proof is the blocked-slot transition itself.
         return { rows: [acquired] }
       }
       if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
