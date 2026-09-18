@@ -33,6 +33,9 @@ At call time, public metadata is obtained from the [official unauthenticated mod
 and pricing; no fixed model list or prices are admitted. The [official chat-completions contract](https://inference-docs.cerebras.ai/api-reference/chat-completions)
 and [authentication contract](https://inference-docs.cerebras.ai/api-reference/authentication)
 define the POST and Bearer envelope. Discovery is metadata-only; it never sends a prompt or key.
+Spend is reserved before inference against the highest current catalog tariffs, not only the
+requested model's tariff; the receipt then calculates actual cost from the reported model and
+binds the classified egress messages by digest, without retaining content.
 
 The retained comparison entry point is [IF-05's evaluation corpus and acceptance rubric](05-acceptance-and-evaluation.md)
 with the [whole-fabric benchmark matrix](18-if-05-fabric-benchmark-matrix.md). A later, separately

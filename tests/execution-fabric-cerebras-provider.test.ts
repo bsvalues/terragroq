@@ -23,7 +23,7 @@ const deniedPackages: Array<[Record<string, unknown>, string]> = [
   [{ classification: "S1", countyData: true }, "county"], [{ classification: "S1", pacsData: true }, "PACS"],
   [{ classification: "S1", pii: true }, "PII"], [{ classification: "S1", credentials: true }, "credential"],
   [{ classification: "S1", localOnly: true }, "local-only"], [{ classification: "S1", confidential: true }, "confidential"],
-  [{ classification: "S2" }, "unattested S2"],
+    [{ classification: "S2" }, "unattested S2"],
 ]
 
 describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
@@ -37,6 +37,12 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
   it.each(deniedPackages)("denies %s (%s) before transport", async (contextPackage) => {
     const fetchImpl = transport()
     await expect(callCerebrasModelApi(request(fetchImpl, { contextPackage }))).rejects.toMatchObject({ code: "EXTERNAL_EGRESS_REFUSED" })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("turns a null context package into a typed refusal before transport", async () => {
+    const fetchImpl = transport()
+    await expect(callCerebrasModelApi(request(fetchImpl, { contextPackage: null }))).rejects.toMatchObject({ code: "EXTERNAL_EGRESS_REFUSED" })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
@@ -54,12 +60,14 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     expect(result).toMatchObject({ provider: "cerebras", requestedProvider: "cerebras", requestedModel: model,
       model, content: "fixture-answer", usage: { totalTokens: 12 } })
     expect(result.usage.costUsd).toBeCloseTo(0.000014)
+    expect(result.receipt.contextDigest).toMatch(/^sha256:[0-9a-f]{64}$/)
     const [url, init] = fetchImpl.mock.calls[1] as unknown as [string, { headers: { authorization: string }, signal: AbortSignal, body: string }]
     expect(url).toBe(`${CEREBRAS_BASE_URL}/chat/completions`)
     expect(init.headers.authorization).toBe(`Bearer ${key}`)
     expect(init.signal).toBeInstanceOf(AbortSignal)
     expect(JSON.parse(init.body)).toEqual({ model, messages: [{ role: "user", content: "fixture-public-input" }], max_tokens: 256, stream: false })
     expect(JSON.stringify(result)).not.toContain(key)
+    expect(JSON.stringify(result.receipt)).not.toContain("fixture-public-input")
   })
 
   it("passes structured output and tool calls only when catalog advertises them", async () => {
@@ -105,6 +113,20 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     await expect(callCerebrasModelApi(request(sensitiveOptions, { tools: [{ type: "function", function: {
       name: "lookup", description: "Authorization: fixture-sensitive-value" } }] }))).rejects.toMatchObject({ code: "EXTERNAL_EGRESS_REFUSED" })
     expect(sensitiveOptions).not.toHaveBeenCalled()
+  })
+
+  it("reserves for a more expensive catalog model before paid inference", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url !== CEREBRAS_CATALOG_URL) throw new Error("inference must not run")
+      return response({ data: [catalog.data[0], { ...catalog.data[1], pricing: { prompt: "0.01", completion: "0.01" } }] })
+    })
+    await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "SPEND_CAP_EXCEEDS_CEILING" })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects inconsistent provider token totals", async () => {
+    const fetchImpl = transport({ ...answer, usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 999 } })
+    await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })
   })
 
   it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],

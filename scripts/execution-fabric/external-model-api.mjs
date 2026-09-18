@@ -139,6 +139,7 @@ const PII_PATTERN = /\b\d{3}-\d{2}-\d{4}\b|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2
 function assertCerebrasEgress(contextPackage, messages) {
   // S1 is the existing public tier. S2 needs an affirmative synthetic/sanitized
   // attestation; neither an absent tier nor a caller's free-form label is authority.
+  if (!contextPackage || typeof contextPackage !== "object" || Array.isArray(contextPackage)) deny("EXTERNAL_EGRESS_REFUSED")
   try { assertExternalEgressAllowed(contextPackage) } catch { deny("EXTERNAL_EGRESS_REFUSED") }
   if (contextPackage.classification !== "S1" &&
     !(contextPackage.classification === "S2" &&
@@ -234,17 +235,26 @@ export async function callCerebrasModelApi({
       (modality !== "text" && !(modality === "image" && capabilities.vision === true))) {
       deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
     }
-    const promptPrice = positivePrice(metadata.pricing.prompt)
-    const completionPrice = positivePrice(metadata.pricing.completion)
-    if (promptPrice === null || completionPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")
+    // Reserve against every model the public catalog says the provider could report.
+    // Requested-model pricing alone cannot bound a provider-side model substitution.
+    let maximumPromptPrice = 0
+    let maximumCompletionPrice = 0
+    for (const candidate of catalog.data) {
+      if (candidate?.deprecated === true) continue
+      const inputPrice = positivePrice(candidate?.pricing?.prompt)
+      const outputPrice = positivePrice(candidate?.pricing?.completion)
+      if (inputPrice === null || outputPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")
+      maximumPromptPrice = Math.max(maximumPromptPrice, inputPrice)
+      maximumCompletionPrice = Math.max(maximumCompletionPrice, outputPrice)
+    }
     // UTF-8 byte count is a conservative token ceiling; reserve output tokens up front.
-    const { messages } = deriveEgressMessages(contextPackage, { userPrompt: prompt, systemPrompt })
+    const { messages, digest } = deriveEgressMessages(contextPackage, { userPrompt: prompt, systemPrompt })
     const request = { model, messages, max_tokens: maxTokens, stream: false }
     if (responseFormat) request.response_format = responseFormat
     if (tools) { request.tools = tools; request.parallel_tool_calls = parallelToolCalls }
     if (reasoningEffort) request.reasoning_effort = reasoningEffort
     const serialized = JSON.stringify(request)
-    const reservedCostUsd = Buffer.byteLength(serialized, "utf8") * promptPrice + maxTokens * completionPrice
+    const reservedCostUsd = Buffer.byteLength(serialized, "utf8") * maximumPromptPrice + maxTokens * maximumCompletionPrice
     if (reservedCostUsd > spendPolicy.maxCostUsd) deny("SPEND_CAP_EXCEEDS_CEILING")
     let response
     try {
@@ -275,6 +285,9 @@ export async function callCerebrasModelApi({
       !Number.isSafeInteger(usage?.prompt_tokens) || !Number.isSafeInteger(usage?.completion_tokens) ||
       usage.prompt_tokens < 0 || usage.completion_tokens < 0 ||
       (message.tool_calls && !Array.isArray(message.tool_calls))) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    const totalTokens = usage.prompt_tokens + usage.completion_tokens
+    if (!Number.isSafeInteger(totalTokens) ||
+      (usage.total_tokens !== undefined && usage.total_tokens !== totalTokens)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
     // The provider may report a different model. Never price that usage using the
     // requested model's tariff or certify it without current actual-model metadata.
     const actualMetadata = catalogModel(catalog, data.model)
@@ -287,9 +300,9 @@ export async function callCerebrasModelApi({
       requestedModel: model, model: data.model, content: message.content ?? null,
       toolCalls: message.tool_calls ?? null,
       usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
-        totalTokens: usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens, costUsd },
+        totalTokens, costUsd },
       receipt: { requestedMaxCostUsd: spendPolicy.maxCostUsd, overBudget: costUsd > spendPolicy.maxCostUsd,
-        durationMs: Date.now() - started, status: "completed" },
+        contextDigest: digest, durationMs: Date.now() - started, status: "completed" },
     }
   } finally {
     clearTimeout(timer)
