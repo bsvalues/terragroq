@@ -59,6 +59,8 @@ guards its hash, so it is **not** a secret-update transaction. Do not edit the s
 Long-lived activation requires a separately reviewed, WilliamOS-governed transaction that:
 
 1. integrates the exact reviewed/sealed revision into authoritative `lab/main` and builds it;
+   the dependency-aware deployment path must stage the exact production lockfile with
+   `-WithDependencies`, because the adapter's JSON Schema validator is a declared dependency;
 2. accepts one hidden local key entry into a protected staged runtime configuration (never Git,
    command arguments, logs, chat, or a developer source tree);
 3. atomically stages the bundle and configuration together, with rollback bytes and ACL checks;

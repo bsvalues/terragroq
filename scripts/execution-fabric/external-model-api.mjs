@@ -17,6 +17,7 @@
  */
 
 import { createHash } from "node:crypto"
+import Ajv from "ajv"
 
 const S1_S2 = new Set(["S1", "S2"])
 
@@ -232,6 +233,14 @@ export async function callCerebrasModelApi({
     ...((requestTools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
     { content: requestResponseFormat === undefined ? "" : safeOptionText(requestResponseFormat) }])
   if (requestResponseFormat && !["json_object", "json_schema"].includes(requestResponseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  let structuredValidator = null
+  if (requestResponseFormat?.type === "json_schema") {
+    const schema = requestResponseFormat.json_schema?.schema
+    if (!schema || typeof schema !== "object" || Array.isArray(schema) ||
+      safeOptionText(requestResponseFormat).length > 32_768) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    try { structuredValidator = new Ajv({ strict: true, allowUnionTypes: true }).compile(schema) }
+    catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+  }
   if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
 
   const controller = new AbortController()
@@ -316,10 +325,20 @@ export async function callCerebrasModelApi({
       (typeof message.content !== "string" || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))) {
       deny("EXTERNAL_API_MALFORMED_RESPONSE")
     }
+    if (finishReason === "stop" && requestResponseFormat) {
+      let structuredContent
+      try { structuredContent = JSON.parse(message.content) } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+      if (requestResponseFormat.type === "json_object" &&
+        (structuredContent === null || typeof structuredContent !== "object" || Array.isArray(structuredContent))) {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+      if (structuredValidator && !structuredValidator(structuredContent)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
     if (finishReason === "tool_calls") {
       if (!requestTools || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
         deny("EXTERNAL_API_MALFORMED_RESPONSE")
       }
+      if (!parallelToolCalls && message.tool_calls.length > 1) deny("EXTERNAL_API_MALFORMED_RESPONSE")
       const declaredNames = new Set(requestTools.map(tool => tool.function.name))
       for (const call of message.tool_calls) {
         if (typeof call?.id !== "string" || !call.id || call.type !== "function" ||

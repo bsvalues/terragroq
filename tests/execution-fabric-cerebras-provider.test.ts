@@ -84,12 +84,34 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     expect(body.response_format.type).toBe("json_schema")
   })
 
+  it("validates JSON object and schema responses before completing", async () => {
+    const schemaFormat = { type: "json_schema", json_schema: { name: "result", strict: true,
+      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false } } }
+    const valid = transport({ ...answer, choices: [{ finish_reason: "stop", message: { content: '{"ok":true}' } }] })
+    expect((await callCerebrasModelApi(request(valid, { responseFormat: schemaFormat }))).content).toBe('{"ok":true}')
+    for (const [responseFormat, content] of [
+      [{ type: "json_object" }, "not-json"],
+      [{ type: "json_object" }, "[]"],
+      [schemaFormat, '{"ok":"wrong"}'],
+    ] as const) {
+      const fetchImpl = transport({ ...answer, choices: [{ finish_reason: "stop", message: { content } }] })
+      await expect(callCerebrasModelApi(request(fetchImpl, { responseFormat })))
+        .rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    }
+    const unsupported = transport()
+    await expect(callCerebrasModelApi(request(unsupported, { responseFormat: { type: "json_schema",
+      json_schema: { schema: { type: "not-a-schema-type" } } } })))
+      .rejects.toMatchObject({ code: "EXTERNAL_API_UNSUPPORTED_CAPABILITY" })
+    expect(unsupported).not.toHaveBeenCalled()
+  })
+
   it("snapshots tool and output options before asynchronous catalog discovery", async () => {
     let releaseCatalog: (() => void) | undefined
     const catalogGate = new Promise<void>(resolve => { releaseCatalog = resolve })
     const fetchImpl = vi.fn(async (url: string) => {
       if (url === CEREBRAS_CATALOG_URL) { await catalogGate; return response(catalog) }
-      return response(answer)
+      return response({ ...answer, choices: [{ finish_reason: "stop", message: { content: "{}" } }] })
     })
     const tools = [{ type: "function", function: { name: "lookup", description: "initial", parameters: { type: "object" } } }]
     const responseFormat = { type: "json_object", marker: "initial" }
@@ -115,8 +137,10 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
   })
 
   it("refuses a substituted model that lacks a requested capability", async () => {
-    const fetchImpl = transport({ ...answer, model: "provider-reported-model" })
-    await expect(callCerebrasModelApi(request(fetchImpl, { responseFormat: { type: "json_schema" } })))
+    const fetchImpl = transport({ ...answer, model: "provider-reported-model",
+      choices: [{ finish_reason: "stop", message: { content: "{}" } }] })
+    await expect(callCerebrasModelApi(request(fetchImpl, { responseFormat: { type: "json_schema",
+      json_schema: { name: "result", schema: { type: "object" } } } })))
       .rejects.toMatchObject({ code: "EXTERNAL_API_UNSUPPORTED_CAPABILITY" })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
@@ -177,6 +201,17 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
       expect(error.code).toBe("EXTERNAL_API_MALFORMED_RESPONSE")
       expect(error.message).not.toContain("not-json")
     }
+  })
+
+  it("rejects parallel returned tool calls unless explicitly enabled", async () => {
+    const tools = [{ type: "function", function: { name: "lookup" } }]
+    const call = { id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }
+    const fetchImpl = transport({ ...answer, choices: [{ finish_reason: "tool_calls", message: { content: null,
+      tool_calls: [call, { ...call, id: "call_2" }] } }] })
+    await expect(callCerebrasModelApi(request(fetchImpl, { tools, parallelToolCalls: false })))
+      .rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })
+    expect((await callCerebrasModelApi(request(fetchImpl, { tools, parallelToolCalls: true }))).toolCalls)
+      .toHaveLength(2)
   })
 
   it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],
