@@ -6,7 +6,8 @@ The existing `scripts/execution-fabric/external-model-api.mjs` Tier 3 adapter ex
 requires provider-reported cost fields Cerebras does not supply). It is disabled unless
 `WILLIAMOS_CEREBRAS_ENABLED=true` is explicit and `CEREBRAS_API_KEY` is present. Neither value
 is installed by this change. The standalone HERMES launcher now reads those two deployment
-declarations, clears inherited values when not enabled, and exports them to its Node child only
+declarations, overrides inherited values with disabled/empty sentinels when not enabled (so
+Next cannot reload a stale key from dotenv), and exports them to its Node child only
 when explicitly declared. There is no routing default, fallback, batch/file operation,
 autonomous spend, scheduler activation, admission, promotion, deployment, or live inference.
 Workspace-controlled child processes launched by the cockpit explicitly discard both Cerebras

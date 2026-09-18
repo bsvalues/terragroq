@@ -214,6 +214,19 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
       .toHaveLength(2)
   })
 
+  it("validates tool arguments against the declared parameter schema", async () => {
+    const tools = [{ type: "function", function: { name: "lookup", parameters: { type: "object",
+      properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } } }]
+    for (const [argumentsText, expectedCode] of [["{}", "EXTERNAL_API_MALFORMED_RESPONSE"],
+      ['{"id":"one"}', null], ["7", "EXTERNAL_API_MALFORMED_RESPONSE"]] as const) {
+      const fetchImpl = transport({ ...answer, choices: [{ finish_reason: "tool_calls", message: { content: null,
+        tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: argumentsText } }] } }] })
+      const result = await callCerebrasModelApi(request(fetchImpl, { tools })).catch(e => e)
+      if (expectedCode) expect(result.code).toBe(expectedCode)
+      else expect(result.toolCalls).toHaveLength(1)
+    }
+  })
+
   it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],
     [429, "EXTERNAL_API_RATE_LIMIT"], [503, "EXTERNAL_API_OUTAGE"]])("maps HTTP %i without response leakage or retries", async (status, code) => {
     const fetchImpl = transport({ unsafe: "fixture-sensitive-response" }, status, "3")

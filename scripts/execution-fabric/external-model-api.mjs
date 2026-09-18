@@ -233,12 +233,24 @@ export async function callCerebrasModelApi({
     ...((requestTools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
     { content: requestResponseFormat === undefined ? "" : safeOptionText(requestResponseFormat) }])
   if (requestResponseFormat && !["json_object", "json_schema"].includes(requestResponseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  const schemaCompiler = new Ajv({ strict: true, allowUnionTypes: true })
   let structuredValidator = null
   if (requestResponseFormat?.type === "json_schema") {
     const schema = requestResponseFormat.json_schema?.schema
     if (!schema || typeof schema !== "object" || Array.isArray(schema) ||
       safeOptionText(requestResponseFormat).length > 32_768) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
-    try { structuredValidator = new Ajv({ strict: true, allowUnionTypes: true }).compile(schema) }
+    try { structuredValidator = schemaCompiler.compile(schema) }
+    catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+  }
+  const toolValidators = new Map()
+  for (const tool of requestTools ?? []) {
+    const name = tool.function.name
+    if (toolValidators.has(name)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    const parameters = tool.function.parameters
+    if (parameters === undefined) { toolValidators.set(name, null); continue }
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters) ||
+      safeOptionText(parameters).length > 32_768) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    try { toolValidators.set(name, schemaCompiler.compile(parameters)) }
     catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
   }
   if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
@@ -339,12 +351,18 @@ export async function callCerebrasModelApi({
         deny("EXTERNAL_API_MALFORMED_RESPONSE")
       }
       if (!parallelToolCalls && message.tool_calls.length > 1) deny("EXTERNAL_API_MALFORMED_RESPONSE")
-      const declaredNames = new Set(requestTools.map(tool => tool.function.name))
       for (const call of message.tool_calls) {
         if (typeof call?.id !== "string" || !call.id || call.type !== "function" ||
-          typeof call.function?.name !== "string" || !declaredNames.has(call.function.name) ||
+          typeof call.function?.name !== "string" || !toolValidators.has(call.function.name) ||
           typeof call.function?.arguments !== "string") deny("EXTERNAL_API_MALFORMED_RESPONSE")
-        try { JSON.parse(call.function.arguments) } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+        let parsedArguments
+        try { parsedArguments = JSON.parse(call.function.arguments) }
+        catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+        if (!parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) {
+          deny("EXTERNAL_API_MALFORMED_RESPONSE")
+        }
+        const validateArguments = toolValidators.get(call.function.name)
+        if (validateArguments && !validateArguments(parsedArguments)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
       }
     }
     const totalTokens = usage.prompt_tokens + usage.completion_tokens

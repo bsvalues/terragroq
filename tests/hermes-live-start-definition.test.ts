@@ -135,15 +135,17 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 
-  it("forwards Cerebras only from an explicit deployment declaration and clears inherited values otherwise", () => {
+  it("forwards Cerebras only from an explicit declaration and blocks dotenv restoration when disabled", () => {
     const code = executableOnly(startText)
     for (const name of ["WILLIAMOS_CEREBRAS_ENABLED", "CEREBRAS_API_KEY"]) {
       expect(code).toContain(`Get-DeclaredEnvValue -File $envFile -Key "${name}"`)
-      expect(code).toContain(`Remove-Item Env:${name} -ErrorAction SilentlyContinue`)
     }
-    expect(code).toMatch(/\$declaredCerebrasEnabled\s+-ceq\s+"true"/)
+    expect(code).toMatch(/\$declaredCerebrasEnabled\s+-ceq\s+"true"\s+-and\s+\$declaredCerebrasKey/)
     expect(code).toMatch(/\$env:WILLIAMOS_CEREBRAS_ENABLED\s*=\s*"true"/)
     expect(code).toMatch(/\$env:CEREBRAS_API_KEY\s*=\s*\$declaredCerebrasKey/)
+    expect(code).toMatch(/\$env:WILLIAMOS_CEREBRAS_ENABLED\s*=\s*"false"/)
+    expect(code).toMatch(/\$env:CEREBRAS_API_KEY\s*=\s*""/)
+    expect(code).not.toContain("Remove-Item Env:CEREBRAS_API_KEY")
     expect(code.indexOf("$env:CEREBRAS_API_KEY")).toBeLessThan(code.indexOf("& $node $server"))
     expect(code).not.toMatch(/Write-(?:Boot|Output|Host).*\$declaredCerebrasKey/)
   })

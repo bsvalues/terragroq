@@ -391,13 +391,13 @@ $env:PORT = "$Port"
 $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 # The optional external provider is explicit-only. Never inherit either value from a scheduled
 # task environment or export a credential when the deployment declaration is not enabled.
-if ($declaredCerebrasEnabled -ceq "true") {
+if ($declaredCerebrasEnabled -ceq "true" -and $declaredCerebrasKey) {
   $env:WILLIAMOS_CEREBRAS_ENABLED = "true"
-  if ($declaredCerebrasKey) { $env:CEREBRAS_API_KEY = $declaredCerebrasKey }
-  else { Remove-Item Env:CEREBRAS_API_KEY -ErrorAction SilentlyContinue }
+  $env:CEREBRAS_API_KEY = $declaredCerebrasKey
 } else {
-  Remove-Item Env:WILLIAMOS_CEREBRAS_ENABLED -ErrorAction SilentlyContinue
-  Remove-Item Env:CEREBRAS_API_KEY -ErrorAction SilentlyContinue
+  # Present-but-disabled values block Next's dotenv loader from restoring a stale key.
+  $env:WILLIAMOS_CEREBRAS_ENABLED = "false"
+  $env:CEREBRAS_API_KEY = ""
 }
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
