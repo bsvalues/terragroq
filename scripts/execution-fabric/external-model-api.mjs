@@ -275,7 +275,13 @@ export async function callCerebrasModelApi({
       !Number.isSafeInteger(usage?.prompt_tokens) || !Number.isSafeInteger(usage?.completion_tokens) ||
       usage.prompt_tokens < 0 || usage.completion_tokens < 0 ||
       (message.tool_calls && !Array.isArray(message.tool_calls))) deny("EXTERNAL_API_MALFORMED_RESPONSE")
-    const costUsd = usage.prompt_tokens * promptPrice + usage.completion_tokens * completionPrice
+    // The provider may report a different model. Never price that usage using the
+    // requested model's tariff or certify it without current actual-model metadata.
+    const actualMetadata = catalogModel(catalog, data.model)
+    const actualPromptPrice = positivePrice(actualMetadata.pricing.prompt)
+    const actualCompletionPrice = positivePrice(actualMetadata.pricing.completion)
+    if (actualPromptPrice === null || actualCompletionPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")
+    const costUsd = usage.prompt_tokens * actualPromptPrice + usage.completion_tokens * actualCompletionPrice
     return {
       schemaVersion: 1, provider: "cerebras", requestedProvider: "cerebras",
       requestedModel: model, model: data.model, content: message.content ?? null,

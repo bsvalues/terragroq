@@ -3,8 +3,12 @@ import { callCerebrasModelApi, CEREBRAS_BASE_URL, CEREBRAS_CATALOG_URL } from ".
 
 const key = "fixture-key-not-real"
 const model = "fixture-model"
-const catalog = { data: [{ id: model, deprecated: false, pricing: { prompt: "0.000001", completion: "0.000002" },
-  capabilities: { tools: true, parallel_tool_calls: true, structured_outputs: true, json_mode: true, reasoning: true, vision: false } }] }
+const catalog = { data: [
+  { id: model, deprecated: false, pricing: { prompt: "0.000001", completion: "0.000002" },
+    capabilities: { tools: true, parallel_tool_calls: true, structured_outputs: true, json_mode: true, reasoning: true, vision: false } },
+  { id: "provider-reported-model", deprecated: false, pricing: { prompt: "0.000003", completion: "0.000004" },
+    capabilities: { tools: false, parallel_tool_calls: false, structured_outputs: false, json_mode: false, reasoning: false, vision: false } },
+] }
 const answer = { model, choices: [{ message: { content: "fixture-answer" } }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
 const response = (body: unknown, status = 200, retryAfter?: string) => ({ ok: status < 400, status,
   headers: { get: () => retryAfter ?? null }, json: async () => body })
@@ -77,6 +81,7 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     const result = await callCerebrasModelApi(request(fetchImpl))
     expect(result.requestedModel).toBe(model)
     expect(result.model).toBe("provider-reported-model")
+    expect(result.usage.costUsd).toBeCloseTo(0.000038)
     expect(JSON.stringify(result.receipt)).not.toContain("fixture-public-input")
     expect(JSON.stringify(result.receipt)).not.toContain("fixture-answer")
     expect(JSON.stringify(result.receipt)).not.toContain(key)
