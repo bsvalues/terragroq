@@ -150,6 +150,8 @@ $declaredWilliamOsSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILL
 $declaredWorkspaceAppUrl = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_WORKSPACE_APP_URL"
 $declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
 $declaredLocalSetupEnabled = Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"
+$declaredCerebrasEnabled = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_CEREBRAS_ENABLED"
+$declaredCerebrasKey = Get-DeclaredEnvValue -File $envFile -Key "CEREBRAS_API_KEY"
 $localSetupEnabled = if ($declaredLocalSetupEnabled -ieq "true") { "true" } else { "false" }
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
@@ -387,6 +389,16 @@ $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
 $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
+# The optional external provider is explicit-only. Never inherit either value from a scheduled
+# task environment or export a credential when the deployment declaration is not enabled.
+if ($declaredCerebrasEnabled -ceq "true") {
+  $env:WILLIAMOS_CEREBRAS_ENABLED = "true"
+  if ($declaredCerebrasKey) { $env:CEREBRAS_API_KEY = $declaredCerebrasKey }
+  else { Remove-Item Env:CEREBRAS_API_KEY -ErrorAction SilentlyContinue }
+} else {
+  Remove-Item Env:WILLIAMOS_CEREBRAS_ENABLED -ErrorAction SilentlyContinue
+  Remove-Item Env:CEREBRAS_API_KEY -ErrorAction SilentlyContinue
+}
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.
