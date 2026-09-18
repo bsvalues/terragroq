@@ -9,6 +9,7 @@ import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
 import { resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
@@ -1161,7 +1162,7 @@ export async function POST(request: Request) {
   // agent bills a pay-as-you-go account instead of the plan he already pays for -- and fails with
   // "credit balance too low" while perfectly good credentials sit unused. The cockpit runs as the
   // operator, so it uses the operator's login.
-  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" }
+  const env: NodeJS.ProcessEnv = withoutCerebrasChildEnvironment({ ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" })
   delete env.ANTHROPIC_API_KEY
   delete env.ANTHROPIC_AUTH_TOKEN
 

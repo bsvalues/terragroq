@@ -9,6 +9,8 @@ is installed by this change. The standalone HERMES launcher now reads those two 
 declarations, clears inherited values when not enabled, and exports them to its Node child only
 when explicitly declared. There is no routing default, fallback, batch/file operation,
 autonomous spend, scheduler activation, admission, promotion, deployment, or live inference.
+Workspace-controlled child processes launched by the cockpit explicitly discard both Cerebras
+variables before execution; the long-lived credential must not flow into test or build jobs.
 
 The later one-shot local command, **after reviewed lab-main integration and governed deployment**, is:
 
@@ -19,7 +21,9 @@ powershell.exe -NoProfile -File "C:\HermesLab\williamos-runtime-64034e93-flat\sc
 This wrapper requires William's HERMES-local interactive, hidden key entry. It gives the key and
 enable flag only to its own Node child, makes one synthetic/public inference with a hard $0.01
 cost ceiling, prints safe provider/model/usage/cost/duration/status metadata, and clears both
-process variables in `finally`. Do not run it during this implementation slice. The model ID is
+process variables in `finally`. Success also requires the fixed synthetic probe's expected
+answer; an incorrect response is a typed failure and its content is never printed. Do not run
+it during this implementation slice. The model ID is
 an explicit operator selection from current public metadata, never a hard-coded production default.
 
 The adapter checks the existing ContextPackage S1/S2 classification and bounded spend policy.

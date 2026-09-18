@@ -24,9 +24,10 @@ export async function runCerebrasSmoke({ model, environment = process.env, fetch
       timeoutMs: 30_000,
       fetchImpl,
     })
+    const probeMatched = typeof result.content === "string" && result.content.trim().toLowerCase() === "ready"
     return {
-      status: result.receipt.overBudget ? "FAILED" : "SUCCEEDED",
-      code: result.receipt.overBudget ? "SPEND_CAP_EXCEEDED" : "CEREBRAS_SMOKE_OK",
+      status: result.receipt.overBudget || !probeMatched ? "FAILED" : "SUCCEEDED",
+      code: result.receipt.overBudget ? "SPEND_CAP_EXCEEDED" : probeMatched ? "CEREBRAS_SMOKE_OK" : "CEREBRAS_SMOKE_PROBE_MISMATCH",
       provider: "cerebras",
       requestedModel: result.requestedModel,
       actualModel: result.model,
