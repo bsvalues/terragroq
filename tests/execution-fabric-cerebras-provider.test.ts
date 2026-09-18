@@ -174,6 +174,22 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps the original validated spend cap through asynchronous discovery", async () => {
+    let releaseCatalog: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { releaseCatalog = resolve })
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url !== CEREBRAS_CATALOG_URL) throw new Error("inference must not run")
+      await gate
+      return response(catalog)
+    })
+    const spendPolicy = { maxCostUsd: 0.000001, hardCeilingUsd: 0.01 }
+    const pending = callCerebrasModelApi(request(fetchImpl, { spendPolicy }))
+    spendPolicy.maxCostUsd = 100
+    releaseCatalog?.()
+    await expect(pending).rejects.toMatchObject({ code: "SPEND_CAP_EXCEEDS_CEILING" })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it("rejects inconsistent provider token totals", async () => {
     const fetchImpl = transport({ ...answer, usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 999 } })
     await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })

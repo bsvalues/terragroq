@@ -217,7 +217,8 @@ export async function callCerebrasModelApi({
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   if (baseUrl !== CEREBRAS_BASE_URL) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   // All checks precede payload serialization and either network operation.
-  assertBoundedSpend(spendPolicy)
+  const boundedSpend = { maxCostUsd: spendPolicy?.maxCostUsd, hardCeilingUsd: spendPolicy?.hardCeilingUsd }
+  assertBoundedSpend(boundedSpend)
   if (typeof prompt !== "string" || !prompt || prompt.includes("\0") ||
       (systemPrompt !== null && typeof systemPrompt !== "string")) deny("EXTERNAL_EGRESS_REFUSED")
   // Normalize once before egress validation; never serialize caller-owned mutable objects after discovery.
@@ -294,7 +295,7 @@ export async function callCerebrasModelApi({
     if (reasoningEffort) request.reasoning_effort = reasoningEffort
     const serialized = JSON.stringify(request)
     const reservedCostUsd = Buffer.byteLength(serialized, "utf8") * maximumPromptPrice + maxTokens * maximumCompletionPrice
-    if (reservedCostUsd > spendPolicy.maxCostUsd) deny("SPEND_CAP_EXCEEDS_CEILING")
+    if (reservedCostUsd > boundedSpend.maxCostUsd) deny("SPEND_CAP_EXCEEDS_CEILING")
     let response
     try {
       response = await fetchImpl(`${baseUrl}/chat/completions`, {
@@ -382,7 +383,7 @@ export async function callCerebrasModelApi({
       toolCalls: message.tool_calls ?? null,
       usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
         totalTokens, costUsd },
-      receipt: { requestedMaxCostUsd: spendPolicy.maxCostUsd, overBudget: costUsd > spendPolicy.maxCostUsd,
+      receipt: { requestedMaxCostUsd: boundedSpend.maxCostUsd, overBudget: costUsd > boundedSpend.maxCostUsd,
         contextDigest: digest, durationMs: Date.now() - started, status: "completed" },
     }
   } finally {
