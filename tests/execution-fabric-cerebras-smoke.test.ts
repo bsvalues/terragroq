@@ -12,11 +12,11 @@ const catalog = { data: [{ id: model, deprecated: false, pricing: { prompt: "0.0
   capabilities: { tools: false, structured_outputs: false, json_mode: false, reasoning: false, vision: false } }] }
 const completion = { model, choices: [{ message: { content: "fixture-response-content" } }],
   usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
-const transport = (body: unknown = completion, status = 200) => vi.fn(async (url: string) => ({
-  ok: status < 400 || url === CEREBRAS_CATALOG_URL,
-  status: url === CEREBRAS_CATALOG_URL ? 200 : status,
-  json: async () => url === CEREBRAS_CATALOG_URL ? catalog : body,
-}))
+const transport = (body: unknown = completion, status = 200) => vi.fn(async (input: RequestInfo | URL) =>
+  new Response(JSON.stringify(String(input) === CEREBRAS_CATALOG_URL ? catalog : body), {
+    status: String(input) === CEREBRAS_CATALOG_URL ? 200 : status,
+    headers: { "content-type": "application/json" },
+  }))
 
 describe("WilliamOS-owned one-shot Cerebras invocation", () => {
   it("stays disabled or credentialless without any metadata or inference call", async () => {
@@ -54,10 +54,10 @@ describe("WilliamOS-owned one-shot Cerebras invocation", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     expect(JSON.stringify(receipt)).not.toContain("fixture-sensitive-response")
     expect(JSON.stringify(receipt)).not.toContain(environment.CEREBRAS_API_KEY)
-    const expensive = vi.fn(async (url: string) => ({ ok: true, status: 200,
-      json: async () => url === CEREBRAS_CATALOG_URL ? {
+    const expensive = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input) === CEREBRAS_CATALOG_URL ? {
         data: [{ ...catalog.data[0], pricing: { prompt: "1", completion: "1" } }],
-      } : completion }))
+      } : completion), { status: 200, headers: { "content-type": "application/json" } }))
     expect((await runCerebrasSmoke({ model, environment, fetchImpl: expensive })).status).toBe("FAILED")
     expect(expensive).toHaveBeenCalledTimes(1)
   })

@@ -146,6 +146,15 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
       return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("fixture-sensitive-response"))))
     })
     await expect(callCerebrasModelApi(request(timeoutFetch, { timeoutMs: 5 }))).rejects.toMatchObject({ code: "EXTERNAL_API_TIMEOUT" })
+    const bodyTimeoutFetch = vi.fn(async (url: string, init: { signal: AbortSignal }) =>
+      url === CEREBRAS_CATALOG_URL ? response(catalog) : {
+        ...response(null), json: () => new Promise((_resolve, reject) =>
+          init.signal.addEventListener("abort", () => reject(new Error("fixture-sensitive-response")))),
+      })
+    const bodyTimeoutError = await callCerebrasModelApi(request(bodyTimeoutFetch, { timeoutMs: 5 })).catch(e => e)
+    expect(bodyTimeoutError.code).toBe("EXTERNAL_API_TIMEOUT")
+    expect(bodyTimeoutError.message).not.toContain("fixture-sensitive-response")
+    expect(bodyTimeoutFetch).toHaveBeenCalledTimes(2)
     const cancelled = new AbortController(); cancelled.abort()
     await expect(callCerebrasModelApi(request(transport(), { signal: cancelled.signal }))).rejects.toMatchObject({ code: "EXTERNAL_API_CANCELLED" })
     await expect(callCerebrasModelApi(request(transport({ choices: [] })))).rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })

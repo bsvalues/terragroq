@@ -277,7 +277,10 @@ export async function callCerebrasModelApi({
       deny(status >= 500 ? "EXTERNAL_API_OUTAGE" : "EXTERNAL_API_HTTP_FAILURE", { status })
     }
     let data
-    try { data = await response.json() } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+    try { data = await response.json() } catch {
+      deny(controller.signal.aborted ? (signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_TIMEOUT") :
+        "EXTERNAL_API_MALFORMED_RESPONSE")
+    }
     const message = data?.choices?.[0]?.message
     const usage = data?.usage
     if (!message || (typeof message.content !== "string" && !Array.isArray(message.tool_calls)) ||

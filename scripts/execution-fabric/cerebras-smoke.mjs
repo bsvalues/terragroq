@@ -9,6 +9,7 @@ const MAX_TOKENS = 32
 // This public synthetic probe contains no estate context or user-supplied content.
 const SYNTHETIC_PROBE = "Return only the word ready."
 
+/** @param {{model?: string, environment?: Record<string, string | undefined>, fetchImpl?: typeof globalThis.fetch}} options */
 export async function runCerebrasSmoke({ model, environment = process.env, fetchImpl = globalThis.fetch } = {}) {
   const started = Date.now()
   try {
