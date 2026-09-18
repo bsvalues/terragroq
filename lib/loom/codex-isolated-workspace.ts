@@ -6,6 +6,7 @@ import path from "node:path"
 import { promisify } from "node:util"
 
 import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 
 const runFile = promisify(execFile)
 const MAX_FILE_BYTES = 2_000_000
@@ -58,6 +59,7 @@ async function git(cwd: string, args: readonly string[]): Promise<string> {
     encoding: "utf8",
     maxBuffer: 4_000_000,
     windowsHide: true,
+    env: withoutCerebrasChildEnvironment(process.env),
   })
   return result.stdout
 }
