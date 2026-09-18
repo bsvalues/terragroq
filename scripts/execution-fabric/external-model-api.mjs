@@ -170,6 +170,22 @@ function safeOptionText(value) {
   try { return JSON.stringify(value) } catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
 }
 
+function snapshotOption(value) {
+  try {
+    const encoded = JSON.stringify(value)
+    if (typeof encoded !== "string") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    return JSON.parse(encoded)
+  } catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+}
+
+function supportsCerebrasRequest(metadata, { responseFormat, tools, parallelToolCalls, reasoningEffort }) {
+  const capabilities = metadata.capabilities
+  return !((responseFormat && !(responseFormat.type === "json_schema" ? capabilities.structured_outputs : capabilities.json_mode)) ||
+    (tools && capabilities.tools !== true) || (parallelToolCalls && (!tools || capabilities.parallel_tool_calls !== true)) ||
+    (reasoningEffort && (capabilities.reasoning !== true ||
+      !Array.isArray(metadata.supported_reasoning_efforts) || !metadata.supported_reasoning_efforts.includes(reasoningEffort))))
+}
+
 /** Only metadata is fetched; this endpoint is public and never receives a prompt or key. */
 export async function discoverCerebrasModels({ fetchImpl = globalThis.fetch, signal } = {}) {
   let response
@@ -203,13 +219,16 @@ export async function callCerebrasModelApi({
   assertBoundedSpend(spendPolicy)
   if (typeof prompt !== "string" || !prompt || prompt.includes("\0") ||
       (systemPrompt !== null && typeof systemPrompt !== "string")) deny("EXTERNAL_EGRESS_REFUSED")
-  if (tools !== undefined && (!Array.isArray(tools) || tools.length === 0 || tools.some(t => t?.type !== "function"))) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  // Normalize once before egress validation; never serialize caller-owned mutable objects after discovery.
+  const requestTools = tools === undefined ? undefined : snapshotOption(tools)
+  const requestResponseFormat = responseFormat === undefined ? undefined : snapshotOption(responseFormat)
+  if (requestTools !== undefined && (!Array.isArray(requestTools) || requestTools.length === 0 || requestTools.some(t => t?.type !== "function"))) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   // This adapter currently accepts text ContextPackages only, even if a discovered model has vision.
   if (modality !== "text") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   assertCerebrasEgress(contextPackage, [{ content: prompt }, { content: systemPrompt ?? "" },
-    ...((tools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
-    { content: responseFormat === undefined ? "" : safeOptionText(responseFormat) }])
-  if (responseFormat && !["json_object", "json_schema"].includes(responseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    ...((requestTools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
+    { content: requestResponseFormat === undefined ? "" : safeOptionText(requestResponseFormat) }])
+  if (requestResponseFormat && !["json_object", "json_schema"].includes(requestResponseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
 
   const controller = new AbortController()
@@ -227,12 +246,8 @@ export async function callCerebrasModelApi({
       throw error
     }
     const metadata = catalogModel(catalog, model)
-    const capabilities = metadata.capabilities
-    if ((responseFormat && !(responseFormat.type === "json_schema" ? capabilities.structured_outputs : capabilities.json_mode)) ||
-      (tools && capabilities.tools !== true) || (parallelToolCalls && (!tools || capabilities.parallel_tool_calls !== true)) ||
-      (reasoningEffort && (capabilities.reasoning !== true ||
-        !Array.isArray(metadata.supported_reasoning_efforts) || !metadata.supported_reasoning_efforts.includes(reasoningEffort))) ||
-      (modality !== "text" && !(modality === "image" && capabilities.vision === true))) {
+    const requestedCapabilities = { responseFormat: requestResponseFormat, tools: requestTools, parallelToolCalls, reasoningEffort }
+    if (!supportsCerebrasRequest(metadata, requestedCapabilities)) {
       deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
     }
     // Reserve against every model the public catalog says the provider could report.
@@ -250,8 +265,8 @@ export async function callCerebrasModelApi({
     // UTF-8 byte count is a conservative token ceiling; reserve output tokens up front.
     const { messages, digest } = deriveEgressMessages(contextPackage, { userPrompt: prompt, systemPrompt })
     const request = { model, messages, max_tokens: maxTokens, stream: false }
-    if (responseFormat) request.response_format = responseFormat
-    if (tools) { request.tools = tools; request.parallel_tool_calls = parallelToolCalls }
+    if (requestResponseFormat) request.response_format = requestResponseFormat
+    if (requestTools) { request.tools = requestTools; request.parallel_tool_calls = parallelToolCalls }
     if (reasoningEffort) request.reasoning_effort = reasoningEffort
     const serialized = JSON.stringify(request)
     const reservedCostUsd = Buffer.byteLength(serialized, "utf8") * maximumPromptPrice + maxTokens * maximumCompletionPrice
@@ -294,6 +309,7 @@ export async function callCerebrasModelApi({
     // The provider may report a different model. Never price that usage using the
     // requested model's tariff or certify it without current actual-model metadata.
     const actualMetadata = catalogModel(catalog, data.model)
+    if (!supportsCerebrasRequest(actualMetadata, requestedCapabilities)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
     const actualPromptPrice = positivePrice(actualMetadata.pricing.prompt)
     const actualCompletionPrice = positivePrice(actualMetadata.pricing.completion)
     if (actualPromptPrice === null || actualCompletionPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")

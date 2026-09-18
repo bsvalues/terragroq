@@ -84,6 +84,25 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     expect(body.response_format.type).toBe("json_schema")
   })
 
+  it("snapshots tool and output options before asynchronous catalog discovery", async () => {
+    let releaseCatalog: (() => void) | undefined
+    const catalogGate = new Promise<void>(resolve => { releaseCatalog = resolve })
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === CEREBRAS_CATALOG_URL) { await catalogGate; return response(catalog) }
+      return response(answer)
+    })
+    const tools = [{ type: "function", function: { name: "lookup", description: "initial", parameters: { type: "object" } } }]
+    const responseFormat = { type: "json_object", marker: "initial" }
+    const pending = callCerebrasModelApi(request(fetchImpl, { tools, responseFormat }))
+    tools[0].function.description = "changed-after-validation"
+    responseFormat.marker = "changed-after-validation"
+    releaseCatalog?.()
+    await pending
+    const body = JSON.parse((fetchImpl.mock.calls[1] as unknown as [string, { body: string }])[1].body)
+    expect(body.tools[0].function.description).toBe("initial")
+    expect(body.response_format.marker).toBe("initial")
+  })
+
   it("keeps requested and actual model distinct without retaining content in the receipt", async () => {
     const fetchImpl = transport({ ...answer, model: "provider-reported-model" })
     const result = await callCerebrasModelApi(request(fetchImpl))
@@ -93,6 +112,13 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     expect(JSON.stringify(result.receipt)).not.toContain("fixture-public-input")
     expect(JSON.stringify(result.receipt)).not.toContain("fixture-answer")
     expect(JSON.stringify(result.receipt)).not.toContain(key)
+  })
+
+  it("refuses a substituted model that lacks a requested capability", async () => {
+    const fetchImpl = transport({ ...answer, model: "provider-reported-model" })
+    await expect(callCerebrasModelApi(request(fetchImpl, { responseFormat: { type: "json_schema" } })))
+      .rejects.toMatchObject({ code: "EXTERNAL_API_UNSUPPORTED_CAPABILITY" })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it("fails unsupported models, capabilities, modes, and unbudgeted calls without inference", async () => {
