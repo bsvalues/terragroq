@@ -11,6 +11,7 @@ import { z } from "zod"
 import { db } from "@/lib/db"
 import { decision as decisionTable, evidenceRecord, project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { saveOwnedLineWorld, selectedLineContextFingerprint } from "@/lib/environment/space-persistence"
@@ -485,6 +486,7 @@ async function composeSignInFix(): Promise<{ ok: boolean; say: string; surfaces:
       await execFile("git", ["diff", "--no-index", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", path.join(scratch, "a"), path.join(scratch, "b")], {
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024,
+        env: withoutCerebrasChildEnvironment(process.env),
       })
     } catch (error) {
       // git diff exits 1 when the trees differ; the diff is on stdout of the "failure".
@@ -504,6 +506,7 @@ async function composeSignInFix(): Promise<{ ok: boolean; say: string; surfaces:
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
       timeout: 240_000,
+      env: withoutCerebrasChildEnvironment(process.env),
     })
     testOutput = `${run.stdout}${run.stderr}`
     testsPassed = true

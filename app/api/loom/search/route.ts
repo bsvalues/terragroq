@@ -7,6 +7,7 @@ import {
   type WorkspaceProjectBinding,
 } from "@/lib/projects/workspace-project-binding"
 import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -86,6 +87,7 @@ function runRipgrep(workspaceRoot: string, query: string): Promise<RipgrepRun> {
       cwd: workspaceRoot,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: withoutCerebrasChildEnvironment(process.env),
     })
 
     let output = ""

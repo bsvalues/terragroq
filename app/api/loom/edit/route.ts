@@ -9,6 +9,7 @@ import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/r
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError, type SpaceMutationAuthority } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 import {
   resolveWorkspaceFileOperationBinding,
   sameWorkspaceFileOperationBinding,
@@ -200,7 +201,8 @@ export async function POST(request: Request) {
 
   // Every value above is either a constant or a validated path/model name, and no shell is involved,
   // so the task text cannot become anything other than a single argument.
-  const child = spawn(PYTHON, args, { cwd: SEA_ROOT, shell: false, windowsHide: true })
+  const child = spawn(PYTHON, args, { cwd: SEA_ROOT, shell: false, windowsHide: true,
+    env: withoutCerebrasChildEnvironment(process.env) })
   child.stdin.end()
 
   let settled = false
