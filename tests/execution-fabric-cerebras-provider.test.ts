@@ -9,7 +9,7 @@ const catalog = { data: [
   { id: "provider-reported-model", deprecated: false, pricing: { prompt: "0.000003", completion: "0.000004" },
     capabilities: { tools: false, parallel_tool_calls: false, structured_outputs: false, json_mode: false, reasoning: false, vision: false } },
 ] }
-const answer = { model, choices: [{ message: { content: "fixture-answer" } }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
+const answer = { model, choices: [{ finish_reason: "stop", message: { content: "fixture-answer" } }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
 const response = (body: unknown, status = 200, retryAfter?: string) => ({ ok: status < 400, status,
   headers: { get: () => retryAfter ?? null }, json: async () => body })
 const transport = (answerBody: unknown = answer, status = 200, retryAfter?: string) => vi.fn(async (url: string) =>
@@ -71,7 +71,7 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
   })
 
   it("passes structured output and tool calls only when catalog advertises them", async () => {
-    const fetchImpl = transport({ ...answer, choices: [{ message: { content: null, tool_calls: [
+    const fetchImpl = transport({ ...answer, choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [
       { id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }] } }] })
     const tools = [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }]
     const result = await callCerebrasModelApi(request(fetchImpl, {
@@ -153,6 +153,12 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
   it("rejects inconsistent provider token totals", async () => {
     const fetchImpl = transport({ ...answer, usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 999 } })
     await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "EXTERNAL_API_MALFORMED_RESPONSE" })
+  })
+
+  it.each(["length", "content_filter"])("rejects a %s finish reason before certifying completion", async finish_reason => {
+    const fetchImpl = transport({ ...answer, choices: [{ finish_reason, message: { content: "partial" } }] })
+    await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "EXTERNAL_API_INCOMPLETE_RESPONSE" })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],

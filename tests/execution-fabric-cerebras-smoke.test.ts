@@ -10,7 +10,7 @@ const model = "fixture-model"
 const environment = { WILLIAMOS_CEREBRAS_ENABLED: "true", CEREBRAS_API_KEY: "fixture-not-a-real-key" }
 const catalog = { data: [{ id: model, deprecated: false, pricing: { prompt: "0.000001", completion: "0.000002" },
   capabilities: { tools: false, structured_outputs: false, json_mode: false, reasoning: false, vision: false } }] }
-const completion = { model, choices: [{ message: { content: "ready" } }],
+const completion = { model, choices: [{ finish_reason: "stop", message: { content: "ready" } }],
   usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
 const transport = (body: unknown = completion, status = 200) => vi.fn(async (input: RequestInfo | URL) =>
   new Response(JSON.stringify(String(input) === CEREBRAS_CATALOG_URL ? catalog : body), {
@@ -47,7 +47,7 @@ describe("WilliamOS-owned one-shot Cerebras invocation", () => {
   })
 
   it("reports a typed failure when the synthetic probe answer is wrong without exposing it", async () => {
-    const fetchImpl = transport({ ...completion, choices: [{ message: { content: "incorrect-probe-output" } }] })
+    const fetchImpl = transport({ ...completion, choices: [{ finish_reason: "stop", message: { content: "incorrect-probe-output" } }] })
     const receipt = await runCerebrasSmoke({ model, environment, fetchImpl })
     expect(receipt).toMatchObject({ status: "FAILED", code: "CEREBRAS_SMOKE_PROBE_MISMATCH" })
     expect(JSON.stringify(receipt)).not.toContain("incorrect-probe-output")

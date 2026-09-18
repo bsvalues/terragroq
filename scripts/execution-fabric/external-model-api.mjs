@@ -296,13 +296,20 @@ export async function callCerebrasModelApi({
       deny(controller.signal.aborted ? (signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_TIMEOUT") :
         "EXTERNAL_API_MALFORMED_RESPONSE")
     }
-    const message = data?.choices?.[0]?.message
+    const choice = data?.choices?.[0]
+    const finishReason = choice?.finish_reason
+    if (finishReason === "length" || finishReason === "content_filter") deny("EXTERNAL_API_INCOMPLETE_RESPONSE")
+    if (finishReason !== "stop" && finishReason !== "tool_calls") deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    const message = choice.message
     const usage = data?.usage
     if (!message || (typeof message.content !== "string" && !Array.isArray(message.tool_calls)) ||
       typeof data.model !== "string" || !SAFE_MODEL.test(data.model) ||
       !Number.isSafeInteger(usage?.prompt_tokens) || !Number.isSafeInteger(usage?.completion_tokens) ||
       usage.prompt_tokens < 0 || usage.completion_tokens < 0 ||
-      (message.tool_calls && !Array.isArray(message.tool_calls))) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      (message.tool_calls && !Array.isArray(message.tool_calls)) ||
+      (finishReason === "tool_calls" && (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0))) {
+      deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
     const totalTokens = usage.prompt_tokens + usage.completion_tokens
     if (!Number.isSafeInteger(totalTokens) ||
       (usage.total_tokens !== undefined && usage.total_tokens !== totalTokens)) deny("EXTERNAL_API_MALFORMED_RESPONSE")

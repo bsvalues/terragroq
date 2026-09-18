@@ -28,5 +28,7 @@ describe("Cerebras credential isolation from workspace child processes", () => {
     expect(diff.match(/env: withoutCerebrasChildEnvironment\(process\.env\)/g)).toHaveLength(2)
     const isolated = fs.readFileSync(path.join(process.cwd(), "lib/loom/codex-isolated-workspace.ts"), "utf8")
     expect(isolated).toContain("env: withoutCerebrasChildEnvironment(process.env)")
+    const productReceipt = fs.readFileSync(path.join(process.cwd(), "lib/environment/external-product-terminal-receipt.ts"), "utf8")
+    expect(productReceipt.match(/env: withoutCerebrasChildEnvironment\(process\.env\)/g)).toHaveLength(2)
   })
 })

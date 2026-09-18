@@ -5,6 +5,7 @@ import { z } from "zod"
 
 import { hashRecord } from "@/lib/governance/hash"
 import { normalizeRepositoryIdentity } from "@/lib/projects/workspace-project-binding"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 
 const SHA40 = /^[0-9a-f]{40}$/
 const SHA256 = /^[0-9a-f]{64}$/
@@ -188,7 +189,8 @@ function canonicalSet(values: readonly unknown[]): string {
 
 function gitText(workspaceRoot: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => execFile(
-    "git", ["-C", workspaceRoot, ...args], { encoding: "utf8", windowsHide: true, maxBuffer: 1_000_000 },
+    "git", ["-C", workspaceRoot, ...args], { encoding: "utf8", windowsHide: true, maxBuffer: 1_000_000,
+      env: withoutCerebrasChildEnvironment(process.env) },
     (error, stdout) => error ? reject(error) : resolve(stdout),
   ))
 }
@@ -196,7 +198,8 @@ function gitText(workspaceRoot: string, args: readonly string[]): Promise<string
 function gitBlob(workspaceRoot: string, commit: string, artifactPath: string): Promise<Buffer> {
   return new Promise((resolve, reject) => execFile(
     "git", ["-C", workspaceRoot, "show", `${commit}:${artifactPath}`],
-    { encoding: "buffer", windowsHide: true, maxBuffer: 2_000_000 },
+    { encoding: "buffer", windowsHide: true, maxBuffer: 2_000_000,
+      env: withoutCerebrasChildEnvironment(process.env) },
     (error, stdout) => error ? reject(error) : resolve(Buffer.from(stdout)),
   ))
 }
