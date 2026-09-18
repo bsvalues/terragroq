@@ -1,7 +1,7 @@
-/** Never pass the optional external-provider credential to workspace-controlled tools. */
+/** Mask the optional provider in child tools; presence also blocks dotenv restoration. */
 export function withoutCerebrasChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const childEnvironment = { ...environment }
-  delete childEnvironment.CEREBRAS_API_KEY
-  delete childEnvironment.WILLIAMOS_CEREBRAS_ENABLED
+  childEnvironment.CEREBRAS_API_KEY = ""
+  childEnvironment.WILLIAMOS_CEREBRAS_ENABLED = "false"
   return childEnvironment
 }

@@ -10,8 +10,9 @@ declarations, overrides inherited values with disabled/empty sentinels when not 
 Next cannot reload a stale key from dotenv), and exports them to its Node child only
 when explicitly declared. There is no routing default, fallback, batch/file operation,
 autonomous spend, scheduler activation, admission, promotion, deployment, or live inference.
-Workspace-controlled child processes launched by the cockpit explicitly discard both Cerebras
-variables before execution; the long-lived credential must not flow into test or build jobs.
+Workspace-controlled child processes launched by the cockpit explicitly mask both Cerebras
+variables with empty/disabled values before execution, blocking child dotenv reload; the
+long-lived credential must not flow into test or build jobs.
 
 The later one-shot local command, **after reviewed lab-main integration and governed deployment**, is:
 

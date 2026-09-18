@@ -5,9 +5,13 @@ import { describe, expect, it } from "vitest"
 import { withoutCerebrasChildEnvironment } from "../lib/loom/child-environment"
 
 describe("Cerebras credential isolation from workspace child processes", () => {
-  it("removes the provider credential and enable flag without mutating the server environment", () => {
+  it("masks the provider credential and enable flag without mutating the server environment", () => {
     const parent = { NODE_ENV: "test" as const, PATH: "fixture-path", CEREBRAS_API_KEY: "fixture-only", WILLIAMOS_CEREBRAS_ENABLED: "true" }
-    expect(withoutCerebrasChildEnvironment(parent)).toEqual({ NODE_ENV: "test", PATH: "fixture-path" })
+    expect(withoutCerebrasChildEnvironment(parent)).toEqual({ NODE_ENV: "test", PATH: "fixture-path",
+      CEREBRAS_API_KEY: "", WILLIAMOS_CEREBRAS_ENABLED: "false" })
+    expect(withoutCerebrasChildEnvironment({ NODE_ENV: "test" })).toMatchObject({
+      CEREBRAS_API_KEY: "", WILLIAMOS_CEREBRAS_ENABLED: "false",
+    })
     expect(parent.CEREBRAS_API_KEY).toBe("fixture-only")
   })
 
