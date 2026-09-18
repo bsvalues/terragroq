@@ -348,6 +348,9 @@ export async function callCerebrasModelApi({
       if (structuredValidator && !structuredValidator(structuredContent)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
     }
     if (finishReason === "tool_calls") {
+      if (message.content !== null && typeof message.content !== "string") {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
       if (!requestTools || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
         deny("EXTERNAL_API_MALFORMED_RESPONSE")
       }

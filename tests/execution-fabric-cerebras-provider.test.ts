@@ -211,6 +211,8 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
         function: { name: "other", arguments: "{}" } }] } }, declared],
       [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ ...toolCall,
         function: { name: "lookup", arguments: "not-json" } }] } }, declared],
+      [{ finish_reason: "tool_calls", message: { content: { unsafe: "fixture-sensitive-response" }, tool_calls: [toolCall] } }, declared],
+      [{ finish_reason: "tool_calls", message: { tool_calls: [toolCall] } }, declared],
     ] as const) {
       const fetchImpl = transport({ ...answer, choices: [choice] })
       const error = await callCerebrasModelApi(request(fetchImpl, { tools })).catch(e => e)

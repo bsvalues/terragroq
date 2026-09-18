@@ -28,6 +28,8 @@ describe("Cerebras credential isolation from workspace child processes", () => {
     expect(run).toContain("withoutCerebrasChildEnvironment({ ...process.env, ...operation.env")
     const agent = fs.readFileSync(path.join(process.cwd(), "app/api/loom/agent/route.ts"), "utf8")
     expect(agent).toContain("withoutCerebrasChildEnvironment({ ...process.env")
+    const assignment = fs.readFileSync(path.join(process.cwd(), "lib/loom/codex-assignment.ts"), "utf8")
+    expect(assignment).toContain("env: withoutCerebrasChildEnvironment(process.env)")
     const diff = fs.readFileSync(path.join(process.cwd(), "lib/loom/workspace-diff.ts"), "utf8")
     expect(diff.match(/env: withoutCerebrasChildEnvironment\(process\.env\)/g)).toHaveLength(2)
     const isolated = fs.readFileSync(path.join(process.cwd(), "lib/loom/codex-isolated-workspace.ts"), "utf8")
