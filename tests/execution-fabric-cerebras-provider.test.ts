@@ -245,7 +245,8 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     }
   })
 
-  it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],
+  it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [402, "EXTERNAL_API_INSUFFICIENT_CREDIT"],
+    [403, "EXTERNAL_API_AUTH_FAILURE"],
     [429, "EXTERNAL_API_RATE_LIMIT"], [503, "EXTERNAL_API_OUTAGE"]])("maps HTTP %i without response leakage or retries", async (status, code) => {
     const fetchImpl = transport({ unsafe: "fixture-sensitive-response" }, status, "3")
     const error = await callCerebrasModelApi(request(fetchImpl)).catch(e => e)

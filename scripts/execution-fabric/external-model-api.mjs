@@ -308,6 +308,7 @@ export async function callCerebrasModelApi({
     if (!response.ok) {
       const status = response.status
       if (status === 401 || status === 403) deny("EXTERNAL_API_AUTH_FAILURE", { status })
+      if (status === 402) deny("EXTERNAL_API_INSUFFICIENT_CREDIT", { status })
       if (status === 429) {
         const raw = response.headers?.get?.("retry-after")
         const retryAfterSeconds = /^\d{1,5}$/.test(raw ?? "") ? Number(raw) :
