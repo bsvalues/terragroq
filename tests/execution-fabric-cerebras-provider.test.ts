@@ -132,7 +132,7 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     const fetchImpl = transport()
     catalog.data[0].capabilities.tools = false
     try {
-      await expect(callCerebrasModelApi(request(fetchImpl, { tools: [{ type: "function" }] }))).rejects.toMatchObject({ code: "EXTERNAL_API_UNSUPPORTED_CAPABILITY" })
+      await expect(callCerebrasModelApi(request(fetchImpl, { tools: [{ type: "function", function: { name: "lookup" } }] }))).rejects.toMatchObject({ code: "EXTERNAL_API_UNSUPPORTED_CAPABILITY" })
       expect(fetchImpl).toHaveBeenCalledTimes(1)
     } finally { catalog.data[0].capabilities.tools = true }
     const sensitiveOptions = transport()
@@ -159,6 +159,24 @@ describe("optional Cerebras Tier 3 adapter (mock transport only)", () => {
     const fetchImpl = transport({ ...answer, choices: [{ finish_reason, message: { content: "partial" } }] })
     await expect(callCerebrasModelApi(request(fetchImpl))).rejects.toMatchObject({ code: "EXTERNAL_API_INCOMPLETE_RESPONSE" })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it("rejects unsolicited, empty, and undeclared tool-call completions", async () => {
+    const declared = [{ type: "function", function: { name: "lookup" } }]
+    const toolCall = { id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } }
+    for (const [choice, tools] of [
+      [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [toolCall] } }, undefined],
+      [{ finish_reason: "stop", message: { content: null, tool_calls: [] } }, declared],
+      [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ ...toolCall,
+        function: { name: "other", arguments: "{}" } }] } }, declared],
+      [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ ...toolCall,
+        function: { name: "lookup", arguments: "not-json" } }] } }, declared],
+    ] as const) {
+      const fetchImpl = transport({ ...answer, choices: [choice] })
+      const error = await callCerebrasModelApi(request(fetchImpl, { tools })).catch(e => e)
+      expect(error.code).toBe("EXTERNAL_API_MALFORMED_RESPONSE")
+      expect(error.message).not.toContain("not-json")
+    }
   })
 
   it.each([[401, "EXTERNAL_API_AUTH_FAILURE"], [403, "EXTERNAL_API_AUTH_FAILURE"],

@@ -222,7 +222,10 @@ export async function callCerebrasModelApi({
   // Normalize once before egress validation; never serialize caller-owned mutable objects after discovery.
   const requestTools = tools === undefined ? undefined : snapshotOption(tools)
   const requestResponseFormat = responseFormat === undefined ? undefined : snapshotOption(responseFormat)
-  if (requestTools !== undefined && (!Array.isArray(requestTools) || requestTools.length === 0 || requestTools.some(t => t?.type !== "function"))) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  if (requestTools !== undefined && (!Array.isArray(requestTools) || requestTools.length === 0 ||
+      requestTools.some(t => t?.type !== "function" || typeof t?.function?.name !== "string" || !t.function.name))) {
+    deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  }
   // This adapter currently accepts text ContextPackages only, even if a discovered model has vision.
   if (modality !== "text") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
   assertCerebrasEgress(contextPackage, [{ content: prompt }, { content: systemPrompt ?? "" },
@@ -302,13 +305,28 @@ export async function callCerebrasModelApi({
     if (finishReason !== "stop" && finishReason !== "tool_calls") deny("EXTERNAL_API_MALFORMED_RESPONSE")
     const message = choice.message
     const usage = data?.usage
-    if (!message || (typeof message.content !== "string" && !Array.isArray(message.tool_calls)) ||
+    if (!message ||
       typeof data.model !== "string" || !SAFE_MODEL.test(data.model) ||
       !Number.isSafeInteger(usage?.prompt_tokens) || !Number.isSafeInteger(usage?.completion_tokens) ||
       usage.prompt_tokens < 0 || usage.completion_tokens < 0 ||
-      (message.tool_calls && !Array.isArray(message.tool_calls)) ||
-      (finishReason === "tool_calls" && (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0))) {
+      (message.tool_calls != null && !Array.isArray(message.tool_calls))) {
       deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    if (finishReason === "stop" &&
+      (typeof message.content !== "string" || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))) {
+      deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    if (finishReason === "tool_calls") {
+      if (!requestTools || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+      const declaredNames = new Set(requestTools.map(tool => tool.function.name))
+      for (const call of message.tool_calls) {
+        if (typeof call?.id !== "string" || !call.id || call.type !== "function" ||
+          typeof call.function?.name !== "string" || !declaredNames.has(call.function.name) ||
+          typeof call.function?.arguments !== "string") deny("EXTERNAL_API_MALFORMED_RESPONSE")
+        try { JSON.parse(call.function.arguments) } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+      }
     }
     const totalTokens = usage.prompt_tokens + usage.completion_tokens
     if (!Number.isSafeInteger(totalTokens) ||
