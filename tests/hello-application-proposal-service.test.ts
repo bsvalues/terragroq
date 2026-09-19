@@ -264,6 +264,49 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it("rejects exact governed contract text hidden only inside comments", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      residentTurn: async ({ workspacePath }) => {
+        fs.appendFileSync(path.join(workspacePath, "examples/hello-application/src/index.html"), [
+          "\n<!--",
+          '        <p class="status-value" id="pulse-status" data-hermes-state="placeholder">Awaiting WilliamOS connection</p>',
+          '        <p id="governance-marker" class="governance-marker">Governed by HERMES · build ready</p>',
+          "-->\n",
+        ].join("\n"))
+        fs.appendFileSync(path.join(workspacePath, "examples/hello-application/src/styles.css"), [
+          "\n/*",
+          ".governance-marker {",
+          "  display: inline-flex;",
+          "  margin: -1rem 0 2rem;",
+          "  padding: 0.38rem 0.55rem;",
+          "  border: 1px solid var(--steel);",
+          "  background: var(--porcelain);",
+          "  color: var(--graphite);",
+          '  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;',
+          "  font-size: 0.72rem;",
+          "  font-weight: 700;",
+          "  letter-spacing: 0.035em;",
+          "}",
+          "*/\n",
+        ].join("\n"))
+        fs.appendFileSync(path.join(workspacePath, "examples/hello-application/src/app.js"), [
+          "\n/*",
+          '  const governanceMarker = root.getElementById("governance-marker")',
+          '    const pulseNumber = String(snapshot.count).padStart(3, "0")',
+          "    countOutput.textContent = pulseNumber",
+          "    if (governanceMarker) governanceMarker.textContent = `Governed by HERMES · pulse ${pulseNumber}`",
+          "*/\n",
+        ].join("\n"))
+        return { threadId: "thread-comments", turnId: "turn-comments", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_GOVERNED_MARKER_INVALID")
+    expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
   it("rejects ignored writes and stale apply without mutating canonical source", async () => {
     const { repositoryRoot, runtimeRoot } = fixture()
     await expect(createHelloApplicationProposal({

@@ -14,78 +14,93 @@ function replaceOnce(source, anchor, replacement, code) {
   return `${source.slice(0, first)}${replacement}${source.slice(first + anchor.length)}`
 }
 
-function prepareFile(repositoryRoot, relativePath, transform) {
-  const target = path.join(repositoryRoot, ...relativePath.split("/"))
-  const before = fs.readFileSync(target, "utf8")
-  const after = transform(before, before.includes("\r\n") ? "\r\n" : "\n")
-  return { after, before, relativePath, target }
+function transformHtml(source) {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n"
+  const marker = '        <p id="governance-marker" class="governance-marker">Governed by HERMES · build ready</p>'
+  if (source.includes(marker)) return source
+  if (source.includes('id="governance-marker"')) throw new Error("HELLO_GOVERNED_CHANGE_HTML_DRIFT")
+  const anchor = '        <p class="status-value" id="pulse-status" data-hermes-state="placeholder">Awaiting WilliamOS connection</p>'
+  return replaceOnce(source, anchor, `${anchor}${eol}${marker}`, "HELLO_GOVERNED_CHANGE_HTML_ANCHOR")
+}
+
+function transformStyles(source) {
+  if (source.includes(".governance-marker {")) return source
+  const eol = source.includes("\r\n") ? "\r\n" : "\n"
+  const anchor = ".status-board dl {"
+  const rule = [
+    ".governance-marker {",
+    "  display: inline-flex;",
+    "  margin: -1rem 0 2rem;",
+    "  padding: 0.38rem 0.55rem;",
+    "  border: 1px solid var(--steel);",
+    "  background: var(--porcelain);",
+    "  color: var(--graphite);",
+    "  font-family: \"Cascadia Code\", \"SFMono-Regular\", Consolas, monospace;",
+    "  font-size: 0.72rem;",
+    "  font-weight: 700;",
+    "  letter-spacing: 0.035em;",
+    "}",
+    "",
+  ].join(eol)
+  return replaceOnce(source, anchor, `${rule}${anchor}`, "HELLO_GOVERNED_CHANGE_STYLES_ANCHOR")
+}
+
+function transformApp(source) {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n"
+  const lookup = '  const governanceMarker = root.getElementById("governance-marker")'
+  const countLine = '    const pulseNumber = String(snapshot.count).padStart(3, "0")'
+  const update = "    if (governanceMarker) governanceMarker.textContent = `Governed by HERMES · pulse ${pulseNumber}`"
+  const complete = source.includes(lookup) && source.includes(countLine) && source.includes(update)
+  if (complete) return source
+  if (source.includes("governanceMarker") || source.includes("pulseNumber")) {
+    throw new Error("HELLO_GOVERNED_CHANGE_APP_DRIFT")
+  }
+  source = replaceOnce(
+    source,
+    '  const statusOutput = root.getElementById("pulse-status")',
+    `  const statusOutput = root.getElementById("pulse-status")${eol}${lookup}`,
+    "HELLO_GOVERNED_CHANGE_APP_LOOKUP_ANCHOR",
+  )
+  source = replaceOnce(
+    source,
+    '    countOutput.textContent = String(snapshot.count).padStart(3, "0")',
+    `${countLine}${eol}    countOutput.textContent = pulseNumber`,
+    "HELLO_GOVERNED_CHANGE_APP_COUNT_ANCHOR",
+  )
+  return replaceOnce(
+    source,
+    "    statusOutput.textContent = snapshot.status",
+    `    statusOutput.textContent = snapshot.status${eol}${update}`,
+    "HELLO_GOVERNED_CHANGE_APP_STATUS_ANCHOR",
+  )
+}
+
+export function createGovernedMarkerExpectedSources(sourceByPath) {
+  if (!sourceByPath || typeof sourceByPath !== "object") throw new TypeError("sourceByPath is required")
+  for (const relativePath of Object.values(TARGETS)) {
+    if (typeof sourceByPath[relativePath] !== "string") throw new TypeError(`source is required: ${relativePath}`)
+  }
+  return {
+    [TARGETS.app]: transformApp(sourceByPath[TARGETS.app]),
+    [TARGETS.html]: transformHtml(sourceByPath[TARGETS.html]),
+    [TARGETS.styles]: transformStyles(sourceByPath[TARGETS.styles]),
+  }
 }
 
 export function applyGovernedMarkerChange({ repositoryRoot = process.cwd() } = {}) {
   const root = fs.realpathSync(path.resolve(repositoryRoot))
-  const prepared = []
-
-  prepared.push(prepareFile(root, TARGETS.html, (source, eol) => {
-    const marker = '        <p id="governance-marker" class="governance-marker">Governed by HERMES · build ready</p>'
-    if (source.includes(marker)) return source
-    if (source.includes('id="governance-marker"')) throw new Error("HELLO_GOVERNED_CHANGE_HTML_DRIFT")
-    const anchor = '        <p class="status-value" id="pulse-status" data-hermes-state="placeholder">Awaiting WilliamOS connection</p>'
-    return replaceOnce(source, anchor, `${anchor}${eol}${marker}`, "HELLO_GOVERNED_CHANGE_HTML_ANCHOR")
-  }))
-
-  prepared.push(prepareFile(root, TARGETS.styles, (source, eol) => {
-    if (source.includes(".governance-marker {")) return source
-    const anchor = ".status-board dl {"
-    const rule = [
-      ".governance-marker {",
-      "  display: inline-flex;",
-      "  margin: -1rem 0 2rem;",
-      "  padding: 0.38rem 0.55rem;",
-      "  border: 1px solid var(--steel);",
-      "  background: var(--porcelain);",
-      "  color: var(--graphite);",
-      "  font-family: \"Cascadia Code\", \"SFMono-Regular\", Consolas, monospace;",
-      "  font-size: 0.72rem;",
-      "  font-weight: 700;",
-      "  letter-spacing: 0.035em;",
-      "}",
-      "",
-    ].join(eol)
-    return replaceOnce(source, anchor, `${rule}${anchor}`, "HELLO_GOVERNED_CHANGE_STYLES_ANCHOR")
-  }))
-
-  prepared.push(prepareFile(root, TARGETS.app, (source, eol) => {
-    const lookup = '  const governanceMarker = root.getElementById("governance-marker")'
-    const countLine = '    const pulseNumber = String(snapshot.count).padStart(3, "0")'
-    const update = "    if (governanceMarker) governanceMarker.textContent = `Governed by HERMES · pulse ${pulseNumber}`"
-    const complete = source.includes(lookup) && source.includes(countLine) && source.includes(update)
-    if (complete) return source
-    if (source.includes("governanceMarker") || source.includes("pulseNumber")) {
-      throw new Error("HELLO_GOVERNED_CHANGE_APP_DRIFT")
-    }
-    source = replaceOnce(
-      source,
-      '  const statusOutput = root.getElementById("pulse-status")',
-      `  const statusOutput = root.getElementById("pulse-status")${eol}${lookup}`,
-      "HELLO_GOVERNED_CHANGE_APP_LOOKUP_ANCHOR",
-    )
-    source = replaceOnce(
-      source,
-      '    countOutput.textContent = String(snapshot.count).padStart(3, "0")',
-      `${countLine}${eol}    countOutput.textContent = pulseNumber`,
-      "HELLO_GOVERNED_CHANGE_APP_COUNT_ANCHOR",
-    )
-    return replaceOnce(
-      source,
-      "    statusOutput.textContent = snapshot.status",
-      `    statusOutput.textContent = snapshot.status${eol}${update}`,
-      "HELLO_GOVERNED_CHANGE_APP_STATUS_ANCHOR",
-    )
-  }))
-
-  const changed = prepared.filter(({ after, before }) => after !== before)
-  for (const edit of changed) fs.writeFileSync(edit.target, edit.after, "utf8")
-  return { changedPaths: changed.map(({ relativePath }) => relativePath).sort() }
+  const sourceByPath = Object.fromEntries(Object.values(TARGETS).map((relativePath) => [
+    relativePath,
+    fs.readFileSync(path.join(root, ...relativePath.split("/")), "utf8"),
+  ]))
+  const expectedByPath = createGovernedMarkerExpectedSources(sourceByPath)
+  const changedPaths = Object.values(TARGETS)
+    .filter((relativePath) => expectedByPath[relativePath] !== sourceByPath[relativePath])
+    .sort()
+  for (const relativePath of changedPaths) {
+    fs.writeFileSync(path.join(root, ...relativePath.split("/")), expectedByPath[relativePath], "utf8")
+  }
+  return { changedPaths }
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
