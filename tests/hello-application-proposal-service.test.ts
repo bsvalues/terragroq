@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import {
   applyHelloApplicationProposal,
   createHelloApplicationProposal,
+  governedPrompt,
+  runGovernedResidentChange,
 } from "@/lib/hello-application/proposal-service.mjs"
 
 const roots: string[] = []
@@ -38,6 +40,74 @@ function fixture() {
 }
 
 describe("Hello Application governed HERMES proposals", () => {
+  it("gives the resident an explicit file-edit contract and self-corrects an incomplete first turn", async () => {
+    const prompt = governedPrompt()
+    expect(prompt).toContain("Use the available file-editing tools now")
+    expect(prompt).toContain('id="governance-marker"')
+    expect(prompt).toContain("git diff --name-only")
+    expect(prompt).toContain("Do not substitute prose or fenced code blocks for file edits")
+
+    let changedPaths: string[] = []
+    const prompts: string[] = []
+    const client = {
+      async runTurn({ prompt: turnPrompt }: { prompt: string }) {
+        prompts.push(turnPrompt)
+        if (prompts.length === 2) {
+          changedPaths = [
+            "examples/hello-application/src/app.js",
+            "examples/hello-application/src/index.html",
+            "examples/hello-application/src/styles.css",
+          ]
+        }
+        return { threadId: "thread-resident", turnId: `turn-${prompts.length}`, status: "completed" }
+      },
+    }
+
+    const result = await runGovernedResidentChange({
+      client,
+      threadId: "thread-resident",
+      readChangedPaths: async () => changedPaths,
+      timeoutMs: 1_000,
+    })
+
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain("Actual changed paths: none")
+    expect(prompts[1]).toContain("Make all three on-disk edits")
+    expect(result.turn.turnId).toBe("turn-2")
+    expect(result.changedPaths).toEqual(changedPaths)
+  })
+
+  it("recovers a resident completion-contract failure without retrying infrastructure walls", async () => {
+    let calls = 0
+    let changedPaths: string[] = []
+    const invalidOutput = Object.assign(new Error("invalid resident output"), {
+      name: "AppServerTurnEndedError",
+      status: "failed",
+      detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing",
+    })
+    const client = {
+      async runTurn() {
+        calls += 1
+        if (calls === 1) throw invalidOutput
+        changedPaths = [
+          "examples/hello-application/src/index.html",
+          "examples/hello-application/src/styles.css",
+        ]
+        return { threadId: "thread-recovery", turnId: "turn-recovered", status: "completed" }
+      },
+    }
+
+    const result = await runGovernedResidentChange({
+      client,
+      threadId: "thread-recovery",
+      readChangedPaths: async () => changedPaths,
+      timeoutMs: 1_000,
+    })
+
+    expect(calls).toBe(2)
+    expect(result.turn.turnId).toBe("turn-recovered")
+  })
+
   it("keeps the canonical source unchanged until explicit apply, then applies the exact tested multi-file patch", async () => {
     const { repositoryRoot, runtimeRoot } = fixture()
     const canonicalHtml = path.join(repositoryRoot, "examples", "hello-application", "src", "index.html")
