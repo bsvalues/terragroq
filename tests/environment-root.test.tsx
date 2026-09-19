@@ -110,9 +110,32 @@ describe("the replacement root refuses the legacy product model", () => {
     view.rerender(<Desk projectKey="williamos" />)
     await screen.findByRole("main", { name: "WilliamOS Repo Space" })
 
+    expect(screen.getByRole("region", { name: "Developer preview · WilliamOS Repo window" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "WilliamOS Repo application fixture" })).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Developer preview · TerraFusion window" })).toBeNull()
+
     expect(requests).toContain("GET /api/environment/space")
     expect(requests).toContain("GET /api/environment/space?projectKey=williamos")
     await waitFor(() => expect(screen.queryByRole("main", { name: "TerraFusion Repo Space" })).toBeNull())
+  })
+
+  it("keeps WilliamOS identity while its Space request is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/environment/space?projectKey=williamos") {
+        return Response.json({ error: "SPACE_UNAVAILABLE" }, { status: 503 })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+
+    render(<Desk projectKey="williamos" />)
+
+    expect(screen.getByRole("main", { name: "WilliamOS Space" })).toBeTruthy()
+    expect(screen.getByRole("region", { name: "Developer preview · WilliamOS window" })).toBeTruthy()
+    await screen.findByText("SPACE_UNAVAILABLE")
+    expect(screen.getByRole("main", { name: "WilliamOS Space" })).toBeTruthy()
+    expect(screen.queryByText(/TerraFusion/)).toBeNull()
   })
 
   it("imports nothing from the refused legacy modules — checked in source, not trusted to review", () => {
@@ -125,10 +148,12 @@ describe("the replacement root refuses the legacy product model", () => {
   })
 
   it("frames the admitted running app directly instead of using the inert document proxy", () => {
-    const source = fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.tsx"), "utf8")
-    expect(source.includes("credentialless")).toBe(false)
-    expect(source.includes("src={space.runningAppUrl}")).toBe(true)
-    expect(source.includes("/api/environment/view")).toBe(false)
-    expect(source).toContain("allow-scripts allow-forms")
+    const shell = fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.tsx"), "utf8")
+    const preview = fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/developer-preview-surface.tsx"), "utf8")
+    expect(preview.includes("credentialless")).toBe(false)
+    expect(shell.includes("runningAppUrl={space.runningAppUrl}")).toBe(true)
+    expect(preview.includes("src={runningAppUrl}")).toBe(true)
+    expect(`${shell}\n${preview}`).not.toContain("/api/environment/view")
+    expect(preview).toContain("allow-scripts allow-forms")
   })
 })

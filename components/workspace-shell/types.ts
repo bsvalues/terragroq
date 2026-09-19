@@ -598,7 +598,22 @@ export function nextSpaceRevision(current: number): number {
   return current + 1
 }
 
-export function spaceToServer(space: WorkspaceSpace, revision = space.revision) {
+function persistedWindowTitle(value: string): string {
+  const normalized = value.trim() || "Project"
+  if (normalized.length <= 200) return normalized
+  // The server contract counts UTF-16 code units. Avoid leaving an unmatched high surrogate at
+  // the boundary while still guaranteeing that an accepted Project name cannot break every save.
+  const candidate = normalized.slice(0, 200)
+  const finalCodeUnit = candidate.charCodeAt(candidate.length - 1)
+  return finalCodeUnit >= 0xD800 && finalCodeUnit <= 0xDBFF ? candidate.slice(0, -1) : candidate
+}
+
+export function spaceToServer(
+  space: WorkspaceSpace,
+  revision = space.revision,
+  runningAppTitle = "Project",
+) {
+  const previewTitle = persistedWindowTitle(runningAppTitle)
   const activePane = space.editor.panes.find((pane) => pane.id === space.editor.activePaneId) ?? space.editor.panes[0]
   const persistedInspectors = Object.entries(space.inspectorWindows)
     .filter(([id]) => {
@@ -621,7 +636,7 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     windows: [...durableWindowIds.map((id) => ({
       id: id === "editor" ? "workspace-editor" : id === "running-app" ? "workspace-running-app" : `workspace-${id}`,
       kind: id,
-      title: id === "editor" ? "Source" : id === "running-app" ? "TerraFusion" : id === "tests" ? "Tests" : id === "diff" ? "Changes" : "Terminal",
+      title: id === "editor" ? "Source" : id === "running-app" ? previewTitle : id === "tests" ? "Tests" : id === "diff" ? "Changes" : "Terminal",
       frame: {
         x: space.windows[id].x,
         y: space.windows[id].y,

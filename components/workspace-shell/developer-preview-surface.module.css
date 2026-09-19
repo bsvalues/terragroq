@@ -1,0 +1,236 @@
+.previewHost {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: #0d110d;
+}
+
+.runtimeFrame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.compositionButton {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid #596653;
+  border-radius: 4px;
+  color: #d5ded1;
+  background: rgb(15 20 15 / 92%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 36%);
+  font: 8.5px var(--font-geist-mono), monospace;
+}
+
+.compositionButton:hover,
+.compositionButton:focus-visible {
+  border-color: #80927b;
+  color: #f0f4ed;
+  background: #182018;
+  outline: none;
+}
+
+.unavailable {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: #91a48c;
+  text-align: center;
+}
+
+.unavailable svg { margin: 0 auto; }
+.unavailable strong { color: #e3e9e0; font-size: 13px; }
+.unavailable span { max-width: 448px; color: #8e998b; font-size: 11px; line-height: 1.6; }
+
+.fixture {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr) auto;
+  color: #e8ece5;
+  background: #0b0f0b;
+}
+
+.fixture::before {
+  content: "";
+  position: absolute;
+  inset: 34px 0 0;
+  pointer-events: none;
+  opacity: .22;
+  background-image:
+    linear-gradient(#283027 1px, transparent 1px),
+    linear-gradient(90deg, #283027 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.fixtureBar,
+.fixtureAppBar,
+.fixtureIdentity,
+.fixtureState,
+.interactionButton,
+.interactionResult {
+  display: flex;
+  align-items: center;
+}
+
+.fixtureBar {
+  position: relative;
+  z-index: 1;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 11px;
+  border-bottom: 1px solid #283027;
+  color: #8e998b;
+  background: #101510;
+  font: 8.5px var(--font-geist-mono), monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.fixtureIdentity { gap: 8px; }
+
+.fixtureMark {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #72866e;
+  border-radius: 50%;
+  color: #c7d7c2;
+  font: 700 8px var(--font-geist-sans), sans-serif;
+}
+
+.fixtureState { gap: 6px; color: #9fc397; }
+.fixtureState > span { width: 5px; height: 5px; border-radius: 50%; background: #8fbd82; }
+
+.fixtureApplication {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  justify-self: center;
+  width: min(560px, calc(100% - 42px));
+  min-height: 250px;
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  border: 1px solid #3b4939;
+  border-radius: 5px;
+  background: #121712;
+  box-shadow: 0 20px 55px rgb(0 0 0 / 42%);
+}
+
+.fixtureAppBar {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid #303a2f;
+  color: #dce3d9;
+  font: 600 9px var(--font-geist-mono), monospace;
+}
+
+.fixtureAppBar span:last-child { color: #768273; font-weight: 400; }
+
+.fixtureBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 154px;
+  min-height: 0;
+}
+
+.fixtureCopy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 30px 28px 26px;
+}
+
+.eyebrow {
+  margin-bottom: 8px;
+  color: #9aae95;
+  font: 8px var(--font-geist-mono), monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.fixtureCopy h2 {
+  margin: 0;
+  color: #edf1eb;
+  font-size: clamp(17px, 2.2vw, 22px);
+  font-weight: 640;
+  letter-spacing: -.025em;
+}
+
+.fixtureCopy p {
+  max-width: 330px;
+  margin: 10px 0 20px;
+  color: #99a595;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.interactionButton {
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #60715c;
+  border-radius: 4px;
+  color: #e5eee2;
+  background: #1a2419;
+  font: 9.5px var(--font-geist-mono), monospace;
+}
+
+.interactionButton:hover,
+.interactionButton:focus-visible {
+  border-color: #8ba184;
+  background: #202b1f;
+  outline: none;
+}
+
+.interactionResult {
+  min-height: 18px;
+  gap: 5px;
+  margin-top: 9px;
+  color: #8fbd82;
+  font: 8.5px var(--font-geist-mono), monospace;
+}
+
+.fixtureFacts {
+  margin: 0;
+  padding: 22px 17px;
+  border-left: 1px solid #303a2f;
+  background: #0f140f;
+}
+
+.fixtureFacts div + div { margin-top: 18px; }
+.fixtureFacts dt { color: #849080; font: 9px var(--font-geist-mono), monospace; letter-spacing: .06em; text-transform: uppercase; }
+.fixtureFacts dd { margin: 4px 0 0; color: #bcc7b9; font-size: 9.5px; line-height: 1.45; }
+
+.fixtureDisclosure {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid #242c23;
+  color: #849080;
+  background: #0d110d;
+  font: 9px var(--font-geist-mono), monospace;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .fixtureApplication { width: calc(100% - 24px); }
+  .fixtureBody { grid-template-columns: 1fr; }
+  .fixtureFacts { border-top: 1px solid #303a2f; border-left: 0; }
+  .fixtureCopy { padding: 24px 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compositionButton,
+  .interactionButton { transition: none; }
+}

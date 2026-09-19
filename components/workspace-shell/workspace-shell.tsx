@@ -1,13 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Activity, AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, Layers3, TerminalSquare, Users, X } from "lucide-react"
+import { Activity, AppWindow, Braces, Command, FlaskConical, GitCompare, GitFork, GitPullRequest, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
+import { DeveloperPreviewSurface, developerPreviewWindowTitle } from "./developer-preview-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import {
@@ -680,6 +681,19 @@ export function applyRestoredWorkspaceSelection(
   }
 }
 
+function projectFallbackSpace(
+  projectKey: "terrafusion" | "williamos",
+  viewportWidth = 1440,
+  viewportHeight = 900,
+): WorkspaceSpace {
+  return defaultSpace(
+    viewportWidth,
+    viewportHeight,
+    projectKey,
+    projectKey === "williamos" ? "WilliamOS" : "TerraFusion",
+  )
+}
+
 export function WorkspaceShell({
   initialSummon = null,
   projectKey = "terrafusion",
@@ -687,7 +701,7 @@ export function WorkspaceShell({
   initialSummon?: SummonedSurface | null
   projectKey?: "terrafusion" | "williamos"
 }) {
-  const [space, setSpace] = useState<WorkspaceSpace>(() => defaultSpace())
+  const [space, setSpace] = useState<WorkspaceSpace>(() => projectFallbackSpace(projectKey))
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [persistenceError, setPersistenceError] = useState<string | null>(null)
@@ -997,6 +1011,7 @@ export function WorkspaceShell({
     const usedIds = new Map(inspectors.map((surface) => [surface.id, surface]))
     const incoming: InspectorSurface[] = []
     for (const surface of reply.surfaces ?? []) {
+      if (projectKey !== "terrafusion" && surface.kind === "preview-evidence") continue
       const binding = surface.kind === "review" ? diffReviewInspectorBinding(surface.payload) : null
       const agentSnapshot = surface.kind === AGENT_SESSION_INSPECTOR_SURFACE_KIND
         ? parseAgentSessionInspectorPayload(surface.payload) : null
@@ -1074,7 +1089,7 @@ export function WorkspaceShell({
       const active = incoming.at(-1)?.id ?? current.activeWindowId
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
     })
-  }, [inspectors])
+  }, [inspectors, projectKey])
 
   const materializeExecutionAssignment = useCallback((sessionId: string) => {
     const session = boundExecutionSession
@@ -1140,7 +1155,7 @@ export function WorkspaceShell({
 
   useEffect(() => {
     let cancelled = false
-    const fallback = defaultSpace(window.innerWidth, window.innerHeight)
+    const fallback = projectFallbackSpace(projectKey, window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
       const response = await fetch(spaceEndpoint(projectKey), { cache: "no-store" })
       const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
@@ -1211,7 +1226,10 @@ export function WorkspaceShell({
           }),
           payload.project,
         )
-        const savedPreview = payload.project
+        if (projectKey !== "terrafusion" && payload.project) {
+          removePreviewEvidenceSnapshot(payload.worldId, payload.project.identity)
+        }
+        const savedPreview = projectKey === "terrafusion" && payload.project
           ? loadPreviewEvidenceSnapshot(payload.worldId, payload.project.identity)
           : null
         const previewSurface: InspectorSurface | null = savedPreview ? {
@@ -1545,7 +1563,7 @@ export function WorkspaceShell({
     const job: PersistJob = {
       worldId: id,
       revision,
-      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision) })),
+      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision, projectRef.current?.name ?? (projectKey === "williamos" ? "WilliamOS" : "TerraFusion")) })),
       storage: storageRef.current,
       browserKey: browserStorageKeyRef.current,
       epoch: transitionEpochRef.current,
@@ -1643,6 +1661,7 @@ export function WorkspaceShell({
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
   const inspectPreviewEvidence = useCallback(async () => {
+    if (projectKey !== "terrafusion") return
     const requestWorldId = worldRef.current
     const requestProjectIdentity = projectRef.current?.identity ?? null
     const requestEpoch = transitionEpochRef.current
@@ -1675,7 +1694,7 @@ export function WorkspaceShell({
         setTransitionMessage("Preview evidence is unavailable; no runtime facts were inferred.")
       }
     }
-  }, [materializeSurfaces])
+  }, [materializeSurfaces, projectKey])
 
   const openRepositoryDeliverySurface = useCallback(async (target: "change-set" | "preview-composition") => {
     setOverlay(target)
@@ -3099,8 +3118,11 @@ export function WorkspaceShell({
       (repository) => repository.key === space.selectedFileRef?.repositoryResourceKey,
     )?.label ?? null
     : null
+  const previewProjectName = project?.name ?? (projectKey === "williamos" ? "WilliamOS" : "TerraFusion")
   const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
-    : selectedKind === "preview" ? "TerraFusion developer preview"
+    : selectedKind === "preview" ? projectKey === "terrafusion"
+      ? "TerraFusion developer preview"
+      : space.runningAppUrl ? `${previewProjectName} developer preview` : `${previewProjectName} application fixture`
     : selectedKind === "diff" ? "Current changes"
     : selectedKind === "file" && selectedFileRepositoryLabel
       ? `${selectedFileRepositoryLabel} · ${space.selectedPath!}`
@@ -3276,6 +3298,7 @@ export function WorkspaceShell({
         : null
     }
     if (selectedKind === "preview") {
+      if (projectKey !== "terrafusion") return null
       if (!worldId || !project) return null
       const live = inspectors.flatMap((surface) => surface.kind === "preview-evidence"
         ? [parsePreviewInspectorPayload(surface.payload)] : []).filter(Boolean).at(-1)
@@ -3540,6 +3563,7 @@ export function WorkspaceShell({
           : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
             : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", fileDelegateUnavailableReason ? "Delegate unavailable" : "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const
+    : selectedKind === "preview" && projectKey !== "terrafusion" ? [] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", previewExplainUnavailableReason ? "Explain unavailable" : "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
@@ -3593,7 +3617,10 @@ export function WorkspaceShell({
       ),
       restoredProject,
     )
-    const savedPreview = restoredProject
+    if (projectKey !== "terrafusion" && restoredProject) {
+      removePreviewEvidenceSnapshot(payload.worldId, restoredProject.identity)
+    }
+    const savedPreview = projectKey === "terrafusion" && restoredProject
       ? loadPreviewEvidenceSnapshot(payload.worldId, restoredProject.identity)
       : null
     const previewSurface: InspectorSurface | null = savedPreview ? {
@@ -4458,7 +4485,7 @@ export function WorkspaceShell({
     : null
 
   return (
-    <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? "Workspace"} Space`}>
+    <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? space.name} Space`}>
       <header className={spatial.topBar}>
         <div className={spatial.identity}>
           <span className={spatial.mark} aria-label="WilliamOS">W</span>
@@ -4582,13 +4609,13 @@ export function WorkspaceShell({
             setSpace((current) => ({ ...current, activeWindowId: "editor", editor, selectedPath, ...(selectedFileRef !== undefined ? { selectedFileRef } : {}) }))
           }} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
-        <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
-          <div className={spatial.previewHost}>
-            <button type="button" className={spatial.previewCompositionButton} onClick={() => void openRepositoryDeliverySurface("preview-composition")} aria-label="Inspect Preview composition" title="Inspect exact runtime composition"><Layers3 size={13} />Composition</button>
-            {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
-              <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
-            )}
-          </div>
+        <WindowFrame id="running-app" title={developerPreviewWindowTitle(previewProjectName)} geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
+          <DeveloperPreviewSurface
+            projectKey={projectKey}
+            projectName={previewProjectName}
+            runningAppUrl={space.runningAppUrl}
+            onInspectComposition={projectKey === "terrafusion" ? () => void openRepositoryDeliverySurface("preview-composition") : undefined}
+          />
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
@@ -4602,7 +4629,7 @@ export function WorkspaceShell({
         {inspectors.map((surface) => {
           const geometry = space.inspectorWindows[surface.id]
           if (!geometry) return null
-          return <WindowFrame key={surface.id} id={surface.id} title={inspectorSurfaceWindowTitle(surface)} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} onRefresh={surface.kind === "preview-evidence" ? () => void inspectPreviewEvidence() : undefined} /></WindowFrame>
+          return <WindowFrame key={surface.id} id={surface.id} title={inspectorSurfaceWindowTitle(surface)} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} onRefresh={surface.kind === "preview-evidence" && projectKey === "terrafusion" ? () => void inspectPreviewEvidence() : undefined} /></WindowFrame>
         })}
       </div>
 

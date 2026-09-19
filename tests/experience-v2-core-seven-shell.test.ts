@@ -4,10 +4,11 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 const shell = () => fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.tsx"), "utf8")
+const preview = () => fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/developer-preview-surface.tsx"), "utf8")
 
 describe("Experience V2 Core Seven shell integration", () => {
   it("keeps the Repository Map, Change Set, and Preview composition summonable inside the Space", () => {
-    const source = shell()
+    const source = `${shell()}\n${preview()}`
     expect(source).toContain("RepositoryMapSurface")
     expect(source).toContain("ChangeSetSurface")
     expect(source).toContain("PreviewComposition")

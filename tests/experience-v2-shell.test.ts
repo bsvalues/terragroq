@@ -238,10 +238,11 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(css).toMatch(/@media \(max-width: 720px\)[\s\S]*\.objectBar > \[role="status"\]\s*\{\s*position:\s*absolute;/)
   })
 
-  it("keeps TerraFusion inside a neutral developer preview, never WilliamOS business UI", () => {
-    const source = shell().toLowerCase()
+  it("keeps target applications inside a project-named developer preview, never WilliamOS business UI", () => {
+    const source = `${shell()}\n${read("components/workspace-shell/developer-preview-surface.tsx")}`.toLowerCase()
     expect(source).toContain("developer preview")
-    expect(source).toContain("running terrafusion application")
+    expect(source).toContain("running ${name} application")
+    expect(source).toContain("application-neutral fixture")
     expect(source).toContain("developer preview unavailable")
     expect(source).not.toContain("parcel")
     expect(source).not.toContain("appeal")

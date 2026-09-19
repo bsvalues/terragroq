@@ -7,6 +7,25 @@ import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 const geometry = (z: number) => ({ x: 100, y: 90, width: 560, height: 480, z, minimized: false })
 
 describe("browser-to-server Space mapping", () => {
+  it("persists the active Project name for the developer-preview window", () => {
+    const mapped = spaceToServer(
+      defaultSpace(1440, 900, "world-williamos", "Feature slice"),
+      3,
+      "WilliamOS",
+    )
+
+    expect(mapped.windows.find((window) => window.kind === "running-app")?.title).toBe("WilliamOS")
+    expect(spaceToServer(defaultSpace()).windows.find((window) => window.kind === "running-app")?.title).toBe("Project")
+  })
+
+  it("bounds an accepted Project name to the persisted window-title contract", () => {
+    const mapped = spaceToServer(defaultSpace(), 4, `  ${"P".repeat(250)}  `)
+    const title = mapped.windows.find((window) => window.kind === "running-app")?.title
+
+    expect(title).toBe("P".repeat(200))
+    expect(title?.length).toBeLessThanOrEqual(200)
+  })
+
   it("round-trips repository, mount, worktree and observed-revision identity for same-path files", () => {
     const base = defaultSpace(1440, 900)
     const atlas: WorkspaceFileRef = {
