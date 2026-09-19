@@ -6,11 +6,30 @@ import {
   HELLO_UPSTREAM_PORT,
 } from "@/scripts/hello-application/hello-https-proxy.mjs"
 import {
+  childBaseEnvironment,
   parseHelloRuntimeEnvironment,
   validateHelloSourceIdentity,
 } from "@/scripts/hello-application/start-williamos-hello-runtime.mjs"
 
 describe("isolated HERMES Hello runtime contract", () => {
+  it("preserves Docker plugin discovery without inheriting runtime secrets", () => {
+    const childEnvironment = childBaseEnvironment({
+      PATH: "C:/Program Files/Docker/Docker/resources/bin",
+      ProgramFiles: "C:/Program Files",
+      ProgramW6432: "C:/Program Files",
+      DATABASE_URL: "postgresql://must-not-leak",
+      WILLIAMOS_TERRAFUSION_ROOT: "C:/forbidden",
+    })
+
+    expect(childEnvironment).toMatchObject({
+      PATH: "C:/Program Files/Docker/Docker/resources/bin",
+      ProgramFiles: "C:/Program Files",
+      ProgramW6432: "C:/Program Files",
+    })
+    expect(childEnvironment.DATABASE_URL).toBeUndefined()
+    expect(Object.keys(childEnvironment).some((key) => key.includes("TERRAFUSION"))).toBe(false)
+  })
+
   it("accepts only the explicit WilliamOS auth/database secret allowlist and injects the Hello identity", () => {
     const parsed = parseHelloRuntimeEnvironment([
       "DATABASE_URL=postgresql://owner:secret@atlas:15432/williamos",

@@ -83,13 +83,13 @@ function argument(name) {
   return value ? path.resolve(value) : null
 }
 
-function childBaseEnvironment() {
+export function childBaseEnvironment(source = process.env) {
   const allowed = [
     "APPDATA", "COMSPEC", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "OS", "PATH", "PATHEXT",
-    "PROCESSOR_ARCHITECTURE", "ProgramData", "SystemDrive", "SystemRoot", "TEMP", "TMP", "USERDOMAIN",
-    "USERNAME", "USERPROFILE", "windir",
+    "PROCESSOR_ARCHITECTURE", "ProgramData", "ProgramFiles", "ProgramW6432", "SystemDrive", "SystemRoot",
+    "TEMP", "TMP", "USERDOMAIN", "USERNAME", "USERPROFILE", "windir",
   ]
-  return Object.fromEntries(allowed.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]))
+  return Object.fromEntries(allowed.flatMap((key) => source[key] === undefined ? [] : [[key, source[key]]]))
 }
 
 export async function startHelloWilliamOsRuntime({
