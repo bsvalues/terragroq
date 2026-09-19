@@ -43,6 +43,7 @@ describe("Hello Application governed HERMES proposals", () => {
   it("gives the resident an explicit file-edit contract and self-corrects an incomplete first turn", async () => {
     const prompt = governedPrompt()
     expect(prompt).toContain("Use the available file-editing tools now")
+    expect(prompt).toContain("node scripts/hello-application/apply-governed-marker-change.mjs")
     expect(prompt).toContain('id="governance-marker"')
     expect(prompt).toContain("git diff --name-only")
     expect(prompt).toContain("Do not substitute prose or fenced code blocks for file edits")
@@ -79,20 +80,22 @@ describe("Hello Application governed HERMES proposals", () => {
 
   it("recovers a resident completion-contract failure without retrying infrastructure walls", async () => {
     let calls = 0
-    let changedPaths: string[] = []
+    const changedPaths = [
+      "examples/hello-application/src/app.js",
+      "examples/hello-application/src/index.html",
+      "examples/hello-application/src/styles.css",
+    ]
+    const prompts: string[] = []
     const invalidOutput = Object.assign(new Error("invalid resident output"), {
       name: "AppServerTurnEndedError",
       status: "failed",
       detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing",
     })
     const client = {
-      async runTurn() {
+      async runTurn({ prompt }: { prompt: string }) {
+        prompts.push(prompt)
         calls += 1
         if (calls === 1) throw invalidOutput
-        changedPaths = [
-          "examples/hello-application/src/index.html",
-          "examples/hello-application/src/styles.css",
-        ]
         return { threadId: "thread-recovery", turnId: "turn-recovered", status: "completed" }
       },
     }
@@ -105,6 +108,9 @@ describe("Hello Application governed HERMES proposals", () => {
     })
 
     expect(calls).toBe(2)
+    expect(prompts[1]).toContain("All three required edits already exist on disk")
+    expect(prompts[1]).not.toContain("Your first action must be")
+    expect(prompts[1]).not.toContain("apply-governed-marker-change.mjs")
     expect(result.turn.turnId).toBe("turn-recovered")
   })
 
