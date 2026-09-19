@@ -12,6 +12,7 @@ import {
   governedPrompt,
   runGovernedResidentChange,
 } from "@/lib/hello-application/proposal-service.mjs"
+import { applyGovernedMarkerChange } from "@/scripts/hello-application/apply-governed-marker-change.mjs"
 
 const roots: string[] = []
 
@@ -42,7 +43,7 @@ function fixture() {
 describe("Hello Application governed HERMES proposals", () => {
   it("gives the resident an explicit file-edit contract and self-corrects an incomplete first turn", async () => {
     const prompt = governedPrompt()
-    expect(prompt).toContain("Use the available file-editing tools now")
+    expect(prompt).toContain("If the codemod reports a drift error, stop")
     expect(prompt).toContain("node scripts/hello-application/apply-governed-marker-change.mjs")
     expect(prompt).toContain('id="governance-marker"')
     expect(prompt).toContain("git diff --name-only")
@@ -126,10 +127,7 @@ describe("Hello Application governed HERMES proposals", () => {
       runtimeRoot,
       requestedBy: "owner",
       residentTurn: async ({ workspacePath }) => {
-        const html = path.join(workspacePath, "examples", "hello-application", "src", "index.html")
-        const css = path.join(workspacePath, "examples", "hello-application", "src", "styles.css")
-        fs.writeFileSync(html, fs.readFileSync(html, "utf8").replace("data-hermes-state=\"placeholder\"", "data-hermes-state=\"placeholder\" data-governed=\"true\""))
-        fs.appendFileSync(css, "\n[data-governed=\"true\"] { outline-color: #ff6b35; }\n")
+        applyGovernedMarkerChange({ repositoryRoot: workspacePath })
         return { threadId: "thread-1", turnId: "turn-1", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
       },
     })
@@ -139,13 +137,14 @@ describe("Hello Application governed HERMES proposals", () => {
       requestedBy: "owner",
       model: "williamos-qwen3-4b:64k",
       changedPaths: [
+        "examples/hello-application/src/app.js",
         "examples/hello-application/src/index.html",
         "examples/hello-application/src/styles.css",
       ],
       validation: expect.objectContaining({ status: "passed", command: "node --test examples/hello-application/test/hello.test.mjs" }),
     })
     expect(proposal.reviewPatch).toContain("diff --git")
-    expect(proposal.reviewPatch).toContain("data-governed")
+    expect(proposal.reviewPatch).toContain("Governed by HERMES")
     expect(fs.readFileSync(canonicalHtml, "utf8")).toBe(htmlBefore)
     expect(fs.readFileSync(canonicalCss, "utf8")).toBe(cssBefore)
     expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
@@ -158,9 +157,10 @@ describe("Hello Application governed HERMES proposals", () => {
     })
 
     expect(applied).toMatchObject({ status: "APPLIED", changedPaths: proposal.changedPaths })
-    expect(fs.readFileSync(canonicalHtml, "utf8")).toContain('data-governed="true"')
-    expect(fs.readFileSync(canonicalCss, "utf8")).toContain("outline-color: #ff6b35")
+    expect(fs.readFileSync(canonicalHtml, "utf8")).toContain('id="governance-marker"')
+    expect(fs.readFileSync(canonicalCss, "utf8")).toContain(".governance-marker {")
     expect(git(repositoryRoot, ["diff", "--name-only"])).toBe([
+      "examples/hello-application/src/app.js",
       "examples/hello-application/src/index.html",
       "examples/hello-application/src/styles.css",
     ].join("\n"))
@@ -173,8 +173,7 @@ describe("Hello Application governed HERMES proposals", () => {
       runtimeRoot,
       requestedBy: "owner",
       residentTurn: async ({ workspacePath }) => {
-        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "index.html"), "\n<!-- reviewed -->\n")
-        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "styles.css"), "\n/* reviewed */\n")
+        applyGovernedMarkerChange({ repositoryRoot: workspacePath })
         return { threadId: "thread-scope", turnId: "turn-scope", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
       },
     })
@@ -214,6 +213,57 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it("rejects an incomplete two-file resident change", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      residentTurn: async ({ workspacePath }) => {
+        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "index.html"), "\n<!-- incomplete -->\n")
+        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "styles.css"), "\n/* incomplete */\n")
+        return { threadId: "thread-two", turnId: "turn-two", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_EXACT_FILE_SET_REQUIRED")
+    expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("rejects three allowed files when the governed marker semantics are absent", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      residentTurn: async ({ workspacePath }) => {
+        for (const target of ["app.js", "index.html", "styles.css"]) {
+          fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", target), "\n/* unrelated allowed edit */\n")
+        }
+        return { threadId: "thread-semantic", turnId: "turn-semantic", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_GOVERNED_MARKER_INVALID")
+    expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("rejects a marker whose governed style contract was altered", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      residentTurn: async ({ workspacePath }) => {
+        applyGovernedMarkerChange({ repositoryRoot: workspacePath })
+        const stylesPath = path.join(workspacePath, "examples/hello-application/src/styles.css")
+        const styles = fs.readFileSync(stylesPath, "utf8")
+        fs.writeFileSync(stylesPath, styles.replace(
+          /(\.governance-marker \{[\s\S]*?)background: var\(--porcelain\);/,
+          "$1background: linear-gradient(red, blue);",
+        ))
+        return { threadId: "thread-style", turnId: "turn-style", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_GOVERNED_MARKER_INVALID")
+    expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
   it("rejects ignored writes and stale apply without mutating canonical source", async () => {
     const { repositoryRoot, runtimeRoot } = fixture()
     await expect(createHelloApplicationProposal({
@@ -232,8 +282,7 @@ describe("Hello Application governed HERMES proposals", () => {
       runtimeRoot,
       requestedBy: "owner",
       residentTurn: async ({ workspacePath }) => {
-        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "index.html"), "\n<!-- safe -->\n")
-        fs.appendFileSync(path.join(workspacePath, "examples", "hello-application", "src", "styles.css"), "\n/* safe */\n")
+        applyGovernedMarkerChange({ repositoryRoot: workspacePath })
         return { threadId: "thread-4", turnId: "turn-4", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
       },
     })

@@ -43,4 +43,26 @@ describe("Hello Application governed marker codemod", () => {
       path.join(repositoryRoot, "examples/hello-application/test/hello.test.mjs"),
     ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true })).not.toThrow()
   })
+
+  it("leaves every target untouched when any target has drifted", () => {
+    const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-governed-change-drift-"))
+    roots.push(repositoryRoot)
+    fs.cpSync(
+      path.join(process.cwd(), "examples", "hello-application"),
+      path.join(repositoryRoot, "examples", "hello-application"),
+      { recursive: true },
+    )
+    const htmlPath = path.join(repositoryRoot, "examples/hello-application/src/index.html")
+    const appPath = path.join(repositoryRoot, "examples/hello-application/src/app.js")
+    const stylesPath = path.join(repositoryRoot, "examples/hello-application/src/styles.css")
+    const htmlBefore = fs.readFileSync(htmlPath, "utf8")
+    const appBefore = fs.readFileSync(appPath, "utf8")
+    fs.writeFileSync(stylesPath, fs.readFileSync(stylesPath, "utf8").replace(".status-board dl {", ".status-board dl.drifted {"))
+    const stylesBefore = fs.readFileSync(stylesPath, "utf8")
+
+    expect(() => applyGovernedMarkerChange({ repositoryRoot })).toThrow("HELLO_GOVERNED_CHANGE_STYLES_ANCHOR")
+    expect(fs.readFileSync(htmlPath, "utf8")).toBe(htmlBefore)
+    expect(fs.readFileSync(appPath, "utf8")).toBe(appBefore)
+    expect(fs.readFileSync(stylesPath, "utf8")).toBe(stylesBefore)
+  })
 })
