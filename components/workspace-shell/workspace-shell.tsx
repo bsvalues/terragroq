@@ -41,6 +41,8 @@ import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
 import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import type { VisibleWorkspaceProject, WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
+import { ProjectSwitcher } from "./project-switcher"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -66,7 +68,7 @@ type AgentSnapshotLineContext = DurableLineSnapshot & Readonly<{
 }>
 type DiffChallengeLineContext = Readonly<{
   kind: "diff-challenge"
-  projectKey: "terrafusion" | "williamos"
+  projectKey: WorkspaceProjectKey
   path: string
   baseHash: string
   indexHash: string
@@ -76,7 +78,7 @@ type DiffChallengeLineContext = Readonly<{
 }>
 type PreviewExplainLineContext = Readonly<{
   kind: "preview-explain"
-  projectKey: "terrafusion" | "williamos"
+  projectKey: WorkspaceProjectKey
   previewFingerprint: string
   selectedPath: string
   clientGuard: Readonly<{
@@ -92,7 +94,7 @@ type PreviewExplainLineContext = Readonly<{
 }>
 type FileAskLineContext = Readonly<{
   kind: "file-ask"
-  projectKey: "terrafusion" | "williamos"
+  projectKey: WorkspaceProjectKey
   path: string
   projectIdentity: string
   revision: number
@@ -163,7 +165,7 @@ type SpaceDelegateEligibility = Readonly<{
 }>
 
 function deriveDeveloperToolRepositoryContext(
-  projectKey: "terrafusion" | "williamos",
+  projectKey: WorkspaceProjectKey,
   project: WorkspaceProject | null,
   space: WorkspaceSpace,
 ): DeveloperToolRepositoryIdentity | null {
@@ -640,19 +642,19 @@ function shouldAttachToolRunSnapshots(text: string): boolean {
     && /\b(latest|current|state|status|result|outcome|ran|run|output|pass(?:ed|ing)?|fail(?:ed|ing|ure)?|succeed(?:ed|ing)?|success(?:ful|fully)?|exit(?:ed)?|complete(?:d)?)\b/i.test(text)
 }
 
-function spaceEndpoint(projectKey: "terrafusion" | "williamos", worldId?: string): string {
+function spaceEndpoint(projectKey: WorkspaceProjectKey, worldId?: string): string {
   const query = [
     ...(worldId ? [`worldId=${encodeURIComponent(worldId)}`] : []),
-    ...(projectKey === "williamos" ? ["projectKey=williamos"] : []),
+    ...(projectKey === "terrafusion" ? [] : [`projectKey=${encodeURIComponent(projectKey)}`]),
   ]
   return `/api/environment/space${query.length > 0 ? `?${query.join("&")}` : ""}`
 }
 
 function spaceMutationBody(
-  projectKey: "terrafusion" | "williamos",
+  projectKey: WorkspaceProjectKey,
   value: Record<string, unknown>,
 ): Record<string, unknown> {
-  return projectKey === "williamos" ? { ...value, projectKey } : value
+  return projectKey === "terrafusion" ? value : { ...value, projectKey }
 }
 
 export function workspaceFileDirtyKey(path: string, fileRef?: WorkspaceFileRef | null): string {
@@ -682,7 +684,7 @@ export function applyRestoredWorkspaceSelection(
 }
 
 function projectFallbackSpace(
-  projectKey: "terrafusion" | "williamos",
+  projectKey: WorkspaceProjectKey,
   viewportWidth = 1440,
   viewportHeight = 900,
 ): WorkspaceSpace {
@@ -690,16 +692,18 @@ function projectFallbackSpace(
     viewportWidth,
     viewportHeight,
     projectKey,
-    projectKey === "williamos" ? "WilliamOS" : "TerraFusion",
+    projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion",
   )
 }
 
 export function WorkspaceShell({
   initialSummon = null,
   projectKey = "terrafusion",
+  visibleProjects = [{ key: "terrafusion", name: "TerraFusion OS" }, { key: "williamos", name: "WilliamOS" }],
 }: {
   initialSummon?: SummonedSurface | null
-  projectKey?: "terrafusion" | "williamos"
+  projectKey?: WorkspaceProjectKey
+  visibleProjects?: readonly VisibleWorkspaceProject[]
 }) {
   const [space, setSpace] = useState<WorkspaceSpace>(() => projectFallbackSpace(projectKey))
   const [worldId, setWorldId] = useState<string | null>(null)
@@ -1563,7 +1567,7 @@ export function WorkspaceShell({
     const job: PersistJob = {
       worldId: id,
       revision,
-      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision, projectRef.current?.name ?? (projectKey === "williamos" ? "WilliamOS" : "TerraFusion")) })),
+      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision, projectRef.current?.name ?? (projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion")) })),
       storage: storageRef.current,
       browserKey: browserStorageKeyRef.current,
       epoch: transitionEpochRef.current,
@@ -3118,7 +3122,7 @@ export function WorkspaceShell({
       (repository) => repository.key === space.selectedFileRef?.repositoryResourceKey,
     )?.label ?? null
     : null
-  const previewProjectName = project?.name ?? (projectKey === "williamos" ? "WilliamOS" : "TerraFusion")
+  const previewProjectName = project?.name ?? (projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion")
   const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
     : selectedKind === "preview" ? projectKey === "terrafusion"
       ? "TerraFusion developer preview"
@@ -3795,7 +3799,7 @@ export function WorkspaceShell({
     setSwitchingSpace(true)
     setTransitionMessage("Removing the saved Space…")
     try {
-      const response = await fetch(`/api/environment/spaces/${encodeURIComponent(targetWorldId)}${projectKey === "williamos" ? "?projectKey=williamos" : ""}`, { method: "DELETE" })
+      const response = await fetch(`/api/environment/spaces/${encodeURIComponent(targetWorldId)}${projectKey === "terrafusion" ? "" : `?projectKey=${encodeURIComponent(projectKey)}`}`, { method: "DELETE" })
       const payload = await response.json().catch(() => ({})) as { error?: string; removedWorldId?: string; spaces?: SpaceSummary[] }
       if (!response.ok || payload.removedWorldId !== targetWorldId) throw new Error(payload.error ?? `SPACE_REMOVE_${response.status}`)
       setSpaceSummaries((current) => payload.spaces ?? current.filter((summary) => summary.worldId !== targetWorldId))
@@ -4494,6 +4498,7 @@ export function WorkspaceShell({
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
+        <ProjectSwitcher activeProjectKey={projectKey} projects={visibleProjects} />
         <div className={spatial.agentPresence}>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (agent.kind === "world-worker") {

@@ -2,6 +2,7 @@ import { pool } from "@/lib/db"
 import {
   applyCanonicalOwnerProjectPlan,
   buildCanonicalOwnerProjectPlan,
+  buildWilliamOsOwnerProjectPlan,
 } from "@/lib/projects/canonical-owner-projects.mjs"
 
 type OwnerProjectProvisioningClient = Readonly<{
@@ -40,6 +41,22 @@ export async function ensureCanonicalOwnerProjects(
     return await applyCanonicalOwnerProjectPlan({
       client,
       plan: buildCanonicalOwnerProjectPlan(userId),
+    })
+  } finally {
+    client.release()
+  }
+}
+
+/** Provision only the WilliamOS Project for runtimes whose visible project allowlist excludes TerraFusion. */
+export async function ensureWilliamOsOwnerProject(
+  userId: string,
+  seams: OwnerProjectProvisioningDependencies = dependencies,
+) {
+  const client = await seams.connect()
+  try {
+    return await applyCanonicalOwnerProjectPlan({
+      client,
+      plan: buildWilliamOsOwnerProjectPlan(userId),
     })
   } finally {
     client.release()

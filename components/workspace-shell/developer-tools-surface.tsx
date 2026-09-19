@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LOOM_OPERATIONS, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import type { WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 import styles from "./experience-spatial.module.css"
 import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snapshot-history"
 import {
@@ -63,7 +64,7 @@ function repositoryIdentityMatches(
 
 export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", repositoryKey = null, repositoryLabel = null, repositoryContext, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
-  projectKey?: "terrafusion" | "williamos"
+  projectKey?: WorkspaceProjectKey
   repositoryKey?: string | null
   repositoryLabel?: string | null
   /** Undefined keeps isolated component harnesses compatible; null explicitly means the product has no verified checkout identity. */

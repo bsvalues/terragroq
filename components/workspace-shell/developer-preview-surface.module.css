@@ -12,6 +12,19 @@
   border: 0;
 }
 
+.helloPreviewHost {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #101a22;
+}
+
+.helloPreviewHost .runtimeFrame {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
 .compositionButton {
   position: absolute;
   z-index: 3;

@@ -3,9 +3,16 @@ import { notFound, redirect } from "next/navigation"
 import { getUserId } from "@/lib/session"
 import { Desk } from "@/components/desk/desk"
 import { isSummonedSurface } from "@/lib/environment/summon"
-import { ensureCanonicalOwnerProjects } from "@/lib/projects/owner-project-provisioning"
+import {
+  ensureCanonicalOwnerProjects,
+  ensureWilliamOsOwnerProject,
+} from "@/lib/projects/owner-project-provisioning"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import {
+  resolveRequestedWorkspaceProjectKey,
+  resolveVisibleWorkspaceProjects,
+} from "@/lib/projects/workspace-project-key"
 
 /**
  * `/` IS the working environment.
@@ -52,12 +59,18 @@ export default async function WilliamOSRoot({
   // canonical Projects. Signup cannot safely own this: its post-create hooks run after the user
   // transaction commits, so a transient failure could otherwise strand a valid owner with no
   // usable Space. Awaiting here guarantees the workspace never hydrates ahead of its Project truth.
-  await ensureCanonicalOwnerProjects(userId)
+  const visibleProjects = resolveVisibleWorkspaceProjects()
+  if (visibleProjects.some((project) => project.key === "terrafusion")) await ensureCanonicalOwnerProjects(userId)
+  else await ensureWilliamOsOwnerProject(userId)
   // A superseded route redirected here carrying the surface it used to be. Anything unrecognized is
   // simply dropped: an unknown surface name opens the ordinary empty environment rather than an error
   // page, because a stale bookmark is not a fault the owner needs reported.
   const params = await searchParams
   const requested = params.summon
-  const projectKey = params.project === "williamos" ? "williamos" : "terrafusion"
-  return <Desk initialSummon={isSummonedSurface(requested) ? requested : null} projectKey={projectKey} />
+  const projectKey = resolveRequestedWorkspaceProjectKey(params.project)
+  return <Desk
+    initialSummon={isSummonedSurface(requested) ? requested : null}
+    projectKey={projectKey}
+    visibleProjects={visibleProjects}
+  />
 }

@@ -21,7 +21,7 @@ function validWorldId(value: unknown): value is string {
 
 function canonicalProjectKey(value: string | null): CanonicalWorkspaceProjectKey | null {
   if (value === null) return "terrafusion"
-  return value === "terrafusion" || value === "williamos" ? value : null
+  return value === "terrafusion" || value === "williamos" || value === "hello-application" ? value : null
 }
 
 export async function DELETE(

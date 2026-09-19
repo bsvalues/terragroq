@@ -105,7 +105,7 @@ type LineReply = Readonly<{
 type ExecutionAssignmentLineContext = Readonly<{ kind: "execution-assignment"; workOrderId: number }>
 const previewExplainLineContextSchema = z.object({
   kind: z.literal("preview-explain"),
-  projectKey: z.enum(["terrafusion", "williamos"]),
+  projectKey: z.enum(["terrafusion", "williamos", "hello-application"]),
   previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   selectedPath: z.string().min(1).max(4_096),
 }).strict()
@@ -113,7 +113,7 @@ type PreviewExplainLineContext = z.infer<typeof previewExplainLineContextSchema>
 
 const fileAskLineContextSchema = z.object({
   kind: z.literal("file-ask"),
-  projectKey: z.enum(["terrafusion", "williamos"]),
+  projectKey: z.enum(["terrafusion", "williamos", "hello-application"]),
   path: z.string().min(1).max(4_096),
   projectIdentity: z.string().min(1).max(4_096),
   revision: z.number().int().nonnegative(),
@@ -127,7 +127,7 @@ type FileAskLineContext = z.infer<typeof fileAskLineContextSchema>
 
 const diffChallengeLineContextSchema = z.object({
   kind: z.literal("diff-challenge"),
-  projectKey: z.enum(["terrafusion", "williamos"]),
+  projectKey: z.enum(["terrafusion", "williamos", "hello-application"]),
   path: z.string().min(1).max(4_096),
   baseHash: z.string().min(1).max(128),
   indexHash: z.string().min(1).max(128),

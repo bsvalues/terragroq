@@ -19,8 +19,13 @@ const TERRAFUSION_PROJECT_KEY = "terrafusion"
 export const TERRAFUSION_REPOSITORY_IDENTITY = "bsvalues/terrafusion_os_1.0"
 const WILLIAMOS_PROJECT_KEY = "williamos"
 export const WILLIAMOS_REPOSITORY_IDENTITY = "bsvalues/terragroq"
+const HELLO_APPLICATION_PROJECT_KEY = "hello-application"
+const HELLO_APPLICATION_SOURCE_DIRECTORY = path.join("examples", "hello-application")
 
-export type CanonicalWorkspaceProjectKey = typeof TERRAFUSION_PROJECT_KEY | typeof WILLIAMOS_PROJECT_KEY
+export type CanonicalWorkspaceProjectKey =
+  | typeof TERRAFUSION_PROJECT_KEY
+  | typeof WILLIAMOS_PROJECT_KEY
+  | typeof HELLO_APPLICATION_PROJECT_KEY
 
 export type WorkspaceProjectBinding = Readonly<{
   projectId: number
@@ -583,6 +588,58 @@ export async function resolveWilliamOsWorkspaceBinding(
   }
 }
 
+/**
+ * Bind the disposable Hello Application to its fixed subtree inside the already verified WilliamOS
+ * checkout. The browser can select the Project key, but it cannot supply or redirect the source
+ * root. This keeps the product distinct while the resident agent remains inside a reviewed
+ * WilliamOS-owned Git worktree.
+ */
+export async function resolveHelloApplicationWorkspaceBinding(
+  userId: string,
+  dependencies: WorkspaceProjectBindingDependencies = workspaceProjectBindingDependencies,
+): Promise<WorkspaceProjectBindingResult> {
+  if (process.env.WILLIAMOS_HELLO_ENABLED?.trim() !== "1") {
+    return { ok: false, error: "HELLO_APPLICATION_DISABLED" }
+  }
+
+  const williamOs = await resolveWilliamOsWorkspaceBinding(userId, dependencies)
+  if (!williamOs.ok) return williamOs
+
+  const repositoryRoot = williamOs.binding.workspaceRoot
+  const requestedRoot = path.resolve(repositoryRoot, HELLO_APPLICATION_SOURCE_DIRECTORY)
+  let workspaceRoot: string
+  try {
+    workspaceRoot = await dependencies.realpath(requestedRoot)
+  } catch {
+    return { ok: false, error: "HELLO_APPLICATION_ROOT_UNAVAILABLE" }
+  }
+  const relative = path.relative(repositoryRoot, workspaceRoot)
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { ok: false, error: "HELLO_APPLICATION_ROOT_INVALID" }
+  }
+
+  const project = workspaceProjectFromRoot(workspaceRoot, "Hello Application")
+  const repositories = williamOs.binding.project.repositories?.map((repository) => ({
+    ...repository,
+    mount: { ...repository.mount, key: "williamos:hello-application:contained" },
+  }))
+
+  return {
+    ok: true,
+    binding: {
+      ...williamOs.binding,
+      projectKey: HELLO_APPLICATION_PROJECT_KEY,
+      projectName: "Hello Application",
+      repositoryLabel: "Hello Application source",
+      repositoryMountKey: "williamos:hello-application:contained",
+      configuredWorkspaceRoot: requestedRoot,
+      workspaceRoot,
+      workspaceAppUrl: "/api/projects/hello-application/preview",
+      project: { ...project, ...(repositories ? { repositories } : {}) },
+    },
+  }
+}
+
 export async function resolveCanonicalWorkspaceProjectBinding(
   userId: string,
   projectKey: unknown,
@@ -590,6 +647,12 @@ export async function resolveCanonicalWorkspaceProjectBinding(
   repositoryKey?: unknown,
   options?: WorkspaceProjectBindingOptions,
 ): Promise<WorkspaceProjectBindingResult> {
+  if (projectKey === HELLO_APPLICATION_PROJECT_KEY) {
+    if (repositoryKey !== undefined && repositoryKey !== null && repositoryKey !== "" && repositoryKey !== "williamos") {
+      return { ok: false, error: "WORKSPACE_REPOSITORY_UNKNOWN" }
+    }
+    return resolveHelloApplicationWorkspaceBinding(userId, dependencies)
+  }
   const selection = resolveWorkspaceRepositorySelection(projectKey, repositoryKey)
   if (!selection.ok) return selection
   if (projectKey === WILLIAMOS_PROJECT_KEY) return resolveWilliamOsWorkspaceBinding(userId, dependencies)

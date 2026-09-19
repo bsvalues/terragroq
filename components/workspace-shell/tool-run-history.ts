@@ -1,5 +1,6 @@
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
+import type { WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
@@ -7,7 +8,7 @@ export const MAX_TOOL_RUN_TRANSCRIPT_BYTES = 98_304
 
 export type ToolOutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
 export type DeveloperToolRepositoryIdentity = Readonly<{
-  projectKey: "terrafusion" | "williamos"
+  projectKey: WorkspaceProjectKey
   repositoryKey: string
   repositoryIdentity: string
   repositoryMountKey: string

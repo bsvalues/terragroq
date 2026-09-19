@@ -4,6 +4,7 @@ import { useState } from "react"
 import { AppWindow, Check, Layers3, MousePointer2 } from "lucide-react"
 
 import styles from "./developer-preview-surface.module.css"
+import { HelloApplicationControls } from "./hello-application-controls"
 
 export function developerPreviewWindowTitle(projectName: string): string {
   const name = projectName.trim() || "Project"
@@ -22,11 +23,13 @@ export function DeveloperPreviewSurface({
   onInspectComposition?: () => void
 }>) {
   const [interactionCount, setInteractionCount] = useState(0)
+  const [previewRevision, setPreviewRevision] = useState(0)
   const name = projectName.trim() || "Project"
   const terraFusionContract = projectKey === "terrafusion"
+  const helloApplication = projectKey === "hello-application"
 
   return (
-    <div className={styles.previewHost}>
+    <div className={`${styles.previewHost} ${helloApplication ? styles.helloPreviewHost : ""}`}>
       {terraFusionContract && onInspectComposition ? (
         <button
           type="button"
@@ -41,12 +44,16 @@ export function DeveloperPreviewSurface({
       ) : null}
 
       {runningAppUrl ? (
-        <iframe
-          src={runningAppUrl}
-          title={`Running ${name} application`}
-          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
-          className={styles.runtimeFrame}
-        />
+        <>
+          {helloApplication ? <HelloApplicationControls onPreviewRefresh={() => setPreviewRevision((current) => current + 1)} /> : null}
+          <iframe
+            key={previewRevision}
+            src={runningAppUrl}
+            title={`Running ${name} application`}
+            sandbox={helloApplication ? "allow-scripts" : "allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"}
+            className={styles.runtimeFrame}
+          />
+        </>
       ) : terraFusionContract ? (
         <div className={styles.unavailable} role="status">
           <AppWindow size={26} aria-hidden />

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#112130" />
+    <title>Hello Application</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="Hello Application home">
+        <span class="wordmark-mark" aria-hidden="true">W</span>
+        <span>WilliamOS Lab</span>
+      </a>
+      <p class="runtime-state"><span aria-hidden="true"></span> Application online</p>
+    </header>
+
+    <main class="signal-bench" aria-labelledby="application-title">
+      <section class="hello-stage">
+        <p class="section-label">Disposable application 001</p>
+        <h1 id="application-title">Hello Application</h1>
+        <p class="introduction">
+          A small, real application for proving the WilliamOS development loop on HERMES.
+          Send a pulse to exercise the running interface.
+        </p>
+
+        <div class="signal-trace" id="signal-track" data-state="idle" aria-hidden="true">
+          <span class="trace-origin"></span>
+          <span class="trace-line"></span>
+          <span class="trace-receiver"></span>
+        </div>
+
+        <div class="pulse-controls">
+          <button id="send-pulse" type="button" aria-describedby="pulse-detail">Send pulse</button>
+          <p id="pulse-detail" aria-live="polite">No pulses sent in this session.</p>
+        </div>
+      </section>
+
+      <aside class="status-board" aria-labelledby="hermes-status-title">
+        <div class="status-heading">
+          <p class="section-label">Resident runtime</p>
+          <span class="status-light" aria-hidden="true"></span>
+        </div>
+        <h2 id="hermes-status-title">HERMES status</h2>
+        <p class="status-value" id="pulse-status" data-hermes-state="placeholder">Awaiting WilliamOS connection</p>
+
+        <dl>
+          <div>
+            <dt>Runtime</dt>
+            <dd>HERMES local</dd>
+          </div>
+          <div>
+            <dt>Application</dt>
+            <dd>Hello 001</dd>
+          </div>
+          <div>
+            <dt>Pulse count</dt>
+            <dd id="pulse-count">000</dd>
+          </div>
+        </dl>
+      </aside>
+    </main>
+
+    <footer>
+      <p>Built to be changed, tested, reviewed, and replaced.</p>
+      <p class="runtime-code">WOS / HELLO / LOCAL</p>
+    </footer>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

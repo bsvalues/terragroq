@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import type { WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 
 export type ChangeRefreshResult = "refreshed" | "dirty-conflict" | "failed"
 type ChangePhase = "streaming" | "refreshing" | "settled"
@@ -55,7 +56,7 @@ export function useSelectedFileChange({
   isOperationScopeCurrent,
 }: {
   worldId: string | null
-  projectKey: "terrafusion" | "williamos"
+  projectKey: WorkspaceProjectKey
   path: string | null
   fileRef: WorkspaceFileRef | null
   dirty: boolean

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { ensureCanonicalOwnerProjects } from "@/lib/projects/owner-project-provisioning"
+import {
+  ensureCanonicalOwnerProjects,
+  ensureWilliamOsOwnerProject,
+} from "@/lib/projects/owner-project-provisioning"
 
 function client(options: { fail?: boolean; existing?: boolean; conflictingPrimaryRepo?: boolean } = {}) {
   const calls: Array<readonly [string, readonly unknown[] | undefined]> = []
@@ -38,6 +41,23 @@ function client(options: { fail?: boolean; existing?: boolean; conflictingPrimar
 }
 
 describe("canonical owner Project provisioning", () => {
+  it("can provision only WilliamOS for an isolated runtime without reading or writing TerraFusion project metadata", async () => {
+    const database = client()
+    await expect(ensureWilliamOsOwnerProject("owner", {
+      connect: async () => database,
+    })).resolves.toEqual({ status: "APPLIED", projects: 1, resources: 1 })
+
+    const projectWrites = database.calls
+      .filter(([text]) => text.startsWith('insert into "project"'))
+      .map(([, values]) => values?.[1])
+    const resourceWrites = database.calls
+      .filter(([text]) => text.startsWith('insert into "project_resource"'))
+      .map(([, values]) => values?.[3])
+    expect(projectWrites).toEqual(["williamos"])
+    expect(resourceWrites).toEqual(["bsvalues/terragroq"])
+    expect(database.calls.flatMap(([, values]) => values ?? []).join("|")).not.toMatch(/terrafusion/i)
+  })
+
   it("creates the two Projects and the exact role-qualified Core Seven resources in one transaction", async () => {
     const database = client()
     await expect(ensureCanonicalOwnerProjects("owner", {

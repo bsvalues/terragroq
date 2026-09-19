@@ -965,10 +965,14 @@ function validWorldId(value: unknown): value is string {
 
 function canonicalProjectKey(value: unknown): CanonicalWorkspaceProjectKey | null {
   if (value === undefined || value === null) return "terrafusion"
-  return value === "terrafusion" || value === "williamos" ? value : null
+  return value === "terrafusion" || value === "williamos" || value === "hello-application" ? value : null
 }
 
 async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
+  if (binding.projectKey === "hello-application"
+    && binding.workspaceAppUrl === "/api/projects/hello-application/preview") {
+    return new URL(binding.workspaceAppUrl, request.url).toString()
+  }
   const admission = await admitWorkspaceApp(
     binding.workspaceAppUrl,
     williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url),

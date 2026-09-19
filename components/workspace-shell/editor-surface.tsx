@@ -6,6 +6,7 @@ import { Columns2, File, Folder, FolderOpen, Save, X } from "lucide-react"
 
 import { canonicalWorkspaceObjectKey, parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
+import type { WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 import { RepositoryShelf, type RepositoryShelfRepository } from "./repository-shelf"
 import type { EditorPane, WorkspaceProject, WorkspaceSpace } from "./types"
 import styles from "./workspace-shell.module.css"
@@ -16,12 +17,11 @@ const SourceEditor = dynamic(() => import("./source-editor").then((module) => mo
 })
 
 type Entry = Readonly<{ name: string; path: string; directory: boolean }>
-type WorkspaceProjectKey = "terrafusion" | "williamos"
 const ROOT_ENTRY_BATCH_SIZE = 32
 
 function fileEndpoint(path: string, projectKey: WorkspaceProjectKey, repositoryKey?: string | null): string {
   const query = new URLSearchParams({ path })
-  if (projectKey === "williamos") query.set("projectKey", "williamos")
+  if (projectKey !== "terrafusion") query.set("projectKey", projectKey)
   if (repositoryKey) query.set("repositoryKey", repositoryKey)
   return `/api/loom/files?${query.toString()}`
 }
