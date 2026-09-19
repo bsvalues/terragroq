@@ -1,6 +1,6 @@
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
-import type { WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
+import { isWorkspaceProjectKey, type WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
@@ -116,7 +116,7 @@ export function repositoryQualifiedToolHistoryScope(
   scope: string,
   repository: DeveloperToolRepositoryIdentity,
 ): string {
-  if (repository.projectKey !== "terrafusion" && repository.projectKey !== "williamos") {
+  if (!isWorkspaceProjectKey(repository.projectKey)) {
     throw new Error("TOOL_RUN_PROJECT_KEY_INVALID")
   }
   if (!/^[a-f0-9]{40,64}$/.test(repository.observedRevision)) {

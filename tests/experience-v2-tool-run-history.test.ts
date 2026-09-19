@@ -104,6 +104,19 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(first).not.toBe(otherMount)
   })
 
+  it("qualifies history for every canonical workspace project, including Hello Application", () => {
+    const scope = repositoryQualifiedToolHistoryScope("server:hello-world", {
+      projectKey: "hello-application",
+      repositoryKey: "hello-application",
+      repositoryIdentity: "C:/HermesLab/WilliamOS-Disposable/hello/source/examples/hello-application",
+      repositoryMountKey: "williamos:hello-application:contained",
+      observedRevision: "c".repeat(40),
+    })
+
+    expect(scope).toContain(":project:hello-application:repository:hello-application")
+    expect(scope).toContain(":mount:williamos%3Ahello-application%3Acontained")
+  })
+
   it("removes every exact-revision history when its disposable Space is deleted", () => {
     const storage = new MemoryStorage()
     const repository = {
