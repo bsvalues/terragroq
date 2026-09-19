@@ -12,6 +12,7 @@ const seams = vi.hoisted(() => ({
   resolveBinding: vi.fn(),
   resolveOwner: vi.fn(),
   assertOwner: vi.fn(),
+  williamOsOrigin: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
@@ -34,7 +35,7 @@ vi.mock("@/lib/environment/space-persistence", () => ({
 }))
 vi.mock("@/lib/environment/workspace-app", () => ({
   admitWorkspaceApp: async () => ({ ok: false }),
-  williamOsOrigin: () => "http://localhost",
+  williamOsOrigin: seams.williamOsOrigin,
 }))
 
 import {
@@ -60,6 +61,7 @@ beforeEach(() => {
   } })
   seams.resolveOwner.mockReset().mockResolvedValue("owner")
   seams.assertOwner.mockReset().mockReturnValue({ ok: true })
+  seams.williamOsOrigin.mockReset().mockReturnValue("http://localhost")
 })
 
 describe("Experience V2 Space route", () => {
@@ -102,6 +104,22 @@ describe("Experience V2 Space route", () => {
 
     await GET(new Request("http://localhost/api/environment/space"))
     expect(seams.resolveBinding).toHaveBeenLastCalledWith("owner", "terrafusion")
+  })
+
+  it("anchors the Hello preview to the configured owner origin instead of the loopback server URL", async () => {
+    seams.williamOsOrigin.mockReturnValueOnce("https://williamos.lan:3543")
+    seams.resolveBinding.mockResolvedValueOnce({ ok: true, binding: {
+      projectKey: "hello-application",
+      workspaceAppUrl: "/api/projects/hello-application/preview",
+      project: { identity: "c:/hello", name: "Hello Application" },
+    } })
+
+    const response = await GET(new Request("http://localhost:3201/api/environment/space?projectKey=hello-application"))
+
+    expect(response.status).toBe(200)
+    expect(seams.load).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceAppUrl: "https://williamos.lan:3543/api/projects/hello-application/preview",
+    }))
   })
 
   it.each([

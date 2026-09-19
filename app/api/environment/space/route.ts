@@ -971,7 +971,7 @@ function canonicalProjectKey(value: unknown): CanonicalWorkspaceProjectKey | nul
 async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
   if (binding.projectKey === "hello-application"
     && binding.workspaceAppUrl === "/api/projects/hello-application/preview") {
-    return new URL(binding.workspaceAppUrl, request.url).toString()
+    return new URL(binding.workspaceAppUrl, williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url)).toString()
   }
   const admission = await admitWorkspaceApp(
     binding.workspaceAppUrl,
