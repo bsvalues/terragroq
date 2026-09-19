@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -103,7 +104,37 @@ export function applyGovernedMarkerChange({ repositoryRoot = process.cwd() } = {
   return { changedPaths }
 }
 
+function applyAndValidateGovernedMarkerChange({ repositoryRoot = process.cwd() } = {}) {
+  const root = fs.realpathSync(path.resolve(repositoryRoot))
+  const result = applyGovernedMarkerChange({ repositoryRoot: root })
+  const testPath = path.join(root, "examples", "hello-application", "test", "hello.test.mjs")
+  execFileSync(process.execPath, ["--test", testPath], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 2_000_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
+    windowsHide: true,
+  })
+  return {
+    ...result,
+    validation: {
+      command: "node --test examples/hello-application/test/hello.test.mjs",
+      status: "passed",
+    },
+  }
+}
+
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  const result = applyGovernedMarkerChange()
-  process.stdout.write(`${JSON.stringify(result)}\n`)
+  try {
+    const result = applyAndValidateGovernedMarkerChange()
+    process.stdout.write(`${JSON.stringify(result)}\n`)
+  } catch (error) {
+    const message = String(error?.message ?? "")
+    const safeCode = /^HELLO_GOVERNED_CHANGE_[A-Z_]+$/.test(message)
+      ? message
+      : "HELLO_GOVERNED_CHANGE_VALIDATION_FAILED"
+    process.stderr.write(`${safeCode}\n`)
+    process.exitCode = 1
+  }
 }

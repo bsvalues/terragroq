@@ -46,7 +46,9 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(prompt).toContain("If the codemod reports a drift error, stop")
     expect(prompt).toContain("node scripts/hello-application/apply-governed-marker-change.mjs")
     expect(prompt).toContain('id="governance-marker"')
-    expect(prompt).toContain("git diff --name-only")
+    expect(prompt).not.toContain("git diff")
+    expect(prompt).toContain("The trusted WilliamOS host verifies the resulting diff")
+    expect(prompt).toContain("runs the Hello Application test")
     expect(prompt).toContain("Do not substitute prose or fenced code blocks for file edits")
 
     let changedPaths: string[] = []
@@ -112,6 +114,8 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(prompts[1]).toContain("All three required edits already exist on disk")
     expect(prompts[1]).not.toContain("Your first action must be")
     expect(prompts[1]).not.toContain("apply-governed-marker-change.mjs")
+    expect(prompts[1]).not.toContain("git diff")
+    expect(prompts[1]).toContain("The trusted WilliamOS host verifies the resulting diff")
     expect(result.turn.turnId).toBe("turn-recovered")
   })
 

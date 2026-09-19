@@ -44,6 +44,84 @@ describe("Hello Application governed marker codemod", () => {
     ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true })).not.toThrow()
   })
 
+  it("runs the governed edit and validation as one resident command", () => {
+    const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-governed-command-"))
+    roots.push(repositoryRoot)
+    fs.cpSync(
+      path.join(process.cwd(), "examples", "hello-application"),
+      path.join(repositoryRoot, "examples", "hello-application"),
+      { recursive: true },
+    )
+
+    const output = execFileSync(process.execPath, [
+      path.join(process.cwd(), "scripts", "hello-application", "apply-governed-marker-change.mjs"),
+    ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true })
+
+    expect(JSON.parse(output)).toEqual({
+      changedPaths: [
+        "examples/hello-application/src/app.js",
+        "examples/hello-application/src/index.html",
+        "examples/hello-application/src/styles.css",
+      ],
+      validation: {
+        command: "node --test examples/hello-application/test/hello.test.mjs",
+        status: "passed",
+      },
+    })
+  })
+
+  it("fails closed without a success receipt when resident validation fails", () => {
+    const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-governed-command-failure-"))
+    roots.push(repositoryRoot)
+    fs.cpSync(
+      path.join(process.cwd(), "examples", "hello-application"),
+      path.join(repositoryRoot, "examples", "hello-application"),
+      { recursive: true },
+    )
+    fs.appendFileSync(
+      path.join(repositoryRoot, "examples", "hello-application", "test", "hello.test.mjs"),
+      '\ntest("injected resident validation failure", () => assert.fail("injected"))\n',
+    )
+
+    let failure: unknown
+    try {
+      execFileSync(process.execPath, [
+        path.join(process.cwd(), "scripts", "hello-application", "apply-governed-marker-change.mjs"),
+      ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeTruthy()
+    expect(String((failure as { stdout?: string })?.stdout ?? "")).toBe("")
+    expect(String((failure as { stderr?: string })?.stderr ?? "")).toBe("HELLO_GOVERNED_CHANGE_VALIDATION_FAILED\n")
+  })
+
+  it("reports a safe exact drift code without emitting a success receipt", () => {
+    const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-governed-command-drift-"))
+    roots.push(repositoryRoot)
+    fs.cpSync(
+      path.join(process.cwd(), "examples", "hello-application"),
+      path.join(repositoryRoot, "examples", "hello-application"),
+      { recursive: true },
+    )
+    const stylesPath = path.join(repositoryRoot, "examples", "hello-application", "src", "styles.css")
+    fs.writeFileSync(stylesPath, fs.readFileSync(stylesPath, "utf8").replace(".status-board dl {", ".status-board dl.drifted {"))
+
+    let failure: unknown
+    try {
+      execFileSync(process.execPath, [
+        path.join(process.cwd(), "scripts", "hello-application", "apply-governed-marker-change.mjs"),
+      ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeTruthy()
+    expect(String((failure as { stdout?: string })?.stdout ?? "")).toBe("")
+    expect(String((failure as { stderr?: string })?.stderr ?? "")).toBe("HELLO_GOVERNED_CHANGE_STYLES_ANCHOR\n")
+  })
+
   it("leaves every target untouched when any target has drifted", () => {
     const repositoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-governed-change-drift-"))
     roots.push(repositoryRoot)
