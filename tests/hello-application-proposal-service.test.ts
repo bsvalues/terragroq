@@ -307,6 +307,25 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it("rejects a resident that moves the governed worktree head", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      residentTurn: async ({ workspacePath }) => {
+        for (const target of ["app.js", "index.html", "styles.css"]) {
+          fs.appendFileSync(path.join(workspacePath, "examples/hello-application/src", target), "\n/* resident extra */\n")
+        }
+        git(workspacePath, ["add", "examples/hello-application/src"])
+        git(workspacePath, ["commit", "-m", "resident moved head"])
+        applyGovernedMarkerChange({ repositoryRoot: workspacePath })
+        return { threadId: "thread-head", turnId: "turn-head", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_RESIDENT_HEAD_MUTATED")
+    expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
   it("rejects ignored writes and stale apply without mutating canonical source", async () => {
     const { repositoryRoot, runtimeRoot } = fixture()
     await expect(createHelloApplicationProposal({
