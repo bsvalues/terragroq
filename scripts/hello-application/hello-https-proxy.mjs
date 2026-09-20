@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 
 export const HELLO_HTTPS_PORT = 3543
 export const HELLO_UPSTREAM_PORT = 3201
+export const HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS = 91 * 60 * 1000
 export const HELLO_HTTPS_ORIGIN = `https://williamos.lan:${HELLO_HTTPS_PORT}`
 const LISTEN_HOSTS = Object.freeze(["192.168.88.9", "100.97.194.84"])
 const DEVICE_HEADER = "x-williamos-device-cert"
@@ -56,13 +57,13 @@ export function createHelloHttpsProxy(tlsMaterial) {
       path: request.url,
       headers: buildHelloProxyUpstreamHeaders(request.headers, verifiedDevice(request.socket)),
     }, (upstreamResponse) => {
-      upstream.setTimeout(31 * 60 * 1000, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
+      upstream.setTimeout(HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
       response.writeHead(upstreamResponse.statusCode ?? 502, downstreamHeaders(upstreamResponse.headers))
       upstreamResponse.pipe(response)
     })
     upstream.setTimeout(30_000, () => upstream.destroy(new Error("UPSTREAM_CONNECT_TIMEOUT")))
     upstream.on("socket", (socket) => {
-      const connected = () => upstream.setTimeout(31 * 60 * 1000, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
+      const connected = () => upstream.setTimeout(HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
       if (socket.connecting) socket.once("connect", connected)
       else connected()
     })

@@ -118,6 +118,8 @@ Create a narrow adapter that reads the reviewed policy from `repositoryRoot`, ve
 
 Remove the marker expected-source import and semantic equality check from the generic path. Normalize the request, allow any nonempty subset of the existing three files, emit observed milestones, pass the owner request to the resident prompt, use the injected/default isolated validator, persist schema v2 provenance, retain all Git/hash/scope walls, and preserve v1 receipt reads.
 
+Retain the reviewed 1,800,000 ms kernel turn budget and bound the complete resident transaction to 5,400,000 ms for at most three attempts. Before full snapshots, diff checks, or validation, use descriptor-bound incremental reads to enforce exclusive 512 KiB per-file and 1 MiB aggregate validation-source limits. Publish READY only after strict worktree cleanup and staged-artifact verification; a cleanup result that cannot be verified must publish an authoritative inspectable quarantine instead.
+
 - [ ] **Step 7: Implement trusted sequential Apply**
 
 After isolated post-apply validation, stage exactly `changedPaths`, commit with fixed identity `WilliamOS HERMES Apply <hermes@williamos.local>` and message `apply(hello): governed proposal <proposalId>`, verify the commit parent and committed paths, persist `appliedCommit`, and leave the canonical source clean. On any validation or commit failure, unstage/reverse exact paths, verify cleanliness, or mark `QUARANTINED_ROLLBACK_FAILED`.
@@ -141,8 +143,10 @@ Commit message: `feat: accept governed HERMES development requests`
 **Files:**
 - Modify: `app/api/projects/hello-application/proposals/route.ts`
 - Modify: `app/api/projects/hello-application/preview/route.ts`
+- Modify: `scripts/hello-application/hello-https-proxy.mjs`
 - Modify: `tests/hello-application-proposal-routes.test.ts`
 - Modify: `tests/hello-application-runtime-routes.test.ts`
+- Modify: `tests/hello-application-hermes-runtime-contract.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2 request-driven service and progress callback.
@@ -161,7 +165,7 @@ Expected: failures because POST ignores the body, returns JSON only after comple
 
 - [ ] **Step 3: Implement the streaming route**
 
-Parse and validate the exact one-key JSON object before constructing a `ReadableStream`. Encode one JSON object per newline. Run proposal creation without blocking response construction; map the service callback to progress records, emit exactly one final proposal or error, close in all cases, and do not surface stack traces or command stderr. Preserve no-store, owner, origin, server-root, and 1,800-second route boundaries.
+Parse and validate the exact one-key JSON object before constructing a `ReadableStream`. Encode one JSON object per newline. Run proposal creation without blocking response construction; map the service callback to progress records, emit exactly one final proposal or error, close in all cases, and do not surface stack traces or command stderr. Preserve no-store, owner, origin, and server-root boundaries. Set the static proposal route duration to 5,400 seconds for the bounded resident transaction and the proposal-capable HTTPS upstream response timeout to 91 minutes so transport does not terminate a valid final attempt.
 
 - [ ] **Step 4: Add defense-in-depth preview sandbox**
 

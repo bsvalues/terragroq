@@ -27,7 +27,7 @@ vi.mock("@/lib/hello-application/proposal-service.mjs", () => ({
   listHelloApplicationProposals: seams.listProposals,
 }))
 
-import { GET, POST } from "@/app/api/projects/hello-application/proposals/route"
+import { GET, maxDuration, POST } from "@/app/api/projects/hello-application/proposals/route"
 import { POST as APPLY } from "@/app/api/projects/hello-application/proposals/[proposalId]/apply/route"
 
 const proposal = {
@@ -77,6 +77,10 @@ beforeEach(() => {
 })
 
 describe("Hello Application proposal routes", () => {
+  it("keeps the proposal route open for the bounded 90-minute resident transaction", () => {
+    expect(maxDuration).toBe(5_400)
+  })
+
   it("returns immediately and streams allowlisted observed milestones before one proposal terminal", async () => {
     let resolveProposal!: (value: typeof proposal) => void
     let onProgress!: (event: Record<string, unknown>) => void
@@ -188,9 +192,11 @@ describe("Hello Application proposal routes", () => {
   })
 
   it.each([
+    ["HELLO_PROPOSAL_ARTIFACT_CLEANUP_FAILED", "HELLO_PROPOSAL_ARTIFACT_CLEANUP_FAILED"],
     ["HELLO_PROPOSAL_VALIDATION_FAILED", "HELLO_PROPOSAL_VALIDATION_FAILED"],
     ["HELLO_PROPOSAL_SOURCE_SIZE_REFUSED", "HELLO_PROPOSAL_SOURCE_SIZE_REFUSED"],
     ["HELLO_PROPOSAL_PATCH_SIZE_REFUSED", "HELLO_PROPOSAL_PATCH_SIZE_REFUSED"],
+    ["HELLO_PROPOSAL_RESIDENT_TIMEOUT:kernel detail must not cross", "HELLO_PROPOSAL_RESIDENT_TIMEOUT"],
     ["HELLO_PROPOSAL_VALIDATION_FAILED:container stderr must not cross", "HELLO_PROPOSAL_VALIDATION_FAILED"],
     ["HELLO_PROPOSAL_UNKNOWN_INTERNAL:secret detail", "HELLO_PROPOSAL_FAILED"],
   ])("emits only an allowlisted stable terminal code for %s", async (message, expected) => {

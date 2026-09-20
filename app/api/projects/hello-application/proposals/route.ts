@@ -11,7 +11,7 @@ import { guardHelloApplicationMutation } from "@/lib/hello-application/mutation-
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-export const maxDuration = 1800
+export const maxDuration = 5400
 
 const MAX_REQUEST_BODY_BYTES = 16_384
 const PROGRESS_STAGES = new Set([
@@ -23,6 +23,7 @@ const PROGRESS_STAGES = new Set([
   "ready_for_review",
 ])
 const TERMINAL_ERROR_CODES = new Set([
+  "HELLO_PROPOSAL_ARTIFACT_CLEANUP_FAILED",
   "HELLO_PROPOSAL_BASE_INVALID",
   "HELLO_PROPOSAL_CANONICAL_DIRTY",
   "HELLO_PROPOSAL_COMMIT_INVALID",

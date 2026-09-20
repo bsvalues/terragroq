@@ -38,9 +38,12 @@ This is an AI development feature. It does not claim that the inner Hello Applic
   - `examples/hello-application/src/styles.css`
 - Tests, package files, server code, ignored files, renames, symlinks/reparse points, binary patches, Git HEAD changes, network access, credentials, and canonical source mounts remain refused.
 - HERMES uses the reviewed local-only policy, one-shot container, internal inference-proxy network, pinned model, no cloud fallback, and one concurrent run.
+- One proposal transaction has a 5,400,000 ms aggregate resident deadline: at most three correction attempts, each retaining the reviewed 1,800,000 ms kernel turn budget. The proposal route allows 5,400 seconds and the HTTPS proxy allows 91 minutes so the bounded transaction can complete through the browser path.
+- Before any complete source snapshot, diff check, or validator run, every validation source must be smaller than 512 KiB and the aggregate must be smaller than 1 MiB. Descriptor-bound reads reject growth, truncation, or replacement.
 - Trusted validation never executes model-authored JavaScript on the HERMES host. The fixed command `node --test examples/hello-application/test/hello.test.mjs` runs in a separate no-network, read-only-root validator container using the policy-pinned resident image and a read-only workspace mount.
 - The preview response carries `sandbox allow-scripts` in CSP in addition to the iframe sandbox, so direct navigation cannot grant same-origin authority to model-authored preview JavaScript.
 - Apply re-derives patch paths, verifies patch hash/base/clean target, applies, validates in the isolated validator, creates a trusted exact-path commit, and then marks the receipt APPLIED. Failure rolls back or quarantines fail closed.
+- A proposal becomes READY only after strict worktree cleanup and staged-artifact verification. If publication cleanup cannot be verified, an authoritative inspectable quarantine supersedes any uncertain READY state and Apply remains refused.
 - TerraFusion files, tasks, processes, repositories, and runtimes are outside scope.
 
 ## API contract

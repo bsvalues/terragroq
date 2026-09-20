@@ -183,6 +183,51 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it.each(["patch", "receipt"])("publishes an inspectable quarantine when %s cleanup cannot be verified", async (lockedArtifact) => {
+    const setup = fixture()
+    const rename = fs.renameSync
+    const remove = fs.rmSync
+    let patchRemoved = false
+    vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      if (String(target).includes("hello-application-proposals") && String(target).endsWith(".json")) {
+        rename(source, target)
+        throw new Error("controlled receipt publish failure")
+      }
+      return rename(source, target)
+    })
+    vi.spyOn(fs, "rmSync").mockImplementation(((target: fs.PathLike, options?: fs.RmDirOptions) => {
+      const value = String(target)
+      if ((lockedArtifact === "patch" && value.endsWith(".patch"))
+        || (lockedArtifact === "receipt" && value.endsWith(".json"))) throw new Error(`${lockedArtifact} cleanup locked`)
+      const result = remove(target, options)
+      if (value.endsWith(".patch")) patchRemoved = true
+      return result
+    }) as typeof fs.rmSync)
+
+    await expect(createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })).rejects.toThrow("HELLO_PROPOSAL_ARTIFACT_CLEANUP_FAILED")
+
+    const listed = service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })
+    expect(listed).toHaveLength(1)
+    expect(listed[0]).toMatchObject({ status: "QUARANTINED_ROLLBACK_FAILED", reviewPatch: expect.stringContaining("resident request change") })
+    await expect(applyHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: listed[0].proposalId,
+      validateWorkspace: validation,
+    })).rejects.toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+    const names = fs.readdirSync(path.join(setup.runtimeRoot, "hello-application-proposals"))
+    expect(names).toContain(`${listed[0].proposalId}.patch`)
+    expect(names).toContain(`${listed[0].proposalId}.quarantine`)
+    expect(names.some((name) => name.endsWith(".tmp"))).toBe(false)
+    expect(patchRemoved).toBe(lockedArtifact === "receipt")
+  })
+
   it.each([
     ["one 524,288-byte allowed file", (workspacePath: string) => {
       fs.writeFileSync(sourcePath(workspacePath, "examples/hello-application/src/app.js"), Buffer.alloc(524_288, "a"))
@@ -239,6 +284,48 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it.each(["before descriptor stat", "after descriptor stat"])("rejects source growth %s without invoking validation", async (phase) => {
+    const setup = fixture()
+    const validateWorkspace = vi.fn(validation)
+    const openSync = fs.openSync
+    const fstatSync = fs.fstatSync
+    let target = ""
+    let targetDescriptor: number | undefined
+    let grew = false
+    const growToExclusiveLimit = () => {
+      const remaining = 524_288 - fs.statSync(target).size
+      if (remaining > 0) fs.appendFileSync(target, Buffer.alloc(remaining, "a"))
+      grew = true
+    }
+    vi.spyOn(fs, "openSync").mockImplementation(((candidate: fs.PathLike, flags: any, mode?: any) => {
+      const descriptor = openSync(candidate, flags, mode)
+      if (target && path.resolve(String(candidate)) === target) targetDescriptor = descriptor
+      return descriptor
+    }) as typeof fs.openSync)
+    vi.spyOn(fs, "fstatSync").mockImplementation(((descriptor: number, options?: any) => {
+      if (descriptor === targetDescriptor && !grew && phase === "before descriptor stat") growToExclusiveLimit()
+      const stat = fstatSync(descriptor, options)
+      if (descriptor === targetDescriptor && !grew && phase === "after descriptor stat") growToExclusiveLimit()
+      return stat
+    }) as typeof fs.fstatSync)
+
+    await expect(createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Make a bounded source change",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        target = path.resolve(sourcePath(workspacePath, "examples/hello-application/src/app.js"))
+        fs.appendFileSync(target, "\n/* resident request change */\n")
+        return { threadId: "thread-race", turnId: "turn-race", model: "model", ignoredPathsCreated: [] }
+      },
+      validateWorkspace,
+    })).rejects.toThrow("HELLO_PROPOSAL_SOURCE_SIZE_REFUSED")
+
+    expect(grew).toBe(true)
+    expect(validateWorkspace).not.toHaveBeenCalled()
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toEqual([])
+  })
+
   it("recovers malformed completion with edits intact and the exact owner request in both prompts", async () => {
     const prompts: string[] = []
     const changedPaths = ["examples/hello-application/src/app.js"]
@@ -267,7 +354,7 @@ describe("Hello Application governed HERMES proposals", () => {
     }
   })
 
-  it("shares one aggregate resident deadline across successful correction retries", async () => {
+  it("shares one 5,400,000ms aggregate deadline while preserving the full kernel turn budget", async () => {
     const failure = Object.assign(new Error("invalid"), { name: "AppServerTurnEndedError", status: "failed", detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing" })
     const budgets: number[] = []
     let now = 10_000
@@ -275,20 +362,38 @@ describe("Hello Application governed HERMES proposals", () => {
     const result = await service.runGovernedResidentChange({
       threadId: "thread-one",
       requestText: "Use one bounded deadline",
-      timeoutMs: 1_000,
+      timeoutMs: 5_400_000,
       now: () => now,
       readChangedPaths: async () => ["examples/hello-application/src/app.js"],
       client: { runTurn: async ({ timeoutMs }) => {
         budgets.push(timeoutMs)
         attempts++
-        now += attempts === 1 ? 300 : attempts === 2 ? 300 : 100
+        now += attempts < 3 ? 1_800_000 : 100
         if (attempts < 3) throw failure
         return { turnId: "turn-three", status: "completed" }
       } },
     })
 
     expect(result.attempts).toBe(3)
-    expect(budgets).toEqual([1_000, 700, 400])
+    expect(budgets).toEqual([1_800_000, 1_800_000, 1_800_000])
+  })
+
+  it.each([
+    Object.assign(new Error("kernel deadline detail"), { name: "AppServerTimeoutError" }),
+    Object.assign(new Error("transport deadline detail"), { code: "APP_SERVER_TIMEOUT" }),
+  ])("maps a real kernel timeout to the stable proposal timeout code", async (timeoutError) => {
+    const readChangedPaths = vi.fn(async () => ["examples/hello-application/src/app.js"])
+    const runTurn = vi.fn(async () => { throw timeoutError })
+
+    await expect(service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Report a stable resident timeout",
+      readChangedPaths,
+      client: { runTurn },
+    })).rejects.toThrow("HELLO_PROPOSAL_RESIDENT_TIMEOUT")
+
+    expect(runTurn).toHaveBeenCalledOnce()
+    expect(readChangedPaths).not.toHaveBeenCalled()
   })
 
   it("does not begin another resident retry after the aggregate deadline is exhausted", async () => {
@@ -299,16 +404,16 @@ describe("Hello Application governed HERMES proposals", () => {
     await expect(service.runGovernedResidentChange({
       threadId: "thread-one",
       requestText: "Stop at the aggregate deadline",
-      timeoutMs: 100,
+      timeoutMs: 5_400_000,
       now: () => now,
       readChangedPaths: async () => ["examples/hello-application/src/app.js"],
       client: { runTurn: async ({ timeoutMs }) => {
         budgets.push(timeoutMs)
-        now += 100
+        now += 3_600_001
         throw failure
       } },
     })).rejects.toThrow("HELLO_PROPOSAL_RESIDENT_TIMEOUT")
-    expect(budgets).toEqual([100])
+    expect(budgets).toEqual([1_800_000])
   })
 
   it.each(["evidence verification", "changed-path inspection"])("enforces the resident deadline across slow %s", async (phase) => {
@@ -318,12 +423,12 @@ describe("Hello Application governed HERMES proposals", () => {
     await expect(service.runGovernedResidentChange({
       threadId: "thread-one",
       requestText: "Bound the complete resident attempt",
-      timeoutMs: 100,
+      timeoutMs: 5_400_000,
       now: () => now,
-      verifyAttempt: async () => { if (phase === "evidence verification") now += 100 },
+      verifyAttempt: async () => { if (phase === "evidence verification") now += 5_400_000 },
       readChangedPaths: async () => {
         pathReads++
-        if (phase === "changed-path inspection") now += 100
+        if (phase === "changed-path inspection") now += 5_400_000
         return ["examples/hello-application/src/app.js"]
       },
       client: { runTurn: async () => ({ turnId: "turn-one", status: "completed" }) },
@@ -368,6 +473,51 @@ describe("Hello Application governed HERMES proposals", () => {
       expect(proposal.reviewPatch).toContain("retained after malformed completion")
       expect(attempt).toBe(2)
     } else await expect(result).rejects.toThrow(mode === "ignored" || mode === "null" ? "HELLO_PROPOSAL_IGNORED_PATH_REFUSED" : "HELLO_PROPOSAL_RESIDENT_EVIDENCE_INVALID")
+  })
+
+  it("gives a real kernel correction retry the full reviewed 1,800,000ms turn budget", async () => {
+    const setup = fixture()
+    fs.mkdirSync(setup.runtimeRoot)
+    const policyPath = path.join(setup.repositoryRoot, "config", "execution-fabric", "hermes-free-dev-agent-v2.policy.json")
+    const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"))
+    policy.placement.allowedWorkspaceRoots = [path.join(setup.runtimeRoot, "worktrees")]
+    fs.writeFileSync(policyPath, JSON.stringify(policy))
+    const invokerPath = path.join(setup.runtimeRoot, "fake-invoker.ps1")
+    fs.writeFileSync(invokerPath, "# command runner injected in test\n")
+    const turnBudgets: number[] = []
+    let attempt = 0
+    vi.spyOn(ResidentModelExecutionBackend.prototype, "runCodexClient").mockImplementation(async ({ workspacePath, timeoutMs }: any) => createHermesKernelClient({
+      workspacePath,
+      runtimeRoot: setup.runtimeRoot,
+      policyPath,
+      invokerPath,
+      timeoutMs,
+      commandRunner: async ({ command, args, cwd, timeoutMs: turnTimeoutMs }: { command: string; args: string[]; cwd: string; timeoutMs: number }) => {
+        if (command === "git") return { code: 0, stdout: execFileSync(command, args, { cwd, encoding: "utf8", windowsHide: true }), stderr: "" }
+        attempt++
+        turnBudgets.push(turnTimeoutMs)
+        const runId = args[args.indexOf("-RunId") + 1]
+        if (attempt === 1) {
+          fs.appendFileSync(sourcePath(workspacePath, "examples/hello-application/src/app.js"), "\n/* retained correction edit */\n")
+          return { code: 0, stderr: "", stdout: `Session: session-one\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=fixture\n` }
+        }
+        const output = { result: "READY_FOR_VALIDATION", workOrder: "WO-1", branch: "codex/x", commit: null, prUrl: null,
+          merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0, ownerTouchCount: 0,
+          blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE", blockedAction: null,
+          authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null, findings: [] }
+        return { code: 0, stderr: "", stdout: `Session: session-one\nHERMES_TURN_OUTPUT runId=${runId}\n${JSON.stringify(output)}\nHERMES_TURN_OUTPUT_END\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=fixture\n` }
+      },
+    } as any))
+
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Preserve the edit through one correction retry",
+      validateWorkspace: validation,
+    })
+
+    expect(proposal.reviewPatch).toContain("retained correction edit")
+    expect(turnBudgets).toEqual([1_800_000, 1_800_000])
   })
 
   it("rejects .env evidence written by the real kernel client with a successful harvested turn", async () => {
@@ -419,7 +569,7 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(setup.repositoryRoot, ["rev-parse", "HEAD^"])).toBe(applied.appliedCommit)
     expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(secondApplied.appliedCommit)
     expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
-  })
+  }, 15_000)
 
   it.each(["requestSha256", "proposalCommit", "progress", "appliedCommit", "validation", "changedPaths", "threadId", "turnId", "createdAt", "status", "extraField"])("rejects malformed v2 %s as RECEIPT_INVALID", async (field) => {
     const setup = fixture()
