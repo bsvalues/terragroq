@@ -44,7 +44,7 @@ describe("contained Hello proposal validation", () => {
     expect(run.args).toEqual(expect.arrayContaining([
       "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
       "--cpus", "1", "--memory", "512m", "--pids-limit", "64", "--user", "10000:10000",
-      "--entrypoint", "node", "williamos-hermes-agent:0.20.0-fa83af3",
+      "--entrypoint", "node", "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613",
       "--test", "examples/hello-application/test/hello.test.mjs",
       "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
     ]))
@@ -67,6 +67,18 @@ describe("contained Hello proposal validation", () => {
       commandRunner: async (_command, args) => {
         if (args[0] === "image") return { code: 0, stdout: "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613", stderr: "" }
         if (args[0] === "run") throw new Error("untrusted container output")
+        return { code: 0, stdout: "", stderr: "" }
+      },
+    })).rejects.toThrow("HELLO_PROPOSAL_VALIDATION_FAILED")
+  })
+
+  it("rejects a timed-out validator even when it reports success and retains only the output tail", async () => {
+    const { repositoryRoot, runtimeRoot, workspacePath } = fixture()
+    await expect(validateHelloApplicationInContainer({
+      repositoryRoot, runtimeRoot, workspacePath,
+      commandRunner: async (_command, args) => {
+        if (args[0] === "image") return { code: 0, stdout: "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613", stderr: "" }
+        if (args[0] === "run") return { code: 0, timedOut: true, stdout: "passed", stderr: "" }
         return { code: 0, stdout: "", stderr: "" }
       },
     })).rejects.toThrow("HELLO_PROPOSAL_VALIDATION_FAILED")
