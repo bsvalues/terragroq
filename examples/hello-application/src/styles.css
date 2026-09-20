@@ -232,6 +232,19 @@ h1 {
   line-height: 1.45;
 }
 
+.governance-marker {
+  display: inline-flex;
+  margin: -1rem 0 2rem;
+  padding: 0.38rem 0.55rem;
+  border: 1px solid var(--steel);
+  background: var(--porcelain);
+  color: var(--graphite);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+}
+
 .status-board dl {
   margin: 0;
 }

@@ -41,6 +41,8 @@ describe("Hello Application", () => {
     assert.equal(page.status, 200)
     const document = await page.text()
     assert.match(document, /Hello Application/)
+    assert.match(document, /id="governance-marker"/)
+    assert.match(document, /Governed by HERMES · build ready/)
     assert.doesNotMatch(document, /(?:script[^>]+src|link[^>]+stylesheet)/i)
     assert.deepEqual(await health.json(), { name: "Hello Application", status: "ready" })
   })

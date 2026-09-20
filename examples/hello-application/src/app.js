@@ -16,6 +16,7 @@ export function mountHelloApplication(root = document) {
   const countOutput = root.getElementById("pulse-count")
   const detailOutput = root.getElementById("pulse-detail")
   const statusOutput = root.getElementById("pulse-status")
+  const governanceMarker = root.getElementById("governance-marker")
   const trace = root.getElementById("signal-track")
 
   if (!button || !countOutput || !detailOutput || !statusOutput || !trace) return null
@@ -25,9 +26,11 @@ export function mountHelloApplication(root = document) {
 
   const sendPulse = () => {
     snapshot = nextPulseSnapshot(snapshot)
-    countOutput.textContent = String(snapshot.count).padStart(3, "0")
+    const pulseNumber = String(snapshot.count).padStart(3, "0")
+    countOutput.textContent = pulseNumber
     detailOutput.textContent = snapshot.detail
     statusOutput.textContent = snapshot.status
+    if (governanceMarker) governanceMarker.textContent = `Governed by HERMES · pulse ${pulseNumber}`
 
     trace.dataset.state = "idle"
     void trace.offsetWidth
