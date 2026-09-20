@@ -79,7 +79,7 @@ footer {
   height: 0.55rem;
   background: var(--ready);
   border-radius: 50%;
-  box-shadow: 0 0 0 0.23rem rgba(79, 119, 45, 0.14);
+  box-shadow: 0 0 0 0.23rem rgba(79, 119, 55, 0.14);
 }
 
 .signal-bench {
@@ -332,4 +332,9 @@ footer p {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.status-board dl .mode-row {
+  border-left: 3px solid var(--signal);
+  padding-left: 0.75rem;
 }
