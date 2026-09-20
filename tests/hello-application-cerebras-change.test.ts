@@ -5,7 +5,10 @@ import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { runCerebrasHelloChange } from "@/scripts/execution-fabric/cerebras-hello-change.mjs"
-import { runCerebrasHelloTurn } from "@/lib/hello-application/cerebras-turn.mjs"
+import {
+  resolveCerebrasCredentialBridge,
+  runCerebrasHelloTurn,
+} from "@/lib/hello-application/cerebras-turn.mjs"
 
 const allowedPaths = [
   "examples/hello-application/src/app.js",
@@ -47,6 +50,16 @@ afterEach(() => {
 })
 
 describe("Cerebras Hello Application change", () => {
+  it("resolves the credential bridge from the deployed source root rather than the bundled module URL", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hello-cerebras-source-"))
+    roots.push(sourceRoot)
+    const wrapper = path.join(sourceRoot, "scripts", "execution-fabric", "invoke-cerebras-hello-change.ps1")
+    fs.mkdirSync(path.dirname(wrapper), { recursive: true })
+    fs.writeFileSync(wrapper, "# governed test wrapper\n")
+
+    expect(resolveCerebrasCredentialBridge({ applicationRoot: sourceRoot })).toBe(fs.realpathSync(wrapper))
+  })
+
   it("requests one structured, cost-bounded edit from the selected exact model", async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
