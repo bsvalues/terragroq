@@ -120,6 +120,59 @@
   font-weight: 650;
 }
 
+.routeControl {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.routeControl > label:first-child { margin-bottom: 0; }
+
+.routeControl select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 34px 7px 9px;
+  border: 1px solid #465b66;
+  border-radius: 3px;
+  color: var(--hermes-text);
+  background: var(--hermes-ink);
+  font: 12px/1.4 var(--font-geist-sans), sans-serif;
+}
+
+.routeDisclosure,
+.routeUnavailable {
+  margin: 0;
+  color: #aebdc4;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.routeUnavailable { color: #efb49d; }
+
+.form .egressApproval {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin: 2px 0 0;
+  padding: 8px;
+  border: 1px solid #725342;
+  border-radius: 3px;
+  color: #f1d6c9;
+  background: #281a15;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.egressApproval input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--hermes-orange);
+}
+
 .requestRow {
   align-items: stretch;
   gap: 8px;
@@ -168,6 +221,8 @@
 }
 
 .requestRow textarea:focus-visible,
+.routeControl select:focus-visible,
+.egressApproval input:focus-visible,
 .ask:focus-visible,
 .apply:focus-visible,
 .reviewBody summary:focus-visible,

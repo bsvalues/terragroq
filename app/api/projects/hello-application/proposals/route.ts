@@ -8,6 +8,7 @@ import {
 } from "@/lib/hello-application/proposal-route-context"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { guardHelloApplicationMutation } from "@/lib/hello-application/mutation-guard"
+import { resolveHelloExecutionRoute } from "@/lib/hello-application/execution-routing.mjs"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -48,6 +49,22 @@ const TERMINAL_ERROR_CODES = new Set([
   "HELLO_PROPOSAL_WORKSPACE_FILE_INVALID",
   "HELLO_PROPOSAL_WORKTREE_CLEANUP_FAILED",
   "HELLO_PROPOSAL_WORKTREE_INVALID",
+  "HELLO_CEREBRAS_EXECUTION_FAILED",
+  "HELLO_CEREBRAS_REQUEST_INVALID",
+  "HELLO_CEREBRAS_RESPONSE_INVALID",
+  "HELLO_CEREBRAS_TIMEOUT",
+  "HELLO_CEREBRAS_UNAVAILABLE",
+  "EXTERNAL_API_AUTH_FAILURE",
+  "EXTERNAL_API_COST_EVIDENCE_MISSING",
+  "EXTERNAL_API_INCOMPLETE_RESPONSE",
+  "EXTERNAL_API_INSUFFICIENT_CREDIT",
+  "EXTERNAL_API_KEY_MISSING",
+  "EXTERNAL_API_MALFORMED_RESPONSE",
+  "EXTERNAL_API_OUTAGE",
+  "EXTERNAL_API_RATE_LIMIT",
+  "EXTERNAL_API_TIMEOUT",
+  "EXTERNAL_EGRESS_REFUSED",
+  "SPEND_CAP_EXCEEDS_CEILING",
 ])
 
 const invalidRequest = () => Response.json({ error: "HELLO_PROPOSAL_REQUEST_INVALID" }, {
@@ -55,14 +72,38 @@ const invalidRequest = () => Response.json({ error: "HELLO_PROPOSAL_REQUEST_INVA
   headers: { "cache-control": "no-store" },
 })
 
-function proposalRequestText(value: unknown): string | null {
+type ProposalRequest = Readonly<{
+  requestText: string
+  executionRoute?: string
+  externalEgressApproved?: true
+}>
+
+function proposalRequest(value: unknown): ProposalRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
-  const keys = Object.keys(value)
-  if (keys.length !== 1 || keys[0] !== "requestText") return null
+  const keys = Object.keys(value).sort()
+  const local = keys.length === 1 && keys[0] === "requestText"
+  const external = keys.length === 3
+    && keys[0] === "executionRoute" && keys[1] === "externalEgressApproved" && keys[2] === "requestText"
+  if (!local && !external) return null
   const requestText = (value as { requestText?: unknown }).requestText
   if (typeof requestText !== "string") return null
   const trimmed = requestText.trim()
-  return trimmed && trimmed.length <= 2_000 && !trimmed.includes("\0") ? trimmed : null
+  if (!trimmed || trimmed.length > 2_000 || trimmed.includes("\0")) return null
+  if (local) return { requestText: trimmed }
+  const externalValue = value as { executionRoute?: unknown; externalEgressApproved?: unknown }
+  if (typeof externalValue.executionRoute !== "string" || externalValue.externalEgressApproved !== true) return null
+  try {
+    const selected = resolveHelloExecutionRoute(externalValue.executionRoute, {
+      externalEnabled: process.env.WILLIAMOS_HELLO_CEREBRAS_ROUTING_ENABLED,
+      externalEgressApproved: true,
+    })
+    if (!selected.external) return null
+  } catch { return null }
+  return {
+    requestText: trimmed,
+    executionRoute: externalValue.executionRoute,
+    externalEgressApproved: true,
+  }
 }
 
 function terminalErrorCode(error: unknown): string {
@@ -94,8 +135,8 @@ export async function POST(request: Request) {
   if (!resolved.ok) return resolved.response
   const parsed = await readBoundedJson(request, MAX_REQUEST_BODY_BYTES)
   if (!parsed.ok) return invalidRequest()
-  const requestText = proposalRequestText(parsed.value)
-  if (!requestText) return invalidRequest()
+  const proposalInput = proposalRequest(parsed.value)
+  if (!proposalInput) return invalidRequest()
 
   const encoder = new TextEncoder()
   let writable = true
@@ -131,7 +172,7 @@ export async function POST(request: Request) {
           repositoryRoot: resolved.context.repositoryRoot,
           runtimeRoot: resolved.context.runtimeRoot,
           requestedBy: resolved.context.userId,
-          requestText,
+          ...proposalInput,
           onProgress,
         })).then(
           (proposal) => finish({ type: "proposal", proposal }),

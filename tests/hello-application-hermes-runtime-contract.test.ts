@@ -48,6 +48,7 @@ describe("isolated HERMES Hello runtime contract", () => {
       WILLIAMOS_DEFAULT_PROJECT: "hello-application",
       WILLIAMOS_VISIBLE_PROJECTS: "hello-application,williamos",
       WILLIAMOS_HELLO_ENABLED: "1",
+      WILLIAMOS_HELLO_CEREBRAS_ROUTING_ENABLED: "1",
       BETTER_AUTH_URL: "https://williamos.lan:3543",
       BETTER_AUTH_TRUSTED_ORIGINS: "https://williamos.lan:3543",
     })

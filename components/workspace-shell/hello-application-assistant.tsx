@@ -11,8 +11,36 @@ type ProgressEntry = Readonly<{
   at: string
 }>
 
+type ProviderExecution = Readonly<{
+  route: "external"
+  provider: "cerebras"
+  bridgeNode: "hermes-node"
+  inferenceNode: "cerebras-api"
+  mode: "credential-bridge-one-shot"
+  requestedModel: string
+  actualModel: string
+  externalEgress: true
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  calculatedCostUsd: number
+  maxCostUsd: 0.03
+  contextDigest: string
+  durationMs: number
+}>
+
+type ExecutionRoute = Readonly<{
+  id: string
+  label: string
+  provider: "hermes-local" | "cerebras"
+  model: string
+  external: boolean
+  metered: boolean
+  available: boolean
+}>
+
 type Proposal = Readonly<{
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   proposalId: string
   status: "READY_FOR_REVIEW" | "APPLY_IN_PROGRESS" | "APPLIED" | "REJECT_IN_PROGRESS" | "REJECTED" | "QUARANTINED_ROLLBACK_FAILED"
   requestedBy: string
@@ -38,6 +66,7 @@ type Proposal = Readonly<{
   validation: Readonly<{ status: string; command: string; output?: string }>
   reviewPatch: string
   quarantinedAt?: string
+  providerExecution?: ProviderExecution
 }>
 
 type StreamTerminal =
@@ -65,6 +94,43 @@ const PROGRESS_MILESTONES = [
   ["validation_started", "Contained validation started"],
   ["ready_for_review", "Proposal ready for review"],
 ] as const
+const EXTERNAL_PROGRESS_MILESTONES = [
+  ["accepted", "Request accepted"],
+  ["workspace_ready", "Isolated workspace ready"],
+  ["resident_started", "HERMES sent the bounded request to Cerebras"],
+  ["resident_finished", "Cerebras returned a bounded change"],
+  ["validation_started", "Contained validation started"],
+  ["ready_for_review", "Proposal ready for review"],
+] as const
+const DEFAULT_EXECUTION_ROUTE = "hermes-local"
+const LOCAL_EXECUTION_ROUTE: ExecutionRoute = Object.freeze({
+  id: DEFAULT_EXECUTION_ROUTE,
+  label: "Local HERMES — williamos-qwen3-4b:64k (default)",
+  provider: "hermes-local",
+  model: "williamos-qwen3-4b:64k",
+  external: false,
+  metered: false,
+  available: true,
+})
+const EXECUTION_ROUTE_CONTRACT = new Map<string, Omit<ExecutionRoute, "available">>([
+  [LOCAL_EXECUTION_ROUTE.id, LOCAL_EXECUTION_ROUTE],
+  ["cerebras-gpt-oss-120b", {
+    id: "cerebras-gpt-oss-120b",
+    label: "Cerebras — gpt-oss-120b (external, metered)",
+    provider: "cerebras",
+    model: "gpt-oss-120b",
+    external: true,
+    metered: true,
+  }],
+  ["cerebras-qwen-3-8-27b", {
+    id: "cerebras-qwen-3-8-27b",
+    label: "Cerebras — qwen-3.8-27b (external, metered)",
+    provider: "cerebras",
+    model: "qwen-3.8-27b",
+    external: true,
+    metered: true,
+  }],
+])
 const V2_PROPOSAL_KEYS = [
   "schemaVersion",
   "proposalId",
@@ -133,11 +199,12 @@ function progressEntry(value: unknown): value is ProgressEntry {
   return record(value) && nonempty(value.stage) && nonempty(value.detail) && timestamp(value.at)
 }
 
-function schemaTwoProgress(value: unknown, createdAt: string): value is readonly ProgressEntry[] {
-  if (!Array.isArray(value) || value.length !== PROGRESS_MILESTONES.length) return false
+function schemaProgress(value: unknown, createdAt: string, external: boolean): value is readonly ProgressEntry[] {
+  const milestones = external ? EXTERNAL_PROGRESS_MILESTONES : PROGRESS_MILESTONES
+  if (!Array.isArray(value) || value.length !== milestones.length) return false
   let previous = Date.parse(createdAt)
   for (const [index, entry] of value.entries()) {
-    const expected = PROGRESS_MILESTONES[index]
+    const expected = milestones[index]
     if (!progressEntry(entry) || !exactKeys(entry, ["stage", "detail", "at"])
       || entry.stage !== expected[0] || entry.detail !== expected[1]) return false
     const observedAt = Date.parse(entry.at)
@@ -145,6 +212,45 @@ function schemaTwoProgress(value: unknown, createdAt: string): value is readonly
     previous = observedAt
   }
   return true
+}
+
+function providerExecutionRecord(value: unknown, model: unknown, executionNode: unknown): value is ProviderExecution {
+  return record(value)
+    && exactKeys(value, ["route", "provider", "bridgeNode", "inferenceNode", "mode", "requestedModel", "actualModel",
+      "externalEgress", "promptTokens", "completionTokens", "totalTokens", "calculatedCostUsd", "maxCostUsd",
+      "contextDigest", "durationMs"])
+    && value.route === "external" && value.provider === "cerebras" && value.bridgeNode === "hermes-node"
+    && value.inferenceNode === "cerebras-api" && value.mode === "credential-bridge-one-shot"
+    && value.requestedModel === model && value.actualModel === model && executionNode === value.inferenceNode
+    && value.externalEgress === true
+    && Number.isSafeInteger(value.promptTokens) && Number(value.promptTokens) >= 0
+    && Number.isSafeInteger(value.completionTokens) && Number(value.completionTokens) >= 0
+    && value.totalTokens === Number(value.promptTokens) + Number(value.completionTokens)
+    && typeof value.calculatedCostUsd === "number" && Number.isFinite(value.calculatedCostUsd) && value.calculatedCostUsd >= 0
+    && value.maxCostUsd === 0.03 && value.calculatedCostUsd <= value.maxCostUsd
+    && typeof value.contextDigest === "string" && /^sha256:[0-9a-f]{64}$/.test(value.contextDigest)
+    && Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0
+}
+
+function executionRouteRecord(value: unknown): value is ExecutionRoute {
+  if (!record(value) || !exactKeys(value, ["id", "label", "provider", "model", "external", "metered", "available"])
+    || typeof value.id !== "string" || typeof value.available !== "boolean") return false
+  const expected = EXECUTION_ROUTE_CONTRACT.get(value.id)
+  return Boolean(expected) && value.label === expected?.label && value.provider === expected?.provider
+    && value.model === expected?.model && value.external === expected?.external && value.metered === expected?.metered
+}
+
+async function readExecutionRoutes(): Promise<readonly ExecutionRoute[]> {
+  const response = await fetch("/api/projects/hello-application/execution-routes", { cache: "no-store" })
+  const payload = await responseJson(response)
+  if (!record(payload) || !exactKeys(payload, ["schemaVersion", "defaultRoute", "routes"])
+    || payload.schemaVersion !== 1 || payload.defaultRoute !== DEFAULT_EXECUTION_ROUTE || !Array.isArray(payload.routes)
+    || payload.routes.length < 1 || payload.routes.length > EXECUTION_ROUTE_CONTRACT.size
+    || payload.routes.some((route) => !executionRouteRecord(route))) throw new Error("HELLO_EXECUTION_ROUTES_INVALID")
+  const routes = payload.routes as ExecutionRoute[]
+  if (new Set(routes.map((route) => route.id)).size !== routes.length
+    || routes[0].id !== DEFAULT_EXECUTION_ROUTE || !routes[0].available) throw new Error("HELLO_EXECUTION_ROUTES_INVALID")
+  return routes.filter((route) => route.available)
 }
 
 function acceptedChangedPaths(value: unknown): value is readonly string[] {
@@ -157,7 +263,7 @@ function acceptedChangedPaths(value: unknown): value is readonly string[] {
 
 function proposalRecord(value: unknown): value is Proposal {
   if (!record(value)) return false
-  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) return false
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3) return false
   if (!nonempty(value.proposalId) || !PROPOSAL_ID.test(value.proposalId)
     || !["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "REJECT_IN_PROGRESS", "REJECTED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
     || !receiptText(value.requestedBy) || !timestamp(value.createdAt)
@@ -168,45 +274,48 @@ function proposalRecord(value: unknown): value is Proposal {
     || typeof value.turnId !== "string" || !SAFE_ID.test(value.turnId)
     || !nonempty(value.patchSha256) || !PATCH_SHA256.test(value.patchSha256)
     || typeof value.reviewPatch !== "string") return false
-  if (value.schemaVersion === 2) {
+  if (value.schemaVersion >= 2) {
+    const baseKeys = value.schemaVersion === 3 ? [...V2_PROPOSAL_KEYS, "providerExecution"] : V2_PROPOSAL_KEYS
     const keys = value.status === "QUARANTINED_ROLLBACK_FAILED"
-      ? [...V2_PROPOSAL_KEYS, "quarantinedAt"]
+      ? [...baseKeys, "quarantinedAt"]
       : value.status === "APPLY_IN_PROGRESS"
-        ? [...V2_PROPOSAL_KEYS, "applyStartedAt"]
+        ? [...baseKeys, "applyStartedAt"]
         : value.status === "REJECT_IN_PROGRESS"
-          ? [...V2_PROPOSAL_KEYS, "rejectStartedAt", "rejectionReason"]
+          ? [...baseKeys, "rejectStartedAt", "rejectionReason"]
           : value.status === "REJECTED"
-            ? [...V2_PROPOSAL_KEYS, "rejectedAt", "rejectionReason"]
-            : V2_PROPOSAL_KEYS
+            ? [...baseKeys, "rejectedAt", "rejectionReason"]
+            : baseKeys
     if (!exactKeys(value, keys)) return false
   }
+  if (value.schemaVersion !== 3 && value.providerExecution !== undefined) return false
   if (value.status === "READY_FOR_REVIEW" && !nonempty(value.reviewPatch)) return false
   if (!acceptedChangedPaths(value.changedPaths)) return false
   if (!record(value.validation) || value.validation.status !== "passed"
     || value.validation.command !== VALIDATION_COMMAND
-    || (value.schemaVersion === 2 && !exactKeys(value.validation, ["status", "command", "output"]))
-    || (value.schemaVersion === 2 && typeof value.validation.output !== "string")
+    || (value.schemaVersion >= 2 && !exactKeys(value.validation, ["status", "command", "output"]))
+    || (value.schemaVersion >= 2 && typeof value.validation.output !== "string")
     || (value.validation.output !== undefined && (typeof value.validation.output !== "string"
       || value.validation.output.length > MAX_VALIDATION_OUTPUT_LENGTH))) return false
-  if (value.schemaVersion === 2 && (!boundedRequest(value.requestText)
+  if (value.schemaVersion >= 2 && (!boundedRequest(value.requestText)
     || !nonempty(value.requestSha256) || !PATCH_SHA256.test(value.requestSha256)
-    || !receiptText(value.executionNode) || !schemaTwoProgress(value.progress, value.createdAt))) return false
+    || !receiptText(value.executionNode) || !schemaProgress(value.progress, value.createdAt, value.schemaVersion === 3))) return false
+  if (value.schemaVersion === 3 && !providerExecutionRecord(value.providerExecution, value.model, value.executionNode)) return false
   if (value.status === "APPLIED") {
     if (!timestamp(value.appliedAt) || value.appliedAt < value.createdAt) return false
-    if ((value.schemaVersion === 2 || value.appliedCommit !== undefined)
+    if ((value.schemaVersion >= 2 || value.appliedCommit !== undefined)
       && (typeof value.appliedCommit !== "string"
         || !COMMIT_SHA.test(value.appliedCommit))) return false
-    if (value.schemaVersion === 2 && Array.isArray(value.progress)
+    if (value.schemaVersion >= 2 && Array.isArray(value.progress)
       && value.appliedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at) return false
   } else {
     if (value.appliedAt !== null) return false
-    if (value.schemaVersion === 2 && value.appliedCommit !== null) return false
+    if (value.schemaVersion >= 2 && value.appliedCommit !== null) return false
   }
   if (value.status === "QUARANTINED_ROLLBACK_FAILED") {
     if (!timestamp(value.quarantinedAt) || value.quarantinedAt < value.createdAt) return false
   } else if (value.quarantinedAt !== undefined) return false
   if (value.status === "APPLY_IN_PROGRESS") {
-    if (value.schemaVersion !== 2 || !timestamp(value.applyStartedAt) || value.applyStartedAt < value.createdAt
+    if (value.schemaVersion < 2 || !timestamp(value.applyStartedAt) || value.applyStartedAt < value.createdAt
       || (Array.isArray(value.progress) && value.applyStartedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at)) return false
   } else if (value.applyStartedAt !== undefined) return false
   if (value.status === "REJECT_IN_PROGRESS") {
@@ -241,7 +350,7 @@ async function verifiedProposalRecord(value: unknown): Promise<Proposal | null> 
   if (!proposalRecord(value)) return null
   const patchDigest = await sha256Text(value.reviewPatch)
   if (patchDigest !== value.patchSha256) return null
-  if (value.schemaVersion === 2) {
+  if (value.schemaVersion >= 2) {
     if (typeof value.requestText !== "string") return null
     const requestDigest = await sha256Text(value.requestText)
     if (requestDigest !== value.requestSha256) return null
@@ -261,11 +370,30 @@ function sameProgress(left: readonly ProgressEntry[] | undefined, right: readonl
   })
 }
 
-function canonicalNextProgress(entry: ProgressEntry, observed: readonly ProgressEntry[]): boolean {
-  const expected = PROGRESS_MILESTONES[observed.length]
+function canonicalNextProgress(entry: ProgressEntry, observed: readonly ProgressEntry[], external: boolean): boolean {
+  const expected = (external ? EXTERNAL_PROGRESS_MILESTONES : PROGRESS_MILESTONES)[observed.length]
   if (!expected || entry.stage !== expected[0] || entry.detail !== expected[1]) return false
   const previous = observed.at(-1)
   return !previous || Date.parse(entry.at) >= Date.parse(previous.at)
+}
+
+function sameProviderExecution(left: ProviderExecution | undefined, right: ProviderExecution | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.route === right.route
+    && left.provider === right.provider
+    && left.bridgeNode === right.bridgeNode
+    && left.inferenceNode === right.inferenceNode
+    && left.mode === right.mode
+    && left.requestedModel === right.requestedModel
+    && left.actualModel === right.actualModel
+    && left.externalEgress === right.externalEgress
+    && left.promptTokens === right.promptTokens
+    && left.completionTokens === right.completionTokens
+    && left.totalTokens === right.totalTokens
+    && left.calculatedCostUsd === right.calculatedCostUsd
+    && left.maxCostUsd === right.maxCostUsd
+    && left.contextDigest === right.contextDigest
+    && left.durationMs === right.durationMs
 }
 
 function sameReviewedEvidence(value: Proposal, reviewed: Proposal): boolean {
@@ -286,6 +414,7 @@ function sameReviewedEvidence(value: Proposal, reviewed: Proposal): boolean {
     && value.reviewPatch === reviewed.reviewPatch
     && sameStrings(value.changedPaths, reviewed.changedPaths)
     && sameProgress(value.progress, reviewed.progress)
+    && sameProviderExecution(value.providerExecution, reviewed.providerExecution)
 }
 
 function sameValidation(left: Proposal["validation"], right: Proposal["validation"]): boolean {
@@ -480,6 +609,12 @@ function statusLabel(status: string): string {
   return status
 }
 
+function formatUsd(value: number): string {
+  if (value === 0) return "$0.00"
+  if (value >= 0.01) return `$${value.toFixed(2)}`
+  return `$${value.toFixed(8).replace(/0+$/, "").replace(/\.$/, "")}`
+}
+
 function ProposalReview({
   proposal,
   applying,
@@ -508,6 +643,7 @@ function ProposalReview({
   const schemaOne = proposal.schemaVersion === 1
   const request = proposal.requestText || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
   const executionNode = proposal.executionNode || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
+  const externalExecution = proposal.schemaVersion === 3 ? proposal.providerExecution : undefined
   const proposalState = applyBlocked && proposal.status === "READY_FOR_REVIEW"
     ? "Apply state unconfirmed"
     : statusLabel(proposal.status)
@@ -522,12 +658,22 @@ function ProposalReview({
       <details className={styles.reviewBody} open>
         <summary>Review proposal</summary>
         <div className={styles.reviewInner}>
-          <dl className={styles.evidence} aria-label="Resident execution evidence">
+          <dl className={styles.evidence} aria-label="Governed execution evidence">
             <div><dt>Request</dt><dd>{request}</dd></div>
+            <div><dt>Execution provider</dt><dd>{externalExecution ? "Cerebras (external)" : "HERMES local"}</dd></div>
             <div><dt>Execution node (actual)</dt><dd>{executionNode}</dd></div>
-            <div><dt>Resident model alias</dt><dd>{proposal.model}</dd></div>
+            <div><dt>Executing model</dt><dd>{proposal.model}</dd></div>
             <div><dt>Thread</dt><dd>{proposal.threadId}</dd></div>
             <div><dt>Turn</dt><dd>{proposal.turnId}</dd></div>
+            {externalExecution ? (
+              <>
+                <div><dt>External egress</dt><dd>Approved</dd></div>
+                <div><dt>Usage</dt><dd>{externalExecution.totalTokens.toLocaleString("en-US")} tokens</dd></div>
+                <div><dt>Calculated cost</dt><dd>{formatUsd(externalExecution.calculatedCostUsd)}</dd></div>
+                <div><dt>Maximum cost</dt><dd>{formatUsd(externalExecution.maxCostUsd)}</dd></div>
+                <div><dt>Provider duration</dt><dd>{externalExecution.durationMs.toLocaleString("en-US")} ms</dd></div>
+              </>
+            ) : null}
           </dl>
 
           <section className={styles.reviewSection} aria-labelledby={`paths-${proposal.proposalId}`}>
@@ -652,8 +798,13 @@ export function HelloApplicationAssistant({
   const [busy, setBusy] = useState<"proposal" | "apply" | "reject" | null>(null)
   const [status, setStatus] = useState("Checking saved proposals.")
   const [assistantError, setAssistantError] = useState<string | null>(null)
+  const [executionRoutes, setExecutionRoutes] = useState<readonly ExecutionRoute[]>([LOCAL_EXECUTION_ROUTE])
+  const [executionRouteId, setExecutionRouteId] = useState(DEFAULT_EXECUTION_ROUTE)
+  const [externalEgressApproved, setExternalEgressApproved] = useState(false)
+  const [routeOptionsError, setRouteOptionsError] = useState(false)
   const operationInFlight = useRef(false)
   const ownerInteracted = useRef(false)
+  const selectedExecutionRoute = executionRoutes.find((route) => route.id === executionRouteId) ?? LOCAL_EXECUTION_ROUTE
 
   function showProposal(value: Proposal, message: string) {
     setProposal(value)
@@ -679,6 +830,24 @@ export function HelloApplicationAssistant({
     }
     setStatus(terminalMessage)
   }
+
+  useEffect(() => {
+    let current = true
+    void readExecutionRoutes()
+      .then((routes) => {
+        if (!current) return
+        setExecutionRoutes(routes)
+        setRouteOptionsError(false)
+      })
+      .catch(() => {
+        if (!current) return
+        setExecutionRoutes([LOCAL_EXECUTION_ROUTE])
+        setExecutionRouteId(DEFAULT_EXECUTION_ROUTE)
+        setExternalEgressApproved(false)
+        setRouteOptionsError(true)
+      })
+    return () => { current = false }
+  }, [])
 
   useEffect(() => {
     let current = true
@@ -722,6 +891,12 @@ export function HelloApplicationAssistant({
       setStatus("")
       return
     }
+    const selectedRoute = selectedExecutionRoute
+    if (selectedRoute.external && !externalEgressApproved) {
+      setAssistantError("Approve the bounded external egress before asking Cerebras.")
+      setStatus("")
+      return
+    }
 
     setDraft(requestText)
     setSubmittedRequest(requestText)
@@ -738,7 +913,9 @@ export function HelloApplicationAssistant({
       const response = await fetch("/api/projects/hello-application/proposals", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requestText }),
+        body: JSON.stringify(selectedRoute.external
+          ? { requestText, executionRoute: selectedRoute.id, externalEgressApproved: true }
+          : { requestText }),
       })
       if (!response.ok) {
         try {
@@ -749,7 +926,7 @@ export function HelloApplicationAssistant({
       }
       const observed: ProgressEntry[] = []
       const terminal = await readProposalStream(response, (entry) => {
-        if (!canonicalNextProgress(entry, observed)) {
+        if (!canonicalNextProgress(entry, observed, selectedRoute.external)) {
           throw new Error("HERMES stream failed: milestone sequence mismatch.")
         }
         observed.push(entry)
@@ -757,8 +934,13 @@ export function HelloApplicationAssistant({
         setStatus(entry.detail)
       })
       if (terminal.type === "error") throw new Error(`HERMES request failed: ${terminal.error}`)
-      if (terminal.proposal.schemaVersion !== 2 || terminal.proposal.status !== "READY_FOR_REVIEW") {
+      const expectedSchema = selectedRoute.external ? 3 : 2
+      if (terminal.proposal.schemaVersion !== expectedSchema || terminal.proposal.status !== "READY_FOR_REVIEW") {
         throw new Error("HERMES stream failed: invalid proposal terminal.")
+      }
+      if (selectedRoute.external && (terminal.proposal.model !== selectedRoute.model
+        || terminal.proposal.providerExecution?.actualModel !== selectedRoute.model)) {
+        throw new Error("HERMES stream failed: execution route mismatch.")
       }
       if (!sameProgress(observed, terminal.proposal.progress)) {
         throw new Error("HERMES stream failed: milestone sequence mismatch.")
@@ -778,6 +960,7 @@ export function HelloApplicationAssistant({
     } finally {
       operationInFlight.current = false
       setBusy(null)
+      if (selectedRoute.external) setExternalEgressApproved(false)
     }
   }
 
@@ -924,10 +1107,44 @@ export function HelloApplicationAssistant({
     <section className={styles.assistant} aria-label="Ask HERMES development assistant">
       <header className={styles.header}>
         <span className={styles.agent}><Bot size={16} aria-hidden /><strong>HERMES development instrument</strong></span>
-        <span className={styles.boundary}><ShieldCheck size={14} aria-hidden />3 writable UI files · local model · proposal only</span>
+        <span className={styles.boundary}><ShieldCheck size={14} aria-hidden />3 writable UI files · {selectedExecutionRoute.external ? "Cerebras external" : "local"} · proposal only</span>
       </header>
 
       <form className={styles.form} onSubmit={(event) => void submit(event)} aria-busy={busy === "proposal"}>
+        <div className={styles.routeControl}>
+          <label htmlFor="hello-execution-route">AI execution route</label>
+          <select
+            id="hello-execution-route"
+            value={selectedExecutionRoute.id}
+            aria-describedby="hello-execution-route-description"
+            disabled={busy !== null}
+            onChange={(event) => {
+              ownerInteracted.current = true
+              setExecutionRouteId(event.target.value)
+              setExternalEgressApproved(false)
+              setAssistantError(null)
+            }}
+          >
+            {executionRoutes.map((route) => <option key={route.id} value={route.id}>{route.label}</option>)}
+          </select>
+          <p id="hello-execution-route-description" className={styles.routeDisclosure} aria-live="polite">
+            {selectedExecutionRoute.external
+              ? "External and metered. HERMES sends the governed request and allowlisted Hello source to Cerebras. Canonical source changes only after review and Apply. No local fallback."
+              : "Runs inside HERMES. The request and application source stay in the lab."}
+          </p>
+          {routeOptionsError ? <p className={styles.routeUnavailable}>External routes are unavailable; local HERMES remains available.</p> : null}
+          {selectedExecutionRoute.external ? (
+            <label className={styles.egressApproval}>
+              <input
+                type="checkbox"
+                checked={externalEgressApproved}
+                disabled={busy !== null}
+                onChange={(event) => setExternalEgressApproved(event.target.checked)}
+              />
+              I confirm this request contains only public or sanitized content and approve sending it with the allowlisted Hello source to Cerebras.
+            </label>
+          ) : null}
+        </div>
         <label htmlFor="hello-hermes-request">Ask HERMES to change this application</label>
         <div className={styles.requestRow}>
           <textarea
@@ -936,13 +1153,20 @@ export function HelloApplicationAssistant({
             onChange={(event) => {
               ownerInteracted.current = true
               setDraft(event.target.value)
+              if (selectedExecutionRoute.external && externalEgressApproved) setExternalEgressApproved(false)
             }}
             rows={2}
             maxLength={MAX_REQUEST_LENGTH}
             disabled={busy !== null}
             placeholder="Describe one visible change to the Hello Application."
           />
-          <button type="submit" className={styles.ask} disabled={busy !== null}>Ask HERMES</button>
+          <button
+            type="submit"
+            className={styles.ask}
+            disabled={busy !== null || (selectedExecutionRoute.external && !externalEgressApproved)}
+          >
+            {selectedExecutionRoute.external ? "Ask HERMES via Cerebras" : "Ask HERMES"}
+          </button>
         </div>
       </form>
 

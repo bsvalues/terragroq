@@ -67,6 +67,7 @@ export function parseHelloRuntimeEnvironment(text, { sourceRoot, canonicalOrigin
   values.WILLIAMOS_PROJECT_ROOT = required(sourceRoot, "SOURCE_ROOT")
   values.WILLIAMOS_PROJECT_SPACE_IDENTITY = values.WILLIAMOS_PROJECT_ROOT
   values.WILLIAMOS_HELLO_ENABLED = "1"
+  values.WILLIAMOS_HELLO_CEREBRAS_ROUTING_ENABLED = "1"
   values.WILLIAMOS_VISIBLE_PROJECTS = "hello-application,williamos"
   values.WILLIAMOS_DEFAULT_PROJECT = "hello-application"
   values.WILLIAMOS_HERMES_RUNTIME_ROOT = required(hermesRuntimeRoot, "HERMES_RUNTIME_ROOT")

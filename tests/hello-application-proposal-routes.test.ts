@@ -30,6 +30,7 @@ vi.mock("@/lib/hello-application/proposal-service.mjs", () => ({
 }))
 
 import { GET, maxDuration, POST } from "@/app/api/projects/hello-application/proposals/route"
+import { GET as GET_EXECUTION_ROUTES } from "@/app/api/projects/hello-application/execution-routes/route"
 import { POST as APPLY } from "@/app/api/projects/hello-application/proposals/[proposalId]/apply/route"
 import * as PROPOSAL_DETAIL from "@/app/api/projects/hello-application/proposals/[proposalId]/route"
 
@@ -67,6 +68,7 @@ async function readChunks(response: Response) {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.WILLIAMOS_HERMES_RUNTIME_ROOT = "C:/runtime/hermes-bridge"
+  process.env.WILLIAMOS_HELLO_CEREBRAS_ROUTING_ENABLED = "1"
   seams.getSession.mockResolvedValue({ user: { id: "owner" } })
   seams.resolveOwnerUserId.mockResolvedValue("owner")
   seams.assertOwner.mockReturnValue({ ok: true })
@@ -88,6 +90,20 @@ beforeEach(() => {
 describe("Hello Application proposal routes", () => {
   it("reserves bounded host overhead around the 90-minute resident transaction", () => {
     expect(maxDuration).toBe(7_200)
+  })
+
+  it("publishes admitted execution-route metadata without touching credential state", async () => {
+    const response = await GET_EXECUTION_ROUTES()
+    expect(response.status).toBe(200)
+    const payload = await response.json()
+    expect(payload.schemaVersion).toBe(1)
+    expect(payload.defaultRoute).toBe("hermes-local")
+    expect(payload.routes.map((route: { id: string; available: boolean }) => [route.id, route.available])).toEqual([
+      ["hermes-local", true],
+      ["cerebras-gpt-oss-120b", true],
+      ["cerebras-qwen-3-8-27b", true],
+    ])
+    expect(JSON.stringify(payload)).not.toMatch(/credential|api.?key|secret/i)
   })
 
   it("returns immediately and streams allowlisted observed milestones before one proposal terminal", async () => {
@@ -152,6 +168,25 @@ describe("Hello Application proposal routes", () => {
     expect(seams.createProposal.mock.calls[0][0].requestText).toBe("Change the footer")
   })
 
+  it("forwards one exact approved external route without accepting a browser-supplied model or cost", async () => {
+    const response = await POST(mutation(JSON.stringify({
+      requestText: "Change the footer",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalEgressApproved: true,
+    })))
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe(`${JSON.stringify({ type: "proposal", proposal })}\n`)
+    expect(seams.createProposal).toHaveBeenCalledWith(expect.objectContaining({
+      requestText: "Change the footer",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalEgressApproved: true,
+    }))
+    const forwarded = seams.createProposal.mock.calls[0][0]
+    expect(forwarded).not.toHaveProperty("model")
+    expect(forwarded).not.toHaveProperty("maxCostUsd")
+  })
+
   it.each([
     ["malformed JSON", "{"],
     ["null", "null"],
@@ -159,6 +194,10 @@ describe("Hello Application proposal routes", () => {
     ["a missing key", "{}"],
     ["an unknown key", '{"unknown":"value"}'],
     ["an extra key", '{"requestText":"Change it","extra":true}'],
+    ["a free-form model", '{"requestText":"Change it","model":"qwen-3.8-27b"}'],
+    ["a browser cost cap", '{"requestText":"Change it","maxCostUsd":100}'],
+    ["an unknown execution route", '{"requestText":"Change it","executionRoute":"cerebras-anything","externalEgressApproved":true}'],
+    ["an external route without approval", '{"requestText":"Change it","executionRoute":"cerebras-gpt-oss-120b"}'],
     ["a non-string request", '{"requestText":42}'],
     ["an empty request", '{"requestText":"   "}'],
     ["a NUL request", JSON.stringify({ requestText: "bad\0request" })],

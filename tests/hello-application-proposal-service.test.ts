@@ -1678,4 +1678,102 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(applied.status).toBe("APPLIED")
     expect(getHelloApplicationProposal({ runtimeRoot, requestedBy: "owner", proposalId: proposal.proposalId }).appliedCommit).toBe(applied.appliedCommit)
   })
+
+  it("routes an explicitly approved Cerebras model without calling the local resident and persists schema-v3 execution truth", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    const residentTurn = vi.fn(async () => { throw new Error("local fallback must not run") })
+    const cerebrasTurn = vi.fn(async ({ workspacePath, model }: { workspacePath: string; model: string }) => {
+      fs.appendFileSync(sourcePath(workspacePath, "examples/hello-application/src/app.js"), "\n/* cerebras route */\n")
+      fs.appendFileSync(sourcePath(workspacePath, "examples/hello-application/src/styles.css"), "\n/* cerebras route */\n")
+      return {
+        threadId: "cerebras-thread",
+        turnId: "cerebras-turn",
+        model,
+        executionNode: "cerebras-api",
+        ignoredPathsCreated: [],
+        providerExecution: {
+          route: "external",
+          provider: "cerebras",
+          bridgeNode: "hermes-node",
+          inferenceNode: "cerebras-api",
+          mode: "credential-bridge-one-shot",
+          requestedModel: "qwen-3.8-27b",
+          actualModel: "qwen-3.8-27b",
+          externalEgress: true,
+          promptTokens: 58,
+          completionTokens: 50,
+          totalTokens: 108,
+          calculatedCostUsd: 0.00013192,
+          maxCostUsd: 0.03,
+          contextDigest: `sha256:${"a".repeat(64)}`,
+          durationMs: 517,
+        },
+      }
+    })
+    const stages: Array<{ stage: string; detail: string }> = []
+
+    const proposal = await createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Make a governed two-file external change",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalEgressApproved: true,
+      externalRoutingEnabled: true,
+      residentTurn,
+      cerebrasTurn,
+      validateWorkspace: validation,
+      onProgress: ({ stage, detail }: { stage: string; detail: string }) => stages.push({ stage, detail }),
+    })
+
+    expect(residentTurn).not.toHaveBeenCalled()
+    expect(cerebrasTurn).toHaveBeenCalledWith(expect.objectContaining({ model: "qwen-3.8-27b" }))
+    expect(proposal).toMatchObject({
+      schemaVersion: 3,
+      status: "READY_FOR_REVIEW",
+      model: "qwen-3.8-27b",
+      executionNode: "cerebras-api",
+      providerExecution: {
+        provider: "cerebras",
+        actualModel: "qwen-3.8-27b",
+        calculatedCostUsd: 0.00013192,
+        externalEgress: true,
+      },
+    })
+    expect(stages.map((entry) => entry.detail)).toContain("HERMES sent the bounded request to Cerebras")
+    expect(stages.map((entry) => entry.detail)).toContain("Cerebras returned a bounded change")
+
+    const applied = await applyHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      validateWorkspace: validation,
+    })
+    expect(applied.status).toBe("APPLIED")
+    expect(applied.providerExecution).toEqual(proposal.providerExecution)
+  })
+
+  it("never falls back to the local resident after an external route failure", async () => {
+    const { repositoryRoot, runtimeRoot } = fixture()
+    const residentTurn = vi.fn(async () => { throw new Error("local fallback must not run") })
+    const cerebrasTurn = vi.fn(async () => { throw new Error("EXTERNAL_API_OUTAGE") })
+
+    await expect(createHelloApplicationProposal({
+      repositoryRoot,
+      runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Keep this request external",
+      executionRoute: "cerebras-gpt-oss-120b",
+      externalEgressApproved: true,
+      externalRoutingEnabled: true,
+      residentTurn,
+      cerebrasTurn,
+      validateWorkspace: validation,
+    })).rejects.toThrow("EXTERNAL_API_OUTAGE")
+
+    expect(cerebrasTurn).toHaveBeenCalledOnce()
+    expect(residentTurn).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(runtimeRoot, "hello-application-proposals"))).toBe(false)
+  })
 })

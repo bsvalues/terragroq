@@ -8,11 +8,29 @@ import { HelloApplicationControls } from "@/components/workspace-shell/hello-app
 
 const requestText = "Make the footer explain the local AI loop"
 const validationCommand = "node --test examples/hello-application/test/hello.test.mjs"
+const executionRoutes = {
+  schemaVersion: 1,
+  defaultRoute: "hermes-local",
+  routes: [
+    { id: "hermes-local", label: "Local HERMES — williamos-qwen3-4b:64k (default)", provider: "hermes-local", model: "williamos-qwen3-4b:64k", external: false, metered: false, available: true },
+    { id: "cerebras-gpt-oss-120b", label: "Cerebras — gpt-oss-120b (external, metered)", provider: "cerebras", model: "gpt-oss-120b", external: true, metered: true, available: true },
+    { id: "cerebras-qwen-3-8-27b", label: "Cerebras — qwen-3.8-27b (external, metered)", provider: "cerebras", model: "qwen-3.8-27b", external: true, metered: true, available: true },
+  ],
+} as const
 const progress = [
   { stage: "accepted", detail: "Request accepted", at: "2026-09-19T17:00:00.000Z" },
   { stage: "workspace_ready", detail: "Isolated workspace ready", at: "2026-09-19T17:00:01.000Z" },
   { stage: "resident_started", detail: "HERMES is editing the isolated workspace", at: "2026-09-19T17:00:02.000Z" },
   { stage: "resident_finished", detail: "HERMES editing finished", at: "2026-09-19T17:00:03.000Z" },
+  { stage: "validation_started", detail: "Contained validation started", at: "2026-09-19T17:00:04.000Z" },
+  { stage: "ready_for_review", detail: "Proposal ready for review", at: "2026-09-19T17:00:05.000Z" },
+] as const
+
+const externalProgress = [
+  { stage: "accepted", detail: "Request accepted", at: "2026-09-19T17:00:00.000Z" },
+  { stage: "workspace_ready", detail: "Isolated workspace ready", at: "2026-09-19T17:00:01.000Z" },
+  { stage: "resident_started", detail: "HERMES sent the bounded request to Cerebras", at: "2026-09-19T17:00:02.000Z" },
+  { stage: "resident_finished", detail: "Cerebras returned a bounded change", at: "2026-09-19T17:00:03.000Z" },
   { stage: "validation_started", detail: "Contained validation started", at: "2026-09-19T17:00:04.000Z" },
   { stage: "ready_for_review", detail: "Proposal ready for review", at: "2026-09-19T17:00:05.000Z" },
 ] as const
@@ -46,6 +64,33 @@ const readyProposal = {
     output: "TAP version 13\n# tests 3\n# pass 3\n# fail 0",
   },
   reviewPatch: "diff --git a/examples/hello-application/src/index.html b/examples/hello-application/src/index.html\n+<footer>The local AI loop</footer>\n",
+} as const
+
+const externalReadyProposal = {
+  ...readyProposal,
+  schemaVersion: 3,
+  executionNode: "cerebras-api",
+  progress: externalProgress,
+  model: "qwen-3.8-27b",
+  threadId: "cerebras-thread-1",
+  turnId: "cerebras-turn-1",
+  providerExecution: {
+    route: "external",
+    provider: "cerebras",
+    bridgeNode: "hermes-node",
+    inferenceNode: "cerebras-api",
+    mode: "credential-bridge-one-shot",
+    requestedModel: "qwen-3.8-27b",
+    actualModel: "qwen-3.8-27b",
+    externalEgress: true,
+    promptTokens: 1_100,
+    completionTokens: 212,
+    totalTokens: 1_312,
+    calculatedCostUsd: 0.00013192,
+    maxCostUsd: 0.03,
+    contextDigest: `sha256:${"a".repeat(64)}`,
+    durationMs: 517,
+  },
 } as const
 
 const appliedProposal = {
@@ -151,6 +196,7 @@ function rawStreamResponse(body: string): Response {
 }
 
 function baseFetch(options: Readonly<{
+  executionRoutesGet?: Response | Promise<Response>
   proposals?: readonly unknown[]
   proposalsGet?: Response | Promise<Response>
   proposalGets?: readonly (Response | Promise<Response>)[]
@@ -176,6 +222,9 @@ function baseFetch(options: Readonly<{
   return vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
     const method = init?.method ?? "GET"
+    if (url.endsWith("/execution-routes") && method === "GET") {
+      return Promise.resolve(options.executionRoutesGet ?? Response.json(executionRoutes))
+    }
     if (url.endsWith("/runtime") && method === "GET") {
       return Promise.resolve(Response.json(runtimeSnapshot()))
     }
@@ -254,6 +303,56 @@ describe("HelloApplicationControls", () => {
     expect(onPreviewRefresh).toHaveBeenCalledTimes(3)
   })
 
+  it("keeps local HERMES as default and requires explicit disclosure approval before an exact Cerebras route", async () => {
+    const fetcher = baseFetch({
+      proposalPosts: [streamResponse([{ type: "error", error: "EXTERNAL_API_OUTAGE" }])],
+    })
+    await renderReady(fetcher)
+    const user = userEvent.setup()
+    const route = await screen.findByRole("combobox", { name: "AI execution route" })
+    expect((route as HTMLSelectElement).value).toBe("hermes-local")
+    expect(screen.getByText("Runs inside HERMES. The request and application source stay in the lab.")).toBeTruthy()
+
+    await user.selectOptions(route, "cerebras-qwen-3-8-27b")
+    expect(screen.getByText(/External and metered.*No local fallback\./)).toBeTruthy()
+    const approval = screen.getByRole("checkbox", { name: /I confirm this request contains only public or sanitized content/i })
+    const ask = screen.getByRole("button", { name: "Ask HERMES via Cerebras" })
+    expect((ask as HTMLButtonElement).disabled).toBe(true)
+    const input = screen.getByRole("textbox", { name: "Ask HERMES to change this application" })
+    await user.type(input, requestText)
+    await user.click(approval)
+    await user.type(input, " safely")
+    expect((approval as HTMLInputElement).checked).toBe(false)
+    expect((ask as HTMLButtonElement).disabled).toBe(true)
+    await user.click(approval)
+    await user.click(ask)
+
+    await screen.findByText("HERMES request failed: EXTERNAL_API_OUTAGE")
+    const proposalPost = fetcher.mock.calls.find(([url, init]) => String(url).endsWith("/proposals") && init?.method === "POST")
+    expect(proposalPost?.[1]?.body).toBe(JSON.stringify({
+      requestText: `${requestText} safely`,
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalEgressApproved: true,
+    }))
+    expect((route as HTMLSelectElement).value).toBe("cerebras-qwen-3-8-27b")
+    expect((approval as HTMLInputElement).checked).toBe(false)
+    expect((ask as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText(/local fallback succeeded/i)).toBeNull()
+  })
+
+  it("restores external provider, model, usage, and cost truth from a schema-v3 receipt", async () => {
+    const fetcher = baseFetch({ proposals: [externalReadyProposal] })
+    await renderReady(fetcher)
+
+    const evidence = await screen.findByLabelText("Governed execution evidence")
+    expect(within(evidence).getByText("Cerebras (external)")).toBeTruthy()
+    expect(within(evidence).getByText("qwen-3.8-27b")).toBeTruthy()
+    expect(within(evidence).getByText("1,312 tokens")).toBeTruthy()
+    expect(within(evidence).getByText("$0.00013192")).toBeTruthy()
+    expect(within(evidence).getByText("$0.03")).toBeTruthy()
+    expect(within(evidence).getByText("517 ms")).toBeTruthy()
+  })
+
   it("reads arbitrarily split NDJSON, shows only observed milestones and complete execution evidence, then applies and accepts a second request", async () => {
     const secondRequest = "Give the pulse button a calmer label"
     const secondProposal = {
@@ -285,7 +384,7 @@ describe("HelloApplicationControls", () => {
     for (const event of progress) expect(within(log).getByText(event.detail)).toBeTruthy()
     expect(log.textContent).not.toMatch(/\b(?:percent|reasoning|tokens?|tools?)\b|%/i)
 
-    const evidence = screen.getByLabelText("Resident execution evidence")
+    const evidence = screen.getByLabelText("Governed execution evidence")
     expect(within(evidence).getByText("hermes-node")).toBeTruthy()
     expect(within(evidence).getByText("williamos-qwen3-4b:64k")).toBeTruthy()
     expect(within(evidence).getByText("thread-1")).toBeTruthy()
@@ -957,9 +1056,18 @@ describe("HelloApplicationControls", () => {
     expect(screen.getAllByText("Unavailable in schema v1")).toHaveLength(2)
     expect(screen.getByText("Milestones unavailable in schema v1.")).toBeTruthy()
     expect(screen.getByRole("log", { name: "HERMES activity" }).textContent).toBe("")
-    expect(screen.getByText("Resident model alias")).toBeTruthy()
+    expect(screen.getByText("Executing model")).toBeTruthy()
     expect(screen.getByText("williamos-qwen3-4b:64k")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+  })
+
+  it("rejects forged external-provider evidence on a legacy schema before rendering it", async () => {
+    const fetcher = baseFetch({ proposals: [{ ...schemaOneProposal, providerExecution: {} }] })
+    await renderReady(fetcher)
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
+    expect(screen.queryByText("Cerebras (external)")).toBeNull()
   })
 
   it("fails closed when browser digest verification is unavailable", async () => {
@@ -1313,7 +1421,7 @@ describe("HelloApplicationControls", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
-    expect(within(screen.getByLabelText("Resident execution evidence")).getByText(requestText)).toBeTruthy()
+    expect(within(screen.getByLabelText("Governed execution evidence")).getByText(requestText)).toBeTruthy()
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(onPreviewRefresh).not.toHaveBeenCalled()
   })

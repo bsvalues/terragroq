@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
-import fs from "node:fs"
+import fs, { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 
@@ -91,6 +92,55 @@ describe("Cerebras Windows Credential Manager bridge", () => {
           blobZeroed: false,
         },
       })
+    },
+  )
+
+  it.skipIf(process.platform !== "win32")(
+    "rejects a non-contract Hello payload before reading the credential",
+    () => {
+      const isolated = mkdtempSync(path.join(os.tmpdir(), "williamos-cerebras-hello-wrapper-"))
+      const marker = path.join(isolated, "credential-read.txt")
+      try {
+        copyFileSync(
+          path.join(process.cwd(), "scripts", "execution-fabric", "invoke-cerebras-hello-change.ps1"),
+          path.join(isolated, "invoke-cerebras-hello-change.ps1"),
+        )
+        writeFileSync(path.join(isolated, "cerebras-credential-manager.ps1"), `
+function Get-CerebrasCredentialSecureString {
+  [IO.File]::WriteAllText($env:WILLIAMOS_CEREBRAS_TEST_MARKER, "credential-read")
+  throw "CEREBRAS_CREDENTIAL_TOUCHED"
+}
+`, "utf8")
+
+        const payload = JSON.stringify({
+          schemaVersion: 1,
+          model: "qwen-3.8-27b",
+          files: [
+            { path: "examples/hello-application/src/app.js", content: "" },
+            { path: "examples/hello-application/src/index.html", content: "" },
+            { path: "examples/hello-application/src/styles.css", content: "" },
+          ],
+          unexpected: "must be refused before credential access",
+        })
+        const result = spawnSync(
+          "powershell.exe",
+          ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+            path.join(isolated, "invoke-cerebras-hello-change.ps1")],
+          {
+            encoding: "utf8",
+            input: payload,
+            env: { ...process.env, WILLIAMOS_CEREBRAS_TEST_MARKER: marker },
+          },
+        )
+
+        expect(result.status).not.toBe(0)
+        expect(result.stdout).toBe("")
+        expect(result.stderr).toContain("CEREBRAS_HELLO_INPUT_INVALID")
+        expect(result.stderr).not.toContain("must be refused before credential access")
+        expect(fs.existsSync(marker)).toBe(false)
+      } finally {
+        rmSync(isolated, { recursive: true, force: true })
+      }
     },
   )
 })
