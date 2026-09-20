@@ -2,6 +2,8 @@ import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 
+import { withoutCerebrasChildEnvironment } from "./child-environment"
+
 export const MAX_WORKSPACE_PATCH_BYTES = 2_000_000
 export const MAX_WORKSPACE_PATCH_STREAM_BYTES = 32_000_000
 const MAX_WORKSPACE_PATCH_STDERR_BYTES = 64_000
@@ -63,6 +65,7 @@ export const streamWorkspacePatch: FixedGitStreamRunner = (file, args, options) 
     windowsHide: options.windowsHide,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
+    env: withoutCerebrasChildEnvironment(process.env),
   })
   const hash = createHash("sha256")
   const retained: Buffer[] = []
@@ -173,6 +176,7 @@ export async function deriveWorkspaceFileDiff(
     maxBuffer: MAX_WORKSPACE_PATCH_BYTES + 1,
     timeout: WORKSPACE_INDEX_TIMEOUT_MS,
     windowsHide: true as const,
+    env: withoutCerebrasChildEnvironment(process.env),
   }
   let status = ""
   try {

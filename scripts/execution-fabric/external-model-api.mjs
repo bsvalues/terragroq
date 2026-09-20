@@ -17,6 +17,7 @@
  */
 
 import { createHash } from "node:crypto"
+import Ajv from "ajv"
 
 const S1_S2 = new Set(["S1", "S2"])
 
@@ -110,9 +111,287 @@ export async function callExternalModelApi({ baseUrl, apiKey, model, prompt, sys
 }
 
 /** Build the registry-shaped node + provider records for an admitted external API (CANDIDATE). */
-export function externalApiAdmissionRecords({ providerKey, baseUrl, displayName }) {
+export function externalApiAdmissionRecords({ providerKey, displayName }) {
   return {
     node: { id: providerKey, displayName, kind: "external-api", executionClass: "EXTERNAL_MODEL_API" },
     provider: { id: `provider-${providerKey}`, class: "EXTERNAL_API", admission: "CANDIDATE" },
+  }
+}
+
+// Cerebras is an explicit, offline-by-default Tier 3 binding. No scheduler or fallback selects it.
+export const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
+export const CEREBRAS_CATALOG_URL = "https://api.cerebras.ai/public/v1/models"
+
+export class ExternalProviderError extends Error {
+  constructor(code, metadata = {}) {
+    super(code)
+    this.name = "ExternalProviderError"
+    this.code = code
+    // Never attach a cause, response body, request, headers, or arbitrary provider text.
+    Object.assign(this, metadata)
+  }
+}
+
+const deny = (code, metadata) => { throw new ExternalProviderError(code, metadata) }
+const SAFE_MODEL = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/
+const CREDENTIAL_PATTERN = /(?:-----BEGIN [^-]+PRIVATE KEY-----|\b(?:sk|ghp|github_pat)_[a-zA-Z0-9_-]{12,}\b|\b(?:password|api[_-]?key|bearer|authorization|cookie|token)\s*[:=]\s*\S+)/i
+const PII_PATTERN = /\b\d{3}-\d{2}-\d{4}\b|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
+
+function assertCerebrasEgress(contextPackage, messages) {
+  // S1 is the existing public tier. S2 needs an affirmative synthetic/sanitized
+  // attestation; neither an absent tier nor a caller's free-form label is authority.
+  if (!contextPackage || typeof contextPackage !== "object" || Array.isArray(contextPackage)) deny("EXTERNAL_EGRESS_REFUSED")
+  try { assertExternalEgressAllowed(contextPackage) } catch { deny("EXTERNAL_EGRESS_REFUSED") }
+  if (contextPackage.classification !== "S1" &&
+    !(contextPackage.classification === "S2" &&
+      (contextPackage.synthetic === true || contextPackage.sanitizedForExternalProcessing === true))) {
+    deny("EXTERNAL_EGRESS_REFUSED")
+  }
+  if (["localOnly", "countyData", "pacsData", "pii", "credentials", "confidential", "protectedData"].some(k => contextPackage[k] === true)) {
+    deny("EXTERNAL_EGRESS_REFUSED")
+  }
+  if (messages.some(message => typeof message.content !== "string" || CREDENTIAL_PATTERN.test(message.content) || PII_PATTERN.test(message.content))) {
+    deny("EXTERNAL_EGRESS_REFUSED")
+  }
+}
+
+function catalogModel(data, model) {
+  if (!Array.isArray(data?.data)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+  const found = data.data.find(entry => entry?.id === model && entry?.deprecated !== true)
+  if (!found || !found.capabilities || !found.pricing) deny("EXTERNAL_API_UNSUPPORTED_MODEL")
+  return found
+}
+
+function positivePrice(value) {
+  const number = Number(value)
+  return typeof value === "string" && value.trim() !== "" && Number.isFinite(number) && number >= 0 ? number : null
+}
+
+function safeOptionText(value) {
+  try { return JSON.stringify(value) } catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+}
+
+function snapshotOption(value) {
+  try {
+    const encoded = JSON.stringify(value)
+    if (typeof encoded !== "string") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    return JSON.parse(encoded)
+  } catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+}
+
+function supportsCerebrasRequest(metadata, { responseFormat, tools, parallelToolCalls, reasoningEffort }) {
+  const capabilities = metadata.capabilities
+  return !((responseFormat && !(responseFormat.type === "json_schema" ? capabilities.structured_outputs : capabilities.json_mode)) ||
+    (tools && capabilities.tools !== true) || (parallelToolCalls && (!tools || capabilities.parallel_tool_calls !== true)) ||
+    (reasoningEffort && (capabilities.reasoning !== true ||
+      !Array.isArray(metadata.supported_reasoning_efforts) || !metadata.supported_reasoning_efforts.includes(reasoningEffort))))
+}
+
+/** Only metadata is fetched; this endpoint is public and never receives a prompt or key. */
+export async function discoverCerebrasModels({ fetchImpl = globalThis.fetch, signal } = {}) {
+  let response
+  try { response = await fetchImpl(CEREBRAS_CATALOG_URL, { method: "GET", signal }) }
+  catch { deny(signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_OUTAGE") }
+  if (!response.ok) deny("EXTERNAL_API_OUTAGE")
+  try {
+    const data = await response.json()
+    if (!Array.isArray(data?.data)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    return data
+  } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+}
+
+/** Explicit real-time inference only; no batch/file route and no implicit retry/fallback. */
+export async function callCerebrasModelApi({
+  enabled = process.env.WILLIAMOS_CEREBRAS_ENABLED === "true",
+  apiKey = process.env.CEREBRAS_API_KEY, baseUrl = CEREBRAS_BASE_URL,
+  model, prompt, systemPrompt = null, contextPackage, spendPolicy,
+  responseFormat, tools, parallelToolCalls = false, reasoningEffort,
+  modality = "text", mode = "realtime", maxTokens = 256, timeoutMs = 30_000,
+  signal, fetchImpl = globalThis.fetch,
+} = {}) {
+  if (enabled !== true) deny("EXTERNAL_PROVIDER_DISABLED")
+  if (typeof apiKey !== "string" || !apiKey.trim()) deny("EXTERNAL_API_KEY_MISSING")
+  if (mode !== "realtime") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  if (typeof model !== "string" || !SAFE_MODEL.test(model)) deny("EXTERNAL_API_UNSUPPORTED_MODEL")
+  if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > 40960 ||
+      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  if (baseUrl !== CEREBRAS_BASE_URL) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  // All checks precede payload serialization and either network operation.
+  const boundedSpend = { maxCostUsd: spendPolicy?.maxCostUsd, hardCeilingUsd: spendPolicy?.hardCeilingUsd }
+  assertBoundedSpend(boundedSpend)
+  if (typeof prompt !== "string" || !prompt || prompt.includes("\0") ||
+      (systemPrompt !== null && typeof systemPrompt !== "string")) deny("EXTERNAL_EGRESS_REFUSED")
+  // Normalize once before egress validation; never serialize caller-owned mutable objects after discovery.
+  const requestTools = tools === undefined ? undefined : snapshotOption(tools)
+  const requestResponseFormat = responseFormat === undefined ? undefined : snapshotOption(responseFormat)
+  if (requestTools !== undefined && (!Array.isArray(requestTools) || requestTools.length === 0 ||
+      requestTools.some(t => t?.type !== "function" || typeof t?.function?.name !== "string" || !t.function.name))) {
+    deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  }
+  // This adapter currently accepts text ContextPackages only, even if a discovered model has vision.
+  if (modality !== "text") deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  assertCerebrasEgress(contextPackage, [{ content: prompt }, { content: systemPrompt ?? "" },
+    ...((requestTools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
+    { content: requestResponseFormat === undefined ? "" : safeOptionText(requestResponseFormat) }])
+  if (requestResponseFormat && !["json_object", "json_schema"].includes(requestResponseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+  const schemaCompiler = new Ajv({ strict: true, allowUnionTypes: true })
+  let structuredValidator = null
+  if (requestResponseFormat?.type === "json_schema") {
+    const schema = requestResponseFormat.json_schema?.schema
+    if (!schema || typeof schema !== "object" || Array.isArray(schema) ||
+      safeOptionText(requestResponseFormat).length > 32_768) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    try { structuredValidator = schemaCompiler.compile(schema) }
+    catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+  }
+  const toolValidators = new Map()
+  for (const tool of requestTools ?? []) {
+    const name = tool.function.name
+    if (toolValidators.has(name)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    const parameters = tool.function.parameters
+    if (parameters === undefined) { toolValidators.set(name, null); continue }
+    if (!parameters || typeof parameters !== "object" || Array.isArray(parameters) ||
+      safeOptionText(parameters).length > 32_768) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    try { toolValidators.set(name, schemaCompiler.compile(parameters)) }
+    catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+  }
+  if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener("abort", onAbort, { once: true })
+  if (signal?.aborted) controller.abort()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const started = Date.now()
+  try {
+    if (controller.signal.aborted) deny("EXTERNAL_API_CANCELLED")
+    let catalog
+    try { catalog = await discoverCerebrasModels({ fetchImpl, signal: controller.signal }) }
+    catch (error) {
+      if (controller.signal.aborted) deny(signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_TIMEOUT")
+      throw error
+    }
+    const metadata = catalogModel(catalog, model)
+    const requestedCapabilities = { responseFormat: requestResponseFormat, tools: requestTools, parallelToolCalls, reasoningEffort }
+    if (!supportsCerebrasRequest(metadata, requestedCapabilities)) {
+      deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    }
+    // Reserve against every model the public catalog says the provider could report.
+    // Requested-model pricing alone cannot bound a provider-side model substitution.
+    let maximumPromptPrice = 0
+    let maximumCompletionPrice = 0
+    for (const candidate of catalog.data) {
+      if (candidate?.deprecated === true) continue
+      const inputPrice = positivePrice(candidate?.pricing?.prompt)
+      const outputPrice = positivePrice(candidate?.pricing?.completion)
+      if (inputPrice === null || outputPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")
+      maximumPromptPrice = Math.max(maximumPromptPrice, inputPrice)
+      maximumCompletionPrice = Math.max(maximumCompletionPrice, outputPrice)
+    }
+    // UTF-8 byte count is a conservative token ceiling; reserve output tokens up front.
+    const { messages, digest } = deriveEgressMessages(contextPackage, { userPrompt: prompt, systemPrompt })
+    const request = { model, messages, max_tokens: maxTokens, stream: false }
+    if (requestResponseFormat) request.response_format = requestResponseFormat
+    if (requestTools) { request.tools = requestTools; request.parallel_tool_calls = parallelToolCalls }
+    if (reasoningEffort) request.reasoning_effort = reasoningEffort
+    const serialized = JSON.stringify(request)
+    const reservedCostUsd = Buffer.byteLength(serialized, "utf8") * maximumPromptPrice + maxTokens * maximumCompletionPrice
+    if (reservedCostUsd > boundedSpend.maxCostUsd) deny("SPEND_CAP_EXCEEDS_CEILING")
+    let response
+    try {
+      response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: serialized, signal: controller.signal,
+      })
+    } catch {
+      deny(controller.signal.aborted ? (signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_TIMEOUT") : "EXTERNAL_API_OUTAGE")
+    }
+    if (!response.ok) {
+      const status = response.status
+      if (status === 401 || status === 403) deny("EXTERNAL_API_AUTH_FAILURE", { status })
+      if (status === 402) deny("EXTERNAL_API_INSUFFICIENT_CREDIT", { status })
+      if (status === 429) {
+        const raw = response.headers?.get?.("retry-after")
+        const retryAfterSeconds = /^\d{1,5}$/.test(raw ?? "") ? Number(raw) :
+          (raw && Number.isFinite(Date.parse(raw)) ? Math.max(0, Math.ceil((Date.parse(raw) - Date.now()) / 1000)) : null)
+        deny("EXTERNAL_API_RATE_LIMIT", { status, retryAfterSeconds })
+      }
+      deny(status >= 500 ? "EXTERNAL_API_OUTAGE" : "EXTERNAL_API_HTTP_FAILURE", { status })
+    }
+    let data
+    try { data = await response.json() } catch {
+      deny(controller.signal.aborted ? (signal?.aborted ? "EXTERNAL_API_CANCELLED" : "EXTERNAL_API_TIMEOUT") :
+        "EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    const choice = data?.choices?.[0]
+    const finishReason = choice?.finish_reason
+    if (finishReason === "length" || finishReason === "content_filter") deny("EXTERNAL_API_INCOMPLETE_RESPONSE")
+    if (finishReason !== "stop" && finishReason !== "tool_calls") deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    const message = choice.message
+    const usage = data?.usage
+    if (!message ||
+      typeof data.model !== "string" || !SAFE_MODEL.test(data.model) ||
+      !Number.isSafeInteger(usage?.prompt_tokens) || !Number.isSafeInteger(usage?.completion_tokens) ||
+      usage.prompt_tokens < 0 || usage.completion_tokens < 0 ||
+      (message.tool_calls != null && !Array.isArray(message.tool_calls))) {
+      deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    if (finishReason === "stop" &&
+      (typeof message.content !== "string" || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))) {
+      deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    if (finishReason === "stop" && requestResponseFormat) {
+      let structuredContent
+      try { structuredContent = JSON.parse(message.content) } catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+      if (requestResponseFormat.type === "json_object" &&
+        (structuredContent === null || typeof structuredContent !== "object" || Array.isArray(structuredContent))) {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+      if (structuredValidator && !structuredValidator(structuredContent)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    }
+    if (finishReason === "tool_calls") {
+      if (message.content !== null && typeof message.content !== "string") {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+      if (!requestTools || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+        deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+      if (!parallelToolCalls && message.tool_calls.length > 1) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      for (const call of message.tool_calls) {
+        if (typeof call?.id !== "string" || !call.id || call.type !== "function" ||
+          typeof call.function?.name !== "string" || !toolValidators.has(call.function.name) ||
+          typeof call.function?.arguments !== "string") deny("EXTERNAL_API_MALFORMED_RESPONSE")
+        let parsedArguments
+        try { parsedArguments = JSON.parse(call.function.arguments) }
+        catch { deny("EXTERNAL_API_MALFORMED_RESPONSE") }
+        if (!parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) {
+          deny("EXTERNAL_API_MALFORMED_RESPONSE")
+        }
+        const validateArguments = toolValidators.get(call.function.name)
+        if (validateArguments && !validateArguments(parsedArguments)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+      }
+    }
+    const totalTokens = usage.prompt_tokens + usage.completion_tokens
+    if (!Number.isSafeInteger(totalTokens) ||
+      (usage.total_tokens !== undefined && usage.total_tokens !== totalTokens)) deny("EXTERNAL_API_MALFORMED_RESPONSE")
+    // The provider may report a different model. Never price that usage using the
+    // requested model's tariff or certify it without current actual-model metadata.
+    const actualMetadata = catalogModel(catalog, data.model)
+    if (!supportsCerebrasRequest(actualMetadata, requestedCapabilities)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
+    const actualPromptPrice = positivePrice(actualMetadata.pricing.prompt)
+    const actualCompletionPrice = positivePrice(actualMetadata.pricing.completion)
+    if (actualPromptPrice === null || actualCompletionPrice === null) deny("EXTERNAL_API_COST_EVIDENCE_MISSING")
+    const costUsd = usage.prompt_tokens * actualPromptPrice + usage.completion_tokens * actualCompletionPrice
+    return {
+      schemaVersion: 1, provider: "cerebras", requestedProvider: "cerebras",
+      requestedModel: model, model: data.model, content: message.content ?? null,
+      toolCalls: message.tool_calls ?? null,
+      usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
+        totalTokens, costUsd },
+      receipt: { requestedMaxCostUsd: boundedSpend.maxCostUsd, overBudget: costUsd > boundedSpend.maxCostUsd,
+        contextDigest: digest, durationMs: Date.now() - started, status: "completed" },
+    }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener("abort", onAbort)
   }
 }

@@ -11,6 +11,7 @@ import { hashRecord } from "@/lib/governance/hash"
 import { reservationCoversRequestedPath } from "@/lib/governance/work-context-gate"
 import { providedAuthorityRank, requiredAuthorityRank } from "@/lib/goal/taxonomy"
 import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export const CODEX_ASSIGNMENT_VERSION = "loom-codex-assignment.v1" as const
@@ -241,6 +242,7 @@ export async function inspectCodexAssignmentTarget(
       encoding: "utf8",
       maxBuffer: 1_000_000,
       windowsHide: true,
+      env: withoutCerebrasChildEnvironment(process.env),
     })
     tracked = result.stdout
   } catch {

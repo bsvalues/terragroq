@@ -4,6 +4,8 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
+
 const run = promisify(execFile)
 
 /**
@@ -41,13 +43,15 @@ export interface LiveWorkContext {
  */
 export async function measureCurrentMain(): Promise<string | null> {
   try {
-    await run("git", ["fetch", "--quiet", "origin", "main"], { cwd: PROJECT_ROOT, timeout: 60_000, windowsHide: true })
+    await run("git", ["fetch", "--quiet", "origin", "main"], { cwd: PROJECT_ROOT, timeout: 60_000,
+      windowsHide: true, env: withoutCerebrasChildEnvironment(process.env) })
   } catch {
     // A fetch failure must not fall back to the cached ref: unknown is safer than confidently stale.
     return null
   }
   try {
-    const { stdout } = await run("git", ["rev-parse", "origin/main"], { cwd: PROJECT_ROOT, timeout: 30_000, windowsHide: true })
+    const { stdout } = await run("git", ["rev-parse", "origin/main"], { cwd: PROJECT_ROOT, timeout: 30_000,
+      windowsHide: true, env: withoutCerebrasChildEnvironment(process.env) })
     const sha = stdout.trim()
     return /^[0-9a-f]{40}$/i.test(sha) ? sha : null
   } catch {

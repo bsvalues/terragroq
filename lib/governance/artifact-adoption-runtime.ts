@@ -27,6 +27,7 @@ import {
 } from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
 import { hashRecord } from "@/lib/governance/hash"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/repository-lifecycle.mjs"
 
 const runFile = promisify(execFile)
@@ -42,6 +43,10 @@ type CommandRunner = (
   args: readonly string[],
   options: Readonly<{ encoding?: "utf8"; windowsHide: true }>,
 ) => Promise<Readonly<{ stdout: string }>>
+
+const defaultCommandRunner: CommandRunner = (executable, args, options) =>
+  runFile(executable, [...args], { ...options, env: withoutCerebrasChildEnvironment(process.env) }) as
+    Promise<Readonly<{ stdout: string }>>
 
 type QueryResult = { rows: Record<string, unknown>[] }
 type Queryable = { query(sql: string, values?: readonly unknown[]): Promise<QueryResult> }
@@ -235,7 +240,7 @@ export async function deriveArtifactAdoptionBaseSha(
   repository: string,
   pullRequest: number,
   headSha: string,
-  execute: CommandRunner = runFile as unknown as CommandRunner,
+  execute: CommandRunner = defaultCommandRunner,
 ): Promise<Readonly<{ pullRequestBaseSha: string; baseRefSha: string; mergeBaseSha: string }>> {
   try {
     const slug = repository.replace(/^https:\/\/github\.com\//, "")

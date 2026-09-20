@@ -9,6 +9,7 @@ import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
 import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
+import { withoutCerebrasChildEnvironment } from "@/lib/loom/child-environment"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -102,7 +103,7 @@ export async function POST(request: Request) {
     cwd: projectRoot,
     shell: false,
     windowsHide: true,
-    env: { ...process.env, ...operation.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    env: withoutCerebrasChildEnvironment({ ...process.env, ...operation.env, NO_COLOR: "1", FORCE_COLOR: "0" }),
   })
 
   let bytes = 0
