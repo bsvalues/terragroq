@@ -108,6 +108,91 @@ describe("Hello Application runtime routes", () => {
     await expect(response.text()).resolves.toContain("Hello Application")
   })
 
+  it.each([
+    ["a non-OK status", 503, "text/html", "HELLO_APPLICATION_UPSTREAM_503"],
+    ["an invalid content type", 200, "application/json", "HELLO_APPLICATION_PREVIEW_TYPE_INVALID"],
+  ])("aborts and cancels the upstream body when refusing %s", async (_label, status, contentType, expected) => {
+    const cancel = vi.fn()
+    let signal: AbortSignal | undefined
+    const body = new ReadableStream<Uint8Array>({ cancel })
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url, options: RequestInit) => {
+      signal = options.signal as AbortSignal
+      return Promise.resolve(new Response(body, { status, headers: { "content-type": contentType } }))
+    }))
+
+    const response = await PREVIEW()
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: expected })
+    expect(signal?.aborted).toBe(true)
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it("rejects a declared oversized preview before reading and cancels the upstream body", async () => {
+    const cancel = vi.fn()
+    const body = new ReadableStream<Uint8Array>({ cancel })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, {
+      headers: { "content-type": "text/html", "content-length": "1000001" },
+    })))
+
+    const response = await PREVIEW()
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_APPLICATION_PREVIEW_TOO_LARGE" })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it("stops and cancels a chunked preview as soon as the hard body cap is crossed", async () => {
+    const cancel = vi.fn()
+    const chunks = [new Uint8Array(600_000), new Uint8Array(400_001)]
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift()
+        if (chunk) controller.enqueue(chunk)
+      },
+      cancel,
+    })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, {
+      headers: { "content-type": "text/html" },
+    })))
+
+    const response = await PREVIEW()
+
+    expect(response.status).toBe(502)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_APPLICATION_PREVIEW_TOO_LARGE" })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it("keeps the preview deadline active through a body that stalls after headers", async () => {
+    vi.useFakeTimers()
+    const cancel = vi.fn()
+    let signal: AbortSignal | undefined
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("<!doctype html>")) },
+      pull: () => new Promise<void>(() => {}),
+      cancel,
+    })
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url, options: RequestInit) => {
+      signal = options.signal as AbortSignal
+      return Promise.resolve(new Response(body, { headers: { "content-type": "text/html" } }))
+    }))
+
+    try {
+      let response: Response | undefined
+      void PREVIEW().then((value) => { response = value })
+      await vi.advanceTimersByTimeAsync(5_001)
+      await Promise.resolve()
+
+      expect(response).toBeInstanceOf(Response)
+      expect(response!.status).toBe(502)
+      await expect(response!.json()).resolves.toEqual({ error: "HELLO_APPLICATION_PREVIEW_UNAVAILABLE" })
+      expect(signal?.aborted).toBe(true)
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("refuses preview when the supervised process is not running", async () => {
     seams.getRuntime.mockReturnValue({ ...running, state: "stopped", url: null, pid: null })
     const response = await PREVIEW()

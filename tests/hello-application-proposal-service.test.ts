@@ -130,6 +130,115 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(proposal.progress).toHaveLength(6)
   })
 
+  it("fails closed before READY when the proposal worktree cannot be removed", async () => {
+    const setup = fixture()
+    const stages: string[] = []
+    let workspace = ""
+
+    await expect(createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: async ({ workspacePath }: { workspacePath: string }) => {
+        workspace = workspacePath
+        git(setup.repositoryRoot, ["worktree", "lock", workspacePath])
+        return validation()
+      },
+      onProgress: (event: { stage: string }) => stages.push(event.stage),
+    })).rejects.toThrow("HELLO_PROPOSAL_WORKTREE_CLEANUP_FAILED")
+
+    expect(stages).toEqual(["accepted", "workspace_ready", "resident_started", "resident_finished", "validation_started"])
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toEqual([])
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    expect(fs.existsSync(proposalRoot) ? fs.readdirSync(proposalRoot) : []).toEqual([])
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+
+    git(setup.repositoryRoot, ["worktree", "unlock", workspace])
+    git(setup.repositoryRoot, ["worktree", "remove", "--force", workspace])
+  })
+
+  it("removes proposal artifacts when receipt publication becomes uncertain after patch creation", async () => {
+    const setup = fixture()
+    const rename = fs.renameSync
+    vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      if (String(target).includes("hello-application-proposals") && String(target).endsWith(".json")) {
+        rename(source, target)
+        throw new Error("controlled receipt publish failure")
+      }
+      return rename(source, target)
+    })
+
+    await expect(createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })).rejects.toThrow("controlled receipt publish failure")
+
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toEqual([])
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    expect(fs.existsSync(proposalRoot) ? fs.readdirSync(proposalRoot) : []).toEqual([])
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it.each([
+    ["one 524,288-byte allowed file", (workspacePath: string) => {
+      fs.writeFileSync(sourcePath(workspacePath, "examples/hello-application/src/app.js"), Buffer.alloc(524_288, "a"))
+    }],
+    ["an aggregate over one MiB", (workspacePath: string) => {
+      for (const relativePath of [
+        "examples/hello-application/src/app.js",
+        "examples/hello-application/src/index.html",
+        "examples/hello-application/src/styles.css",
+      ]) fs.writeFileSync(sourcePath(workspacePath, relativePath), Buffer.alloc(400_000, "a"))
+    }],
+  ])("rejects %s before snapshot, diff, validation, or READY", async (_label, mutate) => {
+    const setup = fixture()
+    const stages: string[] = []
+    const validateWorkspace = vi.fn(validation)
+
+    await expect(createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Make a bounded source change",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        mutate(workspacePath)
+        return { threadId: "thread-size", turnId: "turn-size", model: "model", ignoredPathsCreated: [] }
+      },
+      validateWorkspace,
+      onProgress: (event: { stage: string }) => stages.push(event.stage),
+    })).rejects.toThrow("HELLO_PROPOSAL_SOURCE_SIZE_REFUSED")
+
+    expect(validateWorkspace).not.toHaveBeenCalled()
+    expect(stages).not.toContain("validation_started")
+    expect(stages).not.toContain("ready_for_review")
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toEqual([])
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("bounds Apply validation sources before reading a full snapshot or invoking validation", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const target = path.resolve(sourcePath(setup.repositoryRoot, "examples/hello-application/src/app.js"))
+    const lstat = fs.lstatSync
+    vi.spyOn(fs, "lstatSync").mockImplementation(((candidate: fs.PathLike, options?: unknown) => {
+      const result = lstat(candidate, options as never)
+      if (path.resolve(String(candidate)) === target) Object.assign(result, { size: 524_288 })
+      return result
+    }) as typeof fs.lstatSync)
+    const validateWorkspace = vi.fn(validation)
+
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace }))
+      .rejects.toThrow("HELLO_PROPOSAL_SOURCE_SIZE_REFUSED")
+    expect(validateWorkspace).not.toHaveBeenCalled()
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
   it("recovers malformed completion with edits intact and the exact owner request in both prompts", async () => {
     const prompts: string[] = []
     const changedPaths = ["examples/hello-application/src/app.js"]
@@ -156,6 +265,71 @@ describe("Hello Application governed HERMES proposals", () => {
       })).rejects.toBe(error)
       expect(calls).toBe(1)
     }
+  })
+
+  it("shares one aggregate resident deadline across successful correction retries", async () => {
+    const failure = Object.assign(new Error("invalid"), { name: "AppServerTurnEndedError", status: "failed", detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing" })
+    const budgets: number[] = []
+    let now = 10_000
+    let attempts = 0
+    const result = await service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Use one bounded deadline",
+      timeoutMs: 1_000,
+      now: () => now,
+      readChangedPaths: async () => ["examples/hello-application/src/app.js"],
+      client: { runTurn: async ({ timeoutMs }) => {
+        budgets.push(timeoutMs)
+        attempts++
+        now += attempts === 1 ? 300 : attempts === 2 ? 300 : 100
+        if (attempts < 3) throw failure
+        return { turnId: "turn-three", status: "completed" }
+      } },
+    })
+
+    expect(result.attempts).toBe(3)
+    expect(budgets).toEqual([1_000, 700, 400])
+  })
+
+  it("does not begin another resident retry after the aggregate deadline is exhausted", async () => {
+    const failure = Object.assign(new Error("invalid"), { name: "AppServerTurnEndedError", status: "failed", detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing" })
+    let now = 20_000
+    const budgets: number[] = []
+
+    await expect(service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Stop at the aggregate deadline",
+      timeoutMs: 100,
+      now: () => now,
+      readChangedPaths: async () => ["examples/hello-application/src/app.js"],
+      client: { runTurn: async ({ timeoutMs }) => {
+        budgets.push(timeoutMs)
+        now += 100
+        throw failure
+      } },
+    })).rejects.toThrow("HELLO_PROPOSAL_RESIDENT_TIMEOUT")
+    expect(budgets).toEqual([100])
+  })
+
+  it.each(["evidence verification", "changed-path inspection"])("enforces the resident deadline across slow %s", async (phase) => {
+    let now = 30_000
+    let pathReads = 0
+
+    await expect(service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Bound the complete resident attempt",
+      timeoutMs: 100,
+      now: () => now,
+      verifyAttempt: async () => { if (phase === "evidence verification") now += 100 },
+      readChangedPaths: async () => {
+        pathReads++
+        if (phase === "changed-path inspection") now += 100
+        return ["examples/hello-application/src/app.js"]
+      },
+      client: { runTurn: async () => ({ turnId: "turn-one", status: "completed" }) },
+    })).rejects.toThrow("HELLO_PROPOSAL_RESIDENT_TIMEOUT")
+
+    expect(pathReads).toBe(phase === "evidence verification" ? 0 : 1)
   })
 
   it.each(["ignored", "null", "packet_hash", "workspace", "missing_record", "early_failure", "good"])("reads default resident session evidence: %s", async (mode) => {

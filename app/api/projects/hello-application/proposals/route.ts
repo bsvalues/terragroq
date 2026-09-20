@@ -22,6 +22,32 @@ const PROGRESS_STAGES = new Set([
   "validation_started",
   "ready_for_review",
 ])
+const TERMINAL_ERROR_CODES = new Set([
+  "HELLO_PROPOSAL_BASE_INVALID",
+  "HELLO_PROPOSAL_CANONICAL_DIRTY",
+  "HELLO_PROPOSAL_COMMIT_INVALID",
+  "HELLO_PROPOSAL_DIFF_INVALID",
+  "HELLO_PROPOSAL_IGNORED_PATH_REFUSED",
+  "HELLO_PROPOSAL_NO_CHANGE",
+  "HELLO_PROPOSAL_PATCH_INVALID",
+  "HELLO_PROPOSAL_PATCH_SCOPE_MISMATCH",
+  "HELLO_PROPOSAL_PATCH_SIZE_REFUSED",
+  "HELLO_PROPOSAL_PATH_REFUSED",
+  "HELLO_PROPOSAL_POLICY_INVALID",
+  "HELLO_PROPOSAL_RECEIPT_INVALID",
+  "HELLO_PROPOSAL_RENAME_REFUSED",
+  "HELLO_PROPOSAL_REPOSITORY_INVALID",
+  "HELLO_PROPOSAL_REQUEST_INVALID",
+  "HELLO_PROPOSAL_RESIDENT_EVIDENCE_INVALID",
+  "HELLO_PROPOSAL_RESIDENT_HEAD_MUTATED",
+  "HELLO_PROPOSAL_RESIDENT_TIMEOUT",
+  "HELLO_PROPOSAL_SOURCE_SIZE_REFUSED",
+  "HELLO_PROPOSAL_VALIDATION_FAILED",
+  "HELLO_PROPOSAL_VALIDATION_HASH_MISMATCH",
+  "HELLO_PROPOSAL_WORKSPACE_FILE_INVALID",
+  "HELLO_PROPOSAL_WORKTREE_CLEANUP_FAILED",
+  "HELLO_PROPOSAL_WORKTREE_INVALID",
+])
 
 const invalidRequest = () => Response.json({ error: "HELLO_PROPOSAL_REQUEST_INVALID" }, {
   status: 400,
@@ -36,6 +62,13 @@ function proposalRequestText(value: unknown): string | null {
   if (typeof requestText !== "string") return null
   const trimmed = requestText.trim()
   return trimmed && trimmed.length <= 2_000 && !trimmed.includes("\0") ? trimmed : null
+}
+
+function terminalErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "HELLO_PROPOSAL_FAILED"
+  const separator = error.message.indexOf(":")
+  const code = separator === -1 ? error.message : error.message.slice(0, separator)
+  return TERMINAL_ERROR_CODES.has(code) ? code : "HELLO_PROPOSAL_FAILED"
 }
 
 export async function GET() {
@@ -101,7 +134,7 @@ export async function POST(request: Request) {
           onProgress,
         })).then(
           (proposal) => finish({ type: "proposal", proposal }),
-          () => finish({ type: "error", error: "HELLO_PROPOSAL_FAILED" }),
+          (error) => finish({ type: "error", error: terminalErrorCode(error) }),
         )
       })
     },

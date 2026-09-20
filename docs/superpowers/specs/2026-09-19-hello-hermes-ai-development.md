@@ -92,4 +92,3 @@ The assistant is an embedded project instrument above the preview, not a global 
 - A second materially different request is successfully proposed and applied.
 - Reload plus cold restart preserve both applied commits and receipts.
 - No one-shot containers or proposal worktrees remain; the unrelated Nous container and all TerraFusion state remain untouched.
-

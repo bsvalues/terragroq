@@ -187,6 +187,24 @@ describe("Hello Application proposal routes", () => {
     expect(body).not.toContain("sensitive")
   })
 
+  it.each([
+    ["HELLO_PROPOSAL_VALIDATION_FAILED", "HELLO_PROPOSAL_VALIDATION_FAILED"],
+    ["HELLO_PROPOSAL_SOURCE_SIZE_REFUSED", "HELLO_PROPOSAL_SOURCE_SIZE_REFUSED"],
+    ["HELLO_PROPOSAL_PATCH_SIZE_REFUSED", "HELLO_PROPOSAL_PATCH_SIZE_REFUSED"],
+    ["HELLO_PROPOSAL_VALIDATION_FAILED:container stderr must not cross", "HELLO_PROPOSAL_VALIDATION_FAILED"],
+    ["HELLO_PROPOSAL_UNKNOWN_INTERNAL:secret detail", "HELLO_PROPOSAL_FAILED"],
+  ])("emits only an allowlisted stable terminal code for %s", async (message, expected) => {
+    seams.createProposal.mockRejectedValue(new Error(message))
+
+    const response = await POST(mutation())
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toBe(`${JSON.stringify({ type: "error", error: expected })}\n`)
+    expect(body).not.toContain("stderr must not cross")
+    expect(body).not.toContain("secret detail")
+  })
+
   it("absorbs cancellation, late progress, and late failure without a duplicate terminal or unhandled rejection", async () => {
     let rejectProposal!: (reason: Error) => void
     let onProgress!: (event: Record<string, unknown>) => void
