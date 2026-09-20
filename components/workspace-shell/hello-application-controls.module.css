@@ -1,4 +1,5 @@
 .controls {
+  flex: none;
   border-bottom: 1px solid #33414c;
   color: #dfe7e8;
   background: #101a22;
@@ -6,106 +7,96 @@
 }
 
 .runtimeStrip,
-.governanceStrip,
-.receipt,
-.receiptHead,
 .actions,
-.agent,
-.boundary,
-.proposalState {
+.identity {
   display: flex;
   align-items: center;
 }
 
-.runtimeStrip,
-.governanceStrip {
-  min-height: 31px;
+.runtimeStrip {
+  min-height: 38px;
   gap: 12px;
-  padding: 0 10px;
-  border-bottom: 1px solid #26343f;
+  padding: 0 12px;
+  border-bottom: 1px solid #2d3d48;
+  background: #0e1820;
 }
 
 .identity {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
+  gap: 8px;
+  color: #eef3f3;
+  font-size: 13px;
   font-weight: 680;
 }
 
 .signal {
-  width: 14px;
+  width: 15px;
   height: 2px;
-  background: #ff6b35;
+  flex: none;
+  background: #e0642e;
   box-shadow: 5px -3px 0 #6ca6c1, 10px 2px 0 #4f772d;
 }
 
 .runtimeState {
-  color: #8fa0ac;
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 9px;
+  color: #99aab3;
+  font: 12px var(--font-geist-mono), monospace;
 }
 
-.runtimeState[data-state="running"] { color: #9bc28c; }
-.runtimeState[data-state="failed"] { color: #ee9070; }
+.runtimeState[data-state="running"] { color: #add09f; }
+.runtimeState[data-state="failed"] { color: #f0a184; }
 
 .actions {
-  gap: 6px;
+  gap: 7px;
   margin-left: auto;
 }
 
-.actions button,
-.propose,
-.apply {
+.actions button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 23px;
-  padding: 0 8px;
-  border: 1px solid #3a4a56;
-  color: #cbd6da;
+  gap: 6px;
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid #40535f;
+  border-radius: 3px;
+  color: #d1dcdf;
   background: #17232c;
-  font-size: 9px;
+  font: 12px var(--font-geist-sans), sans-serif;
   cursor: pointer;
 }
 
-.actions button:hover:not(:disabled),
-.propose:hover:not(:disabled) { border-color: #6ca6c1; color: #fff; }
-.actions button:disabled,
-.propose:disabled,
-.apply:disabled { cursor: wait; opacity: 0.55; }
-
-.agent { gap: 6px; color: #f0f3f1; font-size: 10px; }
-.boundary { gap: 5px; color: #8fa0ac; font-size: 9px; }
-.propose { margin-left: auto; border-color: #835037; color: #ffe6d8; background: #392419; }
-
-.receipt {
-  min-height: 34px;
-  gap: 10px;
-  padding: 5px 10px;
-  background: #122129;
-  flex-wrap: wrap;
+.actions button:hover:not(:disabled) {
+  border-color: #75abc3;
+  color: #fff;
+  background: #1b2b35;
 }
 
-.receiptHead { flex-wrap: wrap; gap: 8px; color: #8fa0ac; font-family: var(--font-geist-mono), monospace; font-size: 8px; }
-.proposalState { gap: 4px; color: #a8ce99; font-family: var(--font-geist-sans), sans-serif; font-size: 9px; font-weight: 650; }
-.paths { display: flex; gap: 5px; margin: 0; padding: 0; list-style: none; }
-.paths li { padding: 2px 5px; border-left: 2px solid #6ca6c1; color: #bcc9cf; background: #172831; font-family: var(--font-geist-mono), monospace; font-size: 8px; }
-.apply { margin-left: auto; border-color: #4f772d; color: #e5f4df; background: #23351a; }
-.review {
-  flex: 1 0 100%;
-  box-sizing: border-box;
-  max-height: 180px;
-  margin: 2px 0;
-  padding: 8px;
-  overflow: auto;
-  border: 1px solid #2d424e;
-  color: #c5d1d6;
-  background: #0d171d;
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
-  line-height: 1.45;
-  white-space: pre;
+.actions button:focus-visible {
+  outline: 2px solid #9bd2ec;
+  outline-offset: 2px;
 }
-.reviewUnavailable { flex-basis: 100%; margin: 2px 0; color: #ee9070; font-size: 9px; }
-.error { margin: 0; padding: 6px 10px; border-left: 3px solid #ff6b35; color: #ffd8ca; background: #351b16; font-family: var(--font-geist-mono), monospace; font-size: 9px; }
+
+.actions button:disabled {
+  cursor: wait;
+  opacity: .58;
+}
+
+.runtimeError {
+  margin: 0;
+  padding: 7px 12px;
+  border-left: 3px solid #e0642e;
+  border-bottom: 1px solid #5a2b20;
+  color: #ffd9c9;
+  background: #351b16;
+  font: 12px/1.4 var(--font-geist-mono), monospace;
+}
+
+@media (max-width: 560px) {
+  .runtimeStrip {
+    flex-wrap: wrap;
+    padding-block: 8px;
+  }
+
+  .actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
