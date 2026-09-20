@@ -14,7 +14,7 @@ type ProgressEntry = Readonly<{
 type Proposal = Readonly<{
   schemaVersion: 1 | 2
   proposalId: string
-  status: "READY_FOR_REVIEW" | "APPLY_IN_PROGRESS" | "APPLIED" | "QUARANTINED_ROLLBACK_FAILED"
+  status: "READY_FOR_REVIEW" | "APPLY_IN_PROGRESS" | "APPLIED" | "REJECT_IN_PROGRESS" | "REJECTED" | "QUARANTINED_ROLLBACK_FAILED"
   requestedBy: string
   requestText?: string
   requestSha256?: string
@@ -24,6 +24,9 @@ type Proposal = Readonly<{
   appliedAt: string | null
   appliedCommit?: string | null
   applyStartedAt?: string
+  rejectStartedAt?: string
+  rejectedAt?: string
+  rejectionReason?: string
   baseSha: string
   proposalCommit: string
   branch: string
@@ -42,6 +45,7 @@ type StreamTerminal =
   | Readonly<{ type: "error"; error: string }>
 
 const MAX_REQUEST_LENGTH = 2_000
+const MAX_REJECTION_REASON_LENGTH = 500
 const MAX_VALIDATION_OUTPUT_LENGTH = 12_000
 const PROPOSAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PATCH_SHA256 = /^[0-9a-f]{64}$/
@@ -97,6 +101,17 @@ function receiptText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value && !/[\0\r\n]/.test(value)
 }
 
+function acceptedRejectionReason(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_REJECTION_REASON_LENGTH
+    && value.trim() === value && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(value)
+}
+
+function normalizedRejectionReason(value: unknown): string | null {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return null
+  const trimmed = value.trim()
+  return acceptedRejectionReason(trimmed) ? trimmed : null
+}
+
 function boundedRequest(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_REQUEST_LENGTH
     && value.trim() === value && !value.includes("\0")
@@ -144,7 +159,7 @@ function proposalRecord(value: unknown): value is Proposal {
   if (!record(value)) return false
   if (value.schemaVersion !== 1 && value.schemaVersion !== 2) return false
   if (!nonempty(value.proposalId) || !PROPOSAL_ID.test(value.proposalId)
-    || !["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
+    || !["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "REJECT_IN_PROGRESS", "REJECTED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
     || !receiptText(value.requestedBy) || !timestamp(value.createdAt)
     || !nonempty(value.baseSha) || !COMMIT_SHA.test(value.baseSha)
     || !nonempty(value.proposalCommit) || !COMMIT_SHA.test(value.proposalCommit)
@@ -158,7 +173,11 @@ function proposalRecord(value: unknown): value is Proposal {
       ? [...V2_PROPOSAL_KEYS, "quarantinedAt"]
       : value.status === "APPLY_IN_PROGRESS"
         ? [...V2_PROPOSAL_KEYS, "applyStartedAt"]
-        : V2_PROPOSAL_KEYS
+        : value.status === "REJECT_IN_PROGRESS"
+          ? [...V2_PROPOSAL_KEYS, "rejectStartedAt", "rejectionReason"]
+          : value.status === "REJECTED"
+            ? [...V2_PROPOSAL_KEYS, "rejectedAt", "rejectionReason"]
+            : V2_PROPOSAL_KEYS
     if (!exactKeys(value, keys)) return false
   }
   if (value.status === "READY_FOR_REVIEW" && !nonempty(value.reviewPatch)) return false
@@ -190,6 +209,16 @@ function proposalRecord(value: unknown): value is Proposal {
     if (value.schemaVersion !== 2 || !timestamp(value.applyStartedAt) || value.applyStartedAt < value.createdAt
       || (Array.isArray(value.progress) && value.applyStartedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at)) return false
   } else if (value.applyStartedAt !== undefined) return false
+  if (value.status === "REJECT_IN_PROGRESS") {
+    if (!timestamp(value.rejectStartedAt) || value.rejectStartedAt < value.createdAt
+      || !acceptedRejectionReason(value.rejectionReason)
+      || (Array.isArray(value.progress) && value.rejectStartedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at)) return false
+  } else if (value.rejectStartedAt !== undefined) return false
+  if (value.status === "REJECTED") {
+    if (!timestamp(value.rejectedAt) || value.rejectedAt < value.createdAt
+      || !acceptedRejectionReason(value.rejectionReason)
+      || (Array.isArray(value.progress) && value.rejectedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at)) return false
+  } else if (value.rejectedAt !== undefined || (value.status !== "REJECT_IN_PROGRESS" && value.rejectionReason !== undefined)) return false
   if (value.requestText !== undefined && !boundedRequest(value.requestText)) return false
   if (value.requestSha256 !== undefined && (typeof value.requestSha256 !== "string" || !PATCH_SHA256.test(value.requestSha256))) return false
   if (value.executionNode !== undefined && !receiptText(value.executionNode)) return false
@@ -288,24 +317,65 @@ function applyingProposalRecord(value: unknown, reviewed: Proposal): value is Pr
     && sameValidation(value.validation, reviewed.validation)
 }
 
-type ApplyReconciliation = Readonly<{
-  state: "applied" | "ready" | "applying" | "quarantined"
+function rejectedProposalRecord(value: unknown, reviewed: Proposal, reason?: string): value is Proposal {
+  return proposalRecord(value) && value.status === "REJECTED"
+    && sameReviewedEvidence(value, reviewed)
+    && sameValidation(value.validation, reviewed.validation)
+    && (reason === undefined || value.rejectionReason === reason)
+}
+
+function rejectingProposalRecord(value: unknown, reviewed: Proposal, reason?: string): value is Proposal {
+  return proposalRecord(value) && value.status === "REJECT_IN_PROGRESS"
+    && sameReviewedEvidence(value, reviewed)
+    && sameValidation(value.validation, reviewed.validation)
+    && (reason === undefined || value.rejectionReason === reason)
+}
+
+type ProposalReconciliation = Readonly<{
+  state: "applied" | "ready" | "applying" | "rejecting" | "rejected" | "quarantined"
   proposal: Proposal
 }>
 
-async function reconcileApplyOutcome(reviewed: Proposal): Promise<ApplyReconciliation> {
+async function readVerifiedProposalList(): Promise<readonly Proposal[]> {
   const response = await fetch("/api/projects/hello-application/proposals", { cache: "no-store" })
   const payload = await responseJson(response)
   if (!record(payload) || !exactKeys(payload, ["proposals"]) || !Array.isArray(payload.proposals)) {
     throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
   }
-  const matches = payload.proposals.filter((candidate) => record(candidate) && candidate.proposalId === reviewed.proposalId)
+  const proposals = await Promise.all(payload.proposals.map((candidate) => verifiedProposalRecord(candidate)))
+  if (proposals.some((candidate) => !candidate)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  const verified = proposals as Proposal[]
+  if (new Set(verified.map((candidate) => candidate.proposalId)).size !== verified.length) {
+    throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  }
+  return verified
+}
+
+const PENDING_STATUS_PRIORITY: readonly Proposal["status"][] = [
+  "REJECT_IN_PROGRESS",
+  "APPLY_IN_PROGRESS",
+  "READY_FOR_REVIEW",
+  "QUARANTINED_ROLLBACK_FAILED",
+]
+
+function pendingProposal(proposals: readonly Proposal[], excludedProposalId?: string): Proposal | null {
+  for (const status of PENDING_STATUS_PRIORITY) {
+    const proposal = proposals.find((candidate) => candidate.proposalId !== excludedProposalId && candidate.status === status)
+    if (proposal) return proposal
+  }
+  return null
+}
+
+async function reconcileProposalOutcome(reviewed: Proposal, rejectionReason?: string): Promise<ProposalReconciliation> {
+  const proposals = await readVerifiedProposalList()
+  const matches = proposals.filter((candidate) => candidate.proposalId === reviewed.proposalId)
   if (matches.length !== 1) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
-  const verified = await verifiedProposalRecord(matches[0])
-  if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  const verified = matches[0]
   if (appliedProposalRecord(verified, reviewed)) return { state: "applied", proposal: verified }
   if (readyProposalRecord(verified, reviewed)) return { state: "ready", proposal: verified }
   if (applyingProposalRecord(verified, reviewed)) return { state: "applying", proposal: verified }
+  if (rejectingProposalRecord(verified, reviewed, rejectionReason)) return { state: "rejecting", proposal: verified }
+  if (rejectedProposalRecord(verified, reviewed, rejectionReason)) return { state: "rejected", proposal: verified }
   if (quarantinedProposalRecord(verified, reviewed)) return { state: "quarantined", proposal: verified }
   throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
 }
@@ -404,6 +474,8 @@ function statusLabel(status: string): string {
   if (status === "READY_FOR_REVIEW") return "Ready for review"
   if (status === "APPLY_IN_PROGRESS") return "Apply in progress"
   if (status === "APPLIED") return "Applied"
+  if (status === "REJECT_IN_PROGRESS") return "Reject in progress"
+  if (status === "REJECTED") return "Rejected / discarded"
   if (status === "QUARANTINED_ROLLBACK_FAILED") return "Quarantined"
   return status
 }
@@ -411,13 +483,27 @@ function statusLabel(status: string): string {
 function ProposalReview({
   proposal,
   applying,
+  rejecting,
   applyBlocked,
+  confirmingReject,
+  rejectionReason,
   onApply,
+  onBeginReject,
+  onCancelReject,
+  onRejectionReasonChange,
+  onReject,
 }: Readonly<{
   proposal: Proposal
   applying: boolean
+  rejecting: boolean
   applyBlocked: boolean
+  confirmingReject: boolean
+  rejectionReason: string
   onApply: () => void
+  onBeginReject: () => void
+  onCancelReject: () => void
+  onRejectionReasonChange: (value: string) => void
+  onReject: () => void
 }>) {
   const schemaOne = proposal.schemaVersion === 1
   const request = proposal.requestText || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
@@ -439,7 +525,7 @@ function ProposalReview({
           <dl className={styles.evidence} aria-label="Resident execution evidence">
             <div><dt>Request</dt><dd>{request}</dd></div>
             <div><dt>Execution node (actual)</dt><dd>{executionNode}</dd></div>
-            <div><dt>Resident model (actual)</dt><dd>{proposal.model}</dd></div>
+            <div><dt>Resident model alias</dt><dd>{proposal.model}</dd></div>
             <div><dt>Thread</dt><dd>{proposal.threadId}</dd></div>
             <div><dt>Turn</dt><dd>{proposal.turnId}</dd></div>
           </dl>
@@ -471,19 +557,83 @@ function ProposalReview({
         </div>
       </details>
 
+      {proposal.status === "REJECTED" ? (
+        <dl className={styles.rejectionAudit} aria-label="Proposal rejection audit">
+          <div><dt>Rejected at</dt><dd>{proposal.rejectedAt}</dd></div>
+          <div><dt>Reason</dt><dd>{proposal.rejectionReason}</dd></div>
+        </dl>
+      ) : null}
+
+      {proposal.status === "REJECT_IN_PROGRESS" ? (
+        <>
+          <dl className={styles.rejectionAudit} aria-label="Proposal rejection in progress">
+            <div><dt>Rejection started</dt><dd>{proposal.rejectStartedAt}</dd></div>
+            <div><dt>Reason</dt><dd>{proposal.rejectionReason}</dd></div>
+          </dl>
+          <div className={styles.applyBar}>
+            <span>The durable rejection claim is incomplete. Resume it to finish discarding this proposal.</span>
+            <button
+              type="button"
+              className={styles.reject}
+              onClick={onReject}
+              disabled={rejecting || applyBlocked}
+              aria-label="Resume rejection"
+            >
+              {rejecting ? "Resuming rejection…" : "Resume rejection"}
+            </button>
+          </div>
+        </>
+      ) : null}
+
       {proposal.status === "READY_FOR_REVIEW" ? (
-        <div className={styles.applyBar}>
-          <span>{applyBlocked ? "Apply is blocked until authoritative proposal state is available." : "Canonical source remains unchanged until you apply."}</span>
-          <button
-            type="button"
-            className={styles.apply}
-            onClick={onApply}
-            disabled={applying || applyBlocked || !proposal.reviewPatch}
-            aria-label="Apply proposal"
-          >
-            {applying ? "Applying proposal…" : "Apply proposal"}
-          </button>
-        </div>
+        confirmingReject ? (
+          <div className={styles.rejectConfirmation} role="group" aria-label="Confirm proposal rejection">
+            <label htmlFor={`hello-rejection-${proposal.proposalId}`}>Rejection reason</label>
+            <textarea
+              id={`hello-rejection-${proposal.proposalId}`}
+              value={rejectionReason}
+              onChange={(event) => onRejectionReasonChange(event.target.value)}
+              maxLength={MAX_REJECTION_REASON_LENGTH}
+              rows={2}
+              disabled={rejecting || applyBlocked}
+            />
+            <span className={styles.rejectActions}>
+              <button type="button" onClick={onCancelReject} disabled={rejecting}>Cancel rejection</button>
+              <button
+                type="button"
+                className={styles.reject}
+                onClick={onReject}
+                disabled={rejecting || applyBlocked || normalizedRejectionReason(rejectionReason) === null}
+              >
+                {rejecting ? "Rejecting proposal…" : "Confirm rejection"}
+              </button>
+            </span>
+          </div>
+        ) : (
+          <div className={styles.applyBar}>
+            <span>{applyBlocked ? "Apply is blocked until authoritative proposal state is available." : "Canonical source remains unchanged until you apply or reject."}</span>
+            <span className={styles.reviewActions}>
+              <button
+                type="button"
+                className={styles.reject}
+                onClick={onBeginReject}
+                disabled={applying || applyBlocked}
+                aria-label="Reject proposal"
+              >
+                Reject / discard
+              </button>
+              <button
+                type="button"
+                className={styles.apply}
+                onClick={onApply}
+                disabled={applying || applyBlocked || !proposal.reviewPatch}
+                aria-label="Apply proposal"
+              >
+                {applying ? "Applying proposal…" : "Apply proposal"}
+              </button>
+            </span>
+          </div>
+        )
       ) : null}
     </section>
   )
@@ -497,33 +647,52 @@ export function HelloApplicationAssistant({
   const [events, setEvents] = useState<readonly ProgressEntry[]>([])
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [applyBlocked, setApplyBlocked] = useState(false)
-  const [busy, setBusy] = useState<"proposal" | "apply" | null>(null)
+  const [confirmingReject, setConfirmingReject] = useState(false)
+  const [rejectionReason, setRejectionReason] = useState("")
+  const [busy, setBusy] = useState<"proposal" | "apply" | "reject" | null>(null)
   const [status, setStatus] = useState("Checking saved proposals.")
   const [assistantError, setAssistantError] = useState<string | null>(null)
   const operationInFlight = useRef(false)
   const ownerInteracted = useRef(false)
 
+  function showProposal(value: Proposal, message: string) {
+    setProposal(value)
+    setApplyBlocked(false)
+    setConfirmingReject(false)
+    setRejectionReason("")
+    setDraft(value.requestText ?? "")
+    setSubmittedRequest(value.requestText ?? null)
+    setEvents(value.progress ?? [])
+    setStatus(message)
+  }
+
+  async function advanceAfterTerminal(completed: Proposal, terminalMessage: string) {
+    try {
+      const proposals = await readVerifiedProposalList()
+      const next = pendingProposal(proposals, completed.proposalId)
+      if (next) {
+        showProposal(next, `Next pending proposal ${statusLabel(next.status).toLowerCase()}.`)
+        return
+      }
+    } catch {
+      // The completed receipt remains authoritative. A later page load will retry queue discovery.
+    }
+    setStatus(terminalMessage)
+  }
+
   useEffect(() => {
     let current = true
-    void fetch("/api/projects/hello-application/proposals", { cache: "no-store" })
-      .then(responseJson)
-      .then(async (payload) => {
+    void readVerifiedProposalList()
+      .then((proposals) => {
         if (!current || ownerInteracted.current || operationInFlight.current) return
-        if (!record(payload) || !Array.isArray(payload.proposals)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
-        const newest = payload.proposals[0]
-        if (newest === undefined) {
+        const selected = pendingProposal(proposals) ?? proposals[0]
+        if (!selected) {
           setStatus("Ready for a development request.")
           return
         }
-        const verified = await verifiedProposalRecord(newest)
-        if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
-        if (!current || ownerInteracted.current || operationInFlight.current) return
-        setProposal(verified)
-        setApplyBlocked(false)
-        setDraft(verified.requestText ?? "")
-        setSubmittedRequest(verified.requestText ?? null)
-        setEvents(verified.progress ?? [])
-        setStatus(verified.status === "READY_FOR_REVIEW" ? "Newest proposal ready for review." : `Newest proposal ${statusLabel(verified.status).toLowerCase()}.`)
+        showProposal(selected, selected.status === "READY_FOR_REVIEW"
+          ? "Pending proposal ready for review."
+          : `Pending proposal ${statusLabel(selected.status).toLowerCase()}.`)
       })
       .catch((cause) => {
         if (!current || ownerInteracted.current || operationInFlight.current) return
@@ -559,6 +728,8 @@ export function HelloApplicationAssistant({
     setEvents([])
     setProposal(null)
     setApplyBlocked(false)
+    setConfirmingReject(false)
+    setRejectionReason("")
     setAssistantError(null)
     setStatus("Request submitted to HERMES.")
     operationInFlight.current = true
@@ -629,24 +800,30 @@ export function HelloApplicationAssistant({
       if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
       setProposal(verified)
       setApplyBlocked(false)
-      setStatus("Proposal applied. Preview refreshed.")
       onPreviewRefresh()
+      await advanceAfterTerminal(verified, "Proposal applied. Preview refreshed.")
     } catch (cause) {
       const failure = failureMessage(cause, "HELLO_PROPOSAL_APPLY_FAILED")
       try {
-        const reconciled = await reconcileApplyOutcome(reviewed)
+        const reconciled = await reconcileProposalOutcome(reviewed)
         setProposal(reconciled.proposal)
         setApplyBlocked(false)
         if (reconciled.state === "applied") {
           setAssistantError(null)
-          setStatus("Proposal applied. Preview refreshed.")
           onPreviewRefresh()
+          await advanceAfterTerminal(reconciled.proposal, "Proposal applied. Preview refreshed.")
         } else if (reconciled.state === "ready") {
           setStatus("Proposal remains ready for review.")
           setAssistantError(`Apply failed: ${failure}`)
         } else if (reconciled.state === "applying") {
           setStatus("Proposal apply is in progress. Apply is unavailable.")
           setAssistantError(`Apply response lost: ${failure}`)
+        } else if (reconciled.state === "rejecting") {
+          setStatus("Proposal rejection is in progress. Resume it to finish discarding the proposal.")
+          setAssistantError(null)
+        } else if (reconciled.state === "rejected") {
+          setAssistantError(null)
+          await advanceAfterTerminal(reconciled.proposal, "Proposal rejected and discarded from Apply.")
         } else {
           setStatus("Proposal quarantined. Apply is blocked.")
           setAssistantError(`Apply failed: ${failure}`)
@@ -656,6 +833,86 @@ export function HelloApplicationAssistant({
         setApplyBlocked(true)
         setStatus("Apply outcome could not be verified. Apply is blocked.")
         setAssistantError("Apply failed: HELLO_PROPOSAL_OUTCOME_UNVERIFIED")
+      }
+    } finally {
+      operationInFlight.current = false
+      setBusy(null)
+    }
+  }
+
+  async function rejectProposal() {
+    if (busy || operationInFlight.current || applyBlocked || !proposal
+      || (proposal.status !== "READY_FOR_REVIEW" && proposal.status !== "REJECT_IN_PROGRESS")) return
+    const resuming = proposal.status === "REJECT_IN_PROGRESS"
+    const reason = normalizedRejectionReason(resuming ? proposal.rejectionReason : rejectionReason)
+    if (reason === null) {
+      setAssistantError("Enter a single-line rejection reason of 500 characters or fewer.")
+      return
+    }
+    const reviewed = proposal
+    ownerInteracted.current = true
+    operationInFlight.current = true
+    setBusy("reject")
+    setAssistantError(null)
+    setStatus(resuming ? "Resuming the durable proposal rejection." : "Rejecting the reviewed proposal.")
+    try {
+      const response = await fetch(`/api/projects/hello-application/proposals/${encodeURIComponent(reviewed.proposalId)}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+      })
+      const payload = await responseJson(response)
+      if (!record(payload) || !rejectedProposalRecord(payload.proposal, reviewed, reason)) {
+        throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+      }
+      const verified = await verifiedProposalRecord(payload.proposal)
+      if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+      setProposal(verified)
+      setApplyBlocked(false)
+      setConfirmingReject(false)
+      setRejectionReason("")
+      await advanceAfterTerminal(verified, "Proposal rejected and discarded from Apply.")
+    } catch (cause) {
+      const failure = failureMessage(cause, "HELLO_PROPOSAL_REJECTION_FAILED")
+      try {
+        const reconciled = await reconcileProposalOutcome(reviewed, reason)
+        setProposal(reconciled.proposal)
+        setApplyBlocked(false)
+        if (reconciled.state === "rejected") {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setAssistantError(null)
+          await advanceAfterTerminal(reconciled.proposal, "Proposal rejected and discarded from Apply.")
+        } else if (reconciled.state === "rejecting") {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setAssistantError(null)
+          setStatus("Proposal rejection is in progress. Resume it to finish discarding the proposal.")
+        } else if (reconciled.state === "ready") {
+          setStatus("Proposal remains ready for review.")
+          setAssistantError(`Reject failed: ${failure}`)
+        } else if (reconciled.state === "applied") {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setAssistantError(null)
+          onPreviewRefresh()
+          await advanceAfterTerminal(reconciled.proposal, "Proposal was applied before rejection completed. Preview refreshed.")
+        } else if (reconciled.state === "applying") {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setStatus("Proposal apply is in progress. Apply and Reject are unavailable.")
+          setAssistantError(`Reject response lost: ${failure}`)
+        } else {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setStatus("Proposal quarantined. Apply and Reject are blocked.")
+          setAssistantError(`Reject failed: ${failure}`)
+        }
+      } catch {
+        setProposal(reviewed)
+        setApplyBlocked(true)
+        setStatus("Reject outcome could not be verified. Apply and Reject are blocked.")
+        setAssistantError("Reject failed: HELLO_PROPOSAL_OUTCOME_UNVERIFIED")
       }
     } finally {
       operationInFlight.current = false
@@ -714,7 +971,28 @@ export function HelloApplicationAssistant({
       {status ? <p className={styles.status} role="status" aria-live="polite">{status}</p> : null}
       {assistantError ? <p className={styles.error} role="alert">{assistantError}</p> : null}
 
-      {proposal ? <ProposalReview proposal={proposal} applying={busy === "apply"} applyBlocked={applyBlocked} onApply={() => void applyProposal()} /> : null}
+      {proposal ? (
+        <ProposalReview
+          proposal={proposal}
+          applying={busy === "apply"}
+          rejecting={busy === "reject"}
+          applyBlocked={applyBlocked}
+          confirmingReject={confirmingReject}
+          rejectionReason={rejectionReason}
+          onApply={() => void applyProposal()}
+          onBeginReject={() => {
+            ownerInteracted.current = true
+            setConfirmingReject(true)
+            setAssistantError(null)
+          }}
+          onCancelReject={() => {
+            setConfirmingReject(false)
+            setRejectionReason("")
+          }}
+          onRejectionReasonChange={setRejectionReason}
+          onReject={() => void rejectProposal()}
+        />
+      ) : null}
     </section>
   )
 }

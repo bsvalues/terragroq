@@ -1,10 +1,12 @@
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { getBuildProvenance } from "@/lib/build-provenance"
 import {
   getHelloApplicationRuntime,
   startHelloApplicationRuntime,
   stopHelloApplicationRuntime,
 } from "@/lib/hello-application/runtime-supervisor"
+import { readHelloApplicationProjectHead } from "@/lib/hello-application/runtime-truth"
 import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 import { guardHelloApplicationMutation } from "@/lib/hello-application/mutation-guard"
@@ -34,7 +36,20 @@ async function authorizeOwner() {
 export async function GET() {
   const authorization = await authorizeOwner()
   if (!authorization.ok) return authorization.response
-  return reply({ runtime: getHelloApplicationRuntime() })
+  const binding = await resolveCanonicalWorkspaceProjectBinding(authorization.userId, "hello-application")
+  if (!binding.ok) return reply({ error: binding.error }, 503)
+  try {
+    const activeProjectHead = await readHelloApplicationProjectHead(binding.binding.workspaceRoot)
+    return reply({
+      runtime: getHelloApplicationRuntime(),
+      truth: {
+        runtimeBuild: getBuildProvenance(),
+        activeProjectHead,
+      },
+    })
+  } catch {
+    return reply({ error: "HELLO_APPLICATION_PROJECT_TRUTH_UNAVAILABLE" }, 503)
+  }
 }
 
 export async function POST(request: Request) {

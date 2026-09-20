@@ -146,6 +146,293 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(repositoryRoot, ["status", "--porcelain"])).toBe("")
   })
 
+  it("rejects a ready proposal into one durable terminal audit state without touching canonical source", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+    const rejectProposal = (service as typeof service & {
+      rejectHelloApplicationProposal: (options: Record<string, unknown>) => Record<string, any>
+    }).rejectHelloApplicationProposal
+
+    const rejected = rejectProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason: "Superseded by a clearer owner request.",
+    })
+
+    expect(rejected).toMatchObject({
+      schemaVersion: 2,
+      proposalId: proposal.proposalId,
+      status: "REJECTED",
+      appliedAt: null,
+      appliedCommit: null,
+      rejectionReason: "Superseded by a clearer owner request.",
+      reviewPatch: proposal.reviewPatch,
+    })
+    expect(Date.parse(rejected.rejectedAt)).toBeGreaterThanOrEqual(Date.parse(proposal.createdAt))
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }))
+      .toEqual(rejected)
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+    await expect(applyHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      validateWorkspace: validation,
+    })).rejects.toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+  })
+
+  it("resumes an exact durable rejection claim after a process crash and is idempotent once terminal", async () => {
+    const setup = fixture()
+    const reason = "Superseded by a clearer owner request."
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    const receiptPath = path.join(proposalRoot, `${proposal.proposalId}.json`)
+    const inflightPath = path.join(proposalRoot, `${proposal.proposalId}.inflight`)
+    const ready = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    const rejectStartedAt = new Date(Date.parse(proposal.createdAt) + 60_000).toISOString()
+    fs.writeFileSync(inflightPath, JSON.stringify({
+      ...ready,
+      status: "REJECT_IN_PROGRESS",
+      rejectStartedAt,
+      rejectionReason: reason,
+    }))
+
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }))
+      .toMatchObject({ status: "REJECT_IN_PROGRESS", rejectStartedAt, rejectionReason: reason })
+
+    const rejected = service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason,
+    })
+    expect(rejected).toMatchObject({ status: "REJECTED", rejectedAt: rejectStartedAt, rejectionReason: reason })
+    expect(fs.existsSync(inflightPath)).toBe(false)
+    expect(service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason,
+    })).toEqual(rejected)
+    expect(() => service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason: "A different reason must not rewrite the audit record.",
+    })).toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("accepts an exact peer terminal that wins while a durable rejection claim is resumed", async () => {
+    const setup = fixture()
+    const reason = "Superseded by a clearer owner request."
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    const receiptPath = path.join(proposalRoot, `${proposal.proposalId}.json`)
+    const inflightPath = path.join(proposalRoot, `${proposal.proposalId}.inflight`)
+    const ready = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    const rejectStartedAt = new Date(Date.parse(proposal.createdAt) + 60_000).toISOString()
+    fs.writeFileSync(inflightPath, JSON.stringify({
+      ...ready,
+      status: "REJECT_IN_PROGRESS",
+      rejectStartedAt,
+      rejectionReason: reason,
+    }))
+    const readFile = fs.readFileSync
+    let receiptReads = 0
+    let injected = false
+    let peerResult: unknown
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (String(target) === receiptPath) {
+        receiptReads += 1
+        if (!injected && receiptReads === 2) {
+          injected = true
+          peerResult = service.rejectHelloApplicationProposal({
+            ...setup,
+            requestedBy: "owner",
+            proposalId: proposal.proposalId,
+            reason,
+          })
+        }
+      }
+      return readFile(target, options as never)
+    }) as typeof fs.readFileSync)
+
+    const rejected = service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason,
+    })
+
+    expect(injected).toBe(true)
+    expect(rejected).toEqual(peerResult)
+    expect(rejected).toMatchObject({ status: "REJECTED", rejectedAt: rejectStartedAt, rejectionReason: reason })
+    expect(fs.existsSync(inflightPath)).toBe(false)
+    expect(fs.existsSync(path.join(proposalRoot, `${proposal.proposalId}.quarantine`))).toBe(false)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("accepts a byte-identical peer rejection that wins during terminal publication", async () => {
+    const setup = fixture()
+    const reason = "Superseded by a clearer owner request."
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+    const rename = fs.renameSync
+    let injected = false
+    vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      if (!injected && String(source).endsWith(".reject")) {
+        injected = true
+        rename(source, destination)
+        throw new Error("peer published the identical terminal receipt")
+      }
+      return rename(source, destination)
+    })
+
+    const rejected = service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason,
+    })
+
+    expect(injected).toBe(true)
+    expect(rejected).toMatchObject({ status: "REJECTED", rejectionReason: reason })
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    expect(fs.existsSync(path.join(proposalRoot, `${proposal.proposalId}.quarantine`))).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }))
+      .toEqual(rejected)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("accepts a byte-identical peer rejection that wins while the first process verifies its claim", async () => {
+    const setup = fixture()
+    const reason = "Superseded by a clearer owner request."
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    const inflight = path.join(proposalRoot, `${proposal.proposalId}.inflight`)
+    const readFile = fs.readFileSync
+    let injected = false
+    let peerResult: unknown
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (!injected && String(target) === inflight && fs.existsSync(inflight)) {
+        injected = true
+        peerResult = service.rejectHelloApplicationProposal({
+          ...setup,
+          requestedBy: "owner",
+          proposalId: proposal.proposalId,
+          reason,
+        })
+      }
+      return readFile(target, options as never)
+    }) as typeof fs.readFileSync)
+
+    const rejected = service.rejectHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason,
+    })
+
+    expect(injected).toBe(true)
+    expect(peerResult).toEqual(rejected)
+    expect(rejected).toMatchObject({ status: "REJECTED", rejectionReason: reason })
+    expect(fs.existsSync(path.join(proposalRoot, `${proposal.proposalId}.quarantine`))).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }))
+      .toEqual(rejected)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("fails closed for invalid, repeated, and apply-in-progress rejection transitions", async () => {
+    const setup = fixture()
+    const rejectProposal = (service as typeof service & {
+      rejectHelloApplicationProposal: (options: Record<string, unknown>) => Record<string, any>
+    }).rejectHelloApplicationProposal
+    const proposal = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Update the footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]),
+      validateWorkspace: validation,
+    })
+
+    for (const reason of [
+      " ",
+      "x".repeat(501),
+      "bad\0reason",
+      "multi\nline",
+      "multi\u2028line",
+      "multi\u2029line",
+      "\u2028leading separator",
+      "trailing separator\u2029",
+    ]) {
+      expect(() => rejectProposal({
+        ...setup,
+        requestedBy: "owner",
+        proposalId: proposal.proposalId,
+        reason,
+      })).toThrow("HELLO_PROPOSAL_REJECTION_INVALID")
+    }
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status)
+      .toBe("READY_FOR_REVIEW")
+
+    rejectProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, reason: "No longer wanted." })
+    expect(() => rejectProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason: "Repeated rejection.",
+    })).toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+
+    const applying = await createHelloApplicationProposal({
+      ...setup,
+      requestedBy: "owner",
+      requestText: "Change the pulse label",
+      residentTurn: residentChange(["examples/hello-application/src/app.js"]),
+      validateWorkspace: validation,
+    })
+    service.claimHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: applying.proposalId })
+    expect(() => rejectProposal({
+      ...setup,
+      requestedBy: "owner",
+      proposalId: applying.proposalId,
+      reason: "Do not apply this version.",
+    })).toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: applying.proposalId }).status)
+      .toBe("APPLY_IN_PROGRESS")
+  })
+
   it.each(["sync", "async"])("isolates %s progress observer failures, including persisted READY", async (kind) => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Observer isolation",
@@ -352,7 +639,35 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toEqual([])
   })
 
-  it("recovers malformed completion with edits intact and the exact owner request in both prompts", async () => {
+  it("accepts host-verified allowed edits after malformed completion without paying for a second model turn", async () => {
+    const changedPaths = ["examples/hello-application/src/app.js"]
+    const failure = Object.assign(new Error("invalid"), {
+      name: "AppServerTurnEndedError",
+      status: "failed",
+      detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:NO_ACCEPTABLE_OUTPUT",
+    })
+    const runTurn = vi.fn(async () => { throw failure })
+    const verifyAttempt = vi.fn(async () => ({ turnId: "turn-one" }))
+
+    const result = await service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Keep the existing edit and explain the pulse",
+      readChangedPaths: async () => changedPaths,
+      verifyAttempt,
+      client: { runTurn },
+    })
+
+    expect(result).toMatchObject({
+      attempts: 1,
+      changedPaths,
+      turnId: "turn-one",
+      completionMode: "HOST_OBSERVED_OUTPUT_INVALID",
+    })
+    expect(runTurn).toHaveBeenCalledOnce()
+    expect(verifyAttempt).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, failure }))
+  })
+
+  it("retries malformed completion without a trusted turn binding and keeps the exact owner request in both prompts", async () => {
     const prompts: string[] = []
     const changedPaths = ["examples/hello-application/src/app.js"]
     const failure = Object.assign(new Error("invalid"), { name: "AppServerTurnEndedError", status: "failed", detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing" })
@@ -378,6 +693,35 @@ describe("Hello Application governed HERMES proposals", () => {
       })).rejects.toBe(error)
       expect(calls).toBe(1)
     }
+  })
+
+  it("keeps the correction retry when trusted evidence has no allowed edit to review", async () => {
+    const failure = Object.assign(new Error("invalid"), {
+      name: "AppServerTurnEndedError",
+      status: "failed",
+      detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:NO_ACCEPTABLE_OUTPUT",
+    })
+    let attempt = 0
+    const result = await service.runGovernedResidentChange({
+      threadId: "thread-one",
+      requestText: "Make one reviewable change",
+      verifyAttempt: async () => ({ turnId: `turn-${attempt}` }),
+      readChangedPaths: async () => attempt === 1 ? [] : ["examples/hello-application/src/app.js"],
+      client: {
+        runTurn: async () => {
+          attempt++
+          if (attempt === 1) throw failure
+          return { turnId: "turn-two", status: "completed" }
+        },
+      },
+    })
+
+    expect(result).toMatchObject({
+      attempts: 2,
+      turnId: "turn-two",
+      completionMode: "MODEL_OUTPUT_VALID",
+      changedPaths: ["examples/hello-application/src/app.js"],
+    })
   })
 
   it("shares one 5,400,000ms aggregate deadline while preserving the full kernel turn budget", async () => {
@@ -485,7 +829,7 @@ describe("Hello Application governed HERMES proposals", () => {
           packetSha256: mode === "packet_hash" ? "0".repeat(64) : crypto.createHash("sha256").update(packetBytes).digest("hex"), harvested: attempt === 2,
           ...(attempt === 1 && mode === "ignored" ? { ignoredPathsCreated: [".env"] } : mode === "null" ? { ignoredPathsCreated: null } : {}),
         })
-        if (mode === "missing_record" && attempt === 2) session.turns.shift()
+        if (mode === "missing_record" && attempt === 1) session.turns.shift()
         fs.writeFileSync(recordPath, JSON.stringify(session))
         if (attempt === 1) throw Object.assign(new Error("malformed completion"), { name: "AppServerTurnEndedError", status: "failed", detail: "RESIDENT_MODEL_TURN_OUTPUT_INVALID:sentinel_missing" })
         return { threadId, turnId: packet.runId, status: "completed" }
@@ -497,11 +841,15 @@ describe("Hello Application governed HERMES proposals", () => {
       expect(proposal.model).toBe("actual-placed-model")
       expect(proposal.executionNode).toBe("actual-compute")
       expect(proposal.reviewPatch).toContain("retained after malformed completion")
-      expect(attempt).toBe(2)
+      expect(proposal.turnId).toBe(runIds[0])
+      expect(attempt).toBe(1)
+      const session = JSON.parse(fs.readFileSync(path.join(setup.runtimeRoot, "hermes-kernel", "threads", threadId, "session.json"), "utf8"))
+      expect(session.turns).toHaveLength(1)
+      expect(session.turns[0]).toMatchObject({ turnId: runIds[0], exitCode: 0, harvested: false })
     } else await expect(result).rejects.toThrow(mode === "ignored" || mode === "null" ? "HELLO_PROPOSAL_IGNORED_PATH_REFUSED" : "HELLO_PROPOSAL_RESIDENT_EVIDENCE_INVALID")
   })
 
-  it("gives a real kernel correction retry the full reviewed 1,800,000ms turn budget", async () => {
+  it("accepts one real-kernel edit after its malformed self-report without a correction turn", async () => {
     const setup = fixture()
     fs.mkdirSync(setup.runtimeRoot)
     const policyPath = path.join(setup.repositoryRoot, "config", "execution-fabric", "hermes-free-dev-agent-v2.policy.json")
@@ -538,12 +886,16 @@ describe("Hello Application governed HERMES proposals", () => {
     const proposal = await createHelloApplicationProposal({
       ...setup,
       requestedBy: "owner",
-      requestText: "Preserve the edit through one correction retry",
+      requestText: "Preserve the edit after one malformed self-report",
       validateWorkspace: validation,
     })
 
     expect(proposal.reviewPatch).toContain("retained correction edit")
-    expect(turnBudgets).toEqual([1_800_000, 1_800_000])
+    expect(turnBudgets).toEqual([1_800_000])
+    const threadsRoot = path.join(setup.runtimeRoot, "hermes-kernel", "threads")
+    const session = JSON.parse(fs.readFileSync(path.join(threadsRoot, fs.readdirSync(threadsRoot)[0], "session.json"), "utf8"))
+    expect(session.turns).toHaveLength(1)
+    expect(session.turns[0]).toMatchObject({ turnId: proposal.turnId, exitCode: 0, harvested: false })
   })
 
   it("rejects .env evidence written by the real kernel client with a successful harvested turn", async () => {

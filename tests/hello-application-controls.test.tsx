@@ -65,6 +65,20 @@ const applyingProposal = {
   applyStartedAt: "2026-09-19T17:00:06.000Z",
 } as const
 
+const rejectedProposal = {
+  ...readyProposal,
+  status: "REJECTED",
+  rejectedAt: "2026-09-19T17:00:06.000Z",
+  rejectionReason: "Superseded by a clearer owner request.",
+} as const
+
+const rejectingProposal = {
+  ...readyProposal,
+  status: "REJECT_IN_PROGRESS",
+  rejectStartedAt: "2026-09-19T17:00:06.000Z",
+  rejectionReason: "Superseded by a clearer owner request.",
+} as const
+
 const {
   appliedCommit: _missingAppliedCommit,
   ...appliedWithoutCommit
@@ -143,15 +157,27 @@ function baseFetch(options: Readonly<{
   proposalPosts?: readonly (Response | Promise<Response>)[]
   applyResponse?: Response | Promise<Response>
   applyError?: Error
+  rejectResponse?: Response | Promise<Response>
+  rejectError?: Error
   runtimeMutationError?: string
 }> = {}) {
   let proposalGetIndex = 0
   let proposalPostIndex = 0
+  let runtimeState: "stopped" | "running" = "stopped"
+  const runtimeSnapshot = () => ({
+    runtime: runtimeState === "running"
+      ? { state: "running", pid: 42, url: "http://127.0.0.1:4317/" }
+      : { state: "stopped", pid: null, url: null },
+    truth: {
+      runtimeBuild: { sha: "a".repeat(40), builtAt: "2026-09-20T12:00:00.000Z" },
+      activeProjectHead: "b".repeat(40),
+    },
+  })
   return vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
     const method = init?.method ?? "GET"
     if (url.endsWith("/runtime") && method === "GET") {
-      return Promise.resolve(Response.json({ runtime: { state: "stopped", pid: null, url: null } }))
+      return Promise.resolve(Response.json(runtimeSnapshot()))
     }
     if (url.endsWith("/proposals") && method === "GET") {
       const sequenced = options.proposalGets?.[proposalGetIndex]
@@ -164,11 +190,8 @@ function baseFetch(options: Readonly<{
       if (options.runtimeMutationError) {
         return Promise.resolve(Response.json({ error: options.runtimeMutationError }, { status: 503 }))
       }
-      return Promise.resolve(Response.json({
-        runtime: method === "POST"
-          ? { state: "running", pid: 42, url: "http://127.0.0.1:4317/" }
-          : { state: "stopped", pid: null, url: null },
-      }))
+      runtimeState = method === "POST" ? "running" : "stopped"
+      return Promise.resolve(Response.json({ runtime: runtimeSnapshot().runtime }))
     }
     if (url.endsWith("/proposals") && method === "POST") {
       const response = options.proposalPosts?.[proposalPostIndex]
@@ -181,6 +204,10 @@ function baseFetch(options: Readonly<{
       return Promise.resolve(options.applyResponse ?? Response.json({
         proposal: appliedProposal,
       }))
+    }
+    if (/\/proposals\/[^/]+$/.test(url) && method === "DELETE") {
+      if (options.rejectError) return Promise.reject(options.rejectError)
+      return Promise.resolve(options.rejectResponse ?? Response.json({ proposal: rejectedProposal }))
     }
     throw new Error(`unexpected fetch ${url} ${method}`)
   })
@@ -548,15 +575,40 @@ describe("HelloApplicationControls", () => {
     expect((ask as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it("restores only the newest proposal on mount and replays persisted schema-v2 milestones", async () => {
-    const older = { ...readyProposal, proposalId: "00000000-0000-4000-8000-000000000000", requestText: "Older request" }
+  it("restores the newest pending proposal on mount and replays persisted schema-v2 milestones", async () => {
+    const older = {
+      ...readyProposal,
+      proposalId: "00000000-0000-4000-8000-000000000000",
+      branch: "codex/hermes-hello-00000000-0000-4000-8000-000000000000",
+      threadId: "older-thread",
+      turnId: "older-turn",
+    }
     const fetcher = baseFetch({ proposals: [readyProposal, older] })
     await renderReady(fetcher)
 
     expect(await screen.findByText(requestText, { selector: "blockquote" })).toBeTruthy()
-    expect(screen.queryByText("Older request")).toBeNull()
+    expect(screen.queryByText("older-turn")).toBeNull()
     expect(within(screen.getByRole("log", { name: "HERMES activity" })).getByText("Proposal ready for review")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+  })
+
+  it("restores an older pending proposal instead of hiding it behind newer terminal history", async () => {
+    const olderPending = {
+      ...readyProposal,
+      proposalId: "00000000-0000-4000-8000-000000000000",
+      branch: "codex/hermes-hello-00000000-0000-4000-8000-000000000000",
+      createdAt: "2026-09-19T16:59:58.000Z",
+      threadId: "older-thread",
+      turnId: "older-turn",
+    }
+    const fetcher = baseFetch({ proposals: [appliedProposal, olderPending] })
+    await renderReady(fetcher)
+
+    expect(await screen.findByText("Ready for review")).toBeTruthy()
+    expect(screen.getByText("older-turn")).toBeTruthy()
+    expect(screen.queryByText("Applied")).toBeNull()
+    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Reject proposal" })).toBeTruthy()
   })
 
   it("restores an authoritative APPLY_IN_PROGRESS receipt without exposing Apply", async () => {
@@ -565,6 +617,166 @@ describe("HelloApplicationControls", () => {
 
     expect(await screen.findByText("Apply in progress")).toBeTruthy()
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
+  it("requires confirmation and an audit reason, then refreshes the proposal into rejected state without Apply", async () => {
+    const fetcher = baseFetch({ proposals: [readyProposal] })
+    await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }))
+
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(0)
+    const confirmation = screen.getByRole("group", { name: "Confirm proposal rejection" })
+    const reason = within(confirmation).getByRole("textbox", { name: "Rejection reason" })
+    const confirm = within(confirmation).getByRole("button", { name: "Confirm rejection" }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: "first\u2028second" } })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: "\u2028leading separator" } })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: "trailing separator\u2029" } })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: "  Superseded by a clearer owner request.  " } })
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+
+    expect(await screen.findByText("Rejected / discarded")).toBeTruthy()
+    const audit = screen.getByLabelText("Proposal rejection audit")
+    expect(within(audit).getByText("Superseded by a clearer owner request.")).toBeTruthy()
+    expect(within(audit).getByText("2026-09-19T17:00:06.000Z")).toBeTruthy()
+    expect(screen.queryByText("Ready for review")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reject proposal" })).toBeNull()
+    const rejection = fetcher.mock.calls.find(([url, init]) => /\/proposals\/[^/]+$/.test(String(url)) && init?.method === "DELETE")
+    expect(rejection?.[1]?.body).toBe(JSON.stringify({ reason: "Superseded by a clearer owner request." }))
+  })
+
+  it("restores a rejected proposal with its audit label and never presents READY or Apply", async () => {
+    const fetcher = baseFetch({ proposals: [rejectedProposal] })
+    await renderReady(fetcher)
+
+    expect(await screen.findByText("Rejected / discarded")).toBeTruthy()
+    expect(screen.getByLabelText("Proposal rejection audit").textContent).toContain("Superseded by a clearer owner request.")
+    expect(screen.queryByText("Ready for review")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reject proposal" })).toBeNull()
+  })
+
+  it("advances to the next pending proposal after a terminal rejection", async () => {
+    const nextPending = {
+      ...readyProposal,
+      proposalId: "22222222-2222-4222-8222-222222222222",
+      branch: "codex/hermes-hello-22222222-2222-4222-8222-222222222222",
+      createdAt: "2026-09-19T16:59:58.000Z",
+      threadId: "next-thread",
+      turnId: "next-turn",
+    }
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [rejectedProposal, nextPending] }),
+      ],
+    })
+    await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Rejection reason" }), {
+      target: { value: "Superseded by a clearer owner request." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Confirm rejection" }))
+
+    expect(await screen.findByText("next-turn")).toBeTruthy()
+    expect(screen.getByText("Next pending proposal ready for review.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Reject proposal" })).toBeTruthy()
+  })
+
+  it("reconciles a lost Reject response to the exact terminal rejection", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [rejectedProposal] }),
+      ],
+      rejectError: new TypeError("response lost after rejection"),
+    })
+    await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Rejection reason" }), {
+      target: { value: "Superseded by a clearer owner request." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Confirm rejection" }))
+
+    expect(await screen.findByText("Rejected / discarded")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reject proposal" })).toBeNull()
+  })
+
+  it("reconciles a lost Reject response to an authoritative in-progress claim", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [rejectingProposal] }),
+      ],
+      rejectError: new TypeError("response lost while rejection finalizes"),
+    })
+    await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Rejection reason" }), {
+      target: { value: "Superseded by a clearer owner request." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Confirm rejection" }))
+
+    expect(await screen.findByText("Reject in progress")).toBeTruthy()
+    expect(screen.getByText("Proposal rejection is in progress. Resume it to finish discarding the proposal.")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Reject proposal" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Resume rejection" })).toBeTruthy()
+  })
+
+  it("lets the owner resume a durable rejection left in progress by a server restart", async () => {
+    const fetcher = baseFetch({ proposals: [rejectingProposal] })
+    await renderReady(fetcher)
+
+    expect(await screen.findByText("Reject in progress")).toBeTruthy()
+    const resume = screen.getByRole("button", { name: "Resume rejection" })
+    fireEvent.click(resume)
+
+    expect(await screen.findByText("Rejected / discarded")).toBeTruthy()
+    expect(screen.getByLabelText("Proposal rejection audit").textContent)
+      .toContain("Superseded by a clearer owner request.")
+    expect(fetcher.mock.calls.find(([url, init]) => /\/proposals\/[^/]+$/.test(String(url)) && init?.method === "DELETE")?.[1]?.body)
+      .toBe(JSON.stringify({ reason: "Superseded by a clearer owner request." }))
+    expect(screen.queryByRole("button", { name: "Resume rejection" })).toBeNull()
+  })
+
+  it("blocks both review actions when a lost Reject outcome cannot be verified", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [] }),
+      ],
+      rejectError: new TypeError("response lost with no authoritative receipt"),
+    })
+    await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Rejection reason" }), {
+      target: { value: "Superseded by a clearer owner request." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Confirm rejection" }))
+
+    expect(await screen.findByText("Reject outcome could not be verified. Apply and Reject are blocked.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Confirm rejection" }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole("textbox", { name: "Rejection reason" }) as HTMLTextAreaElement).disabled).toBe(true)
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
@@ -745,6 +957,7 @@ describe("HelloApplicationControls", () => {
     expect(screen.getAllByText("Unavailable in schema v1")).toHaveLength(2)
     expect(screen.getByText("Milestones unavailable in schema v1.")).toBeTruthy()
     expect(screen.getByRole("log", { name: "HERMES activity" }).textContent).toBe("")
+    expect(screen.getByText("Resident model alias")).toBeTruthy()
     expect(screen.getByText("williamos-qwen3-4b:64k")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
   })
@@ -795,6 +1008,26 @@ describe("HelloApplicationControls", () => {
     expect(screen.getByText("Proposal apply is in progress. Apply is unavailable.")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("reconciles a lost Apply response to an authoritative rejection claim with Resume available", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [rejectingProposal] }),
+      ],
+      applyError: new TypeError("response lost while a peer rejects"),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect(await screen.findByText("Reject in progress")).toBeTruthy()
+    expect(screen.getByText("Proposal rejection is in progress. Resume it to finish discarding the proposal.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Resume rejection" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
     expect(onPreviewRefresh).not.toHaveBeenCalled()
   })
 

@@ -52,9 +52,10 @@ export async function resolveHelloProposalRouteContext(): Promise<ProposalRouteC
 }
 
 export function helloProposalError(error: unknown): Response {
-  const code = error instanceof Error ? error.message : "HELLO_PROPOSAL_UNAVAILABLE"
+  const detail = error instanceof Error ? error.message : "HELLO_PROPOSAL_UNAVAILABLE"
+  const code = detail.split(":", 1)[0]
   const status = code === "HELLO_PROPOSAL_NOT_FOUND" ? 404
-    : code === "HELLO_PROPOSAL_REQUEST_INVALID" ? 400
+    : ["HELLO_PROPOSAL_REQUEST_INVALID", "HELLO_PROPOSAL_REJECTION_INVALID"].includes(code) ? 400
     : code.includes("OWNER_MISMATCH") ? 403
       : /(?:STALE|DIRTY|NOT_APPLICABLE)/.test(code) ? 409
         : /(?:PATH_|MULTI_FILE|IGNORED_|PATCH_SIZE|RENAME_|REQUEST_INVALID|NO_CHANGE|VALIDATION_)/.test(code) ? 422

@@ -44,6 +44,27 @@
 .runtimeState[data-state="running"] { color: #add09f; }
 .runtimeState[data-state="failed"] { color: #f0a184; }
 
+.runtimeTruth {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 18px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #2d3d48;
+  color: #91a5af;
+  background: #0b141b;
+  font: 10px/1.45 var(--font-geist-mono), monospace;
+}
+
+.runtimeTruth span,
+.runtimeTruth code {
+  min-width: 0;
+}
+
+.runtimeTruth code {
+  color: #c9d8dd;
+  overflow-wrap: anywhere;
+}
+
 .actions {
   gap: 7px;
   margin-left: auto;
@@ -98,5 +119,9 @@
   .actions {
     width: 100%;
     margin-left: 0;
+  }
+
+  .runtimeTruth {
+    grid-template-columns: 1fr;
   }
 }

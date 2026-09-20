@@ -19,6 +19,7 @@ venv/
 node_modules/
 .pnpm-debug.log*
 coverage/
+output/playwright/
 build/
 .next/
 out/

@@ -7,6 +7,7 @@ const seams = vi.hoisted(() => ({
   getProposal: vi.fn(),
   getSession: vi.fn(),
   listProposals: vi.fn(),
+  rejectProposal: vi.fn(),
   resolveBinding: vi.fn(),
   resolveOwnerUserId: vi.fn(),
 }))
@@ -25,10 +26,12 @@ vi.mock("@/lib/hello-application/proposal-service.mjs", () => ({
   createHelloApplicationProposal: seams.createProposal,
   getHelloApplicationProposal: seams.getProposal,
   listHelloApplicationProposals: seams.listProposals,
+  rejectHelloApplicationProposal: seams.rejectProposal,
 }))
 
 import { GET, maxDuration, POST } from "@/app/api/projects/hello-application/proposals/route"
 import { POST as APPLY } from "@/app/api/projects/hello-application/proposals/[proposalId]/apply/route"
+import * as PROPOSAL_DETAIL from "@/app/api/projects/hello-application/proposals/[proposalId]/route"
 
 const proposal = {
   proposalId: "11111111-1111-4111-8111-111111111111",
@@ -74,6 +77,12 @@ beforeEach(() => {
   seams.createProposal.mockResolvedValue(proposal)
   seams.applyProposal.mockResolvedValue({ ...proposal, status: "APPLIED" })
   seams.listProposals.mockReturnValue([proposal])
+  seams.rejectProposal.mockReturnValue({
+    ...proposal,
+    status: "REJECTED",
+    rejectedAt: "2026-09-20T18:00:00.000Z",
+    rejectionReason: "Superseded by a clearer owner request.",
+  })
 })
 
 describe("Hello Application proposal routes", () => {
@@ -250,6 +259,79 @@ describe("Hello Application proposal routes", () => {
       requestedBy: "owner",
       proposalId: proposal.proposalId,
     })
+  })
+
+  it("rejects a proposal only through an explicit owner DELETE with one bounded audit reason", async () => {
+    const request = new Request(`https://williamos.lan:3543/api/projects/hello-application/proposals/${proposal.proposalId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: "https://williamos.lan:3543", host: "williamos.lan:3543" },
+      body: JSON.stringify({ reason: "Superseded by a clearer owner request." }),
+    })
+    const reject = (PROPOSAL_DETAIL as typeof PROPOSAL_DETAIL & {
+      DELETE: (request: Request, context: { params: Promise<{ proposalId: string }> }) => Promise<Response>
+    }).DELETE
+
+    const response = await reject(request, { params: Promise.resolve({ proposalId: proposal.proposalId }) })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      proposal: {
+        status: "REJECTED",
+        rejectionReason: "Superseded by a clearer owner request.",
+      },
+    })
+    expect(seams.rejectProposal).toHaveBeenCalledWith({
+      repositoryRoot: expect.stringContaining("source"),
+      runtimeRoot: expect.stringContaining("hermes-bridge"),
+      requestedBy: "owner",
+      proposalId: proposal.proposalId,
+      reason: "Superseded by a clearer owner request.",
+    })
+  })
+
+  it.each([
+    ["malformed JSON", "{"],
+    ["a missing reason", "{}"],
+    ["an extra field", JSON.stringify({ reason: "No longer wanted.", extra: true })],
+    ["an empty reason", JSON.stringify({ reason: "   " })],
+    ["a multiline reason", JSON.stringify({ reason: "first\nsecond" })],
+    ["a Unicode line-separator reason", JSON.stringify({ reason: "first\u2028second" })],
+    ["a Unicode paragraph-separator reason", JSON.stringify({ reason: "first\u2029second" })],
+    ["a leading Unicode line-separator reason", JSON.stringify({ reason: "\u2028first" })],
+    ["a trailing Unicode paragraph-separator reason", JSON.stringify({ reason: "last\u2029" })],
+    ["an over-limit reason", JSON.stringify({ reason: "x".repeat(501) })],
+  ])("rejects %s before calling the rejection service", async (_label, body) => {
+    const request = new Request(`https://williamos.lan:3543/api/projects/hello-application/proposals/${proposal.proposalId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: "https://williamos.lan:3543", host: "williamos.lan:3543" },
+      body,
+    })
+    const reject = (PROPOSAL_DETAIL as typeof PROPOSAL_DETAIL & {
+      DELETE: (request: Request, context: { params: Promise<{ proposalId: string }> }) => Promise<Response>
+    }).DELETE
+
+    const response = await reject(request, { params: Promise.resolve({ proposalId: proposal.proposalId }) })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_PROPOSAL_REJECTION_INVALID" })
+    expect(seams.rejectProposal).not.toHaveBeenCalled()
+  })
+
+  it("maps repeated rejection to a stable conflict without leaking service detail", async () => {
+    seams.rejectProposal.mockImplementation(() => { throw new Error("HELLO_PROPOSAL_NOT_APPLICABLE:receipt path") })
+    const request = new Request(`https://williamos.lan:3543/api/projects/hello-application/proposals/${proposal.proposalId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: "https://williamos.lan:3543", host: "williamos.lan:3543" },
+      body: JSON.stringify({ reason: "Repeated rejection." }),
+    })
+    const reject = (PROPOSAL_DETAIL as typeof PROPOSAL_DETAIL & {
+      DELETE: (request: Request, context: { params: Promise<{ proposalId: string }> }) => Promise<Response>
+    }).DELETE
+
+    const response = await reject(request, { params: Promise.resolve({ proposalId: proposal.proposalId }) })
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_PROPOSAL_NOT_APPLICABLE" })
   })
 
   it("rejects cross-origin proposal and apply mutations before invoking the resident lane", async () => {

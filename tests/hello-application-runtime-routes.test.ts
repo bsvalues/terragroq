@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const seams = vi.hoisted(() => ({
   assertOwner: vi.fn(),
+  getBuildProvenance: vi.fn(),
   getRuntime: vi.fn(),
   getSession: vi.fn(),
+  readProjectHead: vi.fn(),
   resolveBinding: vi.fn(),
   resolveOwnerUserId: vi.fn(),
   startRuntime: vi.fn(),
@@ -18,6 +20,10 @@ vi.mock("@/lib/governance/owner", () => ({
 vi.mock("@/lib/governance/owner-lookup", () => ({ ownerLookup: vi.fn(() => ({})) }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveCanonicalWorkspaceProjectBinding: seams.resolveBinding,
+}))
+vi.mock("@/lib/build-provenance", () => ({ getBuildProvenance: seams.getBuildProvenance }))
+vi.mock("@/lib/hello-application/runtime-truth", () => ({
+  readHelloApplicationProjectHead: seams.readProjectHead,
 }))
 vi.mock("@/lib/hello-application/runtime-supervisor", () => ({
   getHelloApplicationRuntime: seams.getRuntime,
@@ -47,6 +53,8 @@ beforeEach(() => {
   seams.resolveOwnerUserId.mockResolvedValue("owner")
   seams.assertOwner.mockReturnValue({ ok: true })
   seams.resolveBinding.mockResolvedValue({ ok: true, binding: { workspaceRoot: running.workspaceRoot } })
+  seams.getBuildProvenance.mockReturnValue({ sha: "a".repeat(40), builtAt: "2026-09-20T12:00:00.000Z" })
+  seams.readProjectHead.mockResolvedValue("b".repeat(40))
   seams.getRuntime.mockReturnValue(running)
   seams.startRuntime.mockResolvedValue(running)
   seams.stopRuntime.mockResolvedValue({ ...running, state: "stopped", pid: null, port: null, url: null })
@@ -78,10 +86,37 @@ describe("Hello Application runtime routes", () => {
     expect(seams.startRuntime).not.toHaveBeenCalled()
   })
 
-  it("reports status without accepting runtime coordinates from the browser", async () => {
+  it("reports runtime-build SHA and the canonical active-project HEAD on one authorized truth surface", async () => {
     const response = await GET()
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ runtime: running })
+    await expect(response.json()).resolves.toEqual({
+      runtime: running,
+      truth: {
+        runtimeBuild: { sha: "a".repeat(40), builtAt: "2026-09-20T12:00:00.000Z" },
+        activeProjectHead: "b".repeat(40),
+      },
+    })
+    expect(seams.resolveBinding).toHaveBeenCalledWith("owner", "hello-application")
+    expect(seams.readProjectHead).toHaveBeenCalledWith(running.workspaceRoot)
+  })
+
+  it("fails closed when the canonical project binding cannot be resolved", async () => {
+    seams.resolveBinding.mockResolvedValue({ ok: false, error: "HELLO_APPLICATION_BINDING_UNAVAILABLE" })
+
+    const response = await GET()
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_APPLICATION_BINDING_UNAVAILABLE" })
+    expect(seams.readProjectHead).not.toHaveBeenCalled()
+  })
+
+  it("fails closed without leaking process details when active-project HEAD cannot be proven", async () => {
+    seams.readProjectHead.mockRejectedValue(new Error("spawn git ENOENT C:\\secret\\workspace"))
+
+    const response = await GET()
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_APPLICATION_PROJECT_TRUTH_UNAVAILABLE" })
   })
 
   it("proxies only the supervisor-held loopback page with a strict browser boundary", async () => {

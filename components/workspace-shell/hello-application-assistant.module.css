@@ -27,6 +27,60 @@
   align-items: center;
 }
 
+.reviewActions,
+.rejectActions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.rejectConfirmation {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #c7d3d7;
+  background: #261915;
+  font-size: 12px;
+}
+
+.rejectConfirmation textarea {
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid #765044;
+  border-radius: 4px;
+  padding: 7px 8px;
+  color: #f5e7e1;
+  background: #120d0b;
+  font: 12px/1.4 var(--font-geist-sans), sans-serif;
+}
+
+.rejectionAudit {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #49352f;
+  color: #edc6b7;
+  background: #251815;
+  font-size: 12px;
+}
+
+.rejectionAudit div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.rejectionAudit dt { color: #b88e80; }
+.rejectionAudit dd { margin: 0; overflow-wrap: anywhere; }
+
+.reject {
+  border: 1px solid #9a5d4b;
+  color: #ffece5;
+  background: #663324;
+}
+
+.reject:hover:not(:disabled) { background: #7a3d2b; }
+
 .header {
   min-height: 38px;
   gap: 14px;
@@ -355,6 +409,7 @@
   .log li { grid-template-columns: 1fr; gap: 2px; }
   .reviewInner { grid-template-columns: 1fr; }
   .applyBar { align-items: flex-end; }
+  .rejectConfirmation { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 440px) {
