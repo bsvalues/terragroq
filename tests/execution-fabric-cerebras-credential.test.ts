@@ -143,4 +143,53 @@ function Get-CerebrasCredentialSecureString {
       }
     },
   )
+
+  it.skipIf(process.platform !== "win32")(
+    "accepts a valid escaped Hello envelope above the source-content limit before credential access",
+    () => {
+      const isolated = mkdtempSync(path.join(os.tmpdir(), "williamos-cerebras-hello-envelope-"))
+      const marker = path.join(isolated, "credential-read.txt")
+      try {
+        copyFileSync(
+          path.join(process.cwd(), "scripts", "execution-fabric", "invoke-cerebras-hello-change.ps1"),
+          path.join(isolated, "invoke-cerebras-hello-change.ps1"),
+        )
+        writeFileSync(path.join(isolated, "cerebras-credential-manager.ps1"), `
+function Get-CerebrasCredentialSecureString {
+  [IO.File]::WriteAllText($env:WILLIAMOS_CEREBRAS_TEST_MARKER, "credential-read")
+  throw "CEREBRAS_CREDENTIAL_TOUCHED"
+}
+`, "utf8")
+
+        const payload = JSON.stringify({
+          schemaVersion: 1,
+          model: "qwen-3.8-27b",
+          requestText: "Exercise the serialized wrapper boundary",
+          files: [
+            { path: "examples/hello-application/src/app.js", content: '"'.repeat(24_000) },
+            { path: "examples/hello-application/src/index.html", content: '"'.repeat(24_000) },
+            { path: "examples/hello-application/src/styles.css", content: '"'.repeat(24_000) },
+          ],
+        })
+        expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(128_000)
+        const result = spawnSync(
+          "powershell.exe",
+          ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+            path.join(isolated, "invoke-cerebras-hello-change.ps1")],
+          {
+            encoding: "utf8",
+            input: payload,
+            env: { ...process.env, WILLIAMOS_CEREBRAS_TEST_MARKER: marker },
+          },
+        )
+
+        expect(result.status).not.toBe(0)
+        expect(result.stdout).toBe("")
+        expect(result.stderr).toContain("CEREBRAS_CREDENTIAL_TOUCHED")
+        expect(fs.readFileSync(marker, "utf8")).toBe("credential-read")
+      } finally {
+        rmSync(isolated, { recursive: true, force: true })
+      }
+    },
+  )
 })

@@ -23,9 +23,13 @@ current contents of the three allowlisted Hello source files. It has no tools, s
 filesystem, network-selection, scheduler, deployment, or additional-path authority. The fixed
 call allows at most 8,192 output tokens and reserves no more than **$0.03** using current catalog
 pricing. The request uses provider JSON mode, and the source-only author then enforces the fixed
-exact-key/path/size contract locally before any write. The provider must return strict JSON
-containing complete replacement content for one to three allowlisted files; a substituted model,
-malformed response, over-budget result, or out-of-scope path is refused.
+exact-key/path/size contract locally before any write. The provider returns one to sixteen compact
+exact edits, each naming an allowlisted path plus unique current `find` text and its `replace` text.
+Each fragment is limited to 2,048 UTF-8 bytes, all fragments together to 8,192 bytes, and a whole
+file cannot be disguised as one edit. HERMES applies the edits sequentially in memory, refuses
+ambiguous, missing, duplicate, no-op, net-zero, oversized, or out-of-scope operations, and
+deterministically produces one complete replacement per changed file for the existing proposal
+write gate. A substituted model, malformed response, or over-budget result is also refused.
 
 Provider output is never written directly to canonical source. HERMES applies it only inside the
 existing isolated proposal worktree, validates the changed paths and test result, and presents

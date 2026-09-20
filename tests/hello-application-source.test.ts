@@ -110,7 +110,8 @@ describe("Hello Application source", () => {
       button?.click()
 
       expect(document.querySelector("#pulse-count")?.textContent).toBe("001")
-      expect(document.querySelector("#pulse-status")?.textContent).toBe("Pulse 001 received.")
+      expect(document.querySelector("#pulse-status")?.textContent).toBe("Cerebras route verified · Pulse 001 received.")
+      expect(document.querySelector("#pulse-status")?.getAttribute("data-hermes-state")).toBe("cerebras-verified")
       expect(document.querySelector("#signal-track")?.getAttribute("data-state")).toBe("sent")
       dom.window.close()
     } finally {

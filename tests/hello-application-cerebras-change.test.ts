@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -70,10 +71,17 @@ describe("Cerebras Hello Application change", () => {
       expect(request.max_tokens).toBe(8_192)
       expect(request.response_format).toEqual({ type: "json_object" })
       expect(request.messages.at(-1).content).toContain("examples/hello-application/src/app.js")
+      expect(request.messages.at(-1).content).toContain("Use at most 16 edits")
+      expect(request.messages.at(-1).content).toContain("2,048 UTF-8 bytes")
+      expect(request.messages.at(-1).content).toContain("Never use an entire file as find")
       return Response.json({
         model: "qwen-3.8-27b",
         choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
-          changes: [{ path: allowedPaths[0], content: "export const routed = true\n" }],
+          edits: [{
+            path: allowedPaths[0],
+            find: `source:${allowedPaths[0]}\n`,
+            replace: "export const routed = true\n",
+          }],
         }) } }],
         usage: { prompt_tokens: 500, completion_tokens: 80, total_tokens: 580 },
       })
@@ -86,7 +94,7 @@ describe("Cerebras Hello Application change", () => {
         schemaVersion: 1,
         model: "qwen-3.8-27b",
         requestText: "Add a routed marker",
-        files: allowedPaths.map((relative) => ({ path: relative, content: `source:${relative}\n` })),
+        files: allowedPaths.map((relative) => ({ path: relative, content: `header:${relative}\nsource:${relative}\n` })),
       },
     })
 
@@ -97,12 +105,200 @@ describe("Cerebras Hello Application change", () => {
       provider: "cerebras",
       requestedModel: "qwen-3.8-27b",
       actualModel: "qwen-3.8-27b",
-      changes: [{ path: allowedPaths[0], content: "export const routed = true\n" }],
+      changes: [{ path: allowedPaths[0], content: `header:${allowedPaths[0]}\nexport const routed = true\n` }],
       usage: { promptTokens: 500, completionTokens: 80, totalTokens: 580 },
     })
     expect(result.calculatedCostUsd).toBeCloseTo(0.0006142, 10)
     expect(result.requestedMaxCostUsd).toBe(0.03)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it("coalesces sequential compact edits and emits deterministic full-file changes", async () => {
+    const files = [
+      { path: allowedPaths[0], content: 'const state = "old"\nconst count = 1\n' },
+      { path: allowedPaths[1], content: '<main data-state="old">Hello</main>\n' },
+      { path: allowedPaths[2], content: '.card { color: gray; }\n/* remove */\n' },
+    ]
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/public/v1/models")) return Response.json(catalog())
+      return Response.json({
+        model: "qwen-3.8-27b",
+        choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+          edits: [
+            { path: allowedPaths[2], find: "/* remove */\n", replace: "" },
+            { path: allowedPaths[0], find: "old", replace: "$&" },
+            { path: allowedPaths[1], find: "old", replace: "ready" },
+            { path: allowedPaths[0], find: "const count = 1", replace: "const count = 2" },
+          ],
+        }) } }],
+        usage: { prompt_tokens: 90, completion_tokens: 40, total_tokens: 130 },
+      })
+    })
+
+    const result = await runCerebrasHelloChange({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as typeof fetch,
+      payload: {
+        schemaVersion: 1,
+        model: "qwen-3.8-27b",
+        requestText: "Make compact sequential edits",
+        files,
+      },
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "SUCCEEDED",
+      changes: [
+        { path: allowedPaths[0], content: 'const state = "$&"\nconst count = 2\n' },
+        { path: allowedPaths[1], content: '<main data-state="ready">Hello</main>\n' },
+        { path: allowedPaths[2], content: ".card { color: gray; }\n" },
+      ],
+    }))
+  })
+
+  it("rejects oversized UTF-8 input before any provider request", async () => {
+    const fetchImpl = vi.fn()
+    const result = await runCerebrasHelloChange({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as typeof fetch,
+      payload: {
+        schemaVersion: 1,
+        model: "qwen-3.8-27b",
+        requestText: "Reject oversized input",
+        files: [
+          { path: allowedPaths[0], content: "é".repeat(32_001) },
+          { path: allowedPaths[1], content: "<main>Hello</main>\n" },
+          { path: allowedPaths[2], content: ".card {}\n" },
+        ],
+      },
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "FAILED",
+      code: "CEREBRAS_HELLO_INPUT_INVALID",
+      changes: [],
+    }))
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("accepts a valid escaped source envelope at the deployed CLI boundary", () => {
+    const childEnvironment = { ...process.env }
+    delete childEnvironment.CEREBRAS_API_KEY
+    delete childEnvironment.WILLIAMOS_CEREBRAS_ENABLED
+    const payload = {
+      schemaVersion: 1,
+      model: "qwen-3.8-27b",
+      requestText: "Exercise the serialized input boundary",
+      files: allowedPaths.map((relative) => ({ path: relative, content: '"'.repeat(24_000) })),
+    }
+    const serialized = JSON.stringify(payload)
+    expect(Buffer.byteLength(serialized, "utf8")).toBeGreaterThan(128_000)
+
+    const child = spawnSync(process.execPath, [path.join(process.cwd(), "scripts", "execution-fabric", "cerebras-hello-change.mjs")], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: childEnvironment,
+      input: serialized,
+      maxBuffer: 1_000_000,
+    })
+
+    expect(child.status).toBe(1)
+    expect(JSON.parse(child.stdout)).toEqual(expect.objectContaining({
+      status: "FAILED",
+      code: "EXTERNAL_PROVIDER_DISABLED",
+    }))
+  })
+
+  it("rejects unsafe or non-deterministic compact edit responses", async () => {
+    const files = [
+      { path: allowedPaths[0], content: "repeat repeat\nlocator\n" },
+      { path: allowedPaths[1], content: "<main>locator</main>\n" },
+      { path: allowedPaths[2], content: "locator\n" },
+    ]
+    const cases = [
+      {
+        name: "an ambiguous match",
+        response: { edits: [{ path: allowedPaths[0], find: "repeat", replace: "unique" }] },
+      },
+      {
+        name: "an overlapping ambiguous match",
+        response: { edits: [{ path: allowedPaths[0], find: "repeat repeat", replace: "aaa" }, { path: allowedPaths[0], find: "aa", replace: "b" }] },
+      },
+      {
+        name: "a missing match",
+        response: { edits: [{ path: allowedPaths[0], find: "absent", replace: "present" }] },
+      },
+      {
+        name: "a direct no-op",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "locator" }] },
+      },
+      {
+        name: "a whole-file replacement disguised as an edit",
+        response: { edits: [{ path: allowedPaths[0], find: files[0].content, replace: "replacement\n" }] },
+      },
+      {
+        name: "a net-zero sequence",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "changed" }, { path: allowedPaths[0], find: "changed", replace: "locator" }] },
+      },
+      {
+        name: "a duplicate locator",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "locator changed" }, { path: allowedPaths[0], find: "locator", replace: "done" }] },
+      },
+      {
+        name: "an out-of-scope path",
+        response: { edits: [{ path: "owner-note.txt", find: "locator", replace: "escape" }] },
+      },
+      {
+        name: "an extra root key",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "changed" }], note: "extra" },
+      },
+      {
+        name: "an extra item key",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "changed", note: "extra" }] },
+      },
+      {
+        name: "an empty locator",
+        response: { edits: [{ path: allowedPaths[0], find: "", replace: "changed" }] },
+      },
+      {
+        name: "a NUL-bearing replacement",
+        response: { edits: [{ path: allowedPaths[0], find: "locator", replace: "bad\0value" }] },
+      },
+      {
+        name: "an oversized UTF-8 fragment",
+        response: { edits: [{ path: allowedPaths[0], find: "é".repeat(8_001), replace: "changed" }] },
+      },
+      {
+        name: "too many operations",
+        response: { edits: Array.from({ length: 17 }, (_, index) => ({ path: allowedPaths[0], find: `missing-${index}`, replace: "changed" })) },
+      },
+    ]
+
+    for (const testCase of cases) {
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        if (String(input).endsWith("/public/v1/models")) return Response.json(catalog())
+        return Response.json({
+          model: "qwen-3.8-27b",
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(testCase.response) } }],
+          usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 },
+        })
+      })
+
+      const result = await runCerebrasHelloChange({
+        apiKey: "test-key",
+        fetchImpl: fetchImpl as typeof fetch,
+        payload: {
+          schemaVersion: 1,
+          model: "qwen-3.8-27b",
+          requestText: "Exercise the compact edit boundary",
+          files,
+        },
+      })
+
+      expect(result.status, testCase.name).toBe("FAILED")
+      expect(result.code, testCase.name).toBe("CEREBRAS_HELLO_RESPONSE_INVALID")
+      expect(result.changes, testCase.name).toEqual([])
+    }
   })
 
   it("runs from a deployed source-only directory with no node_modules", async () => {
@@ -122,7 +318,11 @@ describe("Cerebras Hello Application change", () => {
       return Response.json({
         model: "qwen-3.8-27b",
         choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
-          changes: [{ path: allowedPaths[2], content: ".source-only { color: teal; }\n" }],
+          edits: [{
+            path: allowedPaths[2],
+            find: `source:${allowedPaths[2]}\n`,
+            replace: ".source-only { color: teal; }\n",
+          }],
         }) } }],
         usage: { prompt_tokens: 25, completion_tokens: 15, total_tokens: 40 },
       })
@@ -135,7 +335,7 @@ describe("Cerebras Hello Application change", () => {
         schemaVersion: 1,
         model: "qwen-3.8-27b",
         requestText: "Prove the source-only author",
-        files: allowedPaths.map((relative) => ({ path: relative, content: `source:${relative}\n` })),
+        files: allowedPaths.map((relative) => ({ path: relative, content: `header:${relative}\nsource:${relative}\n` })),
       },
     })
 
@@ -143,7 +343,7 @@ describe("Cerebras Hello Application change", () => {
       status: "SUCCEEDED",
       code: "CEREBRAS_HELLO_CHANGE_OK",
       actualModel: "qwen-3.8-27b",
-      changes: [{ path: allowedPaths[2], content: ".source-only { color: teal; }\n" }],
+      changes: [{ path: allowedPaths[2], content: `header:${allowedPaths[2]}\n.source-only { color: teal; }\n` }],
     }))
   })
 
@@ -153,7 +353,12 @@ describe("Cerebras Hello Application change", () => {
       return Response.json({
         model: "qwen-3.8-27b",
         choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
-          changes: [{ path: allowedPaths[0], content: "export const routed = true\n", extra: true }],
+          edits: [{
+            path: allowedPaths[0],
+            find: `source:${allowedPaths[0]}\n`,
+            replace: "export const routed = true\n",
+            extra: true,
+          }],
         }) } }],
         usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 },
       })
@@ -183,7 +388,7 @@ describe("Cerebras Hello Application change", () => {
       return Response.json({
         model: "gpt-oss-120b",
         choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
-          changes: [{ path: allowedPaths[0], content: "substituted\n" }],
+          edits: [{ path: allowedPaths[0], find: "source\n", replace: "substituted\n" }],
         }) } }],
         usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
       })

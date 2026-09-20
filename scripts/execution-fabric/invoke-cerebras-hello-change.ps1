@@ -15,7 +15,7 @@ $child = $null
 try {
   if (-not [Environment]::UserInteractive) { throw "CEREBRAS_LOCAL_INTERACTION_REQUIRED" }
   $payload = [Console]::In.ReadToEnd()
-  if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 128000) { throw "CEREBRAS_HELLO_INPUT_INVALID" }
+  if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 800000) { throw "CEREBRAS_HELLO_INPUT_INVALID" }
   $parsed = $payload | ConvertFrom-Json
   $expectedProperties = @("files", "model", "requestText", "schemaVersion")
   $actualProperties = @($parsed.PSObject.Properties.Name | Sort-Object)
