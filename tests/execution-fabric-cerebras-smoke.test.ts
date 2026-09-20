@@ -38,7 +38,10 @@ describe("WilliamOS-owned one-shot Cerebras invocation", () => {
     expect(fetchImpl.mock.calls.filter(([url]) => url === `${CEREBRAS_BASE_URL}/chat/completions`)).toHaveLength(1)
     const [, init] = fetchImpl.mock.calls[1] as unknown as [string, { body: string }]
     const wire = JSON.parse(init.body)
-    expect(wire.max_tokens).toBe(32)
+    // Reasoning models can spend a small completion budget on hidden reasoning before emitting the
+    // one-word probe. Reserve enough completion tokens to avoid a false `length` failure while the
+    // adapter's catalog-priced one-cent ceiling remains authoritative.
+    expect(wire.max_tokens).toBe(1024)
     expect(wire.messages).toHaveLength(1)
     expect(typeof wire.messages[0].content).toBe("string")
     expect(JSON.stringify(receipt)).not.toContain(environment.CEREBRAS_API_KEY)

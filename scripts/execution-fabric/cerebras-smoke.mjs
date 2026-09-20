@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url"
 import { callCerebrasModelApi, ExternalProviderError } from "./external-model-api.mjs"
 
 const MAX_COST_USD = 0.01
-const MAX_TOKENS = 32
+// Cerebras reasoning models may consume part of the completion budget before emitting the visible
+// answer. The adapter still reserves this entire allowance against current catalog pricing and
+// refuses the call before network if that reservation would exceed the hard one-cent ceiling.
+const MAX_TOKENS = 1024
 // This public synthetic probe contains no estate context or user-supplied content.
 const SYNTHETIC_PROBE = "Return only the word ready."
 
