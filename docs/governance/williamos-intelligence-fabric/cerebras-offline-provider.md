@@ -22,9 +22,10 @@ The external author receives only an S1 package: the owner's bounded change requ
 current contents of the three allowlisted Hello source files. It has no tools, shell, Git,
 filesystem, network-selection, scheduler, deployment, or additional-path authority. The fixed
 call allows at most 6,144 output tokens and reserves no more than **$0.03** using current catalog
-pricing. The provider must return strict JSON containing complete replacement content for one to
-three allowlisted files; a substituted model, malformed response, over-budget result, or
-out-of-scope path is refused.
+pricing. The request uses provider JSON mode, and the source-only author then enforces the fixed
+exact-key/path/size contract locally before any write. The provider must return strict JSON
+containing complete replacement content for one to three allowlisted files; a substituted model,
+malformed response, over-budget result, or out-of-scope path is refused.
 
 Provider output is never written directly to canonical source. HERMES applies it only inside the
 existing isolated proposal worktree, validates the changed paths and test result, and presents
@@ -81,7 +82,7 @@ admission and not an activation path for any application.
 At call time, public metadata comes from the
 [official unauthenticated model endpoint](https://inference-docs.cerebras.ai/api-reference/models/public-models)
 (`GET https://api.cerebras.ai/public/v1/models`). The Hello route pins its two user-visible model
-IDs, but each request must still find the selected model and required structured-output capability
+IDs, but each request must still find the selected model and required JSON-mode capability
 in current provider metadata. Spend is reserved before inference against current catalog tariffs,
 and the receipt calculates actual cost from the provider-reported model and usage. The
 [official chat-completions contract](https://inference-docs.cerebras.ai/api-reference/chat-completions)

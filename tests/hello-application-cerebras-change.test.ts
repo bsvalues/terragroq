@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -67,7 +68,7 @@ describe("Cerebras Hello Application change", () => {
       const request = JSON.parse(String(init?.body))
       expect(request.model).toBe("qwen-3.8-27b")
       expect(request.max_tokens).toBe(6_144)
-      expect(request.response_format.json_schema.strict).toBe(true)
+      expect(request.response_format).toEqual({ type: "json_object" })
       expect(request.messages.at(-1).content).toContain("examples/hello-application/src/app.js")
       return Response.json({
         model: "qwen-3.8-27b",
@@ -102,6 +103,78 @@ describe("Cerebras Hello Application change", () => {
     expect(result.calculatedCostUsd).toBeCloseTo(0.0006142, 10)
     expect(result.requestedMaxCostUsd).toBe(0.03)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it("runs from a deployed source-only directory with no node_modules", async () => {
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "hello-cerebras-source-only-"))
+    roots.push(isolated)
+    const author = path.join(isolated, "cerebras-hello-change.mjs")
+    fs.copyFileSync(path.join(process.cwd(), "scripts", "execution-fabric", "cerebras-hello-change.mjs"), author)
+    fs.copyFileSync(path.join(process.cwd(), "scripts", "execution-fabric", "external-model-api.mjs"),
+      path.join(isolated, "external-model-api.mjs"))
+    expect(fs.existsSync(path.join(isolated, "node_modules"))).toBe(false)
+
+    const deployed = await import(`${pathToFileURL(author).href}?source-only=${Date.now()}`)
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/public/v1/models")) return Response.json(catalog())
+      const request = JSON.parse(String(init?.body))
+      expect(request.response_format).toEqual({ type: "json_object" })
+      return Response.json({
+        model: "qwen-3.8-27b",
+        choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+          changes: [{ path: allowedPaths[2], content: ".source-only { color: teal; }\n" }],
+        }) } }],
+        usage: { prompt_tokens: 25, completion_tokens: 15, total_tokens: 40 },
+      })
+    })
+
+    const result = await deployed.runCerebrasHelloChange({
+      apiKey: "test-key",
+      fetchImpl,
+      payload: {
+        schemaVersion: 1,
+        model: "qwen-3.8-27b",
+        requestText: "Prove the source-only author",
+        files: allowedPaths.map((relative) => ({ path: relative, content: `source:${relative}\n` })),
+      },
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "SUCCEEDED",
+      code: "CEREBRAS_HELLO_CHANGE_OK",
+      actualModel: "qwen-3.8-27b",
+      changes: [{ path: allowedPaths[2], content: ".source-only { color: teal; }\n" }],
+    }))
+  })
+
+  it("rejects JSON-mode output that does not match the fixed Hello change contract", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/public/v1/models")) return Response.json(catalog())
+      return Response.json({
+        model: "qwen-3.8-27b",
+        choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+          changes: [{ path: allowedPaths[0], content: "export const routed = true\n", extra: true }],
+        }) } }],
+        usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 },
+      })
+    })
+
+    const result = await runCerebrasHelloChange({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as typeof fetch,
+      payload: {
+        schemaVersion: 1,
+        model: "qwen-3.8-27b",
+        requestText: "Add a routed marker",
+        files: allowedPaths.map((relative) => ({ path: relative, content: `source:${relative}\n` })),
+      },
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "FAILED",
+      code: "CEREBRAS_HELLO_RESPONSE_INVALID",
+      changes: [],
+    }))
   })
 
   it("refuses provider model substitution before returning any change", async () => {
