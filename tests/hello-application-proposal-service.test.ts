@@ -79,6 +79,15 @@ function runClaimProcess(script: string, env: NodeJS.ProcessEnv) {
   })
 }
 
+function waitForFileSync(target: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  while (!fs.existsSync(target)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${target}`)
+    Atomics.wait(sleeper, 0, 0, 5)
+  }
+}
+
 describe("Hello Application governed HERMES proposals", () => {
   it("gives the resident the exact owner request and a bounded generic contract", () => {
     const prompt = governedPrompt("Make the footer explain the AI loop")
@@ -744,6 +753,120 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
   })
 
+  it("releases A without observing or quarantining successor B after the exact delete", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const proposalRoot = path.join(setup.runtimeRoot, "hello-application-proposals")
+    const marker = path.join(proposalRoot, `${proposal.proposalId}.inflight`)
+    const quarantine = path.join(proposalRoot, `${proposal.proposalId}.quarantine`)
+    const childReady = path.join(setup.runtimeRoot, "successor-ready")
+    const releaseGate = path.join(setup.runtimeRoot, "release-successor")
+    const startGate = path.join(setup.runtimeRoot, "start-successor")
+    const claimed = path.join(setup.runtimeRoot, "successor-claimed")
+    const validating = path.join(setup.runtimeRoot, "successor-validating")
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), "lib/hello-application/proposal-service.mjs")).href
+    const script = `
+      import fs from "node:fs";
+      import { applyHelloApplicationProposal } from ${JSON.stringify(moduleUrl)};
+      fs.writeFileSync(process.env.SUCCESSOR_READY, "ready");
+      while (!fs.existsSync(process.env.SUCCESSOR_START)) await new Promise(resolve => setTimeout(resolve, 2));
+      while (fs.existsSync(process.env.SUCCESSOR_MARKER)) await new Promise(resolve => setTimeout(resolve, 2));
+      const attempt = applyHelloApplicationProposal({
+        repositoryRoot: process.env.SUCCESSOR_REPOSITORY,
+        runtimeRoot: process.env.SUCCESSOR_RUNTIME,
+        requestedBy: "owner",
+        proposalId: process.env.SUCCESSOR_ID,
+        validateWorkspace: async () => {
+          fs.writeFileSync(process.env.SUCCESSOR_VALIDATING, "validating");
+          while (!fs.existsSync(process.env.SUCCESSOR_RELEASE)) await new Promise(resolve => setTimeout(resolve, 2));
+          return ${JSON.stringify(await validation())};
+        },
+      });
+      fs.writeFileSync(process.env.SUCCESSOR_CLAIMED, "claimed");
+      let outcome;
+      try { outcome = { value: await attempt }; }
+      catch (error) { outcome = { error: error instanceof Error ? error.message : String(error) }; }
+      console.log(JSON.stringify(outcome));
+    `
+    const successor = runClaimProcess(script, {
+      SUCCESSOR_READY: childReady,
+      SUCCESSOR_START: startGate,
+      SUCCESSOR_MARKER: marker,
+      SUCCESSOR_REPOSITORY: setup.repositoryRoot,
+      SUCCESSOR_RUNTIME: setup.runtimeRoot,
+      SUCCESSOR_ID: proposal.proposalId,
+      SUCCESSOR_CLAIMED: claimed,
+      SUCCESSOR_VALIDATING: validating,
+      SUCCESSOR_RELEASE: releaseGate,
+    })
+    await vi.waitFor(() => expect(fs.existsSync(childReady)).toBe(true))
+
+    const remove = fs.rmSync
+    const unlink = fs.unlinkSync
+    const waitForSuccessor = () => waitForFileSync(claimed)
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const result = remove(target, options)
+      if (String(target) === marker) waitForSuccessor()
+      return result
+    })
+    vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+      const result = unlink(target)
+      if (String(target) === marker) waitForSuccessor()
+      return result
+    })
+
+    const firstAttempt = applyHelloApplicationProposal({ ...setup, repositoryRoot: path.join(setup.repositoryRoot, "missing"),
+      requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+    }).then(() => ({ error: "unexpected success" }), (error: Error) => ({ error: error.message }))
+    fs.writeFileSync(startGate, "start")
+    try {
+      const first = await firstAttempt
+      expect(first.error).toContain("ENOENT")
+      await vi.waitFor(() => expect(fs.existsSync(validating)).toBe(true))
+      expect(fs.existsSync(quarantine)).toBe(false)
+      expect(fs.readdirSync(proposalRoot).some((name) => name.endsWith(".release"))).toBe(false)
+      expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")
+    } finally {
+      fs.writeFileSync(releaseGate, "release")
+    }
+    const child = await successor
+    expect(child.code).toBe(0)
+    const outcome = JSON.parse(child.stdout.trim())
+    expect(outcome.error).toBeUndefined()
+    expect(outcome.value.status).toBe("APPLIED")
+    expect(fs.existsSync(quarantine)).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLIED")
+  })
+
+  it("quarantines when the exact public claim unlink fails", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const marker = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
+    const unlink = fs.unlinkSync
+    let attempted = false
+    vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+      if (String(target) === marker) {
+        attempted = true
+        throw new Error("claim unlink failed")
+      }
+      return unlink(target)
+    })
+
+    const outcome = await applyHelloApplicationProposal({ ...setup, repositoryRoot: path.join(setup.repositoryRoot, "missing"),
+      requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+    }).then(() => ({ error: "unexpected success" }), (error: Error) => ({ error: error.message }))
+
+    expect(attempted).toBe(true)
+    expect(outcome.error).toBe("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(fs.existsSync(marker)).toBe(true)
+    expect(fs.readdirSync(path.dirname(marker)).some((name) => name.endsWith(".release"))).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
   it("never removes a changed claim marker when queued preflight fails", async () => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
@@ -972,10 +1095,10 @@ describe("Hello Application governed HERMES proposals", () => {
   it("retains authoritative quarantine when rollback journal removal fails", async () => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
-    const remove = fs.rmSync
-    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+    const unlink = fs.unlinkSync
+    vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
       if (String(target).endsWith(".inflight")) throw new Error("journal removal failed")
-      return remove(target, options)
+      return unlink(target)
     })
     await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
       transactionOperations: { checkpoint: (stage: string) => { if (stage === "published") throw new Error("start recovery") } },
@@ -990,10 +1113,10 @@ describe("Hello Application governed HERMES proposals", () => {
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
     const inflight = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
     const original = fs.readFileSync(sourcePath(setup.repositoryRoot, proposal.changedPaths[0]))
-    const remove = fs.rmSync
-    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+    const unlink = fs.unlinkSync
+    vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
       if (String(target) === inflight) throw new Error("journal cleanup locked")
-      return remove(target, options)
+      return unlink(target)
     })
     let observed = false
     const applied = await applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
