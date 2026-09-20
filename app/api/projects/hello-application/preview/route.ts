@@ -50,7 +50,7 @@ export async function GET() {
       headers: {
         "cache-control": "no-store",
         "content-type": "text/html; charset=utf-8",
-        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'",
+        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts",
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       },
