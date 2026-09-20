@@ -12,12 +12,20 @@ type ProgressEntry = Readonly<{
 }>
 
 type Proposal = Readonly<{
-  schemaVersion?: 1 | 2
+  schemaVersion: 1 | 2
   proposalId: string
-  status: "READY_FOR_REVIEW" | "APPLIED" | string
+  status: "READY_FOR_REVIEW" | "APPLIED" | "QUARANTINED_ROLLBACK_FAILED"
+  requestedBy: string
   requestText?: string
+  requestSha256?: string
   executionNode?: string
   progress?: readonly ProgressEntry[]
+  createdAt: string
+  appliedAt: string | null
+  appliedCommit?: string | null
+  baseSha: string
+  proposalCommit: string
+  branch: string
   model: string
   threadId: string
   turnId: string
@@ -25,7 +33,7 @@ type Proposal = Readonly<{
   changedPaths: readonly string[]
   validation: Readonly<{ status: string; command: string; output?: string }>
   reviewPatch: string
-  appliedCommit?: string | null
+  quarantinedAt?: string
 }>
 
 type StreamTerminal =
@@ -33,6 +41,49 @@ type StreamTerminal =
   | Readonly<{ type: "error"; error: string }>
 
 const MAX_REQUEST_LENGTH = 2_000
+const MAX_VALIDATION_OUTPUT_LENGTH = 12_000
+const PROPOSAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const PATCH_SHA256 = /^[0-9a-f]{64}$/
+const COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const APPLIED_COMMIT = /^[0-9a-f]{40}$/
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+const VALIDATION_COMMAND = "node --test examples/hello-application/test/hello.test.mjs"
+const ALLOWED_CHANGED_PATHS = new Set([
+  "examples/hello-application/src/app.js",
+  "examples/hello-application/src/index.html",
+  "examples/hello-application/src/styles.css",
+])
+const PROGRESS_MILESTONES = [
+  ["accepted", "Request accepted"],
+  ["workspace_ready", "Isolated workspace ready"],
+  ["resident_started", "HERMES is editing the isolated workspace"],
+  ["resident_finished", "HERMES editing finished"],
+  ["validation_started", "Contained validation started"],
+  ["ready_for_review", "Proposal ready for review"],
+] as const
+const V2_PROPOSAL_KEYS = [
+  "schemaVersion",
+  "proposalId",
+  "status",
+  "requestedBy",
+  "requestText",
+  "requestSha256",
+  "executionNode",
+  "progress",
+  "createdAt",
+  "appliedAt",
+  "appliedCommit",
+  "baseSha",
+  "proposalCommit",
+  "branch",
+  "changedPaths",
+  "patchSha256",
+  "threadId",
+  "turnId",
+  "model",
+  "validation",
+  "reviewPatch",
+] as const
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -42,27 +93,144 @@ function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0
 }
 
+function receiptText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value && !/[\0\r\n]/.test(value)
+}
+
+function boundedRequest(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_REQUEST_LENGTH
+    && value.trim() === value && !value.includes("\0")
+}
+
+function exactKeys(value: object, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const sortedExpected = [...expected].sort()
+  return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index])
+}
+
+function timestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
+}
+
 function progressEntry(value: unknown): value is ProgressEntry {
-  return record(value) && nonempty(value.stage) && nonempty(value.detail) && nonempty(value.at)
+  return record(value) && nonempty(value.stage) && nonempty(value.detail) && timestamp(value.at)
+}
+
+function schemaTwoProgress(value: unknown, createdAt: string): value is readonly ProgressEntry[] {
+  if (!Array.isArray(value) || value.length !== PROGRESS_MILESTONES.length) return false
+  let previous = Date.parse(createdAt)
+  for (const [index, entry] of value.entries()) {
+    const expected = PROGRESS_MILESTONES[index]
+    if (!progressEntry(entry) || !exactKeys(entry, ["stage", "detail", "at"])
+      || entry.stage !== expected[0] || entry.detail !== expected[1]) return false
+    const observedAt = Date.parse(entry.at)
+    if (observedAt < previous) return false
+    previous = observedAt
+  }
+  return true
+}
+
+function acceptedChangedPaths(value: unknown): value is readonly string[] {
+  if (!Array.isArray(value) || value.length === 0 || !value.every(nonempty)) return false
+  const paths = value as string[]
+  return paths.every((item) => ALLOWED_CHANGED_PATHS.has(item))
+    && new Set(paths).size === paths.length
+    && paths.every((item, index) => index === 0 || paths[index - 1] < item)
 }
 
 function proposalRecord(value: unknown): value is Proposal {
   if (!record(value)) return false
-  if (value.schemaVersion !== undefined && value.schemaVersion !== 1 && value.schemaVersion !== 2) return false
-  if (!nonempty(value.proposalId) || !nonempty(value.status) || !nonempty(value.model)
-    || !nonempty(value.threadId) || !nonempty(value.turnId) || !nonempty(value.patchSha256)
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) return false
+  if (!nonempty(value.proposalId) || !PROPOSAL_ID.test(value.proposalId)
+    || !["READY_FOR_REVIEW", "APPLIED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
+    || !receiptText(value.requestedBy) || !timestamp(value.createdAt)
+    || !nonempty(value.baseSha) || !COMMIT_SHA.test(value.baseSha)
+    || !nonempty(value.proposalCommit) || !COMMIT_SHA.test(value.proposalCommit)
+    || value.branch !== `codex/hermes-hello-${value.proposalId}`
+    || !receiptText(value.model) || typeof value.threadId !== "string" || !SAFE_ID.test(value.threadId)
+    || typeof value.turnId !== "string" || !SAFE_ID.test(value.turnId)
+    || !nonempty(value.patchSha256) || !PATCH_SHA256.test(value.patchSha256)
     || typeof value.reviewPatch !== "string") return false
-  if (!Array.isArray(value.changedPaths) || value.changedPaths.length === 0
-    || value.changedPaths.some((item) => !nonempty(item))) return false
-  if (!record(value.validation) || !nonempty(value.validation.status)
-    || !nonempty(value.validation.command)
-    || (value.validation.output !== undefined && typeof value.validation.output !== "string")) return false
-  if (value.schemaVersion === 2 && (!nonempty(value.requestText) || !nonempty(value.executionNode)
-    || !Array.isArray(value.progress) || value.progress.some((entry) => !progressEntry(entry)))) return false
-  if (value.requestText !== undefined && typeof value.requestText !== "string") return false
-  if (value.executionNode !== undefined && typeof value.executionNode !== "string") return false
+  if (value.schemaVersion === 2) {
+    const keys = value.status === "QUARANTINED_ROLLBACK_FAILED"
+      ? [...V2_PROPOSAL_KEYS, "quarantinedAt"]
+      : V2_PROPOSAL_KEYS
+    if (!exactKeys(value, keys)) return false
+  }
+  if (value.status === "READY_FOR_REVIEW" && !nonempty(value.reviewPatch)) return false
+  if (!acceptedChangedPaths(value.changedPaths)) return false
+  if (!record(value.validation) || value.validation.status !== "passed"
+    || value.validation.command !== VALIDATION_COMMAND
+    || (value.schemaVersion === 2 && !exactKeys(value.validation, ["status", "command", "output"]))
+    || (value.schemaVersion === 2 && typeof value.validation.output !== "string")
+    || (value.validation.output !== undefined && (typeof value.validation.output !== "string"
+      || value.validation.output.length > MAX_VALIDATION_OUTPUT_LENGTH))) return false
+  if (value.schemaVersion === 2 && (!boundedRequest(value.requestText)
+    || !nonempty(value.requestSha256) || !PATCH_SHA256.test(value.requestSha256)
+    || !receiptText(value.executionNode) || !schemaTwoProgress(value.progress, value.createdAt))) return false
+  if (value.status === "APPLIED") {
+    if (!timestamp(value.appliedAt) || value.appliedAt < value.createdAt) return false
+    if ((value.schemaVersion === 2 || value.appliedCommit !== undefined)
+      && (typeof value.appliedCommit !== "string"
+        || !(value.schemaVersion === 2 ? APPLIED_COMMIT : COMMIT_SHA).test(value.appliedCommit))) return false
+    if (value.schemaVersion === 2 && Array.isArray(value.progress)
+      && value.appliedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at) return false
+  } else {
+    if (value.appliedAt !== null) return false
+    if (value.schemaVersion === 2 && value.appliedCommit !== null) return false
+  }
+  if (value.status === "QUARANTINED_ROLLBACK_FAILED") {
+    if (!timestamp(value.quarantinedAt) || value.quarantinedAt < value.createdAt) return false
+  } else if (value.quarantinedAt !== undefined) return false
+  if (value.requestText !== undefined && !boundedRequest(value.requestText)) return false
+  if (value.requestSha256 !== undefined && (typeof value.requestSha256 !== "string" || !PATCH_SHA256.test(value.requestSha256))) return false
+  if (value.executionNode !== undefined && !receiptText(value.executionNode)) return false
   if (value.progress !== undefined && (!Array.isArray(value.progress) || value.progress.some((entry) => !progressEntry(entry)))) return false
   return true
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index])
+}
+
+function sameProgress(left: readonly ProgressEntry[] | undefined, right: readonly ProgressEntry[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.length === right.length && left.every((entry, index) => {
+    const other = right[index]
+    return entry.stage === other.stage && entry.detail === other.detail && entry.at === other.at
+  })
+}
+
+function canonicalNextProgress(entry: ProgressEntry, observed: readonly ProgressEntry[]): boolean {
+  const expected = PROGRESS_MILESTONES[observed.length]
+  if (!expected || entry.stage !== expected[0] || entry.detail !== expected[1]) return false
+  const previous = observed.at(-1)
+  return !previous || Date.parse(entry.at) >= Date.parse(previous.at)
+}
+
+function appliedProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
+  if (!proposalRecord(value) || value.status !== "APPLIED"
+    || typeof value.appliedCommit !== "string" || !APPLIED_COMMIT.test(value.appliedCommit)
+    || typeof value.validation.output !== "string") return false
+  return value.schemaVersion === reviewed.schemaVersion
+    && value.proposalId === reviewed.proposalId
+    && value.requestedBy === reviewed.requestedBy
+    && value.requestText === reviewed.requestText
+    && value.requestSha256 === reviewed.requestSha256
+    && value.executionNode === reviewed.executionNode
+    && value.createdAt === reviewed.createdAt
+    && value.baseSha === reviewed.baseSha
+    && value.proposalCommit === reviewed.proposalCommit
+    && value.branch === reviewed.branch
+    && value.model === reviewed.model
+    && value.threadId === reviewed.threadId
+    && value.turnId === reviewed.turnId
+    && value.patchSha256 === reviewed.patchSha256
+    && value.reviewPatch === reviewed.reviewPatch
+    && sameStrings(value.changedPaths, reviewed.changedPaths)
+    && sameProgress(value.progress, reviewed.progress)
 }
 
 function failureMessage(cause: unknown, fallback: string): string {
@@ -316,11 +484,23 @@ export function HelloApplicationAssistant({
       }
       const observed: ProgressEntry[] = []
       const terminal = await readProposalStream(response, (entry) => {
+        if (!canonicalNextProgress(entry, observed)) {
+          throw new Error("HERMES stream failed: milestone sequence mismatch.")
+        }
         observed.push(entry)
         setEvents([...observed])
         setStatus(entry.detail)
       })
       if (terminal.type === "error") throw new Error(`HERMES request failed: ${terminal.error}`)
+      if (terminal.proposal.schemaVersion !== 2 || terminal.proposal.status !== "READY_FOR_REVIEW") {
+        throw new Error("HERMES stream failed: invalid proposal terminal.")
+      }
+      if (!sameProgress(observed, terminal.proposal.progress)) {
+        throw new Error("HERMES stream failed: milestone sequence mismatch.")
+      }
+      if (terminal.proposal.requestText !== requestText) {
+        throw new Error("HERMES stream failed: proposal request mismatch.")
+      }
       setProposal(terminal.proposal)
       setStatus(terminal.proposal.status === "READY_FOR_REVIEW" ? "Proposal ready for review." : statusLabel(terminal.proposal.status))
     } catch (cause) {
@@ -335,18 +515,19 @@ export function HelloApplicationAssistant({
 
   async function applyProposal() {
     if (busy || operationInFlight.current || !proposal || proposal.status !== "READY_FOR_REVIEW") return
+    const reviewed = proposal
     ownerInteracted.current = true
     operationInFlight.current = true
     setBusy("apply")
     setAssistantError(null)
     setStatus("Applying the reviewed proposal.")
     try {
-      const response = await fetch(`/api/projects/hello-application/proposals/${encodeURIComponent(proposal.proposalId)}/apply`, {
+      const response = await fetch(`/api/projects/hello-application/proposals/${encodeURIComponent(reviewed.proposalId)}/apply`, {
         method: "POST",
         headers: { "content-type": "application/json" },
       })
       const payload = await responseJson(response)
-      if (!record(payload) || !proposalRecord(payload.proposal)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+      if (!record(payload) || !appliedProposalRecord(payload.proposal, reviewed)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
       setProposal(payload.proposal)
       setStatus("Proposal applied. Preview refreshed.")
       onPreviewRefresh()

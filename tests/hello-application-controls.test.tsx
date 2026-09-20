@@ -21,9 +21,17 @@ const readyProposal = {
   schemaVersion: 2,
   proposalId: "11111111-1111-4111-8111-111111111111",
   status: "READY_FOR_REVIEW",
+  requestedBy: "owner-1",
   requestText,
+  requestSha256: "f8c16506770233e4c242e96988550f5eecbfda580127c1e80d80f765c5856b7c",
   executionNode: "hermes-node",
   progress,
+  createdAt: "2026-09-19T16:59:59.000Z",
+  appliedAt: null,
+  appliedCommit: null,
+  baseSha: "d".repeat(40),
+  proposalCommit: "e".repeat(40),
+  branch: "codex/hermes-hello-11111111-1111-4111-8111-111111111111",
   model: "williamos-qwen3-4b:64k",
   threadId: "thread-1",
   turnId: "turn-1",
@@ -40,6 +48,27 @@ const readyProposal = {
   reviewPatch: "diff --git a/examples/hello-application/src/index.html b/examples/hello-application/src/index.html\n+<footer>The local AI loop</footer>\n",
 } as const
 
+const appliedProposal = {
+  ...readyProposal,
+  status: "APPLIED",
+  appliedAt: "2026-09-19T17:00:06.000Z",
+  appliedCommit: "b".repeat(40),
+  validation: {
+    ...readyProposal.validation,
+    output: "TAP version 13\n# apply validation\n# pass 3\n# fail 0",
+  },
+} as const
+
+const {
+  appliedCommit: _missingAppliedCommit,
+  ...appliedWithoutCommit
+} = appliedProposal
+
+const {
+  appliedAt: _missingAppliedAt,
+  ...appliedWithoutAt
+} = appliedProposal
+
 const {
   requestText: _malformedRequest,
   executionNode: _malformedNode,
@@ -47,11 +76,25 @@ const {
   ...malformedV2Proposal
 } = readyProposal
 
-type ProposalFixture = typeof readyProposal | (Omit<typeof readyProposal, "proposalId" | "requestText" | "turnId"> & {
-  proposalId: string
-  requestText: string
-  turnId: string
-})
+const {
+  schemaVersion: _missingSchemaVersion,
+  ...missingSchemaProposal
+} = readyProposal
+
+const {
+  requestText: _schemaOneRequest,
+  requestSha256: _schemaOneRequestHash,
+  executionNode: _schemaOneNode,
+  progress: _schemaOneProgress,
+  appliedCommit: _schemaOneAppliedCommit,
+  ...schemaOneBase
+} = readyProposal
+const { output: _schemaOneOutput, ...schemaOneValidation } = schemaOneBase.validation
+const schemaOneProposal = {
+  ...schemaOneBase,
+  schemaVersion: 1,
+  validation: schemaOneValidation,
+} as const
 
 function streamResponse(records: readonly unknown[], chunkPattern = [1, 2, 5, 3]): Response {
   const bytes = new TextEncoder().encode(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`)
@@ -123,7 +166,7 @@ function baseFetch(options: Readonly<{
     }
     if (url.endsWith("/apply") && method === "POST") {
       return Promise.resolve(options.applyResponse ?? Response.json({
-        proposal: { ...readyProposal, status: "APPLIED", appliedCommit: "b".repeat(40) },
+        proposal: appliedProposal,
       }))
     }
     throw new Error(`unexpected fetch ${url} ${method}`)
@@ -173,12 +216,14 @@ describe("HelloApplicationControls", () => {
 
   it("reads arbitrarily split NDJSON, shows only observed milestones and complete execution evidence, then applies and accepts a second request", async () => {
     const secondRequest = "Give the pulse button a calmer label"
-    const secondProposal: ProposalFixture = {
+    const secondProposal = {
       ...readyProposal,
       proposalId: "22222222-2222-4222-8222-222222222222",
       requestText: secondRequest,
+      requestSha256: "9033df60a978eaa2ce4b1a3135453b7e0ec6d3d2f16cc486a55c008a75a41502",
+      branch: "codex/hermes-hello-22222222-2222-4222-8222-222222222222",
       turnId: "turn-2",
-    }
+    } as const
     const fetcher = baseFetch({
       proposalPosts: [
         streamResponse([...progress.map((entry) => ({ type: "progress", ...entry })), { type: "proposal", proposal: readyProposal }]),
@@ -278,6 +323,54 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
+  it.each([
+    {
+      name: "zero observed milestones",
+      observed: [],
+    },
+    {
+      name: "a missing observed milestone",
+      observed: progress.slice(0, -1),
+    },
+    {
+      name: "a duplicate observed milestone",
+      observed: [progress[0], progress[0], ...progress.slice(1)],
+    },
+    {
+      name: "out-of-order observed milestones",
+      observed: [progress[1], progress[0], ...progress.slice(2)],
+    },
+    {
+      name: "a fabricated observed milestone detail",
+      observed: progress.map((entry, index) => index === 2
+        ? { ...entry, detail: "Fabricated resident reasoning" }
+        : entry),
+    },
+    {
+      name: "an observed timestamp that differs from the receipt",
+      observed: progress.map((entry, index) => index === 2
+        ? { ...entry, at: "2026-09-19T17:00:02.500Z" }
+        : entry),
+    },
+  ])("rejects $name before exposing Apply", async ({ observed }) => {
+    const fetcher = baseFetch({
+      proposalPosts: [streamResponse([
+        ...observed.map((entry) => ({ type: "progress", ...entry })),
+        { type: "proposal", proposal: readyProposal },
+      ])],
+    })
+    await renderReady(fetcher)
+
+    const input = await submitRequest()
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES stream failed: milestone sequence mismatch.")
+    expect((input as HTMLTextAreaElement).value).toBe(requestText)
+    expect(screen.getByText(requestText, { selector: "blockquote" })).toBeTruthy()
+    expect(screen.getByRole("log", { name: "HERMES activity" }).textContent).not.toContain("Fabricated resident reasoning")
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
   it("renders a backend terminal error as an assistant failure while retaining observed milestones", async () => {
     const fetcher = baseFetch({
       proposalPosts: [streamResponse([
@@ -294,6 +387,64 @@ describe("HelloApplicationControls", () => {
     const log = screen.getByRole("log", { name: "HERMES activity" })
     expect(within(log).getByText("Request accepted")).toBeTruthy()
     expect(within(log).getByText("Isolated workspace ready")).toBeTruthy()
+  })
+
+  it("rejects a schema-v2 terminal for a different request while retaining the owner transcript and milestones", async () => {
+    const differentRequest = "Replace the footer with an unrelated request"
+    const fetcher = baseFetch({
+      proposalPosts: [streamResponse([
+        ...progress.map((entry) => ({ type: "progress", ...entry })),
+        { type: "proposal", proposal: { ...readyProposal, requestText: differentRequest } },
+      ])],
+    })
+    await renderReady(fetcher)
+
+    const input = await submitRequest()
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES stream failed: proposal request mismatch.")
+    expect((input as HTMLTextAreaElement).value).toBe(requestText)
+    expect(screen.getByText(requestText, { selector: "blockquote" })).toBeTruthy()
+    expect(screen.queryByText(differentRequest)).toBeNull()
+    const log = screen.getByRole("log", { name: "HERMES activity" })
+    expect(within(log).getByText("Request accepted")).toBeTruthy()
+    expect(within(log).getByText("Proposal ready for review")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
+  it.each([
+    {
+      name: "a schema-v1 proposal",
+      proposal: schemaOneProposal,
+    },
+    {
+      name: "an already-applied schema-v2 proposal",
+      proposal: appliedProposal,
+    },
+    {
+      name: "a quarantined schema-v2 proposal",
+      proposal: {
+        ...readyProposal,
+        status: "QUARANTINED_ROLLBACK_FAILED",
+        quarantinedAt: "2026-09-19T17:00:06.000Z",
+      },
+    },
+  ])("rejects a creation stream terminal containing $name", async ({ proposal }) => {
+    const fetcher = baseFetch({
+      proposalPosts: [streamResponse([
+        ...progress.map((entry) => ({ type: "progress", ...entry })),
+        { type: "proposal", proposal },
+      ])],
+    })
+    await renderReady(fetcher)
+
+    const input = await submitRequest()
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES stream failed: invalid proposal terminal.")
+    expect((input as HTMLTextAreaElement).value).toBe(requestText)
+    expect(screen.getByText(requestText, { selector: "blockquote" })).toBeTruthy()
+    expect(within(screen.getByRole("log", { name: "HERMES activity" })).getByText("Proposal ready for review")).toBeTruthy()
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
   it("handles a non-stream HTTP error without parsing JSON as NDJSON and preserves the request", async () => {
@@ -333,7 +484,10 @@ describe("HelloApplicationControls", () => {
     fireEvent.click(ask)
     expect(fetcher.mock.calls.filter(([url, init]) => String(url).endsWith("/proposals") && init?.method === "POST")).toHaveLength(1)
 
-    resolveResponse(streamResponse([{ type: "proposal", proposal: readyProposal }]))
+    resolveResponse(streamResponse([
+      ...progress.map((entry) => ({ type: "progress", ...entry })),
+      { type: "proposal", proposal: readyProposal },
+    ]))
     await screen.findByText("Ready for review")
     expect((ask as HTMLButtonElement).disabled).toBe(false)
   })
@@ -347,6 +501,99 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByText("Older request")).toBeNull()
     expect(within(screen.getByRole("log", { name: "HERMES activity" })).getByText("Proposal ready for review")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+  })
+
+  it.each([
+    {
+      name: "a missing schema version",
+      proposal: missingSchemaProposal,
+    },
+    {
+      name: "an unsupported status",
+      proposal: { ...readyProposal, status: "REVIEWABLE_ENOUGH" },
+    },
+    {
+      name: "an invalid proposal UUID",
+      proposal: { ...readyProposal, proposalId: "proposal-1" },
+    },
+    {
+      name: "an invalid patch hash",
+      proposal: { ...readyProposal, patchSha256: "not-a-sha256" },
+    },
+    {
+      name: "a path outside the three writable files",
+      proposal: { ...readyProposal, changedPaths: ["examples/hello-application/server.mjs"] },
+    },
+    {
+      name: "a duplicate changed path",
+      proposal: { ...readyProposal, changedPaths: [readyProposal.changedPaths[0], readyProposal.changedPaths[0]] },
+    },
+    {
+      name: "out-of-order changed paths",
+      proposal: { ...readyProposal, changedPaths: [...readyProposal.changedPaths].reverse() },
+    },
+    {
+      name: "failed validation",
+      proposal: { ...readyProposal, validation: { ...readyProposal.validation, status: "failed" } },
+    },
+    {
+      name: "the wrong validation command",
+      proposal: { ...readyProposal, validation: { ...readyProposal.validation, command: "npm test" } },
+    },
+    {
+      name: "non-string validation output",
+      proposal: { ...readyProposal, validation: { ...readyProposal.validation, output: 42 } },
+    },
+    {
+      name: "an empty READY patch",
+      proposal: { ...readyProposal, reviewPatch: "" },
+    },
+    {
+      name: "empty schema-v2 progress",
+      proposal: { ...readyProposal, progress: [] },
+    },
+    {
+      name: "out-of-order schema-v2 stages",
+      proposal: { ...readyProposal, progress: [progress[1], progress[0], ...progress.slice(2)] },
+    },
+    {
+      name: "a noncanonical schema-v2 milestone detail",
+      proposal: { ...readyProposal, progress: progress.map((entry, index) => index === 2 ? { ...entry, detail: "Resident work maybe started" } : entry) },
+    },
+    {
+      name: "an invalid schema-v2 timestamp",
+      proposal: { ...readyProposal, progress: progress.map((entry, index) => index === 2 ? { ...entry, at: "not-a-timestamp" } : entry) },
+    },
+    {
+      name: "decreasing schema-v2 timestamps",
+      proposal: { ...readyProposal, progress: progress.map((entry, index) => index === 2 ? { ...entry, at: "2026-09-19T16:59:59.000Z" } : entry) },
+    },
+    {
+      name: "a schema-v2 APPLIED receipt without an applied commit",
+      proposal: appliedWithoutCommit,
+    },
+    {
+      name: "a schema-v2 APPLIED receipt with an invalid applied commit",
+      proposal: { ...appliedProposal, appliedCommit: "not-a-commit" },
+    },
+    {
+      name: "a schema-v2 receipt missing immutable provenance",
+      proposal: (() => {
+        const { requestedBy: _requestedBy, ...proposal } = readyProposal
+        return proposal
+      })(),
+    },
+    {
+      name: "a schema-v2 receipt with an injected field",
+      proposal: { ...readyProposal, unexpectedEvidence: "not part of the receipt schema" },
+    },
+  ])("does not expose Apply for $name", async ({ proposal }) => {
+    const fetcher = baseFetch({ proposals: [proposal] })
+    await renderReady(fetcher)
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES status failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
   it("does not let a delayed restore overwrite text the owner has typed", async () => {
@@ -405,14 +652,16 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByText("stale-turn")).toBeNull()
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
 
-    resolvePost(streamResponse([{ type: "proposal", proposal: readyProposal }]))
+    resolvePost(streamResponse([
+      ...progress.map((entry) => ({ type: "progress", ...entry })),
+      { type: "proposal", proposal: readyProposal },
+    ]))
     expect(await screen.findByText("turn-1")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
   })
 
   it("restores schema-v1 proposals with unavailable additions instead of crashing", async () => {
-    const { requestText: _requestText, executionNode: _executionNode, progress: _progress, ...schemaOne } = readyProposal
-    const fetcher = baseFetch({ proposals: [{ ...schemaOne, schemaVersion: 1 }] })
+    const fetcher = baseFetch({ proposals: [schemaOneProposal] })
     await renderReady(fetcher)
 
     expect(await screen.findByText("Ready for review")).toBeTruthy()
@@ -433,6 +682,150 @@ describe("HelloApplicationControls", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_STALE_BASE")
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("requires fresh validation output when applying a restored schema-v1 proposal", async () => {
+    const fetcher = baseFetch({
+      proposals: [schemaOneProposal],
+      applyResponse: Response.json({
+        proposal: {
+          ...schemaOneProposal,
+          status: "APPLIED",
+          appliedAt: "2026-09-19T17:00:06.000Z",
+          appliedCommit: "b".repeat(40),
+        },
+      }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: "a still-ready proposal",
+      proposal: readyProposal,
+    },
+    {
+      name: "a quarantined proposal",
+      proposal: {
+        ...readyProposal,
+        status: "QUARANTINED_ROLLBACK_FAILED",
+        quarantinedAt: "2026-09-19T17:00:06.000Z",
+      },
+    },
+    {
+      name: "the wrong proposal ID",
+      proposal: {
+        ...appliedProposal,
+        proposalId: "22222222-2222-4222-8222-222222222222",
+        branch: "codex/hermes-hello-22222222-2222-4222-8222-222222222222",
+      },
+    },
+    {
+      name: "the wrong owner request",
+      proposal: { ...appliedProposal, requestText: "Change something else" },
+    },
+    {
+      name: "the wrong execution node",
+      proposal: { ...appliedProposal, executionNode: "not-the-reviewed-node" },
+    },
+    {
+      name: "the wrong resident model",
+      proposal: { ...appliedProposal, model: "different-model:latest" },
+    },
+    {
+      name: "the wrong resident turn",
+      proposal: { ...appliedProposal, turnId: "turn-2" },
+    },
+    {
+      name: "different changed paths",
+      proposal: { ...appliedProposal, changedPaths: ["examples/hello-application/src/app.js"] },
+    },
+    {
+      name: "a different patch hash",
+      proposal: { ...appliedProposal, patchSha256: "c".repeat(64) },
+    },
+    {
+      name: "a different reviewed patch",
+      proposal: { ...appliedProposal, reviewPatch: "diff --git a/different b/different\n" },
+    },
+    {
+      name: "different progress provenance",
+      proposal: { ...appliedProposal, progress: progress.map((entry, index) => index === 0 ? { ...entry, detail: "Different accepted detail" } : entry) },
+    },
+    {
+      name: "a different request digest",
+      proposal: { ...appliedProposal, requestSha256: "c".repeat(64) },
+    },
+    {
+      name: "a different requesting owner",
+      proposal: { ...appliedProposal, requestedBy: "owner-2" },
+    },
+    {
+      name: "a different creation timestamp",
+      proposal: { ...appliedProposal, createdAt: "2026-09-19T16:59:58.000Z" },
+    },
+    {
+      name: "a different base commit",
+      proposal: { ...appliedProposal, baseSha: "1".repeat(40) },
+    },
+    {
+      name: "a different proposal commit",
+      proposal: { ...appliedProposal, proposalCommit: "2".repeat(40) },
+    },
+    {
+      name: "a different branch",
+      proposal: { ...appliedProposal, branch: "codex/hermes-hello-not-the-reviewed-proposal" },
+    },
+    {
+      name: "failed fresh validation",
+      proposal: { ...appliedProposal, validation: { ...appliedProposal.validation, status: "failed" } },
+    },
+    {
+      name: "a different fresh validation command",
+      proposal: { ...appliedProposal, validation: { ...appliedProposal.validation, command: "npm test" } },
+    },
+    {
+      name: "non-string fresh validation output",
+      proposal: { ...appliedProposal, validation: { ...appliedProposal.validation, output: 42 } },
+    },
+    {
+      name: "a missing applied commit",
+      proposal: appliedWithoutCommit,
+    },
+    {
+      name: "an invalid applied commit",
+      proposal: { ...appliedProposal, appliedCommit: "not-a-commit" },
+    },
+    {
+      name: "a missing applied timestamp",
+      proposal: appliedWithoutAt,
+    },
+    {
+      name: "an invalid applied timestamp",
+      proposal: { ...appliedProposal, appliedAt: "not-a-timestamp" },
+    },
+  ])("rejects an HTTP-200 Apply response containing $name", async ({ proposal }) => {
+    const fetcher = baseFetch({
+      proposals: [readyProposal],
+      applyResponse: Response.json({ proposal }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(within(screen.getByLabelText("Resident execution evidence")).getByText(requestText)).toBeTruthy()
+    expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(onPreviewRefresh).not.toHaveBeenCalled()
   })
 
