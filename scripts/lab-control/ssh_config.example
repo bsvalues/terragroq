@@ -1,13 +1,45 @@
-# Merge these hosts into %USERPROFILE%\.ssh\config after reviewing existing entries.
-# This template never disables host-key checking.
+# WilliamOS lab SSH candidate. Generate the authoritative candidate with lab-ssh-config.
+# Candidate only: inspect with `ssh -F <candidate> -G`; do not merge it blindly or replace an owner-managed config.
 Host hermes
-    HostName 192.168.1.154
+    HostName 100.97.194.84
     User bs
-    IdentitiesOnly yes
+    Port 22
     IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/known_hosts
+    KnownHostsCommand none
+    StrictHostKeyChecking yes
+    HostKeyAlgorithms ssh-ed25519
+    BatchMode yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    ForwardAgent no
+    PermitLocalCommand no
+    ClearAllForwardings yes
+    ControlMaster no
+    ControlPersist no
+    ControlPath none
 
 Host atlas
-    HostName 192.168.1.156
+    HostName 192.168.88.8
     User bs
-    IdentitiesOnly yes
+    Port 22
     IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/known_hosts
+    KnownHostsCommand none
+    StrictHostKeyChecking yes
+    HostKeyAlgorithms ssh-ed25519
+    BatchMode yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    ForwardAgent no
+    PermitLocalCommand no
+    ClearAllForwardings yes
+    ControlMaster no
+    ControlPersist no
+    ControlPath none
+    ProxyJump hermes
+
+# RELAY aegis: OMEN -> HERMES -> AEGIS (HERMES alias aegis)
+# RELAY daedalus: OMEN -> HERMES -> DAEDALUS (HERMES alias daedalus, endpoint 192.168.88.6:2222)

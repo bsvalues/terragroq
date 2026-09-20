@@ -1,183 +1,164 @@
-# OMEN lab-control runbook
+# WilliamOS lab-control runbook
 
 Work Order: `WO-OMEN-COCKPIT-001`
 
-## Boundary
+## Purpose and boundary
 
-OMEN is the cockpit. These commands perform bounded, read-only SSH probes against `hermes` and
-`atlas`. They do not start or stop services, change Docker, mutate data, modify backups, copy source,
-or disable host-key checking. Every SSH call uses `BatchMode=yes`, a five-second connect timeout, one
-connection attempt, and bounded server-alive settings.
+OMEN is the operator cockpit for the five physical WilliamOS lab nodes: OMEN, HERMES, ATLAS,
+AEGIS, and DAEDALUS. Lab-control performs bounded, read-only health probes. It does not start or
+stop services, change Docker, modify SSH trust, distribute private keys, edit DNS, mutate application
+data, or select autonomous work.
 
-## Current OMEN truth (refreshed 2026-08-08)
+The management source is
+`config/lab-control/lab-management-topology.v1.json`. It is a management-plane projection over the
+existing `williamos-node-identity/1` contract; Azure remains an external capability envelope and is
+not a physical lab node.
 
-- Host: `OMEN`, HP OMEN Gaming Laptop 16-ap0xxx.
-- OS: Microsoft Windows 11 Home, version `10.0.26200`, build `26200.8973`, x64, DisplayVersion `25H2`.
-- LAN: Ethernet 2 IPv4 `192.168.1.157`.
-- PowerShell: `7.6.4`; OpenSSH: `9.5p2`; Git: `2.55.0`; GitHub CLI: `2.89.0`.
-- GitHub CLI is authenticated as `bsvalues` with Git operations configured for SSH.
-- Stable VS Code `1.132.0` is installed with official Remote SSH `0.124.0`, Remote SSH Editing
-  Configuration `0.87.0`, and Remote Explorer `0.5.0`. Its SSH path is explicitly set to Windows
-  OpenSSH, with `hermes=windows` and `atlas=linux` platform mappings. VS Code Insiders remains
-  installed, but its current product/extension combination is not the proven Remote SSH surface.
-- Existing SSH aliases already map `hermes` to `bs@192.168.1.154` and `atlas` to
-  `bs@192.168.1.156`, using `~/.ssh/id_ed25519`, `IdentitiesOnly yes`, and the default
-  `StrictHostKeyChecking ask`. Do not replace the useful existing config with the included example.
-- Existing public-key fingerprint offered for installation:
-  `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`.
+## Prerequisites
 
-## Install the commands
+Run the installer and commands with PowerShell 7.5 or newer. The module uses the 7.5 strict JSON
+date-mode control so topology and signed sync timestamps remain strings until the explicit UTC
+validator accepts them. Older PowerShell versions fail before installation or module import.
 
-From this repository in PowerShell:
+## Current management routes
+
+| Node | OMEN route | Account | Port | Credential owner |
+|---|---|---:|---:|---|
+| OMEN | local observation | current user | local | OMEN |
+| HERMES | direct to `100.97.194.84` | `bs` | 22 | OMEN |
+| ATLAS | strict OMEN-to-HERMES tunnel to `192.168.88.8` | `bs` | 22 | OMEN |
+| AEGIS | OMEN to HERMES, then HERMES alias `aegis` to `192.168.88.7` | `bs` | 22 | HERMES |
+| DAEDALUS | OMEN to HERMES, then HERMES alias `daedalus` to `192.168.88.6` | `daedalus` | 2222 | HERMES |
+
+AEGIS and DAEDALUS deliberately use the HERMES resident relay. The ATLAS jump is constructed with
+its own explicit batch, identity, trust, forwarding, and timeout controls because OpenSSH does not
+inherit the destination's options into an implicit `ProxyJump` child. None of these routes transfer
+HERMES credentials to OMEN. Do not copy HERMES private keys to OMEN and do not enable agent
+forwarding to make the routes look simpler.
+
+Strict read-only identity proofs refreshed on 2026-09-20 returned:
+
+- HERMES: hostname `Hermes`, account `hermes\bs`, ED25519 fingerprint
+  `SHA256:Iz+tH9Nr8AqGCRWzf2CDFGfii0V72zfvuiSijDBIhF0`.
+- ATLAS: hostname `atlas`, account `bs`, ED25519 fingerprint
+  `SHA256:0QsMN3STmqBsozY2oea4GU32dDIyCKV0jCbWI8n4fYw`.
+- AEGIS through HERMES: hostname `aegis`, account `bs`, ED25519 fingerprint
+  `SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo`.
+- DAEDALUS through HERMES: hostname `daedalus-ThinkStation-P620`, account `daedalus`, ED25519
+  fingerprint `SHA256:njnjHfmzEA8Azl5xOcNICR4V3OU7+DvUO4JLHW4AAf4`.
+
+Fingerprints are evidence, not public keys. They cannot be converted into `known_hosts` entries.
+The runtime still requires an existing strict `known_hosts` match. It accepts only ED25519, rejects
+any conflicting ED25519 entry for the endpoint, copies only the exactly verified entry into an
+ephemeral per-command trust file, and deletes that file after use. HERMES-resident relays apply the
+same rule after proving that the effective alias resolves to the declared host, account, and port.
+Every outer SSH process has a 30-second wall-clock ceiling in addition to connection and keepalive
+timeouts.
+
+## Route evidence freshness
+
+Management routes are actionable only while their `VERIFIED` evidence is current. The runtime
+rejects evidence observed more than five minutes in the future, evidence that is expired, and
+attestation windows longer than seven days before it starts SSH. The current four route proofs were
+observed at `2026-09-20T14:27:53Z` and expire at `2026-09-27T14:27:53Z`.
+
+Refresh is an evidence operation, not a timestamp-only edit. From canonical OMEN, re-prove the local
+hostname first. Then use strict, noninteractive SSH to prove each route's configured endpoint,
+remote `hostname`, remote account (`whoami` or `id -un`), and negotiated ED25519 fingerprint. For
+AEGIS and DAEDALUS, perform the endpoint/account/fingerprint proof from HERMES without copying its
+credentials. Compare the negotiated fingerprint with the relevant managed `known_hosts` entry.
+Only after all values agree may `observedAt` be advanced and `expiresAt` set no more than seven days
+later. Run the topology tests, `lab-ssh-config`, and `lab-status` before installing the refreshed
+manifest. Never refresh by using `accept-new`, disabling host-key checking, or merely extending the
+expiry.
+
+The shipped JSON Schema pins the exact ordered node tuples and route bindings. Timestamp ordering,
+future skew, expiry, and the seven-day maximum window are semantic checks performed by the runtime
+and covered by behavior tests; JSON Schema `date-time` validation alone cannot express them.
+
+## DNS and service naming
+
+The lab does not currently have one authoritative internal DNS zone. `williamos.lan` is a service
+name for the HERMES-hosted WilliamOS runtime, while SSH management uses the explicit, validated
+routes above. MagicDNS, the Windows hosts file, mDNS, and raw LAN addresses must not be treated as
+interchangeable sources of truth.
+
+This contract makes management deterministic without pretending the DNS project is complete. A
+future DNS rollout should generate records from the same node identities and must be validated
+separately before it replaces explicit management endpoints.
+
+## Install
+
+From the repository in PowerShell:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\lab-control\install-lab-control.ps1
 ```
 
-The installer copies only its managed command files to
-`%LOCALAPPDATA%\WilliamOS\LabControl\bin` and appends that directory to the user PATH only when it is
-absent. It refuses to overwrite a changed managed file unless `-Force` is explicitly supplied. Open a
-new terminal after the first install. For a review-only install:
+The installer copies its command shims, module, topology, schema, and node-identity contract to
+`%LOCALAPPDATA%\WilliamOS\LabControl\bin`. It refuses to overwrite a changed managed file unless
+`-Force` is explicitly supplied. Sources are preflighted and hash-verified in a sibling staging
+directory, then the complete directory is swapped into place with rollback of the previous install
+if activation fails. Unmanaged files already in the install directory are preserved. Review without
+writing. If the process or machine stops between the two directory renames, the next installer run
+automatically restores one unambiguous sibling backup before preflight; multiple remnants fail
+closed for operator review.
 
 ```powershell
 pwsh -NoProfile -File .\scripts\lab-control\install-lab-control.ps1 -WhatIf
 ```
 
-The repository also contains `ssh_config.example` as a review aid. Merge entries; never replace the
-whole SSH config.
-
-On OMEN, the managed files are installed at
-`C:\Users\bsval\AppData\Local\WilliamOS\LabControl\bin`, and that directory is present in the user
-PATH. The installed `lab-status` entrypoint was resolved from that location and exercised successfully.
-The current verified run reports `SYNC_OK`, operator blocker `NONE`, and exits `0`.
-
 ## Commands
 
-- `lab-status`: concise Hermes, Atlas, backup, cross-node sync, and operator-blocker summary.
-- `lab-hermes`: detailed read-only Hermes snapshot.
-- `lab-atlas`: detailed read-only Atlas snapshot.
-- `lab-containers`: read-only `docker ps` output from both hosts.
-- `lab-backups`: bounded Atlas listing under common backup roots and the same strict cross-node sync
-  receipt classifier used by `lab-status`.
+- `lab-status`: all five nodes, ATLAS/HERMES continuity evidence, and one operator-blocker result.
+- `lab-hermes`: detailed read-only HERMES snapshot.
+- `lab-atlas`: detailed read-only ATLAS snapshot.
+- `lab-aegis`: detailed read-only AEGIS snapshot through the HERMES resident relay.
+- `lab-daedalus`: detailed read-only DAEDALUS snapshot through the HERMES resident relay.
+- `lab-containers`: read-only `docker ps` output from HERMES and ATLAS.
+- `lab-backups`: bounded ATLAS backup listing plus the same continuity classifier as `lab-status`.
+- `lab-ssh-config`: deterministic OMEN SSH candidate on stdout. It never edits active SSH files.
 
-For `lab-status`, exit code `0` additionally requires all mandatory fields to carry usable evidence:
-Hermes Docker/Ollama/GPU/disk, Atlas Docker/disk, protocol-level Postgres/Redis/Mongo probes, latest
-backup, and cross-node sync. Reachable SSH with an `UNKNOWN`, unavailable, not-found, or unaccepted
-service-evidence value exits `2` with `REQUIRED_EVIDENCE_INCOMPLETE`; it cannot false-green. Other
-commands use exit code `0` when their required SSH operation completes and `2` for a typed blocker.
-
-Atlas service lines are deliberately labeled **evidence**, not authoritative state inferred from a
-loose container name. Postgres uses `pg_isready`; Redis uses `redis-cli ping` and distinguishes an
-authentication-required reachable server; Mongo uses `mongosh` ping. If those clients are not present
-on Atlas, the probe runs the same read-only client checks inside the explicitly port-mapped container.
-Docker published-port matches and container health appear as supplemental evidence in `lab-atlas`.
-A TCP listener alone is reported as `TCP_LISTENER_ONLY` and does not satisfy green status.
-
-The Atlas backup probe includes the observed lab-backup root `/home/bs/backups`, excludes the generic
-OS package-backup directory `/var/backups`, aggregates candidates from every configured lab root, and
-only then selects the global newest file. It formats the selected epoch with `date`, so unsupported
-`find` timezone directives cannot leak into the result. The path is preserved after its timestamp
-field, including embedded spaces. Tests decode and inspect the actual UTF-8 shell payload sent to the
-external SSH boundary.
-
-## Current SSH state
-
-Both aliases resolve to the intended hosts, and both accepted passwordless SSH during proof.
-
-- Atlas: passwordless BatchMode SSH succeeds and returns hostname `atlas`.
-- Hermes trust is proven: verbose client evidence shows the server accepts fingerprint
-  `SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8`; public-key authentication succeeds, hostname is
-  `Hermes`, and the command exits `0`.
-
-The verified `lab-status` reports both nodes reachable. Hermes evidence includes Docker `28.5.1`,
-Ollama `0.32.5`, the RTX 3050, and disk status. Atlas evidence includes Docker `29.7.2`, successful
-read-only Postgres/Redis/Mongo protocol probes, `641G` free of `685G`, and the latest observed
-TerraFusion backup archive candidate by mtime under `/home/bs/backups`. Archive integrity/completeness
-is not inferred from file presence. Cross-node status is now derived from the Atlas canonical
-receipt, bound Hermes completed-task evidence, and the Windows scheduled-task state/result rather
-than task result or receipt existence alone.
-
-## Cross-node sync receipt truth
-
-Atlas is the sole canonical durable receipt authority. Hermes executes and verifies both directions;
-OMEN consumes the resulting evidence read-only.
-
-- Atlas canonical receipt: `/home/bs/from-hermes/crossnode-sync-receipt.json`
-- Hermes completed-task evidence: `D:\CrossNodeBackups\crossnode-sync-task-evidence.json`
-- Scheduled task: `HermesCrossNodeBackupSync`
-- Freshness threshold: 30 hours
-
-One immutable UUID `run_id` must match in the Atlas receipt, both direction records, and Hermes task
-evidence. Both directions must report `SHA256_PASS` with positive file counts. Hermes evidence must
-contain the SHA-256 of the exact Atlas receipt bytes, and Task Scheduler must report state `Ready` and
-result `0`. A receipt file alone is never success.
-
-The public states are:
-
-- `SYNC_OK`: the canonical receipt, both direction records, Hermes completed-task evidence, task
-  result, hashes, `run_id`, and timestamps all validate, and the completion is no more than 30 hours
-  old.
-- `SYNC_STALE`: the evidence is otherwise a valid completed success but is older than 30 hours.
-- `SYNC_FAILED`: an explicit failure, nonzero task result, incomplete evidence after publication,
-  mismatch, malformed evidence, failed verification, or invalid ordering/binding exists.
-- `SYNC_UNKNOWN`: no trustworthy canonical evidence exists from which to determine the state.
-
-Windows Task Scheduler's observed `LastRunTime` is accepted only from five minutes before the bound
-receipt start through five minutes after Hermes task-evidence completion. This accounts for the live
-Windows observation being recorded after script completion while retaining a narrow fail-closed
-binding. Exact receipt/task-evidence timestamps still have to match and be internally ordered.
-
-Only `SYNC_OK` permits `lab-status` exit `0`. `SYNC_STALE`, `SYNC_FAILED`, and `SYNC_UNKNOWN` produce
-`REQUIRED_EVIDENCE_INCOMPLETE` and exit `2`. `lab-backups` applies the same state and exit rule.
-
-The live verified run used `run_id` `a14a4724-6fbe-4f5e-b91b-aef6dde55847`. It proved task result
-`0`, both directions `SHA256_PASS`, 6 of 6 Atlas-to-Hermes files and 15 of 15 Hermes-to-Atlas files
-matching by filename, size, and SHA-256, and installed `lab-status`/`lab-backups` exit `0`.
-
-Hermes temporarily stopped accepting TCP connections after the initial proof while still responding
-to ICMP. That condition recovered. Final passwordless SSH, tunnel, and VS Code Remote SSH proofs all
-established fresh connections without changing any private key, password, firewall, or service
-setting. Routine verification from a new OMEN terminal is:
+Capture and review the SSH candidate with:
 
 ```powershell
-ssh -o BatchMode=yes hermes hostname
+lab-ssh-config > $env:TEMP\williamos-ssh-config.candidate
+ssh -F $env:TEMP\williamos-ssh-config.candidate -G hermes
+ssh -F $env:TEMP\williamos-ssh-config.candidate -G atlas
+```
+
+The renderer emits active blocks only for OMEN-owned HERMES and ATLAS credentials. AEGIS and
+DAEDALUS appear as relay routes because their trust and credentials remain on HERMES. The generated
+candidate enforces public-key-only, batch, strict host-key checking, no agent forwarding, no
+forwarding, ED25519-only host keys, bounded connection attempts, and the controlled OMEN
+`known_hosts` path.
+
+## Status rules
+
+Exit `0` means all five required nodes were observed and all mandatory evidence was usable. Exit `2`
+means a typed SSH failure, invalid topology, missing service evidence, or invalid continuity evidence.
+SSH reachability alone cannot produce green status.
+
+HERMES requires Docker, Ollama, GPU, and disk evidence. ATLAS requires Docker, disk, backup,
+protocol-level Postgres/Redis/Mongo evidence, and valid cross-node continuity. AEGIS requires
+hostname, account, OS, uptime, Docker, and disk evidence; its GPU is informative. DAEDALUS is the
+resident GPU worker and additionally requires usable GPU evidence.
+
+The public continuity states remain `SYNC_OK`, `SYNC_STALE`, `SYNC_FAILED`, and `SYNC_UNKNOWN`.
+Only `SYNC_OK` permits green status. The canonical ATLAS receipt and bound HERMES task evidence must
+agree on run ID, hashes, direction records, task result, and timestamps.
+
+## Routine verification
+
+```powershell
+lab-ssh-config
 lab-status
-lab-containers
-lab-backups
+lab-hermes
+lab-atlas
+lab-aegis
+lab-daedalus
 ```
 
-Stable VS Code Remote SSH is proven end-to-end for Atlas and Hermes: the official resolver launched Windows
-OpenSSH, connected to `atlas`, created its exec server, and installed/started the normal user-scoped
-VS Code Server under `/home/bs/.vscode-server`. For Hermes it resolved the Windows platform, created
-and cached the exec server, and installed the user-scoped server under `C:\Users\bs\.vscode-server`.
-A fresh post-recovery proof with stable VS Code `1.132.0` parsed the Windows x64 server listener,
-resolved `ssh-remote+hermes`, and created/cached its exec server.
-
-## Browser and RDP truth
-
-OMEN web-management URLs discovered during the initial LAN scan:
-
-- Hermes Windows Device Portal: `http://192.168.1.154:50080/`
-- Hermes Windows Device Portal TLS endpoint: `https://192.168.1.154:50443/`
-
-Atlas port `9001` identifies Portainer Agent `2.39.5`, not a browser UI. Hermes Docker publishes Open
-WebUI on `0.0.0.0:3000`, Portainer on `0.0.0.0:9000`, and Ollama on `0.0.0.0:11434`, but direct OMEN
-LAN requests time out. The safe proven access path is a local-only tunnel:
-
-```powershell
-ssh -N -L 127.0.0.1:13000:127.0.0.1:3000 -L 127.0.0.1:19000:127.0.0.1:9000 -L 127.0.0.1:21434:127.0.0.1:11434 hermes
-```
-
-While it runs, bookmark Open WebUI at `http://127.0.0.1:13000/`, Portainer at
-`http://127.0.0.1:19000/`, and the Ollama API at `http://127.0.0.1:21434/`. Each endpoint returned
-HTTP 200 during the transient proof, then the exact tunnel process was stopped. No current lab
-monitoring service was found. Port `8080` is legacy EDB PEM Apache, and ports `50080`/`50443` are
-Windows web management; neither is represented as the current operational radar.
-
-The tunnel endpoints were revalidated after Hermes recovered: Open WebUI, Portainer, and Ollama each
-returned HTTP `200`; Ollama reported version `0.32.5`. The exact proof tunnel was then stopped and all
-three OMEN loopback ports were released.
-
-OMEN has `mstsc.exe`; Hermes TCP/3389 was reachable during initial discovery and temporarily became
-unreachable with the broader recovered TCP outage. RDP is potentially useful for exceptional Windows GUI
-administration, but login/usefulness was not tested and it is not required for normal lab operation.
+If topology validation fails, lab-control stops before any SSH process is started. If one relay
+fails, inspect that node's typed failure; do not weaken `StrictHostKeyChecking`, use `accept-new`,
+copy a private key, or enable agent forwarding as a shortcut.

@@ -1,0 +1,140 @@
+{
+  "$schema": "./lab-management-topology.v1.schema.json",
+  "contract": "williamos-lab-management-topology/1",
+  "identityContractRef": "williamos-node-identity-v1",
+  "controlNodeId": "omen",
+  "nodes": [
+    {
+      "id": "omen",
+      "displayName": "OMEN",
+      "kind": "physical-lab-node",
+      "role": "operator-cockpit",
+      "probeProfile": "windows-local",
+      "required": true
+    },
+    {
+      "id": "hermes-node",
+      "displayName": "HERMES",
+      "kind": "physical-lab-node",
+      "role": "resident-ai-coordinator",
+      "probeProfile": "hermes-windows",
+      "required": true
+    },
+    {
+      "id": "atlas",
+      "displayName": "ATLAS",
+      "kind": "physical-lab-node",
+      "role": "durable-state",
+      "probeProfile": "atlas-linux",
+      "required": true
+    },
+    {
+      "id": "aegis",
+      "displayName": "AEGIS",
+      "kind": "physical-lab-node",
+      "role": "governed-cpu-worker",
+      "probeProfile": "linux-generic",
+      "required": true
+    },
+    {
+      "id": "daedalus",
+      "displayName": "DAEDALUS",
+      "kind": "physical-lab-node",
+      "role": "resident-gpu-worker",
+      "probeProfile": "linux-generic",
+      "required": true
+    }
+  ],
+  "managementRoutes": [
+    {
+      "fromNodeId": "omen",
+      "toNodeId": "hermes-node",
+      "routeKind": "direct",
+      "sshAlias": "hermes",
+      "endpoint": {
+        "host": "100.97.194.84",
+        "port": 22,
+        "user": "bs",
+        "addressKind": "tailscale"
+      },
+      "viaNodeIds": [],
+      "identityRef": "OMEN_DEFAULT_ED25519",
+      "knownHostsRef": "OMEN_USER_KNOWN_HOSTS",
+      "hostKeyFingerprint": "SHA256:Iz+tH9Nr8AqGCRWzf2CDFGfii0V72zfvuiSijDBIhF0",
+      "evidence": {
+        "state": "VERIFIED",
+        "observedAt": "2026-09-20T14:27:53Z",
+        "expiresAt": "2026-09-27T14:27:53Z"
+      }
+    },
+    {
+      "fromNodeId": "omen",
+      "toNodeId": "atlas",
+      "routeKind": "proxy-jump",
+      "sshAlias": "atlas",
+      "endpoint": {
+        "host": "192.168.88.8",
+        "port": 22,
+        "user": "bs",
+        "addressKind": "lan"
+      },
+      "viaNodeIds": [
+        "hermes-node"
+      ],
+      "identityRef": "OMEN_DEFAULT_ED25519",
+      "knownHostsRef": "OMEN_USER_KNOWN_HOSTS",
+      "hostKeyFingerprint": "SHA256:0QsMN3STmqBsozY2oea4GU32dDIyCKV0jCbWI8n4fYw",
+      "evidence": {
+        "state": "VERIFIED",
+        "observedAt": "2026-09-20T14:27:53Z",
+        "expiresAt": "2026-09-27T14:27:53Z"
+      }
+    },
+    {
+      "fromNodeId": "omen",
+      "toNodeId": "aegis",
+      "routeKind": "resident-relay",
+      "sshAlias": "aegis",
+      "endpoint": {
+        "host": "192.168.88.7",
+        "port": 22,
+        "user": "bs",
+        "addressKind": "lan"
+      },
+      "viaNodeIds": [
+        "hermes-node"
+      ],
+      "identityRef": "HERMES_MANAGED",
+      "knownHostsRef": "HERMES_MANAGED",
+      "hostKeyFingerprint": "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo",
+      "evidence": {
+        "state": "VERIFIED",
+        "observedAt": "2026-09-20T14:27:53Z",
+        "expiresAt": "2026-09-27T14:27:53Z"
+      }
+    },
+    {
+      "fromNodeId": "omen",
+      "toNodeId": "daedalus",
+      "routeKind": "resident-relay",
+      "sshAlias": "daedalus",
+      "endpoint": {
+        "host": "192.168.88.6",
+        "port": 2222,
+        "user": "daedalus",
+        "addressKind": "lan"
+      },
+      "viaNodeIds": [
+        "hermes-node"
+      ],
+      "identityRef": "HERMES_MANAGED",
+      "knownHostsRef": "HERMES_MANAGED",
+      "hostKeyFingerprint": "SHA256:njnjHfmzEA8Azl5xOcNICR4V3OU7+DvUO4JLHW4AAf4",
+      "evidence": {
+        "state": "VERIFIED",
+        "observedAt": "2026-09-20T14:27:53Z",
+        "expiresAt": "2026-09-27T14:27:53Z"
+      }
+    }
+  ]
+}

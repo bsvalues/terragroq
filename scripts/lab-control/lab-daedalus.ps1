@@ -2,7 +2,7 @@
 param()
 try {
     Import-Module (Join-Path $PSScriptRoot 'LabControl.psm1') -Force -ErrorAction Stop
-    Invoke-LabHermes
+    Invoke-LabDaedalus
     if ($global:LAB_CONTROL_EXIT_CODE -notin @(0, 2)) { throw 'Module returned no recognized exit code.' }
     exit $global:LAB_CONTROL_EXIT_CODE
 } catch {

@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://williamos.local/schemas/lab-management-topology.v1.schema.json",
+  "title": "WilliamOS lab management topology v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "contract",
+    "identityContractRef",
+    "controlNodeId",
+    "nodes",
+    "managementRoutes"
+  ],
+  "properties": {
+    "$schema": { "const": "./lab-management-topology.v1.schema.json" },
+    "contract": { "const": "williamos-lab-management-topology/1" },
+    "identityContractRef": { "const": "williamos-node-identity-v1" },
+    "controlNodeId": { "const": "omen" },
+    "nodes": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/node" },
+            {
+              "properties": {
+                "id": { "const": "omen" },
+                "displayName": { "const": "OMEN" },
+                "role": { "const": "operator-cockpit" },
+                "probeProfile": { "const": "windows-local" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/node" },
+            {
+              "properties": {
+                "id": { "const": "hermes-node" },
+                "displayName": { "const": "HERMES" },
+                "role": { "const": "resident-ai-coordinator" },
+                "probeProfile": { "const": "hermes-windows" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/node" },
+            {
+              "properties": {
+                "id": { "const": "atlas" },
+                "displayName": { "const": "ATLAS" },
+                "role": { "const": "durable-state" },
+                "probeProfile": { "const": "atlas-linux" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/node" },
+            {
+              "properties": {
+                "id": { "const": "aegis" },
+                "displayName": { "const": "AEGIS" },
+                "role": { "const": "governed-cpu-worker" },
+                "probeProfile": { "const": "linux-generic" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/node" },
+            {
+              "properties": {
+                "id": { "const": "daedalus" },
+                "displayName": { "const": "DAEDALUS" },
+                "role": { "const": "resident-gpu-worker" },
+                "probeProfile": { "const": "linux-generic" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "managementRoutes": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/route" },
+            {
+              "properties": {
+                "fromNodeId": { "const": "omen" },
+                "toNodeId": { "const": "hermes-node" },
+                "routeKind": { "const": "direct" },
+                "sshAlias": { "const": "hermes" },
+                "endpoint": {
+                  "properties": {
+                    "host": { "const": "100.97.194.84" },
+                    "port": { "const": 22 },
+                    "user": { "const": "bs" },
+                    "addressKind": { "const": "tailscale" }
+                  }
+                },
+                "viaNodeIds": { "const": [] },
+                "identityRef": { "const": "OMEN_DEFAULT_ED25519" },
+                "knownHostsRef": { "const": "OMEN_USER_KNOWN_HOSTS" },
+                "hostKeyFingerprint": { "const": "SHA256:Iz+tH9Nr8AqGCRWzf2CDFGfii0V72zfvuiSijDBIhF0" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/route" },
+            {
+              "properties": {
+                "fromNodeId": { "const": "omen" },
+                "toNodeId": { "const": "atlas" },
+                "routeKind": { "const": "proxy-jump" },
+                "sshAlias": { "const": "atlas" },
+                "endpoint": {
+                  "properties": {
+                    "host": { "const": "192.168.88.8" },
+                    "port": { "const": 22 },
+                    "user": { "const": "bs" },
+                    "addressKind": { "const": "lan" }
+                  }
+                },
+                "viaNodeIds": { "const": ["hermes-node"] },
+                "identityRef": { "const": "OMEN_DEFAULT_ED25519" },
+                "knownHostsRef": { "const": "OMEN_USER_KNOWN_HOSTS" },
+                "hostKeyFingerprint": { "const": "SHA256:0QsMN3STmqBsozY2oea4GU32dDIyCKV0jCbWI8n4fYw" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/route" },
+            {
+              "properties": {
+                "fromNodeId": { "const": "omen" },
+                "toNodeId": { "const": "aegis" },
+                "routeKind": { "const": "resident-relay" },
+                "sshAlias": { "const": "aegis" },
+                "endpoint": {
+                  "properties": {
+                    "host": { "const": "192.168.88.7" },
+                    "port": { "const": 22 },
+                    "user": { "const": "bs" },
+                    "addressKind": { "const": "lan" }
+                  }
+                },
+                "viaNodeIds": { "const": ["hermes-node"] },
+                "identityRef": { "const": "HERMES_MANAGED" },
+                "knownHostsRef": { "const": "HERMES_MANAGED" },
+                "hostKeyFingerprint": { "const": "SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/route" },
+            {
+              "properties": {
+                "fromNodeId": { "const": "omen" },
+                "toNodeId": { "const": "daedalus" },
+                "routeKind": { "const": "resident-relay" },
+                "sshAlias": { "const": "daedalus" },
+                "endpoint": {
+                  "properties": {
+                    "host": { "const": "192.168.88.6" },
+                    "port": { "const": 2222 },
+                    "user": { "const": "daedalus" },
+                    "addressKind": { "const": "lan" }
+                  }
+                },
+                "viaNodeIds": { "const": ["hermes-node"] },
+                "identityRef": { "const": "HERMES_MANAGED" },
+                "knownHostsRef": { "const": "HERMES_MANAGED" },
+                "hostKeyFingerprint": { "const": "SHA256:njnjHfmzEA8Azl5xOcNICR4V3OU7+DvUO4JLHW4AAf4" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "nodeId": {
+      "enum": ["omen", "hermes-node", "atlas", "aegis", "daedalus"]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "kind", "role", "probeProfile", "required"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "displayName": { "enum": ["OMEN", "HERMES", "ATLAS", "AEGIS", "DAEDALUS"] },
+        "kind": { "const": "physical-lab-node" },
+        "role": {
+          "enum": [
+            "operator-cockpit",
+            "resident-ai-coordinator",
+            "durable-state",
+            "governed-cpu-worker",
+            "resident-gpu-worker"
+          ]
+        },
+        "probeProfile": {
+          "enum": ["windows-local", "hermes-windows", "atlas-linux", "linux-generic"]
+        },
+        "required": { "const": true }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "user", "addressKind"],
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*$"
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "addressKind": { "enum": ["lan", "tailscale"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "observedAt", "expiresAt"],
+      "properties": {
+        "state": { "const": "VERIFIED" },
+        "observedAt": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "expiresAt": { "type": "string", "format": "date-time", "pattern": "Z$" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromNodeId",
+        "toNodeId",
+        "routeKind",
+        "sshAlias",
+        "endpoint",
+        "viaNodeIds",
+        "identityRef",
+        "knownHostsRef",
+        "hostKeyFingerprint",
+        "evidence"
+      ],
+      "properties": {
+        "fromNodeId": { "$ref": "#/$defs/nodeId" },
+        "toNodeId": { "$ref": "#/$defs/nodeId" },
+        "routeKind": { "enum": ["direct", "proxy-jump", "resident-relay"] },
+        "sshAlias": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "viaNodeIds": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nodeId" }
+        },
+        "identityRef": {
+          "enum": ["OMEN_DEFAULT_ED25519", "HERMES_MANAGED"]
+        },
+        "knownHostsRef": {
+          "enum": ["OMEN_USER_KNOWN_HOSTS", "HERMES_MANAGED"]
+        },
+        "hostKeyFingerprint": {
+          "type": "string",
+          "pattern": "^SHA256:[A-Za-z0-9+/]{43}$"
+        },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  }
+}
