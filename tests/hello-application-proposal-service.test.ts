@@ -3,6 +3,7 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ResidentModelExecutionBackend } from "@/scripts/hermes-bridge/execution-backend.mjs"
@@ -308,6 +309,176 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
     expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("QUARANTINED_ROLLBACK_FAILED")
     await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+  })
+
+  it.each(["restore_file", "restore_index"])("preserves an external commit at the %s recovery boundary", async (boundary) => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const target = sourcePath(setup.repositoryRoot, proposal.changedPaths[0])
+    let external: { head: string; index: string; bytes: Buffer } | undefined
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+      transactionOperations: { checkpoint: (stage: string) => {
+        if (stage === (boundary === "restore_file" ? "published" : "index_synced")) throw new Error("start recovery")
+        if (stage === boundary) {
+          // The file race adopts the transaction's exact bytes; content equality is not ownership.
+          if (boundary === "restore_index") fs.writeFileSync(target, "external owner committed bytes\n")
+          git(setup.repositoryRoot, ["add", "--", proposal.changedPaths[0]])
+          git(setup.repositoryRoot, ["commit", "-m", "owner adopts target during recovery"])
+          external = { head: git(setup.repositoryRoot, ["rev-parse", "HEAD"]), index: git(setup.repositoryRoot, ["ls-files", "--stage"]), bytes: fs.readFileSync(target) }
+        }
+      } },
+    })).rejects.toThrow("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(external).toBeDefined()
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(external!.head)
+    expect(git(setup.repositoryRoot, ["ls-files", "--stage"])).toBe(external!.index)
+    expect(fs.readFileSync(target)).toEqual(external!.bytes)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
+  it("fails closed after an actual child process exits at published", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), "lib/hello-application/proposal-service.mjs")).href
+    const script = `
+      import { applyHelloApplicationProposal } from ${JSON.stringify(moduleUrl)};
+      await applyHelloApplicationProposal({
+        ...${JSON.stringify({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId })},
+        validateWorkspace: async () => (${JSON.stringify(await validation())}),
+        transactionOperations: { checkpoint: stage => { if (stage === "published") process.exit(86); } }
+      });
+    `
+    let exitStatus: number | null = null
+    try { execFileSync(process.execPath, ["--input-type=module", "-e", script], { windowsHide: true, timeout: 30_000, stdio: "pipe" }) }
+    catch (error) { exitStatus = (error as { status: number }).status }
+    expect(exitStatus).toBe(86)
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).not.toBe(proposal.baseSha)
+    const prefix = path.join(setup.runtimeRoot, "hello-application-proposals", proposal.proposalId)
+    expect(JSON.parse(fs.readFileSync(`${prefix}.json`, "utf8")).status).toBe("READY_FOR_REVIEW")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("QUARANTINED_ROLLBACK_FAILED")
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
+    // A journal-only entry must remain discoverable even if its READY receipt is absent.
+    fs.rmSync(`${prefix}.json`)
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
+  it.each(["restore_file", "restore_index"])("preserves an external index-only change at %s", async (boundary) => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const target = sourcePath(setup.repositoryRoot, proposal.changedPaths[0])
+    let ownerState: { index: string; bytes: Buffer } | undefined
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+      transactionOperations: { checkpoint: (stage: string) => {
+        if (stage === (boundary === "restore_file" ? "published" : "index_synced")) throw new Error("start recovery")
+        if (stage === boundary) {
+          if (boundary === "restore_index") fs.writeFileSync(target, "external owner staged bytes\n")
+          git(setup.repositoryRoot, ["add", "--", proposal.changedPaths[0]])
+          ownerState = { index: git(setup.repositoryRoot, ["ls-files", "--stage"]), bytes: fs.readFileSync(target) }
+        }
+      } },
+    })).rejects.toThrow("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(ownerState).toBeDefined()
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["ls-files", "--stage"])).toBe(ownerState!.index)
+    expect(fs.readFileSync(target)).toEqual(ownerState!.bytes)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
+  it.each(["invalid_json", "bad_hash", "mismatched_projection"])("refuses a %s in-flight journal", async (corruption) => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const prefix = path.join(setup.runtimeRoot, "hello-application-proposals", proposal.proposalId)
+    const journal = { ...JSON.parse(fs.readFileSync(`${prefix}.json`, "utf8")), status: "QUARANTINED_ROLLBACK_FAILED", quarantinedAt: new Date().toISOString() }
+    if (corruption === "bad_hash") journal.requestSha256 = "0".repeat(64)
+    if (corruption === "mismatched_projection") journal.requestedBy = "different owner"
+    fs.writeFileSync(`${prefix}.inflight`, corruption === "invalid_json" ? "{" : JSON.stringify(journal))
+    expect(() => getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId })).toThrow("HELLO_PROPOSAL_RECEIPT_INVALID")
+    expect(() => service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toThrow("HELLO_PROPOSAL_RECEIPT_INVALID")
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("HELLO_PROPOSAL_RECEIPT_INVALID")
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+  })
+
+  it("refuses journal publication failure before canonical mutation", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const rename = fs.renameSync
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to).endsWith(".inflight")) throw new Error("journal publication failed")
+      return rename(from, to)
+    })
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("journal publication failed")
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
+    expect(fs.readdirSync(path.join(setup.runtimeRoot, "hello-application-proposals")).some((name) => /\.(?:tmp|inflight)$/.test(name))).toBe(false)
+  })
+
+  it("retains authoritative quarantine when rollback journal removal fails", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const remove = fs.rmSync
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (String(target).endsWith(".inflight")) throw new Error("journal removal failed")
+      return remove(target, options)
+    })
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+      transactionOperations: { checkpoint: (stage: string) => { if (stage === "published") throw new Error("start recovery") } },
+    })).rejects.toThrow("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
+  it("persists the in-flight projection before canonical writes and lets APPLIED supersede failed marker cleanup", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const inflight = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
+    const original = fs.readFileSync(sourcePath(setup.repositoryRoot, proposal.changedPaths[0]))
+    const remove = fs.rmSync
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (String(target) === inflight) throw new Error("journal cleanup locked")
+      return remove(target, options)
+    })
+    let observed = false
+    const applied = await applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+      transactionOperations: { checkpoint: (stage: string) => {
+        if (stage === "canonical_write") {
+          observed = true
+          expect(JSON.parse(fs.readFileSync(inflight, "utf8")).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+          expect(fs.readFileSync(sourcePath(setup.repositoryRoot, proposal.changedPaths[0]))).toEqual(original)
+          expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+        }
+      } },
+    })
+    expect(observed).toBe(true)
+    expect(fs.existsSync(inflight)).toBe(true)
+    expect(applied.status).toBe("APPLIED")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLIED")
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("APPLIED")
+  })
+
+  it("recovers rather than finalizing a locked validation worktree after CAS", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    let workspace = ""
+    let sawPublished = false
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId,
+      validateWorkspace: async ({ workspacePath }: { workspacePath: string }) => { workspace = workspacePath; return validation() },
+      transactionOperations: { checkpoint: (stage: string) => {
+        if (stage === "published") {
+          sawPublished = git(setup.repositoryRoot, ["rev-parse", "HEAD"]) !== proposal.baseSha
+          git(setup.repositoryRoot, ["worktree", "lock", workspace])
+        }
+      } },
+    })).rejects.toThrow("HELLO_PROPOSAL_WORKTREE_CLEANUP_FAILED")
+    expect(sawPublished).toBe(true)
+    expect(fs.existsSync(workspace)).toBe(true)
+    expect(git(setup.repositoryRoot, ["worktree", "list", "--porcelain"])).toContain(workspace.replaceAll("\\", "/"))
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
+    expect(fs.existsSync(path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`))).toBe(false)
+    git(setup.repositoryRoot, ["worktree", "unlock", workspace])
   })
 
   it("refuses a stale base before touching the target", async () => {
