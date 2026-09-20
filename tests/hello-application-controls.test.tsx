@@ -133,10 +133,13 @@ function rawStreamResponse(body: string): Response {
 function baseFetch(options: Readonly<{
   proposals?: readonly unknown[]
   proposalsGet?: Response | Promise<Response>
+  proposalGets?: readonly (Response | Promise<Response>)[]
   proposalPosts?: readonly (Response | Promise<Response>)[]
-  applyResponse?: Response
+  applyResponse?: Response | Promise<Response>
+  applyError?: Error
   runtimeMutationError?: string
 }> = {}) {
+  let proposalGetIndex = 0
   let proposalPostIndex = 0
   return vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
@@ -145,6 +148,9 @@ function baseFetch(options: Readonly<{
       return Promise.resolve(Response.json({ runtime: { state: "stopped", pid: null, url: null } }))
     }
     if (url.endsWith("/proposals") && method === "GET") {
+      const sequenced = options.proposalGets?.[proposalGetIndex]
+      proposalGetIndex += 1
+      if (sequenced) return Promise.resolve(sequenced)
       if (options.proposalsGet) return Promise.resolve(options.proposalsGet)
       return Promise.resolve(Response.json({ proposals: options.proposals ?? [] }))
     }
@@ -165,6 +171,7 @@ function baseFetch(options: Readonly<{
       return Promise.resolve(response)
     }
     if (url.endsWith("/apply") && method === "POST") {
+      if (options.applyError) return Promise.reject(options.applyError)
       return Promise.resolve(options.applyResponse ?? Response.json({
         proposal: appliedProposal,
       }))
@@ -737,13 +744,126 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
-  it("preserves a ready proposal when Apply fails and refreshes the preview only after success", async () => {
-    const failedApply = Response.json({ error: "HELLO_PROPOSAL_STALE_BASE" }, { status: 409 })
-    const fetcher = baseFetch({ proposals: [readyProposal], applyResponse: failedApply })
+  it("reconciles a lost Apply response to the exact APPLIED receipt and refreshes once", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [appliedProposal] }),
+      ],
+      applyError: new TypeError("response lost after request"),
+    })
     const { onPreviewRefresh } = await renderReady(fetcher)
     await screen.findByText("Ready for review")
 
     fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect(await screen.findByText("Applied")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(onPreviewRefresh).toHaveBeenCalledOnce()
+  })
+
+  it("reconciles a malformed HTTP-200 Apply response to exact READY and keeps retry available", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [readyProposal] }),
+      ],
+      applyResponse: new Response("{malformed", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.getByText("Proposal remains ready for review.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Apply proposal" }) as HTMLButtonElement).disabled).toBe(false)
+    expect(fetcher.mock.calls.filter(([url, init]) => String(url).endsWith("/proposals") && (init?.method ?? "GET") === "GET")).toHaveLength(2)
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("reconciles an invalid HTTP-200 Apply response to exact QUARANTINED and blocks Apply", async () => {
+    const quarantinedProposal = {
+      ...readyProposal,
+      status: "QUARANTINED_ROLLBACK_FAILED",
+      quarantinedAt: "2026-09-19T17:00:06.000Z",
+    } as const
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [quarantinedProposal] }),
+      ],
+      applyResponse: Response.json({ proposal: { ...appliedProposal, patchSha256: "c".repeat(64) } }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect(await screen.findByText("Quarantined")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.queryByText("Proposal remains ready for review.")).toBeNull()
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: "the reconciliation request is unavailable",
+      reconcile: Response.json({ error: "HELLO_PROPOSAL_UNAVAILABLE" }, { status: 503 }),
+    },
+    {
+      name: "the reconciliation receipt is not the reviewed proposal",
+      reconcile: Response.json({ proposals: [{
+        ...readyProposal,
+        proposalId: "22222222-2222-4222-8222-222222222222",
+        branch: "codex/hermes-hello-22222222-2222-4222-8222-222222222222",
+      }] }),
+    },
+  ])("fails closed with Apply disabled when $name", async ({ reconcile }) => {
+    const fetcher = baseFetch({
+      proposalGets: [Response.json({ proposals: [readyProposal] }), reconcile],
+      applyError: new TypeError("response lost after request"),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_OUTCOME_UNVERIFIED")
+    expect(screen.getByText("Apply outcome could not be verified. Apply is blocked.")).toBeTruthy()
+    expect(screen.queryByText("Proposal remains ready for review.")).toBeNull()
+    expect(screen.getByText("Apply state unconfirmed")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Apply proposal" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("preserves a ready proposal when Apply fails and refreshes the preview only after success", async () => {
+    const failedApply = Response.json({ error: "HELLO_PROPOSAL_STALE_BASE" }, { status: 409 })
+    let resolveReconciliation!: (response: Response) => void
+    const reconciliation = new Promise<Response>((resolve) => { resolveReconciliation = resolve })
+    const fetcher = baseFetch({
+      proposalGets: [Response.json({ proposals: [readyProposal] }), reconciliation],
+      applyResponse: failedApply,
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+    expect(await screen.findByText("Applying the reviewed proposal.")).toBeTruthy()
+    const applying = screen.getByRole("button", { name: "Apply proposal" }) as HTMLButtonElement
+    expect(applying.textContent).toBe("Applying proposal…")
+    expect(applying.disabled).toBe(true)
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveReconciliation(Response.json({ proposals: [readyProposal] }))
+      await reconciliation
+    })
     expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_STALE_BASE")
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
@@ -778,8 +898,10 @@ describe("HelloApplicationControls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
 
-    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
-    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_OUTCOME_UNVERIFIED")
+    expect(screen.getByText("Apply outcome could not be verified. Apply is blocked.")).toBeTruthy()
+    expect(screen.getByText("Apply state unconfirmed")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Apply proposal" }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(onPreviewRefresh).not.toHaveBeenCalled()
   })

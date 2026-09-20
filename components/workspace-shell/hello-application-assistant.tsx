@@ -232,10 +232,7 @@ function canonicalNextProgress(entry: ProgressEntry, observed: readonly Progress
   return !previous || Date.parse(entry.at) >= Date.parse(previous.at)
 }
 
-function appliedProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
-  if (!proposalRecord(value) || value.status !== "APPLIED"
-    || typeof value.appliedCommit !== "string" || !COMMIT_SHA.test(value.appliedCommit)
-    || typeof value.validation.output !== "string") return false
+function sameReviewedEvidence(value: Proposal, reviewed: Proposal): boolean {
   return value.schemaVersion === reviewed.schemaVersion
     && value.proposalId === reviewed.proposalId
     && value.requestedBy === reviewed.requestedBy
@@ -253,6 +250,50 @@ function appliedProposalRecord(value: unknown, reviewed: Proposal): value is Pro
     && value.reviewPatch === reviewed.reviewPatch
     && sameStrings(value.changedPaths, reviewed.changedPaths)
     && sameProgress(value.progress, reviewed.progress)
+}
+
+function sameValidation(left: Proposal["validation"], right: Proposal["validation"]): boolean {
+  return left.status === right.status && left.command === right.command && left.output === right.output
+}
+
+function appliedProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
+  return proposalRecord(value) && value.status === "APPLIED"
+    && typeof value.appliedCommit === "string" && COMMIT_SHA.test(value.appliedCommit)
+    && typeof value.validation.output === "string"
+    && sameReviewedEvidence(value, reviewed)
+}
+
+function readyProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
+  return proposalRecord(value) && value.status === "READY_FOR_REVIEW"
+    && sameReviewedEvidence(value, reviewed)
+    && sameValidation(value.validation, reviewed.validation)
+}
+
+function quarantinedProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
+  return proposalRecord(value) && value.status === "QUARANTINED_ROLLBACK_FAILED"
+    && sameReviewedEvidence(value, reviewed)
+    && sameValidation(value.validation, reviewed.validation)
+}
+
+type ApplyReconciliation = Readonly<{
+  state: "applied" | "ready" | "quarantined"
+  proposal: Proposal
+}>
+
+async function reconcileApplyOutcome(reviewed: Proposal): Promise<ApplyReconciliation> {
+  const response = await fetch("/api/projects/hello-application/proposals", { cache: "no-store" })
+  const payload = await responseJson(response)
+  if (!record(payload) || !exactKeys(payload, ["proposals"]) || !Array.isArray(payload.proposals)) {
+    throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  }
+  const matches = payload.proposals.filter((candidate) => record(candidate) && candidate.proposalId === reviewed.proposalId)
+  if (matches.length !== 1) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  const verified = await verifiedProposalRecord(matches[0])
+  if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+  if (appliedProposalRecord(verified, reviewed)) return { state: "applied", proposal: verified }
+  if (readyProposalRecord(verified, reviewed)) return { state: "ready", proposal: verified }
+  if (quarantinedProposalRecord(verified, reviewed)) return { state: "quarantined", proposal: verified }
+  throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
 }
 
 function failureMessage(cause: unknown, fallback: string): string {
@@ -355,20 +396,25 @@ function statusLabel(status: string): string {
 function ProposalReview({
   proposal,
   applying,
+  applyBlocked,
   onApply,
 }: Readonly<{
   proposal: Proposal
   applying: boolean
+  applyBlocked: boolean
   onApply: () => void
 }>) {
   const schemaOne = proposal.schemaVersion === 1
   const request = proposal.requestText || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
   const executionNode = proposal.executionNode || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
+  const proposalState = applyBlocked && proposal.status === "READY_FOR_REVIEW"
+    ? "Apply state unconfirmed"
+    : statusLabel(proposal.status)
 
   return (
     <section className={styles.proposal} aria-label="HERMES proposal">
       <header className={styles.proposalHeader}>
-        <span className={styles.proposalState}><Check size={14} aria-hidden />{statusLabel(proposal.status)}</span>
+        <span className={styles.proposalState}><Check size={14} aria-hidden />{proposalState}</span>
         <span>Validation {proposal.validation.status}</span>
       </header>
 
@@ -412,12 +458,12 @@ function ProposalReview({
 
       {proposal.status === "READY_FOR_REVIEW" ? (
         <div className={styles.applyBar}>
-          <span>Canonical source remains unchanged until you apply.</span>
+          <span>{applyBlocked ? "Apply is blocked until authoritative proposal state is available." : "Canonical source remains unchanged until you apply."}</span>
           <button
             type="button"
             className={styles.apply}
             onClick={onApply}
-            disabled={applying || !proposal.reviewPatch}
+            disabled={applying || applyBlocked || !proposal.reviewPatch}
             aria-label="Apply proposal"
           >
             {applying ? "Applying proposal…" : "Apply proposal"}
@@ -435,6 +481,7 @@ export function HelloApplicationAssistant({
   const [submittedRequest, setSubmittedRequest] = useState<string | null>(null)
   const [events, setEvents] = useState<readonly ProgressEntry[]>([])
   const [proposal, setProposal] = useState<Proposal | null>(null)
+  const [applyBlocked, setApplyBlocked] = useState(false)
   const [busy, setBusy] = useState<"proposal" | "apply" | null>(null)
   const [status, setStatus] = useState("Checking saved proposals.")
   const [assistantError, setAssistantError] = useState<string | null>(null)
@@ -457,6 +504,7 @@ export function HelloApplicationAssistant({
         if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
         if (!current || ownerInteracted.current || operationInFlight.current) return
         setProposal(verified)
+        setApplyBlocked(false)
         setDraft(verified.requestText ?? "")
         setSubmittedRequest(verified.requestText ?? null)
         setEvents(verified.progress ?? [])
@@ -495,6 +543,7 @@ export function HelloApplicationAssistant({
     setSubmittedRequest(requestText)
     setEvents([])
     setProposal(null)
+    setApplyBlocked(false)
     setAssistantError(null)
     setStatus("Request submitted to HERMES.")
     operationInFlight.current = true
@@ -534,6 +583,7 @@ export function HelloApplicationAssistant({
       const verified = await verifiedProposalRecord(terminal.proposal)
       if (!verified) throw new Error("HERMES stream failed: proposal evidence hash mismatch.")
       setProposal(verified)
+      setApplyBlocked(false)
       setStatus(verified.status === "READY_FOR_REVIEW" ? "Proposal ready for review." : statusLabel(verified.status))
     } catch (cause) {
       setProposal(null)
@@ -546,7 +596,7 @@ export function HelloApplicationAssistant({
   }
 
   async function applyProposal() {
-    if (busy || operationInFlight.current || !proposal || proposal.status !== "READY_FOR_REVIEW") return
+    if (busy || operationInFlight.current || applyBlocked || !proposal || proposal.status !== "READY_FOR_REVIEW") return
     const reviewed = proposal
     ownerInteracted.current = true
     operationInFlight.current = true
@@ -563,11 +613,32 @@ export function HelloApplicationAssistant({
       const verified = await verifiedProposalRecord(payload.proposal)
       if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
       setProposal(verified)
+      setApplyBlocked(false)
       setStatus("Proposal applied. Preview refreshed.")
       onPreviewRefresh()
     } catch (cause) {
-      setStatus("Proposal remains ready for review.")
-      setAssistantError(`Apply failed: ${failureMessage(cause, "HELLO_PROPOSAL_APPLY_FAILED")}`)
+      const failure = failureMessage(cause, "HELLO_PROPOSAL_APPLY_FAILED")
+      try {
+        const reconciled = await reconcileApplyOutcome(reviewed)
+        setProposal(reconciled.proposal)
+        setApplyBlocked(false)
+        if (reconciled.state === "applied") {
+          setAssistantError(null)
+          setStatus("Proposal applied. Preview refreshed.")
+          onPreviewRefresh()
+        } else if (reconciled.state === "ready") {
+          setStatus("Proposal remains ready for review.")
+          setAssistantError(`Apply failed: ${failure}`)
+        } else {
+          setStatus("Proposal quarantined. Apply is blocked.")
+          setAssistantError(`Apply failed: ${failure}`)
+        }
+      } catch {
+        setProposal(reviewed)
+        setApplyBlocked(true)
+        setStatus("Apply outcome could not be verified. Apply is blocked.")
+        setAssistantError("Apply failed: HELLO_PROPOSAL_OUTCOME_UNVERIFIED")
+      }
     } finally {
       operationInFlight.current = false
       setBusy(null)
@@ -625,7 +696,7 @@ export function HelloApplicationAssistant({
       {status ? <p className={styles.status} role="status" aria-live="polite">{status}</p> : null}
       {assistantError ? <p className={styles.error} role="alert">{assistantError}</p> : null}
 
-      {proposal ? <ProposalReview proposal={proposal} applying={busy === "apply"} onApply={() => void applyProposal()} /> : null}
+      {proposal ? <ProposalReview proposal={proposal} applying={busy === "apply"} applyBlocked={applyBlocked} onApply={() => void applyProposal()} /> : null}
     </section>
   )
 }
