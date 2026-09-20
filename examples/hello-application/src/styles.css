@@ -192,6 +192,7 @@ h1 {
   box-shadow: 0.15rem 0.15rem 0 var(--ink);
   transform: translate(0.13rem, 0.13rem);
 }
+#send-pulse[data-state="sent"] { border-color: var(--ready); }
 
 #send-pulse:focus-visible {
   outline: 0.2rem solid var(--steel);

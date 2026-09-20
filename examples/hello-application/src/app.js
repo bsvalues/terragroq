@@ -39,7 +39,8 @@ export function mountHelloApplication(root = document) {
     animationTimer = setTimeout(() => {
       trace.dataset.state = "idle"
     }, 760)
-    button.textContent = "Send another pulse"
+    button.textContent = "Send another pulse";
+    button.dataset.state = "sent";
   }
 
   button.addEventListener("click", sendPulse)
