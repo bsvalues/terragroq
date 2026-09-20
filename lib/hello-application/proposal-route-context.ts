@@ -56,7 +56,7 @@ export function helloProposalError(error: unknown): Response {
   const status = code === "HELLO_PROPOSAL_NOT_FOUND" ? 404
     : code.includes("OWNER_MISMATCH") ? 403
       : /(?:STALE|DIRTY|NOT_APPLICABLE)/.test(code) ? 409
-        : /(?:PATH_|MULTI_FILE|IGNORED_|PATCH_SIZE|RENAME_)/.test(code) ? 422
+        : /(?:PATH_|MULTI_FILE|IGNORED_|PATCH_SIZE|RENAME_|REQUEST_INVALID|NO_CHANGE|VALIDATION_)/.test(code) ? 422
           : 503
   return reply({ error: code }, status)
 }
