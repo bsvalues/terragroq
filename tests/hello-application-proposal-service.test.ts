@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
@@ -60,6 +60,23 @@ function residentChange(relativePaths: string[]) {
     for (const relativePath of relativePaths) fs.appendFileSync(sourcePath(workspacePath, relativePath), "\n/* resident request change */\n")
     return { threadId: "thread-1", turnId: "turn-1", model: "williamos-qwen3-4b:64k", ignoredPathsCreated: [] }
   }
+}
+
+function runClaimProcess(script: string, env: NodeJS.ProcessEnv) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, ...env },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => { stdout += chunk })
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.on("close", (code) => resolve({ code, stdout, stderr }))
+  })
 }
 
 describe("Hello Application governed HERMES proposals", () => {
@@ -610,6 +627,142 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLIED")
   })
 
+  it("claims proposal B before applyQueue while proposal A is still validating", async () => {
+    const setup = fixture()
+    const first = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const second = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update focus styling",
+      residentTurn: residentChange(["examples/hello-application/src/styles.css"]), validateWorkspace: validation,
+    })
+    let firstValidationStarted!: () => void
+    let releaseFirstValidation!: () => void
+    const started = new Promise<void>((resolve) => { firstValidationStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseFirstValidation = resolve })
+    const firstApply = applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: first.proposalId,
+      validateWorkspace: async () => { firstValidationStarted(); await release; return validation() },
+    })
+    await started
+    const secondOutcome = applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: second.proposalId, validateWorkspace: validation })
+      .then((value) => ({ value }), (error: Error) => ({ error }))
+    try {
+      expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: second.proposalId }).status).toBe("APPLY_IN_PROGRESS")
+      expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })
+        .find((proposal) => proposal.proposalId === second.proposalId)?.status).toBe("APPLY_IN_PROGRESS")
+    } finally {
+      releaseFirstValidation()
+      await firstApply
+    }
+    const result = await secondOutcome
+    expect("error" in result ? result.error.message : "unexpected success").toBe("HELLO_PROPOSAL_STALE_BASE")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: second.proposalId }).status).toBe("READY_FOR_REVIEW")
+  })
+
+  it("exclusively claims a synthetic receipt across independent processes without a second mutation", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hello-proposal-claim-"))
+    roots.push(root)
+    const runtimeRoot = path.join(root, "runtime")
+    const proposalRoot = path.join(runtimeRoot, "hello-application-proposals")
+    const proposalId = "44444444-4444-4444-8444-444444444444"
+    const patch = Buffer.from("synthetic review evidence\n")
+    const requestText = "Synthetic exclusive claim"
+    const progress = [
+      ["accepted", "Request accepted", "2026-09-20T01:00:00.000Z"],
+      ["workspace_ready", "Isolated workspace ready", "2026-09-20T01:00:01.000Z"],
+      ["resident_started", "HERMES is editing the isolated workspace", "2026-09-20T01:00:02.000Z"],
+      ["resident_finished", "HERMES editing finished", "2026-09-20T01:00:03.000Z"],
+      ["validation_started", "Contained validation started", "2026-09-20T01:00:04.000Z"],
+      ["ready_for_review", "Proposal ready for review", "2026-09-20T01:00:05.000Z"],
+    ].map(([stage, detail, at]) => ({ stage, detail, at }))
+    const receipt = {
+      schemaVersion: 2, proposalId, status: "READY_FOR_REVIEW", requestedBy: "owner", requestText,
+      requestSha256: crypto.createHash("sha256").update(requestText).digest("hex"), executionNode: "synthetic-node",
+      progress, createdAt: "2026-09-20T00:59:59.000Z", appliedAt: null, appliedCommit: null,
+      baseSha: "a".repeat(40), proposalCommit: "b".repeat(40), branch: `codex/hermes-hello-${proposalId}`,
+      changedPaths: ["examples/hello-application/src/index.html"], patchSha256: crypto.createHash("sha256").update(patch).digest("hex"),
+      threadId: "thread-synthetic", turnId: "turn-synthetic", model: "synthetic-model",
+      validation: { status: "passed", command: "node --test examples/hello-application/test/hello.test.mjs", output: "synthetic pass" },
+    }
+    fs.mkdirSync(proposalRoot, { recursive: true })
+    fs.writeFileSync(path.join(proposalRoot, `${proposalId}.json`), `${JSON.stringify(receipt, null, 2)}\n`)
+    fs.writeFileSync(path.join(proposalRoot, `${proposalId}.patch`), patch)
+    const gate = path.join(root, "start")
+    const mutation = path.join(root, "mutations")
+    const readyOne = path.join(root, "ready-one")
+    const readyTwo = path.join(root, "ready-two")
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), "lib/hello-application/proposal-service.mjs")).href
+    const script = `
+      import fs from "node:fs";
+      import * as service from ${JSON.stringify(moduleUrl)};
+      fs.writeFileSync(process.env.CLAIM_READY, "ready");
+      while (!fs.existsSync(process.env.CLAIM_GATE)) await new Promise(resolve => setTimeout(resolve, 2));
+      let outcome;
+      try {
+        const claim = service.claimHelloApplicationProposal({ runtimeRoot: process.env.CLAIM_RUNTIME, proposalId: process.env.CLAIM_ID, requestedBy: "owner" });
+        fs.appendFileSync(process.env.CLAIM_MUTATION, process.pid + "\\n");
+        outcome = { state: "claimed", status: claim.marker.status };
+      } catch (error) {
+        outcome = { state: "refused", error: error instanceof Error ? error.message : String(error) };
+      }
+      console.log(JSON.stringify(outcome));
+    `
+    const common = { CLAIM_RUNTIME: runtimeRoot, CLAIM_ID: proposalId, CLAIM_GATE: gate, CLAIM_MUTATION: mutation }
+    const one = runClaimProcess(script, { ...common, CLAIM_READY: readyOne })
+    const two = runClaimProcess(script, { ...common, CLAIM_READY: readyTwo })
+    await vi.waitFor(() => {
+      expect(fs.existsSync(readyOne)).toBe(true)
+      expect(fs.existsSync(readyTwo)).toBe(true)
+    })
+    fs.writeFileSync(gate, "go")
+    const children = await Promise.all([one, two])
+    expect(children.map((child) => child.code)).toEqual([0, 0])
+    const outcomes = children.map((child) => JSON.parse(child.stdout.trim()))
+    expect(outcomes.map((outcome) => outcome.state).sort()).toEqual(["claimed", "refused"])
+    expect(outcomes.find((outcome) => outcome.state === "claimed")).toMatchObject({ status: "APPLY_IN_PROGRESS" })
+    expect(outcomes.find((outcome) => outcome.state === "refused")).toMatchObject({ error: "HELLO_PROPOSAL_NOT_APPLICABLE" })
+    expect(fs.readFileSync(mutation, "utf8").trim().split("\n")).toHaveLength(1)
+    expect(JSON.parse(fs.readFileSync(path.join(proposalRoot, `${proposalId}.inflight`), "utf8"))).toMatchObject({
+      proposalId,
+      status: "APPLY_IN_PROGRESS",
+    })
+  })
+
+  it("claims synchronously and cleans its exact marker when repository preflight fails", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const marker = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
+    const attempt = applyHelloApplicationProposal({ ...setup, repositoryRoot: path.join(setup.repositoryRoot, "missing"),
+      requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+    }).then(() => ({ error: "unexpected success" }), (error: Error) => ({ error: error.message }))
+
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")
+    const outcome = await attempt
+    expect(outcome.error).not.toBe("unexpected success")
+    expect(fs.existsSync(marker)).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
+  })
+
+  it("never removes a changed claim marker when queued preflight fails", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const marker = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
+    const attempt = applyHelloApplicationProposal({ ...setup, repositoryRoot: path.join(setup.repositoryRoot, "missing"),
+      requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation,
+    }).then(() => ({ error: "unexpected success" }), (error: Error) => ({ error: error.message }))
+    const foreign = Buffer.from('{"foreign":"claim"}\n')
+    expect(fs.existsSync(marker)).toBe(true)
+    fs.writeFileSync(marker, foreign)
+
+    const outcome = await attempt
+    expect(outcome.error).toBe("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(fs.readFileSync(marker)).toEqual(foreign)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+  })
+
   it("removes APPLY_IN_PROGRESS after a confirmed validation failure and restores READY", async () => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
@@ -783,16 +936,37 @@ describe("Hello Application governed HERMES proposals", () => {
   it("refuses journal publication failure before canonical mutation", async () => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
-    const rename = fs.renameSync
-    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-      if (String(to).endsWith(".inflight")) throw new Error("journal publication failed")
-      return rename(from, to)
+    const open = fs.openSync
+    vi.spyOn(fs, "openSync").mockImplementation((target, flags, mode) => {
+      if (String(target).endsWith(".inflight") && flags === "wx") throw new Error("journal publication failed")
+      return open(target, flags, mode)
     })
     await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("journal publication failed")
     expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
     expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
     expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
     expect(fs.readdirSync(path.join(setup.runtimeRoot, "hello-application-proposals")).some((name) => /\.(?:tmp|inflight)$/.test(name))).toBe(false)
+  })
+
+  it("quarantines a partial exclusive claim write instead of restoring READY", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
+    const write = fs.writeSync
+    let injected = false
+    vi.spyOn(fs, "writeSync").mockImplementation((descriptor, buffer, offset, length, position) => {
+      if (!injected && Buffer.isBuffer(buffer) && buffer.toString("utf8").includes('"status": "APPLY_IN_PROGRESS"')) {
+        injected = true
+        write(descriptor, buffer, offset, Math.min(length, 16), position)
+        throw new Error("partial claim write")
+      }
+      return write(descriptor, buffer, offset, length, position)
+    })
+
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation }))
+      .rejects.toThrow("HELLO_PROPOSAL_ROLLBACK_FAILED")
+    expect(injected).toBe(true)
+    expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).toBe(proposal.baseSha)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
   })
 
   it("retains authoritative quarantine when rollback journal removal fails", async () => {
