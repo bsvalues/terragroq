@@ -45,7 +45,6 @@ const MAX_VALIDATION_OUTPUT_LENGTH = 12_000
 const PROPOSAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const PATCH_SHA256 = /^[0-9a-f]{64}$/
 const COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
-const APPLIED_COMMIT = /^[0-9a-f]{40}$/
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const VALIDATION_COMMAND = "node --test examples/hello-application/test/hello.test.mjs"
 const ALLOWED_CHANGED_PATHS = new Set([
@@ -174,7 +173,7 @@ function proposalRecord(value: unknown): value is Proposal {
     if (!timestamp(value.appliedAt) || value.appliedAt < value.createdAt) return false
     if ((value.schemaVersion === 2 || value.appliedCommit !== undefined)
       && (typeof value.appliedCommit !== "string"
-        || !(value.schemaVersion === 2 ? APPLIED_COMMIT : COMMIT_SHA).test(value.appliedCommit))) return false
+        || !COMMIT_SHA.test(value.appliedCommit))) return false
     if (value.schemaVersion === 2 && Array.isArray(value.progress)
       && value.appliedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at) return false
   } else {
@@ -189,6 +188,29 @@ function proposalRecord(value: unknown): value is Proposal {
   if (value.executionNode !== undefined && !receiptText(value.executionNode)) return false
   if (value.progress !== undefined && (!Array.isArray(value.progress) || value.progress.some((entry) => !progressEntry(entry)))) return false
   return true
+}
+
+async function sha256Text(value: string): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle
+    if (!subtle || typeof subtle.digest !== "function" || typeof TextEncoder !== "function") return null
+    const digest = await subtle.digest("SHA-256", new TextEncoder().encode(value))
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
+  } catch {
+    return null
+  }
+}
+
+async function verifiedProposalRecord(value: unknown): Promise<Proposal | null> {
+  if (!proposalRecord(value)) return null
+  const patchDigest = await sha256Text(value.reviewPatch)
+  if (patchDigest !== value.patchSha256) return null
+  if (value.schemaVersion === 2) {
+    if (typeof value.requestText !== "string") return null
+    const requestDigest = await sha256Text(value.requestText)
+    if (requestDigest !== value.requestSha256) return null
+  }
+  return value
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
@@ -212,7 +234,7 @@ function canonicalNextProgress(entry: ProgressEntry, observed: readonly Progress
 
 function appliedProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
   if (!proposalRecord(value) || value.status !== "APPLIED"
-    || typeof value.appliedCommit !== "string" || !APPLIED_COMMIT.test(value.appliedCommit)
+    || typeof value.appliedCommit !== "string" || !COMMIT_SHA.test(value.appliedCommit)
     || typeof value.validation.output !== "string") return false
   return value.schemaVersion === reviewed.schemaVersion
     && value.proposalId === reviewed.proposalId
@@ -271,14 +293,20 @@ function parseStreamLine(line: string, terminal: StreamTerminal | null): StreamT
     throw new Error("HERMES stream failed: record after terminal.")
   }
   if (value.type === "progress") {
-    if (!progressEntry(value)) throw new Error("HERMES stream failed: malformed progress record.")
+    if (!exactKeys(value, ["type", "stage", "detail", "at"]) || !progressEntry(value)) {
+      throw new Error("HERMES stream failed: malformed progress record.")
+    }
     return { stage: value.stage, detail: value.detail, at: value.at }
   }
   if (value.type === "proposal") {
-    if (!proposalRecord(value.proposal)) throw new Error("HERMES stream failed: malformed proposal record.")
+    if (!exactKeys(value, ["type", "proposal"]) || !proposalRecord(value.proposal)) {
+      throw new Error("HERMES stream failed: malformed proposal record.")
+    }
     return { type: "proposal", proposal: value.proposal }
   }
-  if (!nonempty(value.error)) throw new Error("HERMES stream failed: malformed error record.")
+  if (!exactKeys(value, ["type", "error"]) || !nonempty(value.error)) {
+    throw new Error("HERMES stream failed: malformed error record.")
+  }
   return { type: "error", error: value.error }
 }
 
@@ -417,7 +445,7 @@ export function HelloApplicationAssistant({
     let current = true
     void fetch("/api/projects/hello-application/proposals", { cache: "no-store" })
       .then(responseJson)
-      .then((payload) => {
+      .then(async (payload) => {
         if (!current || ownerInteracted.current || operationInFlight.current) return
         if (!record(payload) || !Array.isArray(payload.proposals)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
         const newest = payload.proposals[0]
@@ -425,12 +453,14 @@ export function HelloApplicationAssistant({
           setStatus("Ready for a development request.")
           return
         }
-        if (!proposalRecord(newest)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
-        setProposal(newest)
-        setDraft(newest.requestText ?? "")
-        setSubmittedRequest(newest.requestText ?? null)
-        setEvents(newest.progress ?? [])
-        setStatus(newest.status === "READY_FOR_REVIEW" ? "Newest proposal ready for review." : `Newest proposal ${statusLabel(newest.status).toLowerCase()}.`)
+        const verified = await verifiedProposalRecord(newest)
+        if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+        if (!current || ownerInteracted.current || operationInFlight.current) return
+        setProposal(verified)
+        setDraft(verified.requestText ?? "")
+        setSubmittedRequest(verified.requestText ?? null)
+        setEvents(verified.progress ?? [])
+        setStatus(verified.status === "READY_FOR_REVIEW" ? "Newest proposal ready for review." : `Newest proposal ${statusLabel(verified.status).toLowerCase()}.`)
       })
       .catch((cause) => {
         if (!current || ownerInteracted.current || operationInFlight.current) return
@@ -501,8 +531,10 @@ export function HelloApplicationAssistant({
       if (terminal.proposal.requestText !== requestText) {
         throw new Error("HERMES stream failed: proposal request mismatch.")
       }
-      setProposal(terminal.proposal)
-      setStatus(terminal.proposal.status === "READY_FOR_REVIEW" ? "Proposal ready for review." : statusLabel(terminal.proposal.status))
+      const verified = await verifiedProposalRecord(terminal.proposal)
+      if (!verified) throw new Error("HERMES stream failed: proposal evidence hash mismatch.")
+      setProposal(verified)
+      setStatus(verified.status === "READY_FOR_REVIEW" ? "Proposal ready for review." : statusLabel(verified.status))
     } catch (cause) {
       setProposal(null)
       setStatus("")
@@ -528,7 +560,9 @@ export function HelloApplicationAssistant({
       })
       const payload = await responseJson(response)
       if (!record(payload) || !appliedProposalRecord(payload.proposal, reviewed)) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
-      setProposal(payload.proposal)
+      const verified = await verifiedProposalRecord(payload.proposal)
+      if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
+      setProposal(verified)
       setStatus("Proposal applied. Preview refreshed.")
       onPreviewRefresh()
     } catch (cause) {

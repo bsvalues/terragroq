@@ -35,7 +35,7 @@ const readyProposal = {
   model: "williamos-qwen3-4b:64k",
   threadId: "thread-1",
   turnId: "turn-1",
-  patchSha256: "a".repeat(64),
+  patchSha256: "d7be2b03ee7f50b00da380124193797e7fe5546bdb90400db94cb931bd1df3f8",
   changedPaths: [
     "examples/hello-application/src/index.html",
     "examples/hello-application/src/styles.css",
@@ -256,7 +256,7 @@ describe("HelloApplicationControls", () => {
     expect(screen.getByText(validationCommand)).toBeTruthy()
     expect(screen.getByLabelText("Validation output").textContent).toContain("# pass 3")
     expect(screen.getByLabelText("Validation output").getAttribute("tabindex")).toBe("0")
-    expect(screen.getByText("a".repeat(64))).toBeTruthy()
+    expect(screen.getByText("d7be2b03ee7f50b00da380124193797e7fe5546bdb90400db94cb931bd1df3f8")).toBeTruthy()
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(screen.getByLabelText("Proposed patch").getAttribute("tabindex")).toBe("0")
 
@@ -310,6 +310,21 @@ describe("HelloApplicationControls", () => {
       name: "a schema-v2 proposal missing provenance additions",
       response: streamResponse([{ type: "proposal", proposal: malformedV2Proposal }]),
       message: "HERMES stream failed: malformed proposal record.",
+    },
+    {
+      name: "a progress envelope with an unexpected field",
+      response: streamResponse([{ type: "progress", ...progress[0], percent: 10 }]),
+      message: "HERMES stream failed: malformed progress record.",
+    },
+    {
+      name: "a proposal envelope with an unexpected field",
+      response: streamResponse([{ type: "proposal", proposal: readyProposal, debug: true }]),
+      message: "HERMES stream failed: malformed proposal record.",
+    },
+    {
+      name: "an error envelope with an unexpected field",
+      response: streamResponse([{ type: "error", error: "HELLO_PROPOSAL_FAILED", detail: "internal" }]),
+      message: "HERMES stream failed: malformed error record.",
     },
   ])("fails closed for $name while retaining the request and real transcript", async ({ response, message }) => {
     const fetcher = baseFetch({ proposalPosts: [response] })
@@ -408,6 +423,34 @@ describe("HelloApplicationControls", () => {
     const log = screen.getByRole("log", { name: "HERMES activity" })
     expect(within(log).getByText("Request accepted")).toBeTruthy()
     expect(within(log).getByText("Proposal ready for review")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
+  it.each([
+    {
+      name: "request digest",
+      proposal: { ...readyProposal, requestSha256: "0".repeat(64) },
+    },
+    {
+      name: "patch digest",
+      proposal: { ...readyProposal, patchSha256: "0".repeat(64) },
+    },
+  ])("rejects a streamed READY proposal with the wrong $name", async ({ proposal }) => {
+    const fetcher = baseFetch({
+      proposalPosts: [streamResponse([
+        ...progress.map((entry) => ({ type: "progress", ...entry })),
+        { type: "proposal", proposal },
+      ])],
+    })
+    await renderReady(fetcher)
+
+    const input = await submitRequest()
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES stream failed: proposal evidence hash mismatch.")
+    expect((input as HTMLTextAreaElement).value).toBe(requestText)
+    expect(screen.getByText(requestText, { selector: "blockquote" })).toBeTruthy()
+    expect(within(screen.getByRole("log", { name: "HERMES activity" })).getByText("Proposal ready for review")).toBeTruthy()
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
   })
 
@@ -519,6 +562,18 @@ describe("HelloApplicationControls", () => {
     {
       name: "an invalid patch hash",
       proposal: { ...readyProposal, patchSha256: "not-a-sha256" },
+    },
+    {
+      name: "a valid-format request digest that does not bind the request text",
+      proposal: { ...readyProposal, requestSha256: "0".repeat(64) },
+    },
+    {
+      name: "a valid-format patch digest that does not bind the review patch",
+      proposal: { ...readyProposal, patchSha256: "0".repeat(64) },
+    },
+    {
+      name: "a schema-v1 patch digest that does not bind the review patch",
+      proposal: { ...schemaOneProposal, patchSha256: "0".repeat(64) },
     },
     {
       name: "a path outside the three writable files",
@@ -672,6 +727,16 @@ describe("HelloApplicationControls", () => {
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
   })
 
+  it("fails closed when browser digest verification is unavailable", async () => {
+    vi.stubGlobal("crypto", {})
+    const fetcher = baseFetch({ proposals: [readyProposal] })
+    await renderReady(fetcher)
+
+    expect((await screen.findByRole("alert")).textContent).toContain("HERMES status failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.queryByLabelText("HERMES proposal")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
   it("preserves a ready proposal when Apply fails and refreshes the preview only after success", async () => {
     const failedApply = Response.json({ error: "HELLO_PROPOSAL_STALE_BASE" }, { status: 409 })
     const fetcher = baseFetch({ proposals: [readyProposal], applyResponse: failedApply })
@@ -682,6 +747,40 @@ describe("HelloApplicationControls", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_STALE_BASE")
     expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("accepts a schema-v2 APPLIED receipt with a 64-character commit", async () => {
+    const fetcher = baseFetch({
+      proposals: [readyProposal],
+      applyResponse: Response.json({
+        proposal: { ...appliedProposal, appliedCommit: "b".repeat(64) },
+      }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect(await screen.findByText("Applied")).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(onPreviewRefresh).toHaveBeenCalledOnce()
+  })
+
+  it("reverifies evidence hashes before accepting Apply", async () => {
+    const fetcher = baseFetch({
+      proposals: [readyProposal],
+      applyResponse: Response.json({ proposal: appliedProposal }),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+    vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValue(new Error("digest unavailable"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Apply failed: HELLO_PROPOSAL_RESPONSE_INVALID")
+    expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
+    expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
     expect(onPreviewRefresh).not.toHaveBeenCalled()
   })
 
