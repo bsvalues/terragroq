@@ -14,7 +14,7 @@ const MAX_REQUEST_LENGTH = 2_000
 const MAX_FILE_LENGTH = 64_000
 const MAX_INPUT_BYTES = 128_000
 const MAX_COST_USD = 0.03
-const MAX_TOKENS = 6_144
+const MAX_TOKENS = 8_192
 const DIGEST = /^sha256:[0-9a-f]{64}$/
 
 function exactKeys(value, keys) {

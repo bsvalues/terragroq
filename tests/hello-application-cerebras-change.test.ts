@@ -67,7 +67,7 @@ describe("Cerebras Hello Application change", () => {
       if (url.endsWith("/public/v1/models")) return Response.json(catalog())
       const request = JSON.parse(String(init?.body))
       expect(request.model).toBe("qwen-3.8-27b")
-      expect(request.max_tokens).toBe(6_144)
+      expect(request.max_tokens).toBe(8_192)
       expect(request.response_format).toEqual({ type: "json_object" })
       expect(request.messages.at(-1).content).toContain("examples/hello-application/src/app.js")
       return Response.json({

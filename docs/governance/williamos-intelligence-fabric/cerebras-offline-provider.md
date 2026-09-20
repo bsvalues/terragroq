@@ -21,7 +21,7 @@ local failure never escalates to Cerebras. A new page load returns to the local 
 The external author receives only an S1 package: the owner's bounded change request and the
 current contents of the three allowlisted Hello source files. It has no tools, shell, Git,
 filesystem, network-selection, scheduler, deployment, or additional-path authority. The fixed
-call allows at most 6,144 output tokens and reserves no more than **$0.03** using current catalog
+call allows at most 8,192 output tokens and reserves no more than **$0.03** using current catalog
 pricing. The request uses provider JSON mode, and the source-only author then enforces the fixed
 exact-key/path/size contract locally before any write. The provider must return strict JSON
 containing complete replacement content for one to three allowlisted files; a substituted model,
