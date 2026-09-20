@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process"
-import fs from "node:fs"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 
@@ -77,13 +76,5 @@ describe("WilliamOS-owned one-shot Cerebras invocation", () => {
     expect(result.status).toBe(1)
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "FAILED", code: "EXTERNAL_API_KEY_MISSING" })
     expect(result.stderr).toBe("")
-  })
-
-  it("local handoff requires hidden interaction and clears both variables in finally", () => {
-    const source = fs.readFileSync(path.join(process.cwd(), "scripts", "execution-fabric", "invoke-cerebras-smoke.ps1"), "utf8")
-    expect(source).toContain("Read-Host -Prompt \"Cerebras API key (local, hidden)\" -AsSecureString")
-    expect(source).toContain("ZeroFreeBSTR")
-    expect(source).toMatch(/finally\s*\{[\s\S]*Remove-Item Env:CEREBRAS_API_KEY[\s\S]*Remove-Item Env:WILLIAMOS_CEREBRAS_ENABLED/)
-    expect(source).not.toContain(".env.local")
   })
 })

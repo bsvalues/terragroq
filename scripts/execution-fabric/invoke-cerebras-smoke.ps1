@@ -1,17 +1,20 @@
-# Run only in an interactive HERMES PowerShell session after the sealed revision is deployed.
-# The key is transient in this process and its single Node child; it is never a command argument.
+# Run only in the interactive HERMES logon session after the sealed revision is deployed.
+# The key comes from one exact Windows generic-credential target, is transient in this
+# process and its single Node child, and is never a command argument or pipeline value.
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string]$Model)
 
 $ErrorActionPreference = "Stop"
+$credentialHelper = Join-Path $PSScriptRoot "cerebras-credential-manager.ps1"
+. $credentialHelper
+
 $secureKey = $null
 $keyHandle = [IntPtr]::Zero
 $plainKey = $null
 $smokeExit = 1
 try {
   if (-not [Environment]::UserInteractive) { throw "CEREBRAS_LOCAL_INTERACTION_REQUIRED" }
-  $secureKey = Read-Host -Prompt "Cerebras API key (local, hidden)" -AsSecureString
-  if ($null -eq $secureKey -or $secureKey.Length -eq 0) { throw "CEREBRAS_KEY_REQUIRED" }
+  $secureKey = Get-CerebrasCredentialSecureString
   $keyHandle = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
   $plainKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyHandle)
   $env:CEREBRAS_API_KEY = $plainKey

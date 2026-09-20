@@ -1,4 +1,4 @@
-# Cerebras optional Tier 3 provider — runtime-wired candidate, key not installed
+# Cerebras optional Tier 3 provider — runtime-wired candidate, credential-store smoke bridge
 
 The existing `scripts/execution-fabric/external-model-api.mjs` Tier 3 adapter exposes
 `callCerebrasModelApi`. Its production caller is the explicit one-shot
@@ -14,18 +14,22 @@ Workspace-controlled child processes launched by the cockpit explicitly mask bot
 variables with empty/disabled values before execution, blocking child dotenv reload; the
 long-lived credential must not flow into test or build jobs.
 
-The later one-shot local command, **after reviewed lab-main integration and governed deployment**, is:
+The later one-shot local command, **after reviewed integration and governed deployment**, is:
 
 ```powershell
-powershell.exe -NoProfile -File "C:\HermesLab\williamos-runtime-64034e93-flat\scripts\execution-fabric\invoke-cerebras-smoke.ps1" -Model <catalog-model-id>
+$VersionedRoot = "C:\HermesLab\WilliamOS-Disposable\williamos-hello-ai-<release-sha12>"
+powershell.exe -NoProfile -File "$VersionedRoot\source\scripts\execution-fabric\invoke-cerebras-smoke.ps1" -Model <catalog-model-id>
 ```
 
-This wrapper requires William's HERMES-local interactive, hidden key entry. It gives the key and
-enable flag only to its own Node child, makes one synthetic/public inference with a hard $0.01
-cost ceiling, prints safe provider/model/usage/cost/duration/status metadata, and clears both
-process variables in `finally`. Success also requires the fixed synthetic probe's expected
-answer; an incorrect response is a typed failure and its content is never printed. Do not run
-it during this implementation slice. The model ID is
+The wrapper reads only the `WilliamOS/Cerebras/API-Key` Windows generic credential from the
+current interactive HERMES logon session and requires the username metadata
+`CEREBRAS_API_KEY`. It never enumerates credentials and has no prompt, target override, env,
+file, or module fallback. It gives the key and enable flag only to its own Node child, makes one
+synthetic/public inference with a hard $0.01 cost ceiling, prints safe
+provider/model/usage/cost/duration/status metadata, and clears both process variables in
+`finally`. Native credential bytes and the managed BSTR are zeroed before release. Success also
+requires the fixed synthetic probe's expected answer; an incorrect response is a typed failure
+and its content is never printed. The model ID is
 an explicit operator selection from current public metadata, never a hard-coded production default.
 
 The adapter checks the existing ContextPackage S1/S2 classification and bounded spend policy.
@@ -52,24 +56,26 @@ No model is qualified, admitted, or production-ready on the strength of this off
 
 ## Long-lived activation boundary
 
-No dedicated HERMES API-key installer or vault is present in this repository. The running
-`.env.local` belongs to the signed deployment tree; editing it in place invalidates the tree
-attestation and can prevent restart. The current deploy script preserves that file and explicitly
-guards its hash, so it is **not** a secret-update transaction. Do not edit the source or runtime
-`.env.local` by hand.
+The repository now has a narrow reader for the one-shot smoke credential, not a general API-key
+installer, UI, or long-lived runtime vault. Credential creation and rotation remain owner actions
+in the interactive HERMES Windows Credential Manager. The running `.env.local` belongs to the
+signed deployment tree; editing it in place invalidates the tree attestation and can prevent
+restart. The current deploy script preserves that file and explicitly guards its hash, so it is
+**not** a secret-update transaction. Do not edit the source or runtime `.env.local` by hand.
 
 Long-lived activation requires a separately reviewed, WilliamOS-governed transaction that:
 
 1. integrates the exact reviewed/sealed revision into authoritative `lab/main` and builds it;
    the dependency-aware deployment path must stage the exact production lockfile with
    `-WithDependencies`, because the adapter's JSON Schema validator is a declared dependency;
-2. accepts one hidden local key entry into a protected staged runtime configuration (never Git,
-   command arguments, logs, chat, or a developer source tree);
+2. reads the named Windows credential into a protected staged runtime configuration without
+   copying it into Git, command arguments, logs, chat, or a developer source tree;
 3. atomically stages the bundle and configuration together, with rollback bytes and ACL checks;
 4. attests/signs the **post-key** tree including `.env.local`, then performs one deliberate
    supervised deployment/restart and verifies the attested revision and health;
 5. rolls back both code and configuration if admission or health verification fails.
 
-That combined secret/deployment transaction is **not implemented by this PR**. Until it exists,
-the process-only smoke above is the only approved future key handoff; the long-lived service must
-remain disabled. One successful smoke would be evidence for evaluation, not model admission.
+That combined secret/deployment transaction is **not implemented by this change**. Until it
+exists, the credential-backed process-only smoke above is the only approved key use; the
+long-lived service must remain disabled. One successful smoke would be evidence for evaluation,
+not model admission.
