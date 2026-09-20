@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process"
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 
@@ -76,5 +78,37 @@ describe("WilliamOS-owned one-shot Cerebras invocation", () => {
     expect(result.status).toBe(1)
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "FAILED", code: "EXTERNAL_API_KEY_MISSING" })
     expect(result.stderr).toBe("")
+  })
+
+  it("runs the no-tools smoke from a source-only checkout without installed packages", () => {
+    const isolated = mkdtempSync(path.join(os.tmpdir(), "williamos-cerebras-source-only-"))
+    try {
+      copyFileSync(path.join(process.cwd(), "scripts", "execution-fabric", "external-model-api.mjs"),
+        path.join(isolated, "external-model-api.mjs"))
+      copyFileSync(path.join(process.cwd(), "scripts", "execution-fabric", "cerebras-smoke.mjs"),
+        path.join(isolated, "cerebras-smoke.mjs"))
+      const driver = path.join(isolated, "driver.mjs")
+      writeFileSync(driver, `
+import { runCerebrasSmoke } from "./cerebras-smoke.mjs"
+const model = "fixture-model"
+const catalog = { data: [{ id: model, deprecated: false,
+  pricing: { prompt: "0.000001", completion: "0.000002" },
+  capabilities: { tools: false, structured_outputs: false, json_mode: false, reasoning: false, vision: false } }] }
+const completion = { model, choices: [{ finish_reason: "stop", message: { content: "ready" } }],
+  usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }
+const fetchImpl = async input => new Response(JSON.stringify(String(input).includes("/public/") ? catalog : completion),
+  { status: 200, headers: { "content-type": "application/json" } })
+const receipt = await runCerebrasSmoke({ model,
+  environment: { WILLIAMOS_CEREBRAS_ENABLED: "true", CEREBRAS_API_KEY: "fixture-not-a-real-key" }, fetchImpl })
+process.stdout.write(JSON.stringify(receipt))
+if (receipt.status !== "SUCCEEDED") process.exitCode = 1
+`, "utf8")
+      const result = spawnSync(process.execPath, [driver], { encoding: "utf8" })
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "SUCCEEDED", code: "CEREBRAS_SMOKE_OK",
+        requestedModel: model, actualModel: model })
+    } finally {
+      rmSync(isolated, { recursive: true, force: true })
+    }
   })
 })

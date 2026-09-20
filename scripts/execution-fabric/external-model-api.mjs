@@ -17,7 +17,6 @@
  */
 
 import { createHash } from "node:crypto"
-import Ajv from "ajv"
 
 const S1_S2 = new Set(["S1", "S2"])
 
@@ -234,7 +233,18 @@ export async function callCerebrasModelApi({
     ...((requestTools ?? []).map(tool => ({ content: safeOptionText(tool) }))),
     { content: requestResponseFormat === undefined ? "" : safeOptionText(requestResponseFormat) }])
   if (requestResponseFormat && !["json_object", "json_schema"].includes(requestResponseFormat.type)) deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY")
-  const schemaCompiler = new Ajv({ strict: true, allowUnionTypes: true })
+  // The source-only one-shot smoke carries no structured output or tools and must be runnable from
+  // the sealed checkout without a package installation. Load Ajv only when a request actually needs
+  // JSON-schema validation; those richer calls remain fail-closed when the dependency is unavailable.
+  const needsSchemaCompiler = requestResponseFormat?.type === "json_schema" ||
+    (requestTools ?? []).some(tool => tool.function.parameters !== undefined)
+  let schemaCompiler = null
+  if (needsSchemaCompiler) {
+    let Ajv
+    try { ({ default: Ajv } = await import("ajv")) }
+    catch { deny("EXTERNAL_API_UNSUPPORTED_CAPABILITY") }
+    schemaCompiler = new Ajv({ strict: true, allowUnionTypes: true })
+  }
   let structuredValidator = null
   if (requestResponseFormat?.type === "json_schema") {
     const schema = requestResponseFormat.json_schema?.schema
