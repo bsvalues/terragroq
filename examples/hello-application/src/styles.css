@@ -233,6 +233,11 @@ h1 {
   line-height: 1.45;
 }
 
+#pulse-status[data-hermes-state="cerebras-verified"] {
+  border-left: 4px solid #1abc9c;
+  padding-left: 0.5rem;
+}
+
 .governance-marker {
   display: inline-flex;
   margin: -1rem 0 2rem;
