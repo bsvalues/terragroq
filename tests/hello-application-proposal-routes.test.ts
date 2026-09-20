@@ -77,8 +77,8 @@ beforeEach(() => {
 })
 
 describe("Hello Application proposal routes", () => {
-  it("keeps the proposal route open for the bounded 90-minute resident transaction", () => {
-    expect(maxDuration).toBe(5_400)
+  it("reserves bounded host overhead around the 90-minute resident transaction", () => {
+    expect(maxDuration).toBe(7_200)
   })
 
   it("returns immediately and streams allowlisted observed milestones before one proposal terminal", async () => {

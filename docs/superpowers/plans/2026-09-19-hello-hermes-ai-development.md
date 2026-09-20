@@ -165,7 +165,7 @@ Expected: failures because POST ignores the body, returns JSON only after comple
 
 - [ ] **Step 3: Implement the streaming route**
 
-Parse and validate the exact one-key JSON object before constructing a `ReadableStream`. Encode one JSON object per newline. Run proposal creation without blocking response construction; map the service callback to progress records, emit exactly one final proposal or error, close in all cases, and do not surface stack traces or command stderr. Preserve no-store, owner, origin, and server-root boundaries. Set the static proposal route duration to 5,400 seconds for the bounded resident transaction and the proposal-capable HTTPS upstream response timeout to 91 minutes so transport does not terminate a valid final attempt.
+Parse and validate the exact one-key JSON object before constructing a `ReadableStream`. Encode one JSON object per newline. Run proposal creation without blocking response construction; map the service callback to progress records, emit exactly one final proposal or error, close in all cases, and do not surface stack traces or command stderr. Preserve no-store, owner, origin, and server-root boundaries. Keep the resident transaction at 5,400 seconds, set the outer proposal route to 7,200 seconds, and set the proposal-capable HTTPS upstream response timeout to 121 minutes. The explicit 30-minute host-overhead reserve covers bounded worktree, Git, validator, publication, and cleanup operations without weakening the reviewed 1,800-second per-turn policy.
 
 - [ ] **Step 4: Add defense-in-depth preview sandbox**
 

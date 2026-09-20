@@ -75,7 +75,7 @@ describe("isolated HERMES Hello runtime contract", () => {
   it("pins HTTPS to the isolated ports and strips forged proxy/device identity headers", () => {
     expect(HELLO_HTTPS_PORT).toBe(3543)
     expect(HELLO_UPSTREAM_PORT).toBe(3201)
-    expect((helloHttpsProxy as { HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS?: number }).HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS).toBe(5_460_000)
+    expect((helloHttpsProxy as { HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS?: number }).HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS).toBe(7_260_000)
     const headers = buildHelloProxyUpstreamHeaders({
       host: "evil.example:9999",
       origin: "https://evil.example",

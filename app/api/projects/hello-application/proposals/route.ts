@@ -11,7 +11,7 @@ import { guardHelloApplicationMutation } from "@/lib/hello-application/mutation-
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-export const maxDuration = 5400
+export const maxDuration = 7200
 
 const MAX_REQUEST_BODY_BYTES = 16_384
 const PROGRESS_STAGES = new Set([

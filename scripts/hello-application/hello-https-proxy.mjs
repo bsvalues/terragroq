@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 
 export const HELLO_HTTPS_PORT = 3543
 export const HELLO_UPSTREAM_PORT = 3201
-export const HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS = 91 * 60 * 1000
+export const HELLO_UPSTREAM_RESPONSE_TIMEOUT_MS = 121 * 60 * 1000
 export const HELLO_HTTPS_ORIGIN = `https://williamos.lan:${HELLO_HTTPS_PORT}`
 const LISTEN_HOSTS = Object.freeze(["192.168.88.9", "100.97.194.84"])
 const DEVICE_HEADER = "x-williamos-device-cert"
