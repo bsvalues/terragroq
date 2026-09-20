@@ -107,4 +107,11 @@ describe("Hello Application proposal routes", () => {
     expect(response.status).toBe(403)
     expect(seams.createProposal).not.toHaveBeenCalled()
   })
+
+  it("keeps invalid owner request errors mapped to HTTP 400", async () => {
+    seams.createProposal.mockRejectedValue(new Error("HELLO_PROPOSAL_REQUEST_INVALID"))
+    const response = await POST(mutation())
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "HELLO_PROPOSAL_REQUEST_INVALID" })
+  })
 })

@@ -25,6 +25,71 @@ function fixture() {
 }
 
 describe("contained Hello proposal validation", () => {
+  it.each(["before", "during"])("rejects an ancestor junction created %s image inspection", async (when) => {
+    const setup = fixture()
+    const calls: string[][] = []
+    const ancestor = path.join(setup.workspacePath, "examples")
+    const outside = path.join(setup.runtimeRoot, "escaped-examples")
+    const link = () => { fs.renameSync(ancestor, outside); fs.symlinkSync(outside, ancestor, "junction") }
+    if (when === "before") link()
+    await expect(validateHelloApplicationInContainer({ ...setup,
+      commandRunner: async (_command, args) => {
+        calls.push(args)
+        if (args[0] === "image") { link(); return { code: 0, stdout: "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613" } }
+        return { code: 0, stdout: "" }
+      },
+    })).rejects.toThrow(when === "before" ? "HELLO_PROPOSAL_WORKSPACE_FILE_INVALID" : "HELLO_PROPOSAL_VALIDATION_FAILED")
+    expect(calls.some((args) => args[0] === "run")).toBe(false)
+  })
+
+  it("rejects links outside the six leaves across the entire mounted workspace", async () => {
+    const setup = fixture()
+    fs.symlinkSync(setup.repositoryRoot, path.join(setup.workspacePath, "escape"), "junction")
+    await expect(validateHelloApplicationInContainer({ ...setup, commandRunner: async () => { throw new Error("Docker must not run") } })).rejects.toThrow("HELLO_PROPOSAL_WORKSPACE_FILE_INVALID")
+  })
+
+  it("rejects replacement of the immediate workspace parent during image inspection", async () => {
+    const setup = fixture()
+    let ran = false
+    await expect(validateHelloApplicationInContainer({ ...setup, commandRunner: async (_command, args) => {
+      if (args[0] === "image") {
+        const parent = path.dirname(setup.workspacePath)
+        fs.renameSync(parent, `${parent}-original`)
+        fs.cpSync(`${parent}-original`, parent, { recursive: true })
+        return { code: 0, stdout: "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613" }
+      }
+      if (args[0] === "run") ran = true
+      return { code: 0, stdout: "" }
+    } })).rejects.toThrow("HELLO_PROPOSAL_VALIDATION_FAILED")
+    expect(ran).toBe(false)
+  })
+
+  it("bounds all commands, cleans only its container, and returns the last 12000 output characters", async () => {
+    const setup = fixture()
+    const calls: any[] = []
+    const result = await validateHelloApplicationInContainer({ ...setup, commandRunner: async (_command, args, options) => {
+      calls.push({ args, options })
+      if (args[0] === "image") return { code: 0, stdout: "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613" }
+      return { code: 0, stdout: "discard" + "x".repeat(12000), stderr: "" }
+    } })
+    expect(result.output).toBe("x".repeat(12000))
+    for (const call of calls) { expect(call.options.timeout).toBeGreaterThan(0); expect(call.options.timeout).toBeLessThanOrEqual(60000); expect(call.options.maxBuffer).toBeLessThanOrEqual(2_000_000) }
+    const run = calls.find((call) => call.args[0] === "run")
+    expect(calls.at(-1).args).toEqual(["rm", "-f", run.args[run.args.indexOf("--name") + 1]])
+  })
+
+  it("never runs a mismatched image and sanitizes cleanup failure", async () => {
+    for (const mode of ["image", "cleanup"]) {
+      const setup = fixture()
+      let ran = false
+      await expect(validateHelloApplicationInContainer({ ...setup, commandRunner: async (_command, args) => {
+        if (args[0] === "image") return { code: 0, stdout: mode === "image" ? "sha256:wrong" : "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613" }
+        if (args[0] === "run") { ran = true; return { code: 0, stdout: "ok" } }
+        return { code: 1, stderr: "private cleanup error" }
+      } })).rejects.toThrow("HELLO_PROPOSAL_VALIDATION_FAILED")
+      expect(ran).toBe(mode === "cleanup")
+    }
+  })
   it("runs only the fixed test in a policy-pinned, no-network, read-only container", async () => {
     const { repositoryRoot, runtimeRoot, workspacePath } = fixture()
     const calls: Array<{ command: string; args: string[]; options: { env?: NodeJS.ProcessEnv } }> = []
