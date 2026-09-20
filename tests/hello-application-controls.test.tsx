@@ -59,6 +59,12 @@ const appliedProposal = {
   },
 } as const
 
+const applyingProposal = {
+  ...readyProposal,
+  status: "APPLY_IN_PROGRESS",
+  applyStartedAt: "2026-09-19T17:00:06.000Z",
+} as const
+
 const {
   appliedCommit: _missingAppliedCommit,
   ...appliedWithoutCommit
@@ -553,6 +559,15 @@ describe("HelloApplicationControls", () => {
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()
   })
 
+  it("restores an authoritative APPLY_IN_PROGRESS receipt without exposing Apply", async () => {
+    const fetcher = baseFetch({ proposals: [applyingProposal] })
+    await renderReady(fetcher)
+
+    expect(await screen.findByText("Apply in progress")).toBeTruthy()
+    expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+  })
+
   it.each([
     {
       name: "a missing schema version",
@@ -761,6 +776,26 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
     expect(screen.queryByRole("alert")).toBeNull()
     expect(onPreviewRefresh).toHaveBeenCalledOnce()
+  })
+
+  it("reconciles a lost Apply response to authoritative APPLY_IN_PROGRESS without re-enabling Apply", async () => {
+    const fetcher = baseFetch({
+      proposalGets: [
+        Response.json({ proposals: [readyProposal] }),
+        Response.json({ proposals: [applyingProposal] }),
+      ],
+      applyError: new TypeError("response lost while validation continues"),
+    })
+    const { onPreviewRefresh } = await renderReady(fetcher)
+    await screen.findByText("Ready for review")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply proposal" }))
+
+    expect(await screen.findByText("Apply in progress")).toBeTruthy()
+    expect(screen.getByText("Proposal apply is in progress. Apply is unavailable.")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Apply proposal" })).toBeNull()
+    expect(screen.getByLabelText("Proposed patch").textContent).toContain("The local AI loop")
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
   })
 
   it("reconciles a malformed HTTP-200 Apply response to exact READY and keeps retry available", async () => {

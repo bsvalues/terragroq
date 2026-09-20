@@ -571,6 +571,64 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(setup.repositoryRoot, ["status", "--porcelain"])).toBe("")
   }, 15_000)
 
+  it("publishes APPLY_IN_PROGRESS before validation and refuses another Apply while active", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    let validationStarted!: () => void
+    let releaseValidation!: () => void
+    const started = new Promise<void>((resolve) => { validationStarted = resolve })
+    const release = new Promise<void>((resolve) => { releaseValidation = resolve })
+    const firstApply = applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId,
+      validateWorkspace: async () => { validationStarted(); await release; return validation() },
+    })
+    await started
+    let secondOutcome: Promise<string> | undefined
+    try {
+      const current = getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId })
+      expect(current).toMatchObject({
+        status: "APPLY_IN_PROGRESS",
+        applyStartedAt: expect.any(String),
+        reviewPatch: proposal.reviewPatch,
+      })
+      expect(new Date(current.applyStartedAt).toISOString()).toBe(current.applyStartedAt)
+      expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("APPLY_IN_PROGRESS")
+
+      secondOutcome = applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })
+        .then(() => "unexpected success", (error: Error) => error.message)
+      const settled = await Promise.race([
+        secondOutcome,
+        new Promise<string>((resolve) => setTimeout(() => resolve("still queued"), 100)),
+      ])
+      expect(settled).toBe("HELLO_PROPOSAL_NOT_APPLICABLE")
+    } finally {
+      releaseValidation()
+      await firstApply
+      await secondOutcome
+    }
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLIED")
+  })
+
+  it("removes APPLY_IN_PROGRESS after a confirmed validation failure and restores READY", async () => {
+    const setup = fixture()
+    const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text",
+      residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation,
+    })
+    const inflight = path.join(setup.runtimeRoot, "hello-application-proposals", `${proposal.proposalId}.inflight`)
+    const validateWorkspace = vi.fn(async () => {
+      expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")
+      throw new Error("controlled validation failure")
+    })
+
+    await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace }))
+      .rejects.toThrow("controlled validation failure")
+
+    expect(validateWorkspace).toHaveBeenCalledOnce()
+    expect(fs.existsSync(inflight)).toBe(false)
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("READY_FOR_REVIEW")
+  })
+
   it.each(["requestSha256", "proposalCommit", "progress", "appliedCommit", "validation", "changedPaths", "threadId", "turnId", "createdAt", "status", "extraField"])("rejects malformed v2 %s as RECEIPT_INVALID", async (field) => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update text", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
@@ -678,12 +736,12 @@ describe("Hello Application governed HERMES proposals", () => {
     expect(git(setup.repositoryRoot, ["rev-parse", "HEAD"])).not.toBe(proposal.baseSha)
     const prefix = path.join(setup.runtimeRoot, "hello-application-proposals", proposal.proposalId)
     expect(JSON.parse(fs.readFileSync(`${prefix}.json`, "utf8")).status).toBe("READY_FOR_REVIEW")
-    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
-    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("QUARANTINED_ROLLBACK_FAILED")
+    expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")
+    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("APPLY_IN_PROGRESS")
     await expect(applyHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId, validateWorkspace: validation })).rejects.toThrow("HELLO_PROPOSAL_NOT_APPLICABLE")
-    // A journal-only entry must remain discoverable even if its READY receipt is absent.
+    // APPLY_IN_PROGRESS is authoritative only while it remains bound to the stored READY receipt.
     fs.rmSync(`${prefix}.json`)
-    expect(service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })[0].status).toBe("QUARANTINED_ROLLBACK_FAILED")
+    expect(() => service.listHelloApplicationProposals({ ...setup, requestedBy: "owner" })).toThrow("HELLO_PROPOSAL_RECEIPT_INVALID")
   })
 
   it.each(["restore_file", "restore_index"])("preserves an external index-only change at %s", async (boundary) => {
@@ -712,7 +770,7 @@ describe("Hello Application governed HERMES proposals", () => {
     const setup = fixture()
     const proposal = await createHelloApplicationProposal({ ...setup, requestedBy: "owner", requestText: "Update footer", residentTurn: residentChange(["examples/hello-application/src/index.html"]), validateWorkspace: validation })
     const prefix = path.join(setup.runtimeRoot, "hello-application-proposals", proposal.proposalId)
-    const journal = { ...JSON.parse(fs.readFileSync(`${prefix}.json`, "utf8")), status: "QUARANTINED_ROLLBACK_FAILED", quarantinedAt: new Date().toISOString() }
+    const journal = { ...JSON.parse(fs.readFileSync(`${prefix}.json`, "utf8")), status: "APPLY_IN_PROGRESS", applyStartedAt: new Date().toISOString() }
     if (corruption === "bad_hash") journal.requestSha256 = "0".repeat(64)
     if (corruption === "mismatched_projection") journal.requestedBy = "different owner"
     fs.writeFileSync(`${prefix}.inflight`, corruption === "invalid_json" ? "{" : JSON.stringify(journal))
@@ -768,9 +826,9 @@ describe("Hello Application governed HERMES proposals", () => {
       transactionOperations: { checkpoint: (stage: string) => {
         if (stage === "canonical_write") {
           observed = true
-          expect(JSON.parse(fs.readFileSync(inflight, "utf8")).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+          expect(JSON.parse(fs.readFileSync(inflight, "utf8")).status).toBe("APPLY_IN_PROGRESS")
           expect(fs.readFileSync(sourcePath(setup.repositoryRoot, proposal.changedPaths[0]))).toEqual(original)
-          expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("QUARANTINED_ROLLBACK_FAILED")
+          expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")
         }
       } },
     })

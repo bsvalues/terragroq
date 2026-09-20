@@ -80,6 +80,13 @@ New receipts use schema version 2 and add:
 - `progress`
 - `appliedCommit` (null before Apply)
 
+During Apply, readers expose the schema-v2 receipt as `APPLY_IN_PROGRESS` with an
+`applyStartedAt` timestamp. The durable in-flight receipt is published before
+workspace setup or contained validation, remains bound to the stored
+`READY_FOR_REVIEW` evidence, and makes Apply unavailable until the transaction
+is finalized or a verified recovery restores READY. An uncertain rollback remains
+quarantined and non-actionable.
+
 Schema version 1 receipts remain readable.
 
 ## UI direction

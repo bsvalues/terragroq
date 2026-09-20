@@ -124,6 +124,8 @@ Retain the reviewed 1,800,000 ms kernel turn budget and bound the complete resid
 
 After isolated post-apply validation, stage exactly `changedPaths`, commit with fixed identity `WilliamOS HERMES Apply <hermes@williamos.local>` and message `apply(hello): governed proposal <proposalId>`, verify the commit parent and committed paths, persist `appliedCommit`, and leave the canonical source clean. On any validation or commit failure, unstage/reverse exact paths, verify cleanliness, or mark `QUARANTINED_ROLLBACK_FAILED`.
 
+Before Apply workspace setup or contained validation, persist a schema-v2 `APPLY_IN_PROGRESS` marker with `applyStartedAt`, validate its immutable projection against the stored READY receipt, and make that marker authoritative to GET/list readers. Keep the same marker through canonical mutation. Remove it only after APPLIED is finalized or rollback is verified; an uncertain rollback must retain authoritative quarantine so another client cannot apply stale READY evidence.
+
 - [ ] **Step 8: Verify GREEN**
 
 Run:

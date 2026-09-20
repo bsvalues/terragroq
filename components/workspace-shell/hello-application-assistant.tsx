@@ -14,7 +14,7 @@ type ProgressEntry = Readonly<{
 type Proposal = Readonly<{
   schemaVersion: 1 | 2
   proposalId: string
-  status: "READY_FOR_REVIEW" | "APPLIED" | "QUARANTINED_ROLLBACK_FAILED"
+  status: "READY_FOR_REVIEW" | "APPLY_IN_PROGRESS" | "APPLIED" | "QUARANTINED_ROLLBACK_FAILED"
   requestedBy: string
   requestText?: string
   requestSha256?: string
@@ -23,6 +23,7 @@ type Proposal = Readonly<{
   createdAt: string
   appliedAt: string | null
   appliedCommit?: string | null
+  applyStartedAt?: string
   baseSha: string
   proposalCommit: string
   branch: string
@@ -143,7 +144,7 @@ function proposalRecord(value: unknown): value is Proposal {
   if (!record(value)) return false
   if (value.schemaVersion !== 1 && value.schemaVersion !== 2) return false
   if (!nonempty(value.proposalId) || !PROPOSAL_ID.test(value.proposalId)
-    || !["READY_FOR_REVIEW", "APPLIED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
+    || !["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "QUARANTINED_ROLLBACK_FAILED"].includes(String(value.status))
     || !receiptText(value.requestedBy) || !timestamp(value.createdAt)
     || !nonempty(value.baseSha) || !COMMIT_SHA.test(value.baseSha)
     || !nonempty(value.proposalCommit) || !COMMIT_SHA.test(value.proposalCommit)
@@ -155,7 +156,9 @@ function proposalRecord(value: unknown): value is Proposal {
   if (value.schemaVersion === 2) {
     const keys = value.status === "QUARANTINED_ROLLBACK_FAILED"
       ? [...V2_PROPOSAL_KEYS, "quarantinedAt"]
-      : V2_PROPOSAL_KEYS
+      : value.status === "APPLY_IN_PROGRESS"
+        ? [...V2_PROPOSAL_KEYS, "applyStartedAt"]
+        : V2_PROPOSAL_KEYS
     if (!exactKeys(value, keys)) return false
   }
   if (value.status === "READY_FOR_REVIEW" && !nonempty(value.reviewPatch)) return false
@@ -183,6 +186,10 @@ function proposalRecord(value: unknown): value is Proposal {
   if (value.status === "QUARANTINED_ROLLBACK_FAILED") {
     if (!timestamp(value.quarantinedAt) || value.quarantinedAt < value.createdAt) return false
   } else if (value.quarantinedAt !== undefined) return false
+  if (value.status === "APPLY_IN_PROGRESS") {
+    if (value.schemaVersion !== 2 || !timestamp(value.applyStartedAt) || value.applyStartedAt < value.createdAt
+      || (Array.isArray(value.progress) && value.applyStartedAt < (value.progress[value.progress.length - 1] as ProgressEntry).at)) return false
+  } else if (value.applyStartedAt !== undefined) return false
   if (value.requestText !== undefined && !boundedRequest(value.requestText)) return false
   if (value.requestSha256 !== undefined && (typeof value.requestSha256 !== "string" || !PATCH_SHA256.test(value.requestSha256))) return false
   if (value.executionNode !== undefined && !receiptText(value.executionNode)) return false
@@ -275,8 +282,14 @@ function quarantinedProposalRecord(value: unknown, reviewed: Proposal): value is
     && sameValidation(value.validation, reviewed.validation)
 }
 
+function applyingProposalRecord(value: unknown, reviewed: Proposal): value is Proposal {
+  return proposalRecord(value) && value.status === "APPLY_IN_PROGRESS"
+    && sameReviewedEvidence(value, reviewed)
+    && sameValidation(value.validation, reviewed.validation)
+}
+
 type ApplyReconciliation = Readonly<{
-  state: "applied" | "ready" | "quarantined"
+  state: "applied" | "ready" | "applying" | "quarantined"
   proposal: Proposal
 }>
 
@@ -292,6 +305,7 @@ async function reconcileApplyOutcome(reviewed: Proposal): Promise<ApplyReconcili
   if (!verified) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
   if (appliedProposalRecord(verified, reviewed)) return { state: "applied", proposal: verified }
   if (readyProposalRecord(verified, reviewed)) return { state: "ready", proposal: verified }
+  if (applyingProposalRecord(verified, reviewed)) return { state: "applying", proposal: verified }
   if (quarantinedProposalRecord(verified, reviewed)) return { state: "quarantined", proposal: verified }
   throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
 }
@@ -388,6 +402,7 @@ async function readProposalStream(
 
 function statusLabel(status: string): string {
   if (status === "READY_FOR_REVIEW") return "Ready for review"
+  if (status === "APPLY_IN_PROGRESS") return "Apply in progress"
   if (status === "APPLIED") return "Applied"
   if (status === "QUARANTINED_ROLLBACK_FAILED") return "Quarantined"
   return status
@@ -629,6 +644,9 @@ export function HelloApplicationAssistant({
         } else if (reconciled.state === "ready") {
           setStatus("Proposal remains ready for review.")
           setAssistantError(`Apply failed: ${failure}`)
+        } else if (reconciled.state === "applying") {
+          setStatus("Proposal apply is in progress. Apply is unavailable.")
+          setAssistantError(`Apply response lost: ${failure}`)
         } else {
           setStatus("Proposal quarantined. Apply is blocked.")
           setAssistantError(`Apply failed: ${failure}`)
