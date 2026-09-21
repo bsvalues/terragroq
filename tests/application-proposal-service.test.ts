@@ -20,6 +20,7 @@ import {
 } from "@/lib/applications/application-proposal-service.mjs"
 import {
   acquireApplicationRepositoryLock,
+  applicationRepositoryLockIdentity,
   applicationRepositoryLockPath,
   releaseApplicationRepositoryLock,
   withApplicationRepositoryRecoveryClaim,
@@ -1597,6 +1598,30 @@ describe("application proposal lifecycle", () => {
     }
     expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
   }, 30_000)
+
+  it("does not let a reused live PID impersonate the original repository-lock process", async () => {
+    const focus = await fixture("focus-board")
+    const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+    fs.writeFileSync(lockPath, `${JSON.stringify({
+      schemaVersion: 1,
+      token: "11111111-1111-4111-8111-111111111111",
+      processId: process.pid,
+      processIdentity: process.platform === "win32" ? "win:0000000000" : process.platform === "linux" ? "linux:0" : "posix:not-the-current-process",
+      startedAt: new Date().toISOString(),
+      repositoryDigest: applicationRepositoryLockIdentity(focus.repositoryRoot),
+      proposalId: "22222222-2222-4222-8222-222222222222",
+    }, null, 2)}\n`)
+    const recoverStale = vi.fn(async () => {})
+    const claim = await acquireApplicationRepositoryLock({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      proposalId: "33333333-3333-4333-8333-333333333333",
+      recoverStale,
+    })
+    expect(recoverStale).toHaveBeenCalledWith(expect.objectContaining({ processId: process.pid }))
+    releaseApplicationRepositoryLock(claim)
+  })
 
   it("does not overwrite a concurrently replaced APPLY_IN_PROGRESS receipt", async () => {
     const focus = await fixture("focus-board")
