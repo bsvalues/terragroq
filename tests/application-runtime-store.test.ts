@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import ts from "typescript"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -9,6 +9,15 @@ import { fixture } from "./application-runtime-fixture"
 const roots: string[] = []
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))) })
 async function setup() { const f = await fixture(); roots.push(f.root); const store = new ApplicationRuntimeStore({ runtimeRoot: f.runtimeRoot, applicationsRoot: f.apps, platformRoot: process.cwd() }); return { ...f, store } }
+async function compileStore(root: string) {
+  const harness = path.join(root, "harness"); await fs.mkdir(harness)
+  for (const name of ["application-runtime-store", "application-catalog", "application-manifest"]) {
+    const source = await fs.readFile(path.resolve(`lib/applications/${name}.ts`), "utf8")
+    const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace(/from "\.\/([^"]+)"/g, 'from "./$1.mjs"')
+    await fs.writeFile(path.join(harness, `${name}.mjs`), compiled)
+  }
+  return harness
+}
 describe("durable runtime records and process locks", () => {
   it("atomically syncs and renames records without exposing partial writes", async () => {
     const { store, runtimeRoot } = await setup()
@@ -48,15 +57,9 @@ describe("durable runtime records and process locks", () => {
     expect(JSON.parse(await fs.readFile(lock, "utf8")).token).toBe("live")
   })
   it("serializes two real independent Node processes against the same durable app lock", async () => {
-    const { root, apps, runtimeRoot } = await setup(); const harness = path.join(root, "harness")
-    await fs.mkdir(harness)
+    const { root, apps, runtimeRoot } = await setup(); const harness = await compileStore(root)
     // Compile the actual store and its imports for an independent Node process; assertions
     // below inspect critical-section writes, not implementation source strings.
-    for (const name of ["application-runtime-store", "application-catalog", "application-manifest"]) {
-      const source = await fs.readFile(path.resolve(`lib/applications/${name}.ts`), "utf8")
-      const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace(/from "\.\/([^"]+)"/g, 'from "./$1.mjs"')
-      await fs.writeFile(path.join(harness, `${name}.mjs`), compiled)
-    }
     const events = path.join(root, "events.txt"), script = path.join(harness, "contender.mjs")
     await fs.writeFile(script, `import fs from 'node:fs/promises'; import { ApplicationRuntimeStore } from './application-runtime-store.mjs'; const store = new ApplicationRuntimeStore(${JSON.stringify({ applicationsRoot: apps, runtimeRoot, platformRoot: process.cwd() })}); await store.withLock('first-board', async () => { await fs.appendFile(${JSON.stringify(events)}, 'start:' + process.pid + '\\n'); await new Promise(r => setTimeout(r, 80)); await fs.appendFile(${JSON.stringify(events)}, 'end:' + process.pid + '\\n'); });`)
     await Promise.all([promisify(execFile)(process.execPath, [script], { windowsHide: true }), promisify(execFile)(process.execPath, [script], { windowsHide: true })])
@@ -64,6 +67,48 @@ describe("durable runtime records and process locks", () => {
     expect(lines).toHaveLength(4)
     expect(lines[0].replace("start:", "end:")).toBe(lines[1]); expect(lines[2].replace("start:", "end:")).toBe(lines[3])
     expect(lines[0]).not.toBe(lines[2])
+  })
+  it("recovers an abruptly killed independent reaper while excluding its live ownership", async () => {
+    const { root, apps, runtimeRoot, store } = await setup(); const harness = await compileStore(root)
+    const script = path.join(harness, "reaper.mjs")
+    await fs.writeFile(script, `import { ApplicationRuntimeStore } from './application-runtime-store.mjs'; const store = new ApplicationRuntimeStore(${JSON.stringify({ applicationsRoot: apps, runtimeRoot, platformRoot: process.cwd() })}); await store.withReaper('first-board', async () => { process.send('acquired'); await new Promise(() => setInterval(() => {}, 1000)); });`)
+    const child = spawn(process.execPath, [script], { windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] })
+    let stderr = ""; child.stderr!.on("data", (chunk) => { stderr += chunk })
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`reaper acquisition timed out: ${stderr}`)), 2000)
+        child.once("message", (message) => { clearTimeout(timer); message === "acquired" ? resolve() : reject(new Error("invalid reaper event")) })
+        child.once("exit", () => { clearTimeout(timer); reject(new Error(`reaper exited before acquisition: ${stderr}`)) })
+      })
+      const directory = path.join(runtimeRoot, "first-board")
+      const claims = (await fs.readdir(directory)).filter((name) => name.startsWith(".reap-") && name.endsWith(".json"))
+      expect(claims).toHaveLength(1)
+      expect(JSON.parse(await fs.readFile(path.join(directory, claims[0]), "utf8"))).toMatchObject({ pid: child.pid, createdAt: expect.any(Number), token: expect.any(String), ticket: 1 })
+      await expect(store.withLock("first-board", async () => {}, { timeoutMs: 80 })).rejects.toThrow("APPLICATION_RUNTIME_LOCKED")
+      child.kill("SIGKILL"); await exited
+      await store.withLock("first-board", async () => {}, { timeoutMs: 1500 })
+      expect(await fs.readdir(directory)).toEqual([])
+    } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited }
+  })
+  it("fails closed on corrupt reaper ownership without creating an empty shared marker", async () => {
+    const { store, runtimeRoot } = await setup(); const directory = await store.directory("first-board")
+    const claim = ".reap-12345678-1234-4234-8234-123456789abc.json"
+    await fs.writeFile(path.join(directory, claim), "{}"); await fs.utimes(path.join(directory, claim), 1, 1)
+    await expect(store.withLock("first-board", async () => {}, { timeoutMs: 80 })).rejects.toThrow("APPLICATION_RUNTIME_LOCKED")
+    expect(await fs.readFile(path.join(directory, claim), "utf8")).toBe("{}")
+    expect(await fs.readdir(path.join(runtimeRoot, "first-board"))).toEqual([claim])
+  })
+  it("serializes simultaneous reaper elections and record increments without losing contenders", async () => {
+    const { store } = await setup()
+    await store.writeJson("first-board", "counter.json", { count: 0 })
+    const outcomes = await Promise.allSettled(Array.from({ length: 12 }, () => store.withLock("first-board", async () => {
+      const record = await store.readJson<{ count: number }>("first-board", "counter.json")
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      await store.writeJson("first-board", "counter.json", { count: record!.count + 1 })
+    })))
+    expect(outcomes.every((outcome) => outcome.status === "fulfilled")).toBe(true)
+    expect(await store.readJson("first-board", "counter.json")).toEqual({ count: 12 })
   })
   it("refuses overlapping roots, escaped filenames, linked roots, and linked state records", async () => {
     const { store, root, apps } = await setup()

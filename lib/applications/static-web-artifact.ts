@@ -26,8 +26,31 @@ function inlineScript(source: string): string {
 }
 function inlineStyle(source: string): string {
   const decoded = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\\([0-9a-f]{1,6})\s?|\\([^\r\n])/gi, (_match, hex, char) => hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char)
-  if (/@import\b|\burl\s*\(/i.test(decoded) || /\\<\/style/i.test(source)) throw new Error("APPLICATION_ARTIFACT_STYLE_INVALID")
-  return source.replace(/</g, "\\3c ")
+  const invalid = (): never => { throw new Error("APPLICATION_ARTIFACT_STYLE_INVALID") }
+  if (/@import\b|\burl\s*\(/i.test(decoded)) invalid()
+  let result = "", quote = "", comment = false, escaped = false
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index], next = source[index + 1]
+    // Only neutralize HTML raw-text closing sequences. Escaping the slash preserves
+    // CSS string values, including an already escaped '<'; range operators stay intact.
+    if (char === "<" && /^\/style/i.test(source.slice(index + 1))) {
+      if (!quote && !comment) invalid() // Outside strings/comments the token meaning is ambiguous.
+      result += "<\\/"; index++; escaped = false; continue
+    }
+    result += char
+    if (comment) {
+      if (char === "*" && next === "/") { result += next; index++; comment = false }
+    } else if (quote) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === quote) quote = ""
+      else if (char === "\n" || char === "\r") invalid()
+    } else if (char === "/" && next === "*") {
+      result += next; index++; comment = true
+    } else if (char === '"' || char === "'") quote = char
+  }
+  if (quote || comment) invalid()
+  return result
 }
 
 /** A deliberately small V1 HTML grammar. Reject ambiguous HTML instead of repairing it with

@@ -104,7 +104,10 @@ export function ownedContainer(container: any, expected: { name: string; imageId
   }
   for (const [key, value] of Object.entries(required)) if (!equal(host[key], value)) mismatch()
   const deny = ["CapAdd", "Binds", "Mounts", "VolumesFrom", "Devices", "DeviceRequests", "DeviceCgroupRules", "PortBindings", "Links", "ExtraHosts", "Dns", "DnsOptions", "DnsSearch", "GroupAdd", "Sysctls", "Ulimits"]
-  for (const key of deny) if (!Object.hasOwn(host, key) || !empty(host[key])) mismatch()
+  // Docker 29 serializes these two fields with omitempty. Absence means no requested
+  // mounts/sysctls; all other reviewed fields must still be explicitly observable.
+  const optionalEmpty = new Set(["Mounts", "Sysctls"])
+  for (const key of deny) if ((!Object.hasOwn(host, key) && !optionalEmpty.has(key)) || !empty(host[key])) mismatch()
   const defaultPaths = {
     MaskedPaths: ["/proc/acpi", "/proc/asound", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/sched_debug", "/proc/scsi", "/proc/timer_list", "/proc/timer_stats", "/sys/devices/virtual/powercap", "/sys/firmware"],
     ReadonlyPaths: ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"],

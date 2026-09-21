@@ -6,6 +6,7 @@ import { readApplicationRepository } from "@/lib/applications/application-catalo
 
 export const BASE = "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
 export const CHILD = `sha256:${"c".repeat(64)}`
+export const WORKDIR = `sha256:${"b".repeat(64)}`
 export const IMAGE = `sha256:${"d".repeat(64)}`
 export const ENV = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "NODE_VERSION=22.22.0", "YARN_VERSION=1.22.22"]
 export async function fixture() {
@@ -48,12 +49,14 @@ export function dockerFake() {
       const labels = Object.fromEntries(flags("--label").map((entry) => { const split = entry.indexOf("="); return [entry.slice(0, split), entry.slice(split + 1)] }))
       const isChild = recipe.includes("server.mjs")
       const id = isChild ? CHILD : html.size === 0 ? IMAGE : `sha256:${"e".repeat(63)}${html.size}`
-      const parent = isChild ? BASE : CHILD
+      const parent = isChild ? WORKDIR : /^FROM (sha256:[a-f0-9]{64})/m.exec(recipe)![1]
+      if (isChild) images.set(WORKDIR, { ...structuredClone(images.get(BASE)), Id: WORKDIR, Parent: BASE,
+        RootFS: { Type: "layers", Layers: [...images.get(BASE).RootFS.Layers, "sha256:workdir"] } })
       const metadata = {
         Id: id, Os: "linux", Architecture: "amd64", Parent: parent,
         RootFS: { Type: "layers", Layers: [...images.get(parent).RootFS.Layers, `sha256:${isChild ? "helpers" : "artifact"}`] },
         Config: { User: "10000:10000", WorkingDir: "/opt/williamos", Entrypoint: ["/usr/local/bin/node", "/opt/williamos/server.mjs"], Cmd: null,
-          Env: [...ENV, "NODE_ENV=production"], Volumes: null, Labels: { ...(isChild ? {} : images.get(CHILD).Config.Labels), ...labels }, OnBuild: null, Healthcheck: null, ExposedPorts: null },
+          Env: [...ENV, "NODE_ENV=production"], Volumes: null, Labels: { ...(isChild ? {} : images.get(parent).Config.Labels), ...labels }, OnBuild: null, Healthcheck: null, ExposedPorts: null },
       }
       images.set(id, metadata); images.set(flag("--tag"), metadata)
       if (!isChild) html.set(id, await fs.readFile(path.join(context, "artifact.html"), "utf8"))
@@ -80,9 +83,9 @@ export function dockerFake() {
           Memory: 134217728, MemorySwap: 134217728, NanoCpus: 500000000, PidsLimit: 32,
           LogConfig: { Type: "json-file", Config: { "max-size": "1m", "max-file": "1" } },
           Tmpfs: { "/tmp": "rw,noexec,nosuid,nodev,size=16m" }, RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
-          Binds: null, Mounts: null, VolumesFrom: null, Privileged: false, AutoRemove: false, PublishAllPorts: false, PortBindings: {},
+          Binds: null, VolumesFrom: null, Privileged: false, AutoRemove: false, PublishAllPorts: false, PortBindings: {},
           Devices: [], DeviceRequests: null, DeviceCgroupRules: null, Links: null, ExtraHosts: null, Dns: [], DnsOptions: [], DnsSearch: [],
-          IpcMode: "private", PidMode: "", UTSMode: "", UsernsMode: "", CgroupnsMode: "private", CgroupParent: "", GroupAdd: null, Sysctls: null,
+          IpcMode: "private", PidMode: "", UTSMode: "", UsernsMode: "", CgroupnsMode: "private", CgroupParent: "", GroupAdd: null,
           Runtime: "runc", Isolation: "", Init: false, Ulimits: null, ShmSize: 67108864, ConsoleSize: [0, 0], MaskedPaths: ["/proc/acpi", "/proc/asound", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/sched_debug", "/proc/scsi", "/proc/timer_list", "/proc/timer_stats", "/sys/devices/virtual/powercap", "/sys/firmware"],
           ReadonlyPaths: ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"],
         },

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { JSDOM } from "jsdom"
 import { createStaticWebArtifact } from "@/lib/applications/static-web-artifact"
 import { fixture } from "./application-runtime-fixture"
 const roots: string[] = []
@@ -18,9 +19,10 @@ describe("static artifact boundary", () => {
     expect(artifact).toMatchObject({ sourceHead: application.head, manifestDigest: application.manifestDigest })
     expect(artifact.artifactSha256).toMatch(/^[a-f0-9]{64}$/)
     expect(artifact.sourceDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(artifact.html.match(/<script>/g)).toHaveLength(1)
-    expect(artifact.html.match(/<\/script>/g)).toHaveLength(1)
-    expect(artifact.html.match(/<\/style>/g)).toHaveLength(1)
+    const dom = new JSDOM(artifact.html)
+    expect(dom.window.document.querySelectorAll("script")).toHaveLength(1)
+    expect(dom.window.document.querySelectorAll("style")).toHaveLength(1)
+    dom.window.close()
     expect(artifact.html).not.toMatch(/src="app.js"|href="styles.css"/)
   })
   it.each([
@@ -53,5 +55,28 @@ describe("static artifact boundary", () => {
     const { application } = await setup(); const file = path.join(application.repositoryRoot, "src/styles.css")
     await fs.writeFile(file, '@import "https://evil.test/styles.css";')
     await expect(createStaticWebArtifact(application)).rejects.toThrow("APPLICATION_ARTIFACT_STYLE_INVALID")
+  })
+  it("preserves CSS range operators and already escaped less-than strings byte for byte", async () => {
+    const { application } = await setup()
+    const css = String.raw`@media (width < 600px) { .board { color: red; } } .label::after { content: "\< already escaped"; }`
+    await fs.writeFile(path.join(application.repositoryRoot, "src/styles.css"), css)
+    const artifact = await createStaticWebArtifact(application)
+    expect(artifact.html).toContain(`<style>${css}</style>`)
+  })
+  it.each(["style", "StYlE", "STYLE"])("neutralizes only raw-text closing sequences, preserving CSS string meaning for %s", async (tag) => {
+    const { application } = await setup()
+    const css = `.label::after { content: "</${tag}>"; } .escaped::after { content: "\\</${tag}>"; } /* </${tag} > */`
+    await fs.writeFile(path.join(application.repositoryRoot, "src/styles.css"), css)
+    const artifact = await createStaticWebArtifact(application)
+    const expected = `.label::after { content: "<\\/${tag}>"; } .escaped::after { content: "\\<\\/${tag}>"; } /* <\\/${tag} > */`
+    expect(artifact.html).toContain(`<style>${expected}</style>`)
+    // CSS simple escapes represent their escaped character. Both original authored string
+    // values and the emitted string values must resolve to the same literal closing tag.
+    for (const literal of [expected.match(/content: "([^"]+)"/)![1], expected.match(/\.escaped::after \{ content: "([^"]+)"/)![1]]) expect(literal.replace(/\\(.)/g, "$1")).toBe(`</${tag}>`)
+    const dom = new JSDOM(artifact.html)
+    expect(dom.window.document.querySelectorAll("style")).toHaveLength(1)
+    expect(dom.window.document.querySelectorAll("script")).toHaveLength(1)
+    expect(dom.window.document.getElementById("task-form")).not.toBeNull()
+    dom.window.close()
   })
 })

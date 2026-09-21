@@ -196,6 +196,69 @@ describe("contained durable application runtime", () => {
     await expect(runtime.start(application)).rejects.toThrow("APPLICATION_RUNTIME_POLICY_MISMATCH")
     expect(fake.calls.some(({ args }) => args[0] === "start")).toBe(false)
   })
+  it("accepts Docker's serialized no-mount/no-sysctl shape with omitempty fields absent", async () => {
+    const { runtime, application, fake } = await setup()
+    fake.setMutate((args) => {
+      if (args[0] === "container" && fake.containers.size) {
+        const host = [...fake.containers.values()][0].HostConfig
+        delete host.Mounts; delete host.Sysctls
+      }
+    })
+    expect((await runtime.start(application)).observed).toBe("running")
+    expect(Object.hasOwn([...fake.containers.values()][0].HostConfig, "Mounts")).toBe(false)
+    expect(Object.hasOwn([...fake.containers.values()][0].HostConfig, "Sysctls")).toBe(false)
+  })
+  it.each(["Mounts", "Sysctls"])("rejects nonempty optional HostConfig.%s", async (field) => {
+    const { runtime, application, fake } = await setup()
+    fake.setMutate((args) => {
+      if (args[0] === "container" && fake.containers.size) [...fake.containers.values()][0].HostConfig[field] = field === "Mounts" ? [{ Type: "bind", Source: "C:/secret", Target: "/secret" }] : { "net.ipv4.ip_forward": "1" }
+    })
+    await expect(runtime.start(application)).rejects.toThrow("APPLICATION_RUNTIME_POLICY_MISMATCH")
+    expect(fake.calls.some(({ args }) => args[0] === "start")).toBe(false)
+  })
+  it.each(["foreign-parent", "additional-layer"])("rejects static child %s before start and during adoption", async (mutation) => {
+    const { runtime, application, fake } = await setup()
+    const tamper = () => { const child = fake.images.get(CHILD); if (mutation === "foreign-parent") child.Parent = `sha256:${"f".repeat(64)}`; else if (!child.RootFS.Layers.includes("sha256:unreviewed")) child.RootFS.Layers.push("sha256:unreviewed") }
+    fake.setMutate((args) => { if (args[0] === "image" && args.at(-1) === CHILD) tamper() })
+    await expect(runtime.start(application)).rejects.toThrow("APPLICATION_RUNTIME_POLICY_MISMATCH")
+    expect(fake.calls.some(({ args }) => args[0] === "start")).toBe(false)
+
+    const other = await setup(); await other.runtime.start(other.application)
+    const child = other.fake.images.get(CHILD)
+    if (mutation === "foreign-parent") child.Parent = `sha256:${"f".repeat(64)}`; else child.RootFS.Layers.push("sha256:unreviewed")
+    other.fake.calls.length = 0
+    expect((await other.runtime.get(other.application)).observed).toBe("mismatch")
+    expect(other.fake.calls.some(({ args }) => ["start", "exec", "rm"].includes(args[0]))).toBe(false)
+  })
+  it("does not trust a copied-label image reachable through a mutable static recipe tag", async () => {
+    const { runtime, application, fake, app } = await setup(); await runtime.start(application)
+    const tag = [...fake.images.keys()].find((key) => key.startsWith("williamos-static-runtime:"))!
+    const foreign = { ...structuredClone(fake.images.get(CHILD)), Id: `sha256:${"f".repeat(64)}` }
+    fake.images.set(foreign.Id, foreign); fake.images.set(tag, foreign)
+    const next = await runtime.start(await app("second-board"))
+    expect(next.active!.staticImageId).toBe(CHILD)
+    const builds = fake.calls.filter(({ args }) => args[0] === "build" && args.includes(tag))
+    expect(builds).toHaveLength(2)
+    expect(builds.every(({ args }) => args.includes("--no-cache"))).toBe(true)
+  })
+  it("persists exact static build proof and refuses a malformed receipt ID before Docker sees it", async () => {
+    const { runtime, application, fake, runtimeRoot } = await setup(); await runtime.start(application)
+    const directory = path.join(runtimeRoot, "first-board")
+    const filename = (await fs.readdir(directory)).find((name) => name.startsWith("static-") && name.endsWith(".json"))!
+    const proof = JSON.parse(await fs.readFile(path.join(directory, filename), "utf8"))
+    expect(proof).toMatchObject({ schemaVersion: 1, imageId: CHILD, baseImageId: BASE, policyDigest: expect.stringMatching(/^[a-f0-9]{64}$/), recipeDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(proof.ancestry).toEqual([
+      { imageId: CHILD, parentId: `sha256:${"b".repeat(64)}`, layers: ["sha256:base", "sha256:workdir", "sha256:helpers"] },
+      { imageId: `sha256:${"b".repeat(64)}`, parentId: BASE, layers: ["sha256:base", "sha256:workdir"] },
+    ])
+    proof.imageId = "--help"; await fs.writeFile(path.join(directory, filename), JSON.stringify(proof))
+    await fs.appendFile(path.join(application.repositoryRoot, "src/app.js"), "\n// new generation")
+    // Discard the prior active record to exercise receipt reuse, independently from the
+    // retiring-generation verifier which also rejects a changed receipt's identity.
+    await fs.unlink(path.join(directory, "runtime.json")); fake.calls.length = 0
+    await expect(runtime.start(application)).rejects.toThrow("APPLICATION_RUNTIME_POLICY_MISMATCH")
+    expect(fake.calls.some(({ args }) => args.includes("--help"))).toBe(false)
+  })
   it("reports unavailable rather than stopped when Docker cannot be reached", async () => {
     const { runtime, application, fake } = await setup(); await runtime.start(application)
     fake.setMutate(() => { throw new Error("connect ENOENT with secret details") })

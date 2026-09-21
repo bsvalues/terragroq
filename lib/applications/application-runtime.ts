@@ -21,6 +21,8 @@ export type ApplicationRuntimeOptions = RuntimeStoreOptions & Readonly<{
 }>
 const code = (error: unknown) => error instanceof Error && /^APPLICATION_[A-Z_]{1,80}$/.test(error.message) ? error.message : "APPLICATION_DOCKER_UNAVAILABLE"
 const nameFor = (id: string) => `williamos-application-${id}`
+type StaticImageProof = { schemaVersion: 1; imageId: string; baseImageId: string; policyDigest: string; recipeDigest: string
+  ancestry: { imageId: string; parentId: string; layers: string[] }[] }
 
 export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}) {
   const store = new ApplicationRuntimeStore(options), run = options.run ?? dockerRunner
@@ -61,11 +63,42 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     try { return await work(directory) }
     finally { await rejectLinkedPath(directory); await fs.rm(directory, { recursive: true, force: true }) }
   }
+  const proofName = () => `static-${policy.recipeDigest}.json`
+  async function inspectStaticImage(id: string, base: any, env: string[]) {
+    if (typeof id !== "string" || !IMAGE_ID.test(id)) return mismatch()
+    const child = await inspect("image", id, true)
+    // The reviewed legacy-builder recipe creates exactly WORKDIR and COPY filesystem
+    // layers. ENV/USER/ENTRYPOINT/CMD/labels may add metadata-only parent images.
+    ownedImage(child, id, env, staticLabels(policy), base.RootFS.Layers, 2)
+    const ancestry: StaticImageProof["ancestry"] = []
+    const visited = new Set<string>()
+    let current = child
+    for (let count = 0; current.Id !== base.Id; count++) {
+      if (count >= 16 || visited.has(current.Id) || !IMAGE_ID.test(current.Parent ?? "")) mismatch()
+      visited.add(current.Id)
+      ancestry.push({ imageId: current.Id, parentId: current.Parent, layers: current.RootFS.Layers })
+      const parent = current.Parent === base.Id ? base : await inspect("image", current.Parent, true)
+      if (!parent || parent.Id !== current.Parent || parent.Os !== "linux" || parent.Architecture !== "amd64"
+        || parent.RootFS?.Type !== "layers" || !Array.isArray(parent.RootFS.Layers)
+        || parent.RootFS.Layers.length < base.RootFS.Layers.length
+        || parent.RootFS.Layers.length > current.RootFS.Layers.length
+        || current.RootFS.Layers.length - parent.RootFS.Layers.length > 1
+        || !equal(current.RootFS.Layers.slice(0, parent.RootFS.Layers.length), parent.RootFS.Layers)) mismatch()
+      current = parent
+    }
+    return { child, proof: { schemaVersion: 1, imageId: id, baseImageId: base.Id, policyDigest: policy.digest, recipeDigest: policy.recipeDigest, ancestry } satisfies StaticImageProof }
+  }
+  async function verifiedStaticImage(applicationId: string, id: string, base: any, env: string[]) {
+    const receipt = await store.readJson<StaticImageProof>(applicationId, proofName())
+    if (!receipt || receipt.imageId !== id) return mismatch()
+    const verified = await inspectStaticImage(id, base, env)
+    if (!equal(receipt, verified.proof)) mismatch()
+    return verified.child
+  }
   async function verifyImages(record: ApplicationRuntimeRecord, generation: RuntimeGeneration) {
     const base = await inspect("image", policy.baseImageId), env = baseImage(base, policy)
     if (!generation.staticImageId || !generation.imageId) return mismatch()
-    const child = await inspect("image", generation.staticImageId)
-    ownedImage(child, generation.staticImageId, env, staticLabels(policy), base.RootFS.Layers)
+    const child = await verifiedStaticImage(record.applicationId, generation.staticImageId, base, env)
     const artifact = await inspect("image", generation.imageId)
     ownedImage(artifact, generation.imageId, env, labels(record, generation), child.RootFS.Layers, 1)
     // Legacy builder may add metadata-only intermediate images for --label. Prove the parent
@@ -111,28 +144,28 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     const generation = record.active!
     const base = await inspect("image", policy.baseImageId), env = baseImage(base, policy)
     const childTag = `williamos-static-runtime:${policy.recipeDigest}`
-    let child = await inspect("image", childTag, true)
-    if (!child) {
+    const receipt = await store.readJson<StaticImageProof>(record.applicationId, proofName())
+    let child: any
+    if (receipt) child = await verifiedStaticImage(record.applicationId, receipt.imageId, base, env)
+    else {
       const id = await context(record.applicationId, async (directory) => {
         await writeBuildContext(directory, { ...policy.helpers, Dockerfile: policy.helpers.Dockerfile.replace("__BASE_IMAGE_ID__", policy.baseImageId) })
-        return (await command(["build", "--pull=false", "--network=none", "--quiet", "--tag", childTag, ...labelArgs(staticLabels(policy)), directory], 60000))!.trim()
+        return (await command(["build", "--no-cache", "--pull=false", "--network=none", "--quiet", "--tag", childTag, ...labelArgs(staticLabels(policy)), directory], 60000))!.trim()
       })
       if (!IMAGE_ID.test(id)) mismatch()
-      child = await inspect("image", id)
+      const verified = await inspectStaticImage(id, base, env)
+      // Only a fresh owned build creates a receipt. Mutable tags are never identity proof.
+      await store.writeJson(record.applicationId, proofName(), verified.proof)
+      child = verified.child
     }
-    ownedImage(child, child.Id, env, staticLabels(policy), base.RootFS.Layers)
     generation.staticImageId = child.Id
     const tag = `williamos-application:${generation.generation}`
-    let image = await inspect("image", tag, true)
-    if (!image) {
-      const id = await context(record.applicationId, async (directory) => {
-        await writeBuildContext(directory, { Dockerfile: `FROM ${child.Id}\nCOPY --chown=10000:10000 artifact.html /opt/williamos/artifact.html\n`, "artifact.html": artifact.html })
-        return (await command(["build", "--pull=false", "--network=none", "--quiet", "--tag", tag, ...labelArgs(labels(record, generation)), directory], 60000))!.trim()
-      })
-      if (!IMAGE_ID.test(id)) mismatch()
-      image = await inspect("image", id)
-    }
-    generation.imageId = image.Id
+    const id = await context(record.applicationId, async (directory) => {
+      await writeBuildContext(directory, { Dockerfile: `FROM ${child.Id}\nCOPY --chown=10000:10000 artifact.html /opt/williamos/artifact.html\n`, "artifact.html": artifact.html })
+      return (await command(["build", "--pull=false", "--network=none", "--quiet", "--tag", tag, ...labelArgs(labels(record, generation)), directory], 60000))!.trim()
+    })
+    if (!IMAGE_ID.test(id)) mismatch()
+    generation.imageId = id
     await verifyImages(record, generation)
     await save(record)
   }
