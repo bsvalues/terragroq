@@ -1,4 +1,4 @@
-# Fixed one-shot bridge for the disposable Hello Application. The owner request and source travel on
+# Fixed one-shot bridge for bounded WilliamOS applications. The owner request and source travel on
 # stdin; the key comes from one exact Windows generic-credential target and reaches only one child.
 [CmdletBinding()]
 param()
@@ -17,16 +17,41 @@ try {
   $payload = [Console]::In.ReadToEnd()
   if ([Text.Encoding]::UTF8.GetByteCount($payload) -gt 800000) { throw "CEREBRAS_HELLO_INPUT_INVALID" }
   $parsed = $payload | ConvertFrom-Json
-  $expectedProperties = @("files", "model", "requestText", "schemaVersion")
+  $expectedProperties = if ($parsed.schemaVersion -eq 1) {
+    @("files", "model", "requestText", "schemaVersion")
+  } elseif ($parsed.schemaVersion -eq 2) {
+    @("application", "files", "model", "requestText", "schemaVersion")
+  } else {
+    @()
+  }
   $actualProperties = @($parsed.PSObject.Properties.Name | Sort-Object)
   if (
     $parsed -isnot [pscustomobject] -or
     $actualProperties.Count -ne $expectedProperties.Count -or
     (Compare-Object $actualProperties $expectedProperties -CaseSensitive) -or
-    $parsed.schemaVersion -ne 1 -or
+    $parsed.schemaVersion -notin @(1, 2) -or
     $parsed.model -notin @("gpt-oss-120b", "qwen-3.8-27b")
   ) {
     throw "CEREBRAS_HELLO_INPUT_INVALID"
+  }
+  if ($parsed.schemaVersion -eq 2) {
+    $applicationProperties = @($parsed.application.PSObject.Properties.Name | Sort-Object)
+    $expectedApplicationProperties = @("displayName", "id", "manifestDigest", "writablePaths")
+    $paths = @($parsed.application.writablePaths)
+    $filePaths = @($parsed.files | ForEach-Object { $_.path })
+    if (
+      $parsed.application -isnot [pscustomobject] -or
+      $applicationProperties.Count -ne $expectedApplicationProperties.Count -or
+      (Compare-Object $applicationProperties $expectedApplicationProperties -CaseSensitive) -or
+      $parsed.application.id -notmatch '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$' -or
+      $parsed.application.manifestDigest -notmatch '^[0-9a-f]{64}$' -or
+      $paths.Count -ne 3 -or
+      (@($paths | Select-Object -Unique)).Count -ne 3 -or
+      $filePaths.Count -ne 3 -or
+      (Compare-Object @($paths | Sort-Object) @($filePaths | Sort-Object) -CaseSensitive)
+    ) {
+      throw "CEREBRAS_APPLICATION_INPUT_INVALID"
+    }
   }
 
   . $credentialHelper
