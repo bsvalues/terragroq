@@ -9,6 +9,7 @@ vi.mock("@/components/workspace-shell/hello-application-assistant", () => ({
 }))
 
 import { DeveloperPreviewSurface } from "@/components/workspace-shell/developer-preview-surface"
+import { projectHelloApplicationRuntime } from "@/lib/hello-application/runtime-projection"
 import { applicationWorkspaceProject, HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
 
 const project = applicationWorkspaceProject("focus-board", "Focus Board")
@@ -32,11 +33,17 @@ const record = (observed: "stopped" | "running") => ({
 })
 
 const legacyRuntime = (state: "stopped" | "running") => ({
-  runtime: {
+  runtime: projectHelloApplicationRuntime({
     state,
+    host: "127.0.0.1",
+    port: state === "running" ? 43117 : null,
     pid: state === "running" ? 42 : null,
     url: state === "running" ? "http://127.0.0.1:43117/" : null,
-  },
+    workspaceRoot: "C:/runtime/source/examples/hello-application",
+    startedAt: state === "running" ? "2026-09-21T00:00:00.000Z" : null,
+    error: null,
+    logs: ["server detail that must remain server-side"],
+  }),
   truth,
 })
 
@@ -161,6 +168,24 @@ describe("contained application developer preview", () => {
 
     await act(async () => resolveStop(Response.json({ runtime: { state: "stopped", pid: null, url: null } })))
     expect(await screen.findByText("Runtime stopped", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it("keeps the projected legacy Hello iframe withheld when Stop fails", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(legacyRuntime("running")))
+      .mockResolvedValueOnce(Response.json({ error: "HELLO_APPLICATION_STOP_FAILED" }, { status: 503 }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    expect(await screen.findByTitle("Running Hello Application application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop application" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
+
+    expect(await screen.findByText("Runtime error: HELLO_APPLICATION_STOP_FAILED")).toBeTruthy()
     expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
   })
 

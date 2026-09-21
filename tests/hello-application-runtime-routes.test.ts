@@ -33,6 +33,8 @@ vi.mock("@/lib/hello-application/runtime-supervisor", () => ({
 
 import { DELETE, GET, POST } from "@/app/api/projects/hello-application/runtime/route"
 import { GET as PREVIEW } from "@/app/api/projects/hello-application/preview/route"
+import { adaptApplicationRuntimePayload } from "@/components/workspace-shell/application-ui-contract"
+import { HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
 
 const running = {
   state: "running",
@@ -44,6 +46,20 @@ const running = {
   startedAt: "2026-09-19T18:00:00.000Z",
   error: null,
   logs: [],
+}
+
+const projectedRunning = {
+  state: "running",
+  pid: 42,
+  url: "http://127.0.0.1:43117/",
+  error: null,
+}
+
+function mutationRequest(method: "POST" | "DELETE") {
+  return new Request("https://williamos.lan:3543/api/projects/hello-application/runtime", {
+    method,
+    headers: { "content-type": "application/json", origin: "https://williamos.lan:3543", host: "williamos.lan:3543" },
+  })
 }
 
 beforeEach(() => {
@@ -62,17 +78,18 @@ beforeEach(() => {
 
 describe("Hello Application runtime routes", () => {
   it("starts and stops only the server-resolved Hello runtime", async () => {
-    const mutation = new Request("https://williamos.lan:3543/api/projects/hello-application/runtime", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: "https://williamos.lan:3543", host: "williamos.lan:3543" },
-    })
+    const mutation = mutationRequest("POST")
     const started = await POST(mutation)
     expect(started.status).toBe(200)
+    await expect(started.json()).resolves.toEqual({ runtime: projectedRunning })
     expect(seams.resolveBinding).toHaveBeenCalledWith("owner", "hello-application")
     expect(seams.startRuntime).toHaveBeenCalledWith({ workspaceRoot: running.workspaceRoot })
 
     const stopped = await DELETE(new Request(mutation, { method: "DELETE" }))
     expect(stopped.status).toBe(200)
+    await expect(stopped.json()).resolves.toEqual({
+      runtime: { state: "stopped", pid: null, url: null, error: null },
+    })
     expect(seams.stopRuntime).toHaveBeenCalledOnce()
   })
 
@@ -89,15 +106,76 @@ describe("Hello Application runtime routes", () => {
   it("reports runtime-build SHA and the canonical active-project HEAD on one authorized truth surface", async () => {
     const response = await GET()
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      runtime: running,
+    const payload = await response.json()
+    expect(payload).toEqual({
+      runtime: projectedRunning,
       truth: {
         runtimeBuild: { sha: "a".repeat(40), builtAt: "2026-09-20T12:00:00.000Z" },
         activeProjectHead: "b".repeat(40),
       },
     })
+    expect(adaptApplicationRuntimePayload(HELLO_APPLICATION_WORKSPACE_PROJECT, payload)).toMatchObject({
+      state: "running",
+      previewAvailable: true,
+      activeProjectHead: "b".repeat(40),
+      detail: null,
+    })
     expect(seams.resolveBinding).toHaveBeenCalledWith("owner", "hello-application")
     expect(seams.readProjectHead).toHaveBeenCalledWith(running.workspaceRoot)
+  })
+
+  it("normalizes supervisor failures without exposing colon detail, paths, or logs", async () => {
+    const failed = {
+      ...running,
+      state: "failed",
+      pid: null,
+      url: null,
+      error: "HELLO_APPLICATION_EXITED:17",
+      logs: ["C:/secret/runtime/source/server.mjs failed"],
+    }
+    seams.getRuntime.mockReturnValue(failed)
+    seams.startRuntime.mockResolvedValue({ ...failed, error: "spawn ENOENT C:/secret/runtime/source/server.mjs" })
+    seams.stopRuntime.mockResolvedValue({ ...failed, error: "APPLICATION_DOCKER_TIMEOUT: C:/secret/docker.log" })
+
+    const getPayload = await (await GET()).json()
+    expect(getPayload.runtime).toEqual({ state: "failed", pid: null, url: null, error: "HELLO_APPLICATION_EXITED" })
+    expect(JSON.stringify(getPayload)).not.toContain("secret")
+
+    const postPayload = await (await POST(mutationRequest("POST"))).json()
+    expect(postPayload).toEqual({
+      runtime: { state: "failed", pid: null, url: null, error: "HELLO_APPLICATION_RUNTIME_FAILED" },
+    })
+    expect(JSON.stringify(postPayload)).not.toContain("secret")
+
+    const deletePayload = await (await DELETE(mutationRequest("DELETE"))).json()
+    expect(deletePayload).toEqual({
+      runtime: { state: "failed", pid: null, url: null, error: "APPLICATION_DOCKER_TIMEOUT" },
+    })
+    expect(JSON.stringify(deletePayload)).not.toContain("secret")
+  })
+
+  it("normalizes a thrown supervisor error before returning a start failure", async () => {
+    seams.startRuntime.mockRejectedValueOnce(new Error("HELLO_APPLICATION_EXITED:17"))
+    const admitted = await POST(mutationRequest("POST"))
+    expect(admitted.status).toBe(503)
+    await expect(admitted.json()).resolves.toEqual({ error: "HELLO_APPLICATION_EXITED" })
+
+    seams.startRuntime.mockRejectedValueOnce(new Error("spawn ENOENT C:/secret/runtime/source/server.mjs"))
+    const unknown = await POST(mutationRequest("POST"))
+    expect(unknown.status).toBe(503)
+    await expect(unknown.json()).resolves.toEqual({ error: "HELLO_APPLICATION_START_FAILED" })
+  })
+
+  it("normalizes a thrown supervisor error before returning a stop failure", async () => {
+    seams.stopRuntime.mockRejectedValueOnce(new Error("APPLICATION_DOCKER_TIMEOUT: C:/secret/docker.log"))
+    const admitted = await DELETE(mutationRequest("DELETE"))
+    expect(admitted.status).toBe(503)
+    await expect(admitted.json()).resolves.toEqual({ error: "APPLICATION_DOCKER_TIMEOUT" })
+
+    seams.stopRuntime.mockRejectedValueOnce(new Error("spawn ENOENT C:/secret/runtime/source/server.mjs"))
+    const unknown = await DELETE(mutationRequest("DELETE"))
+    expect(unknown.status).toBe(503)
+    await expect(unknown.json()).resolves.toEqual({ error: "HELLO_APPLICATION_STOP_FAILED" })
   })
 
   it("fails closed when the canonical project binding cannot be resolved", async () => {

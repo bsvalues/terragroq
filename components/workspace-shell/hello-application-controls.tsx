@@ -38,6 +38,8 @@ const RUNTIME_DETAIL_MESSAGES: Readonly<Record<string, string>> = Object.freeze(
   APPLICATION_RUNTIME_OUTPUT_LIMIT: "The contained runtime returned more output than WilliamOS can safely accept.",
   APPLICATION_RUNTIME_SOURCE_HEAD_MISMATCH: "The running artifact was built from an older source commit. Use Start application to rebuild the current project HEAD.",
   APPLICATION_RUNTIME_TRANSITION_PENDING: "A prior runtime generation is still retiring. Retry after that transition finishes.",
+  HELLO_APPLICATION_EXITED: "The Hello Application runtime exited unexpectedly. Use Start application to launch it again.",
+  HELLO_APPLICATION_START_TIMEOUT: "The Hello Application runtime did not become ready in time. Retry Start application.",
 })
 
 function runtimeDetailMessage(runtime: ApplicationRuntimeView): string | null {

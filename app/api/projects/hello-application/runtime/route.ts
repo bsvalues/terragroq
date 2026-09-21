@@ -10,6 +10,11 @@ import { readHelloApplicationProjectHead } from "@/lib/hello-application/runtime
 import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 import { guardHelloApplicationMutation } from "@/lib/hello-application/mutation-guard"
+import {
+  projectHelloApplicationRuntime,
+  projectHelloApplicationStartError,
+  projectHelloApplicationStopError,
+} from "@/lib/hello-application/runtime-projection"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -41,7 +46,7 @@ export async function GET() {
   try {
     const activeProjectHead = await readHelloApplicationProjectHead(binding.binding.workspaceRoot)
     return reply({
-      runtime: getHelloApplicationRuntime(),
+      runtime: projectHelloApplicationRuntime(getHelloApplicationRuntime()),
       truth: {
         runtimeBuild: getBuildProvenance(),
         activeProjectHead,
@@ -60,9 +65,13 @@ export async function POST(request: Request) {
   const binding = await resolveCanonicalWorkspaceProjectBinding(authorization.userId, "hello-application")
   if (!binding.ok) return reply({ error: binding.error }, 503)
   try {
-    return reply({ runtime: await startHelloApplicationRuntime({ workspaceRoot: binding.binding.workspaceRoot }) })
+    return reply({
+      runtime: projectHelloApplicationRuntime(
+        await startHelloApplicationRuntime({ workspaceRoot: binding.binding.workspaceRoot }),
+      ),
+    })
   } catch (error) {
-    return reply({ error: error instanceof Error ? error.message : "HELLO_APPLICATION_START_FAILED" }, 503)
+    return reply({ error: projectHelloApplicationStartError(error) }, 503)
   }
 }
 
@@ -71,5 +80,9 @@ export async function DELETE(request: Request) {
   if (rejection) return rejection
   const authorization = await authorizeOwner()
   if (!authorization.ok) return authorization.response
-  return reply({ runtime: await stopHelloApplicationRuntime() })
+  try {
+    return reply({ runtime: projectHelloApplicationRuntime(await stopHelloApplicationRuntime()) })
+  } catch (error) {
+    return reply({ error: projectHelloApplicationStopError(error) }, 503)
+  }
 }

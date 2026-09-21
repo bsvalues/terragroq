@@ -20,6 +20,7 @@ vi.mock("@/components/workspace-shell/hello-application-assistant", async (impor
       activateAppliedCommit = onApplied
       return <div>Assistant for {project.name}</div>
     },
+    HelloApplicationAssistant: ({ project }: { project: { name: string } }) => <div>Assistant for {project.name}</div>,
   }
 })
 
@@ -30,6 +31,7 @@ import {
   parseApplicationManifestPayload,
 } from "@/components/workspace-shell/application-ui-contract"
 import type { ApplicationVisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
+import { projectHelloApplicationRuntime } from "@/lib/hello-application/runtime-projection"
 
 const project: ApplicationVisibleWorkspaceProject = {
   key: "focus-board",
@@ -347,5 +349,31 @@ describe("ApplicationControls", () => {
 
     const detail = await screen.findByText(/runtime policy no longer matches/i)
     expect(detail.textContent).not.toContain("APPLICATION_RUNTIME_POLICY_MISMATCH")
+  })
+
+  it.each([
+    ["HELLO_APPLICATION_EXITED:17", /Hello Application runtime exited unexpectedly/i],
+    ["HELLO_APPLICATION_START_TIMEOUT", /Hello Application runtime did not become ready in time/i],
+  ])("humanizes projected legacy failure %s without rendering its code or detail", async (supervisorError, expected) => {
+    const runtime = projectHelloApplicationRuntime({
+      state: "failed",
+      host: "127.0.0.1",
+      port: null,
+      url: null,
+      pid: null,
+      workspaceRoot: "C:/runtime/source/examples/hello-application",
+      startedAt: null,
+      error: supervisorError,
+      logs: ["C:/secret/runtime/source/server.mjs failed"],
+    })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      runtime,
+      truth: { runtimeBuild: { sha: "5".repeat(40), builtAt: null }, activeProjectHead: "d".repeat(40) },
+    })))
+    render(<ApplicationControls project={legacyProject} onPreviewRefresh={vi.fn()} />)
+
+    expect(await screen.findByText(expected)).toBeTruthy()
+    expect(screen.queryByText(runtime.error ?? "missing error")).toBeNull()
+    expect(document.body.textContent).not.toContain("secret")
   })
 })
