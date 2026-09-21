@@ -2,13 +2,13 @@
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import type { SummonedSurface } from "@/lib/environment/summon"
-import type { VisibleWorkspaceProject, WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
+import { DEFAULT_VISIBLE_WORKSPACE_PROJECTS, type VisibleWorkspaceProject, type WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 
 /** The root is one durable Space: independent work windows plus the transient universal Line. */
 export function Desk({
   initialSummon = null,
   projectKey = "terrafusion",
-  visibleProjects = [{ key: "terrafusion", name: "TerraFusion OS" }, { key: "williamos", name: "WilliamOS" }],
+  visibleProjects = DEFAULT_VISIBLE_WORKSPACE_PROJECTS,
 }: {
   initialSummon?: SummonedSurface | null
   projectKey?: WorkspaceProjectKey

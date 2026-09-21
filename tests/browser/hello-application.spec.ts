@@ -1,7 +1,53 @@
 import { expect, test } from "@playwright/test"
+import { createHash } from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
 
 const runtimeUrl = "/api/projects/hello-application/preview"
 const ownerStorageState = process.env.WILLIAMOS_E2E_STORAGE_STATE?.trim()
+const starterRoot = path.join(process.cwd(), "starters", "static-web-v1", "src")
+const starterDocument = fs.readFileSync(path.join(starterRoot, "index.html"), "utf8")
+  .replace(
+    '<link rel="stylesheet" href="styles.css">',
+    `<style>${fs.readFileSync(path.join(starterRoot, "styles.css"), "utf8")}</style>`,
+  )
+  .replace(
+    '<script src="app.js"></script>',
+    `<script>${fs.readFileSync(path.join(starterRoot, "app.js"), "utf8")}</script>`,
+  )
+const reviewRequest = "Add a visible starter marker"
+const reviewPatch = "diff --git a/examples/hello-application/src/app.js b/examples/hello-application/src/app.js\n+// visible marker\n"
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex")
+const reviewProposal = {
+  schemaVersion: 2,
+  proposalId: "11111111-1111-4111-8111-111111111111",
+  status: "READY_FOR_REVIEW",
+  requestedBy: "owner",
+  requestText: reviewRequest,
+  requestSha256: sha256(reviewRequest),
+  executionNode: "hermes-node",
+  progress: [
+    ["accepted", "Request accepted"],
+    ["workspace_ready", "Isolated workspace ready"],
+    ["resident_started", "HERMES is editing the isolated workspace"],
+    ["resident_finished", "HERMES editing finished"],
+    ["validation_started", "Contained validation started"],
+    ["ready_for_review", "Proposal ready for review"],
+  ].map(([stage, detail], index) => ({ stage, detail, at: `2026-09-21T00:00:0${index}.000Z` })),
+  createdAt: "2026-09-21T00:00:00.000Z",
+  appliedAt: null,
+  appliedCommit: null,
+  baseSha: "b".repeat(40),
+  proposalCommit: "c".repeat(40),
+  branch: "codex/hermes-hello-11111111-1111-4111-8111-111111111111",
+  changedPaths: ["examples/hello-application/src/app.js"],
+  patchSha256: sha256(reviewPatch),
+  threadId: "thread-browser",
+  turnId: "turn-browser",
+  model: "williamos-qwen3-4b:64k",
+  validation: { status: "passed", command: "node --test examples/hello-application/test/hello.test.mjs", output: "ok" },
+  reviewPatch,
+}
 
 test.beforeAll(() => {
   expect(
@@ -10,8 +56,9 @@ test.beforeAll(() => {
   ).toBeTruthy()
 })
 
-test("the Hello Application controls are reachable and Refresh replaces visible preview content", async ({ page }) => {
+test("the real starter stays interactive and governed controls remain reachable in a constrained viewport", async ({ page }) => {
   let previewLoads = 0
+  await page.setViewportSize({ width: 820, height: 560 })
 
   await page.route("**/api/projects/hello-application/runtime", async (route) => {
     if (route.request().method() !== "GET") {
@@ -47,7 +94,7 @@ test("the Hello Application controls are reachable and Refresh replaces visible 
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ proposals: [] }),
+      body: JSON.stringify({ proposals: [reviewProposal] }),
     })
   })
 
@@ -69,12 +116,11 @@ test("the Hello Application controls are reachable and Refresh replaces visible 
 
   await page.route("**/api/projects/hello-application/preview", async (route) => {
     previewLoads += 1
-    const generation = previewLoads
     await route.fulfill({
       status: 200,
       contentType: "text/html; charset=utf-8",
       headers: { "cache-control": "no-store" },
-      body: `<!doctype html><html><body><main><h1>Browser gate preview ${generation}</h1><p>Visible generation ${generation}</p></main></body></html>`,
+      body: starterDocument,
     })
   })
 
@@ -98,17 +144,34 @@ test("the Hello Application controls are reachable and Refresh replaces visible 
   const truth = page.getByLabel("Hello Application runtime truth")
   await expect(truth.getByText(`Runtime build ${"a".repeat(40)}`)).toBeVisible()
   await expect(truth.getByText(`Active project HEAD ${"b".repeat(40)}`)).toBeVisible()
-  await expect(page.getByRole("textbox", {
+  const request = page.getByRole("textbox", {
     name: "Ask HERMES to change this application",
-  })).toBeVisible()
+  })
+  await request.scrollIntoViewIfNeeded()
+  await expect(request).toBeInViewport()
+  await expect(controls.getByRole("button", { name: "Stop application" })).toBeVisible()
+  await expect(controls.getByRole("button", { name: "Refresh preview" })).toBeVisible()
+  const apply = controls.getByRole("button", { name: "Apply proposal" })
+  const reject = controls.getByRole("button", { name: "Reject proposal" })
+  await apply.scrollIntoViewIfNeeded()
+  await expect(apply).toBeInViewport()
+  await expect(reject).toBeInViewport()
 
+  const previewElement = page.locator('iframe[title="Running Hello Application application"]')
+  await expect(previewElement).toHaveAttribute("sandbox", "allow-scripts")
   const preview = page.frameLocator('iframe[title="Running Hello Application application"]')
-  await expect(preview.getByRole("heading", { name: "Browser gate preview 1" })).toBeVisible()
+  await expect(preview.getByRole("heading", { name: "Your next small step." })).toBeVisible()
   expect(previewLoads).toBe(1)
+
+  await preview.getByRole("textbox", { name: "What would you like to do?" }).fill("Prove the starter is interactive")
+  await preview.getByRole("button", { name: "Add task" }).click()
+  await expect(preview.getByText("0 of 1 complete")).toBeVisible()
+  await preview.getByRole("checkbox", { name: "Complete Prove the starter is interactive" }).check()
+  await expect(preview.getByText("1 of 1 complete")).toBeVisible()
 
   await controls.getByRole("button", { name: "Refresh preview" }).click()
 
-  await expect(preview.getByRole("heading", { name: "Browser gate preview 2" })).toBeVisible()
+  await expect(preview.getByText("0 of 0 complete")).toBeVisible()
   expect(previewLoads).toBe(2)
 })
 

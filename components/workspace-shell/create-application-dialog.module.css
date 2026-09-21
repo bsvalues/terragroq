@@ -1,0 +1,107 @@
+.backdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(4 8 11 / 78%);
+  backdrop-filter: blur(4px);
+}
+
+.dialog {
+  width: min(500px, 100%);
+  overflow: hidden;
+  border: 1px solid #445661;
+  border-radius: 6px;
+  color: #e3ebed;
+  background: #101a22;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 52%);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.header,
+.title,
+.actions {
+  display: flex;
+  align-items: center;
+}
+
+.header {
+  min-height: 46px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  border-bottom: 1px solid #31414b;
+  background: #13212b;
+}
+
+.title { gap: 8px; font-size: 14px; }
+.title svg { color: #7fb2c8; }
+
+.close,
+.actions button {
+  min-height: 32px;
+  border: 1px solid #465965;
+  border-radius: 3px;
+  color: #d8e2e5;
+  background: #17242d;
+  cursor: pointer;
+}
+
+.close { width: 32px; display: grid; place-items: center; padding: 0; }
+
+.introduction {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #2a3a44;
+  color: #aebdc3;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.introduction p { margin: 0; }
+.introduction p + p { margin-top: 6px; }
+.introduction code { color: #d9e7eb; font-family: var(--font-geist-mono), monospace; }
+
+.form {
+  display: grid;
+  gap: 7px;
+  padding: 14px 16px 16px;
+}
+
+.form label { font-size: 12px; font-weight: 680; }
+.form label span { color: #8799a2; font-weight: 450; }
+
+.form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #4b606b;
+  border-radius: 3px;
+  color: #eef3f4;
+  background: #091217;
+  font: 13px var(--font-geist-sans), sans-serif;
+}
+
+.form input:focus-visible,
+.close:focus-visible,
+.actions button:focus-visible {
+  outline: 2px solid #9bd2ec;
+  outline-offset: 2px;
+}
+
+.help,
+.error { margin: 0; font-size: 11px; line-height: 1.45; }
+.help { color: #8497a1; }
+.error { padding: 8px 9px; border-left: 3px solid #e0642e; color: #ffd8c8; background: #351b16; }
+
+.actions { justify-content: flex-end; gap: 8px; margin-top: 7px; }
+.actions button { padding: 0 12px; }
+.actions .create { border-color: #f07a43; color: #fff4ec; background: #943d1d; font-weight: 680; }
+.actions .create:hover:not(:disabled) { background: #ad4922; }
+.actions button:disabled { cursor: wait; opacity: .58; }
+
+@media (max-width: 520px) {
+  .backdrop { place-items: end center; padding: 12px; }
+}

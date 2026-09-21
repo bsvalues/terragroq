@@ -7,6 +7,7 @@
   --hermes-muted: #9aabb4;
   --hermes-orange: #e0642e;
   --hermes-green: #4f8756;
+  min-height: 0;
   max-height: min(450px, 54vh);
   overflow: auto;
   color: var(--hermes-text);
@@ -32,6 +33,29 @@
   display: inline-flex;
   gap: 8px;
 }
+
+.nextBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid #2b3e49;
+  color: #9fb0b7;
+  font-size: 12px;
+}
+
+.nextBar button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #5b7481;
+  border-radius: 3px;
+  color: #e7eff1;
+  background: #1a2d37;
+  cursor: pointer;
+}
+
+.nextBar button:focus-visible { outline: 2px solid #9bd2ec; outline-offset: 2px; }
 
 .rejectConfirmation {
   display: grid;

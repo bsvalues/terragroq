@@ -763,7 +763,7 @@ describe("HelloApplicationControls", () => {
     expect(screen.queryByRole("button", { name: "Reject proposal" })).toBeNull()
   })
 
-  it("advances to the next pending proposal after a terminal rejection", async () => {
+  it("keeps a terminal rejection visible until the owner explicitly reviews the next proposal", async () => {
     const nextPending = {
       ...readyProposal,
       proposalId: "22222222-2222-4222-8222-222222222222",
@@ -787,6 +787,9 @@ describe("HelloApplicationControls", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Confirm rejection" }))
 
+    expect(await screen.findByText("Rejected / discarded")).toBeTruthy()
+    expect(screen.queryByText("next-turn")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Review next proposal" }))
     expect(await screen.findByText("next-turn")).toBeTruthy()
     expect(screen.getByText("Next pending proposal ready for review.")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Apply proposal" })).toBeTruthy()

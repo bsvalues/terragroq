@@ -50,8 +50,8 @@ describe("Hello Application project", () => {
     process.env.WILLIAMOS_DEFAULT_PROJECT = "hello-application"
 
     expect(resolveVisibleWorkspaceProjects()).toEqual([
-      { key: "hello-application", name: "Hello Application" },
-      { key: "williamos", name: "WilliamOS" },
+      expect.objectContaining({ key: "hello-application", name: "Hello Application", kind: "application", preview: "contained" }),
+      { key: "williamos", name: "WilliamOS", kind: "core", preview: "neutral" },
     ])
     expect(resolveRequestedWorkspaceProjectKey(undefined)).toBe("hello-application")
     expect(resolveRequestedWorkspaceProjectKey("hello-application")).toBe("hello-application")

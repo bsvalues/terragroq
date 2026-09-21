@@ -18,7 +18,11 @@ describe("catalog application project binding", () => {
     const second = await createApplication({ id: "second-board", displayName: "Second Board" })
     const catalog = await discoverApplications()
     const projects = catalog.applications.map(({ manifest }) => ({ key: manifest.id, name: manifest.displayName }))
-    expect(resolveVisibleWorkspaceProjects(projects)).toEqual([{ key: "williamos", name: "WilliamOS" }, { key: "focus-board", name: "Focus Board" }, { key: "second-board", name: "Second Board" }])
+    expect(resolveVisibleWorkspaceProjects(projects)).toEqual([
+      expect.objectContaining({ key: "williamos", name: "WilliamOS", kind: "core", preview: "neutral" }),
+      expect.objectContaining({ key: "focus-board", name: "Focus Board", kind: "application", preview: "contained" }),
+      expect.objectContaining({ key: "second-board", name: "Second Board", kind: "application", preview: "contained" }),
+    ])
     expect(resolveRequestedWorkspaceProjectKey("focus-board", projects)).toBe("focus-board")
     const firstBinding = await resolveCanonicalWorkspaceProjectBinding("owner", "focus-board")
     expect(firstBinding).toEqual({ ok: true, binding: expect.objectContaining({ projectKey: "focus-board", workspaceRoot: created.repositoryRoot, observedRevision: created.head, workspaceAppUrl: "/api/projects/focus-board/application-preview" }) })
@@ -35,9 +39,15 @@ describe("catalog application project binding", () => {
   })
   it("preserves core defaults and never lists an unverified caller ID", () => {
     vi.stubEnv("WILLIAMOS_VISIBLE_PROJECTS", "unknown-app,terrafusion,williamos")
-    expect(resolveVisibleWorkspaceProjects()).toEqual([{ key: "terrafusion", name: "TerraFusion OS" }, { key: "williamos", name: "WilliamOS" }])
+    expect(resolveVisibleWorkspaceProjects()).toEqual([
+      { key: "terrafusion", name: "TerraFusion OS", kind: "core", preview: "terrafusion" },
+      { key: "williamos", name: "WilliamOS", kind: "core", preview: "neutral" },
+    ])
     expect(resolveRequestedWorkspaceProjectKey("unknown-app")).toBe("terrafusion")
     vi.stubEnv("WILLIAMOS_VISIBLE_PROJECTS", "unknown-app")
-    expect(resolveVisibleWorkspaceProjects()).toEqual([{ key: "terrafusion", name: "TerraFusion OS" }, { key: "williamos", name: "WilliamOS" }])
+    expect(resolveVisibleWorkspaceProjects()).toEqual([
+      { key: "terrafusion", name: "TerraFusion OS", kind: "core", preview: "terrafusion" },
+      { key: "williamos", name: "WilliamOS", kind: "core", preview: "neutral" },
+    ])
   })
 })

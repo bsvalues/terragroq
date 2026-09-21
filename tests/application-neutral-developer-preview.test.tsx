@@ -12,6 +12,9 @@ import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
+const neutralProject = (key: string, name: string) => ({ key, name, kind: "core" as const, preview: "neutral" as const })
+const terraFusionProject = { key: "terrafusion", name: "TerraFusion", kind: "core" as const, preview: "terrafusion" as const }
+
 vi.mock("next/dynamic", () => ({
   default: () => function Editor() { return <textarea aria-label="Source content" readOnly /> },
 }))
@@ -84,8 +87,7 @@ describe("application-neutral developer Preview", () => {
   it("keeps product work interactive with a truthful neutral fixture when no runtime is attached", () => {
     render(
       <DeveloperPreviewSurface
-        projectKey="williamos"
-        projectName="WilliamOS"
+        project={neutralProject("williamos", "WilliamOS")}
         runningAppUrl={null}
       />,
     )
@@ -102,8 +104,7 @@ describe("application-neutral developer Preview", () => {
   it("keeps an unattached Project's fixture copy tied to that Project", () => {
     render(
       <DeveloperPreviewSurface
-        projectKey="atlas-studio"
-        projectName="Atlas Studio"
+        project={neutralProject("atlas-studio", "Atlas Studio")}
         runningAppUrl={null}
       />,
     )
@@ -125,8 +126,7 @@ describe("application-neutral developer Preview", () => {
   it("frames any admitted Project runtime with that Project's identity", () => {
     render(
       <DeveloperPreviewSurface
-        projectKey="williamos"
-        projectName="Atlas Studio"
+        project={neutralProject("williamos", "Atlas Studio")}
         runningAppUrl="https://atlas-studio.example.test/"
       />,
     )
@@ -140,8 +140,7 @@ describe("application-neutral developer Preview", () => {
     const onInspectComposition = vi.fn()
     render(
       <DeveloperPreviewSurface
-        projectKey="terrafusion"
-        projectName="TerraFusion"
+        project={terraFusionProject}
         runningAppUrl="https://terrafusion.example.test/"
         onInspectComposition={onInspectComposition}
       />,

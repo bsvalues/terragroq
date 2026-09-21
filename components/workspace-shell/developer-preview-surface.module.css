@@ -12,18 +12,34 @@
   border: 0;
 }
 
-.helloPreviewHost {
+.applicationPreviewHost {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
   background: #101a22;
 }
 
-.helloPreviewHost .runtimeFrame {
-  flex: 1;
-  min-height: 0;
+.applicationPreviewHost .runtimeFrame {
+  flex: 1 0 240px;
+  min-height: 240px;
   height: auto;
 }
+
+.applicationUnavailable {
+  flex: 1 0 190px;
+  min-height: 190px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: #91a6af;
+  text-align: center;
+  background: #0b141b;
+}
+
+.applicationUnavailable strong { color: #dce7ea; font-size: 13px; }
+.applicationUnavailable span { max-width: 390px; font-size: 11px; line-height: 1.5; }
 
 .compositionButton {
   position: absolute;

@@ -3,6 +3,15 @@
 import { FormEvent, useEffect, useRef, useState } from "react"
 import { Bot, Check, ShieldCheck } from "lucide-react"
 
+import type { ApplicationVisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
+import { HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
+import {
+  adaptApplicationProposal,
+  parseApplicationManifestPayload,
+  type ApplicationManifestView,
+  type ApplicationProgressEntry,
+  type ApplicationProposalView,
+} from "./application-ui-contract"
 import styles from "./hello-application-assistant.module.css"
 
 type ProgressEntry = Readonly<{
@@ -240,8 +249,8 @@ function executionRouteRecord(value: unknown): value is ExecutionRoute {
     && value.model === expected?.model && value.external === expected?.external && value.metered === expected?.metered
 }
 
-async function readExecutionRoutes(): Promise<readonly ExecutionRoute[]> {
-  const response = await fetch("/api/projects/hello-application/execution-routes", { cache: "no-store" })
+async function readExecutionRoutes(project: ApplicationVisibleWorkspaceProject): Promise<readonly ExecutionRoute[]> {
+  const response = await fetch(project.application.executionRoutesUrl, { cache: "no-store" })
   const payload = await responseJson(response)
   if (!record(payload) || !exactKeys(payload, ["schemaVersion", "defaultRoute", "routes"])
     || payload.schemaVersion !== 1 || payload.defaultRoute !== DEFAULT_EXECUTION_ROUTE || !Array.isArray(payload.routes)
@@ -465,8 +474,8 @@ type ProposalReconciliation = Readonly<{
   proposal: Proposal
 }>
 
-async function readVerifiedProposalList(): Promise<readonly Proposal[]> {
-  const response = await fetch("/api/projects/hello-application/proposals", { cache: "no-store" })
+async function readVerifiedProposalList(project: ApplicationVisibleWorkspaceProject): Promise<readonly Proposal[]> {
+  const response = await fetch(project.application.proposalsUrl, { cache: "no-store" })
   const payload = await responseJson(response)
   if (!record(payload) || !exactKeys(payload, ["proposals"]) || !Array.isArray(payload.proposals)) {
     throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
@@ -495,8 +504,12 @@ function pendingProposal(proposals: readonly Proposal[], excludedProposalId?: st
   return null
 }
 
-async function reconcileProposalOutcome(reviewed: Proposal, rejectionReason?: string): Promise<ProposalReconciliation> {
-  const proposals = await readVerifiedProposalList()
+async function reconcileProposalOutcome(
+  project: ApplicationVisibleWorkspaceProject,
+  reviewed: Proposal,
+  rejectionReason?: string,
+): Promise<ProposalReconciliation> {
+  const proposals = await readVerifiedProposalList(project)
   const matches = proposals.filter((candidate) => candidate.proposalId === reviewed.proposalId)
   if (matches.length !== 1) throw new Error("HELLO_PROPOSAL_RESPONSE_INVALID")
   const verified = matches[0]
@@ -627,8 +640,9 @@ function ProposalReview({
   onCancelReject,
   onRejectionReasonChange,
   onReject,
+  onReviewNext,
 }: Readonly<{
-  proposal: Proposal
+  proposal: Proposal | ApplicationProposalView
   applying: boolean
   rejecting: boolean
   applyBlocked: boolean
@@ -639,11 +653,12 @@ function ProposalReview({
   onCancelReject: () => void
   onRejectionReasonChange: (value: string) => void
   onReject: () => void
+  onReviewNext: () => void
 }>) {
   const schemaOne = proposal.schemaVersion === 1
   const request = proposal.requestText || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
   const executionNode = proposal.executionNode || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
-  const externalExecution = proposal.schemaVersion === 3 ? proposal.providerExecution : undefined
+  const externalExecution = proposal.providerExecution ?? undefined
   const proposalState = applyBlocked && proposal.status === "READY_FOR_REVIEW"
     ? "Apply state unconfirmed"
     : statusLabel(proposal.status)
@@ -659,12 +674,16 @@ function ProposalReview({
         <summary>Review proposal</summary>
         <div className={styles.reviewInner}>
           <dl className={styles.evidence} aria-label="Governed execution evidence">
+            <div><dt>Proposal receipt</dt><dd>{proposal.proposalId}</dd></div>
+            {"applicationId" in proposal && proposal.applicationId ? <div><dt>Application</dt><dd>{proposal.applicationId}</dd></div> : null}
             <div><dt>Request</dt><dd>{request}</dd></div>
             <div><dt>Execution provider</dt><dd>{externalExecution ? "Cerebras (external)" : "HERMES local"}</dd></div>
             <div><dt>Execution node (actual)</dt><dd>{executionNode}</dd></div>
             <div><dt>Executing model</dt><dd>{proposal.model}</dd></div>
             <div><dt>Thread</dt><dd>{proposal.threadId}</dd></div>
             <div><dt>Turn</dt><dd>{proposal.turnId}</dd></div>
+            <div><dt>Base commit</dt><dd>{proposal.baseSha}</dd></div>
+            <div><dt>Candidate commit</dt><dd>{"candidateSha" in proposal ? proposal.candidateSha : proposal.proposalCommit}</dd></div>
             {externalExecution ? (
               <>
                 <div><dt>External egress</dt><dd>Approved</dd></div>
@@ -781,13 +800,24 @@ function ProposalReview({
           </div>
         )
       ) : null}
+
+      {proposal.status === "APPLIED" || proposal.status === "REJECTED" || proposal.status === "QUARANTINED_ROLLBACK_FAILED" ? (
+        <div className={styles.nextBar}>
+          <span>This terminal receipt stays visible until you choose another proposal.</span>
+          <button type="button" onClick={onReviewNext} aria-label="Review next proposal">Review next proposal</button>
+        </div>
+      ) : null}
     </section>
   )
 }
 
-export function HelloApplicationAssistant({
+function LegacyApplicationAssistant({
+  project,
   onPreviewRefresh,
-}: Readonly<{ onPreviewRefresh: () => void }>) {
+}: Readonly<{
+  project: ApplicationVisibleWorkspaceProject
+  onPreviewRefresh: () => void
+}>) {
   const [draft, setDraft] = useState("")
   const [submittedRequest, setSubmittedRequest] = useState<string | null>(null)
   const [events, setEvents] = useState<readonly ProgressEntry[]>([])
@@ -818,22 +848,31 @@ export function HelloApplicationAssistant({
   }
 
   async function advanceAfterTerminal(completed: Proposal, terminalMessage: string) {
-    try {
-      const proposals = await readVerifiedProposalList()
-      const next = pendingProposal(proposals, completed.proposalId)
-      if (next) {
-        showProposal(next, `Next pending proposal ${statusLabel(next.status).toLowerCase()}.`)
-        return
-      }
-    } catch {
-      // The completed receipt remains authoritative. A later page load will retry queue discovery.
-    }
+    setProposal(completed)
     setStatus(terminalMessage)
+  }
+
+  async function reviewNextProposal() {
+    if (busy || operationInFlight.current) return
+    ownerInteracted.current = true
+    operationInFlight.current = true
+    setAssistantError(null)
+    setStatus("Checking for another proposal.")
+    try {
+      const proposals = await readVerifiedProposalList(project)
+      const next = pendingProposal(proposals, proposal?.proposalId)
+      if (next) showProposal(next, `Next pending proposal ${statusLabel(next.status).toLowerCase()}.`)
+      else setStatus("No other pending proposal is ready for review.")
+    } catch (cause) {
+      setAssistantError(`HERMES status failed: ${failureMessage(cause, "HELLO_PROPOSAL_UNAVAILABLE")}`)
+    } finally {
+      operationInFlight.current = false
+    }
   }
 
   useEffect(() => {
     let current = true
-    void readExecutionRoutes()
+    void readExecutionRoutes(project)
       .then((routes) => {
         if (!current) return
         setExecutionRoutes(routes)
@@ -847,11 +886,11 @@ export function HelloApplicationAssistant({
         setRouteOptionsError(true)
       })
     return () => { current = false }
-  }, [])
+  }, [project])
 
   useEffect(() => {
     let current = true
-    void readVerifiedProposalList()
+    void readVerifiedProposalList(project)
       .then((proposals) => {
         if (!current || ownerInteracted.current || operationInFlight.current) return
         const selected = pendingProposal(proposals) ?? proposals[0]
@@ -869,7 +908,7 @@ export function HelloApplicationAssistant({
         setAssistantError(`HERMES status failed: ${failureMessage(cause, "HELLO_PROPOSAL_UNAVAILABLE")}`)
       })
     return () => { current = false }
-  }, [])
+  }, [project])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -910,7 +949,7 @@ export function HelloApplicationAssistant({
     operationInFlight.current = true
     setBusy("proposal")
     try {
-      const response = await fetch("/api/projects/hello-application/proposals", {
+      const response = await fetch(project.application.proposalsUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(selectedRoute.external
@@ -973,7 +1012,7 @@ export function HelloApplicationAssistant({
     setAssistantError(null)
     setStatus("Applying the reviewed proposal.")
     try {
-      const response = await fetch(`/api/projects/hello-application/proposals/${encodeURIComponent(reviewed.proposalId)}/apply`, {
+      const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(reviewed.proposalId)}/apply`, {
         method: "POST",
         headers: { "content-type": "application/json" },
       })
@@ -988,7 +1027,7 @@ export function HelloApplicationAssistant({
     } catch (cause) {
       const failure = failureMessage(cause, "HELLO_PROPOSAL_APPLY_FAILED")
       try {
-        const reconciled = await reconcileProposalOutcome(reviewed)
+        const reconciled = await reconcileProposalOutcome(project, reviewed)
         setProposal(reconciled.proposal)
         setApplyBlocked(false)
         if (reconciled.state === "applied") {
@@ -1039,8 +1078,8 @@ export function HelloApplicationAssistant({
     setAssistantError(null)
     setStatus(resuming ? "Resuming the durable proposal rejection." : "Rejecting the reviewed proposal.")
     try {
-      const response = await fetch(`/api/projects/hello-application/proposals/${encodeURIComponent(reviewed.proposalId)}`, {
-        method: "DELETE",
+      const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(reviewed.proposalId)}`, {
+        method: project.application.rejectMethod,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reason }),
       })
@@ -1058,7 +1097,7 @@ export function HelloApplicationAssistant({
     } catch (cause) {
       const failure = failureMessage(cause, "HELLO_PROPOSAL_REJECTION_FAILED")
       try {
-        const reconciled = await reconcileProposalOutcome(reviewed, reason)
+        const reconciled = await reconcileProposalOutcome(project, reviewed, reason)
         setProposal(reconciled.proposal)
         setApplyBlocked(false)
         if (reconciled.state === "rejected") {
@@ -1104,19 +1143,22 @@ export function HelloApplicationAssistant({
   }
 
   return (
-    <section className={styles.assistant} aria-label="Ask HERMES development assistant">
+    <section className={styles.assistant} aria-label={`Ask HERMES to develop ${project.name}`}>
       <header className={styles.header}>
         <span className={styles.agent}><Bot size={16} aria-hidden /><strong>HERMES development instrument</strong></span>
-        <span className={styles.boundary}><ShieldCheck size={14} aria-hidden />3 writable UI files · {selectedExecutionRoute.external ? "Cerebras external" : "local"} · proposal only</span>
+        <span className={styles.boundary}>
+          <ShieldCheck size={14} aria-hidden />
+          {project.application.writablePaths?.length ?? 0} writable files · {project.application.writablePaths?.join(" · ") ?? "unavailable"}
+        </span>
       </header>
 
       <form className={styles.form} onSubmit={(event) => void submit(event)} aria-busy={busy === "proposal"}>
         <div className={styles.routeControl}>
-          <label htmlFor="hello-execution-route">AI execution route</label>
+          <label htmlFor={`${project.key}-execution-route`}>AI execution route</label>
           <select
-            id="hello-execution-route"
+            id={`${project.key}-execution-route`}
             value={selectedExecutionRoute.id}
-            aria-describedby="hello-execution-route-description"
+            aria-describedby={`${project.key}-execution-route-description`}
             disabled={busy !== null}
             onChange={(event) => {
               ownerInteracted.current = true
@@ -1127,9 +1169,9 @@ export function HelloApplicationAssistant({
           >
             {executionRoutes.map((route) => <option key={route.id} value={route.id}>{route.label}</option>)}
           </select>
-          <p id="hello-execution-route-description" className={styles.routeDisclosure} aria-live="polite">
+          <p id={`${project.key}-execution-route-description`} className={styles.routeDisclosure} aria-live="polite">
             {selectedExecutionRoute.external
-              ? "External and metered. HERMES sends the governed request and allowlisted Hello source to Cerebras. Canonical source changes only after review and Apply. No local fallback."
+              ? `External and metered. HERMES sends the governed request and allowlisted ${project.name} source to Cerebras. Canonical source changes only after review and Apply. No local fallback.`
               : "Runs inside HERMES. The request and application source stay in the lab."}
           </p>
           {routeOptionsError ? <p className={styles.routeUnavailable}>External routes are unavailable; local HERMES remains available.</p> : null}
@@ -1141,14 +1183,14 @@ export function HelloApplicationAssistant({
                 disabled={busy !== null}
                 onChange={(event) => setExternalEgressApproved(event.target.checked)}
               />
-              I confirm this request contains only public or sanitized content and approve sending it with the allowlisted Hello source to Cerebras.
+              I confirm this request contains only public or sanitized content and approve sending it with the allowlisted {project.name} source to Cerebras.
             </label>
           ) : null}
         </div>
-        <label htmlFor="hello-hermes-request">Ask HERMES to change this application</label>
+        <label htmlFor={`${project.key}-hermes-request`}>Ask HERMES to change this application</label>
         <div className={styles.requestRow}>
           <textarea
-            id="hello-hermes-request"
+            id={`${project.key}-hermes-request`}
             value={draft}
             onChange={(event) => {
               ownerInteracted.current = true
@@ -1158,7 +1200,7 @@ export function HelloApplicationAssistant({
             rows={2}
             maxLength={MAX_REQUEST_LENGTH}
             disabled={busy !== null}
-            placeholder="Describe one visible change to the Hello Application."
+            placeholder={`Describe one visible change to ${project.name}.`}
           />
           <button
             type="submit"
@@ -1215,8 +1257,626 @@ export function HelloApplicationAssistant({
           }}
           onRejectionReasonChange={setRejectionReason}
           onReject={() => void rejectProposal()}
+          onReviewNext={() => void reviewNextProposal()}
         />
       ) : null}
     </section>
   )
+}
+
+type ApplicationStreamTerminal =
+  | Readonly<{ type: "proposal"; proposal: ApplicationProposalView }>
+  | Readonly<{ type: "error"; error: string }>
+
+const APPLICATION_PROGRESS_MILESTONES = [
+  ["accepted", "Request accepted"],
+  ["workspace_ready", "Isolated application workspace ready"],
+  ["resident_started", "HERMES AI is editing the isolated application workspace"],
+  ["resident_finished", "HERMES AI editing finished"],
+  ["validation_started", "Contained application validation started"],
+  ["ready_for_review", "Application proposal ready for review"],
+] as const
+
+const APPLICATION_EXTERNAL_PROGRESS_MILESTONES = [
+  ["accepted", "Request accepted"],
+  ["workspace_ready", "Isolated application workspace ready"],
+  ["resident_started", "HERMES sent the bounded application request to Cerebras"],
+  ["resident_finished", "Cerebras returned a bounded application change"],
+  ["validation_started", "Contained application validation started"],
+  ["ready_for_review", "Application proposal ready for review"],
+] as const
+
+function applicationFailureMessage(cause: unknown, fallback: string): string {
+  const code = cause instanceof Error ? cause.message : ""
+  if (code.includes("EXECUTION_ROUTE_UNAVAILABLE") || code.includes("CEREBRAS_UNAVAILABLE")) {
+    return "The selected AI route is unavailable. Choose another available route and try again."
+  }
+  if (code.includes("STALE_BASE") || code.includes("MANIFEST_DRIFT")) {
+    return "The application changed after this proposal was created. Review a fresh proposal."
+  }
+  if (code.includes("REPOSITORY_BUSY")) return "The application repository is busy. Try again after the current operation finishes."
+  if (code.includes("VALIDATION")) return "The contained application validation did not pass. No source change was applied."
+  if (code.includes("SECRET_DETECTED")) return "The proposal was refused because it may contain a secret."
+  if (code.includes("APPLICATION_PROPOSAL")) return fallback
+  return code || fallback
+}
+
+async function applicationResponseJson(response: Response): Promise<unknown> {
+  let payload: unknown
+  try { payload = await response.json() }
+  catch { throw new Error(response.ok ? "APPLICATION_RESPONSE_INVALID" : `APPLICATION_HTTP_${response.status}`) }
+  if (!response.ok) {
+    throw new Error(record(payload) && nonempty(payload.error) ? payload.error : `APPLICATION_HTTP_${response.status}`)
+  }
+  return payload
+}
+
+async function verifiedApplicationProposal(
+  project: ApplicationVisibleWorkspaceProject,
+  manifest: ApplicationManifestView,
+  value: unknown,
+): Promise<ApplicationProposalView> {
+  const proposal = adaptApplicationProposal(project, value)
+  if (proposal.applicationId !== project.key || proposal.manifestDigest !== manifest.manifestDigest
+    || !proposal.writablePaths || !sameStrings(proposal.writablePaths, manifest.writablePaths)) {
+    throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  }
+  if (proposal.requestText) {
+    const requestDigest = await sha256Text(proposal.requestText)
+    if (!requestDigest || requestDigest !== proposal.requestSha256) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  }
+  if (proposal.reviewPatch !== null) {
+    const patchDigest = await sha256Text(proposal.reviewPatch)
+    if (!patchDigest || patchDigest !== proposal.patchSha256) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  }
+  return proposal
+}
+
+function sameApplicationProposalEvidence(left: ApplicationProposalView, right: ApplicationProposalView): boolean {
+  return left.schemaVersion === right.schemaVersion
+    && left.proposalId === right.proposalId
+    && left.applicationId === right.applicationId
+    && left.manifestDigest === right.manifestDigest
+    && left.repositoryDigest === right.repositoryDigest
+    && Boolean(left.writablePaths && right.writablePaths && sameStrings(left.writablePaths, right.writablePaths))
+    && left.requestedBy === right.requestedBy
+    && left.requestText === right.requestText
+    && left.requestSha256 === right.requestSha256
+    && left.executionRoute === right.executionRoute
+    && left.executionProvider === right.executionProvider
+    && left.executionNode === right.executionNode
+    && left.createdAt === right.createdAt
+    && left.baseSha === right.baseSha
+    && left.candidateSha === right.candidateSha
+    && left.baseRef === right.baseRef
+    && left.branch === right.branch
+    && left.model === right.model
+    && left.threadId === right.threadId
+    && left.turnId === right.turnId
+    && left.patchSha256 === right.patchSha256
+    && sameStrings(left.changedPaths, right.changedPaths)
+    && JSON.stringify(left.validation) === JSON.stringify(right.validation)
+    && JSON.stringify(left.progress) === JSON.stringify(right.progress)
+    && JSON.stringify(left.providerExecution) === JSON.stringify(right.providerExecution)
+}
+
+async function readApplicationManifest(project: ApplicationVisibleWorkspaceProject): Promise<ApplicationManifestView> {
+  if (!project.application.manifestUrl) throw new Error("APPLICATION_MANIFEST_UNAVAILABLE")
+  const response = await fetch(project.application.manifestUrl, { cache: "no-store" })
+  return parseApplicationManifestPayload(project, await applicationResponseJson(response))
+}
+
+async function readApplicationExecutionRoutes(project: ApplicationVisibleWorkspaceProject): Promise<readonly ExecutionRoute[]> {
+  const response = await fetch(project.application.executionRoutesUrl, { cache: "no-store" })
+  const payload = await applicationResponseJson(response)
+  if (!record(payload) || !exactKeys(payload, ["schemaVersion", "defaultRoute", "routes"])
+    || payload.schemaVersion !== 1 || payload.defaultRoute !== DEFAULT_EXECUTION_ROUTE || !Array.isArray(payload.routes)
+    || payload.routes.length < 1 || payload.routes.length > EXECUTION_ROUTE_CONTRACT.size
+    || payload.routes.some((route) => !executionRouteRecord(route))) throw new Error("APPLICATION_EXECUTION_ROUTES_INVALID")
+  const routes = payload.routes as ExecutionRoute[]
+  if (new Set(routes.map((route) => route.id)).size !== routes.length
+    || routes[0].id !== DEFAULT_EXECUTION_ROUTE || !routes[0].available) {
+    throw new Error("APPLICATION_EXECUTION_ROUTES_INVALID")
+  }
+  return routes.filter((route) => route.available)
+}
+
+async function readApplicationProposalList(
+  project: ApplicationVisibleWorkspaceProject,
+  manifest: ApplicationManifestView,
+): Promise<readonly ApplicationProposalView[]> {
+  const response = await fetch(project.application.proposalsUrl, { cache: "no-store" })
+  const payload = await applicationResponseJson(response)
+  if (!record(payload) || !(exactKeys(payload, ["proposals"])
+      || exactKeys(payload, ["proposals", "truncated"]) && payload.truncated === true)
+    || !Array.isArray(payload.proposals)) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  const proposals = await Promise.all(payload.proposals.map((value) => verifiedApplicationProposal(project, manifest, value)))
+  if (new Set(proposals.map((proposal) => proposal.proposalId)).size !== proposals.length) {
+    throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  }
+  return proposals
+}
+
+async function readApplicationProposal(
+  project: ApplicationVisibleWorkspaceProject,
+  manifest: ApplicationManifestView,
+  proposalId: string,
+): Promise<ApplicationProposalView> {
+  const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(proposalId)}`, { cache: "no-store" })
+  const payload = await applicationResponseJson(response)
+  if (!record(payload) || !exactKeys(payload, ["proposal"])) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+  return verifiedApplicationProposal(project, manifest, payload.proposal)
+}
+
+function nextApplicationProgress(
+  entry: ApplicationProgressEntry,
+  observed: readonly ApplicationProgressEntry[],
+  external: boolean,
+): boolean {
+  const expected = (external ? APPLICATION_EXTERNAL_PROGRESS_MILESTONES : APPLICATION_PROGRESS_MILESTONES)[observed.length]
+  if (!expected || entry.stage !== expected[0] || entry.detail !== expected[1] || !timestamp(entry.at)) return false
+  const previous = observed.at(-1)
+  return !previous || entry.at >= previous.at
+}
+
+async function readApplicationProposalStream(
+  response: Response,
+  project: ApplicationVisibleWorkspaceProject,
+  manifest: ApplicationManifestView,
+  onProgress: (entry: ApplicationProgressEntry) => void,
+): Promise<ApplicationStreamTerminal> {
+  if (!response.body) throw new Error("The HERMES response ended before a proposal receipt arrived.")
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let terminal: ApplicationStreamTerminal | null = null
+  const consume = async (rawLine: string) => {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine
+    if (!line) throw new Error("The HERMES response contained an invalid activity record.")
+    let value: unknown
+    try { value = JSON.parse(line) } catch { throw new Error("The HERMES response contained an invalid activity record.") }
+    if (!record(value) || typeof value.type !== "string" || terminal) {
+      throw new Error("The HERMES response contained an invalid terminal sequence.")
+    }
+    if (value.type === "progress") {
+      if (!exactKeys(value, ["type", "stage", "detail", "at"])
+        || !nonempty(value.stage) || !nonempty(value.detail) || !timestamp(value.at)) {
+        throw new Error("The HERMES response contained an invalid activity record.")
+      }
+      onProgress({ stage: value.stage, detail: value.detail, at: value.at })
+      return
+    }
+    if (value.type === "proposal" && exactKeys(value, ["type", "proposal"])) {
+      terminal = { type: "proposal", proposal: await verifiedApplicationProposal(project, manifest, value.proposal) }
+      return
+    }
+    if (value.type === "error" && exactKeys(value, ["type", "error"]) && nonempty(value.error)) {
+      terminal = { type: "error", error: value.error }
+      return
+    }
+    throw new Error("The HERMES response contained an invalid terminal record.")
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let newline = buffer.indexOf("\n")
+    while (newline >= 0) {
+      await consume(buffer.slice(0, newline))
+      buffer = buffer.slice(newline + 1)
+      newline = buffer.indexOf("\n")
+    }
+  }
+  buffer += decoder.decode()
+  if (buffer) await consume(buffer)
+  if (!terminal) throw new Error("The HERMES response ended before a proposal receipt arrived.")
+  return terminal
+}
+
+const APPLICATION_PENDING_PRIORITY: readonly ApplicationProposalView["status"][] = [
+  "APPLY_IN_PROGRESS",
+  "READY_FOR_REVIEW",
+  "QUARANTINED_ROLLBACK_FAILED",
+]
+
+function pendingApplicationProposal(
+  proposals: readonly ApplicationProposalView[],
+  excludedProposalId?: string,
+): ApplicationProposalView | null {
+  for (const status of APPLICATION_PENDING_PRIORITY) {
+    const proposal = proposals.find((candidate) => candidate.proposalId !== excludedProposalId && candidate.status === status)
+    if (proposal) return proposal
+  }
+  return null
+}
+
+function GenericApplicationAssistant({
+  project,
+  onPreviewRefresh,
+}: Readonly<{
+  project: ApplicationVisibleWorkspaceProject
+  onPreviewRefresh: () => void
+}>) {
+  const [manifest, setManifest] = useState<ApplicationManifestView | null>(null)
+  const [draft, setDraft] = useState("")
+  const [submittedRequest, setSubmittedRequest] = useState<string | null>(null)
+  const [events, setEvents] = useState<readonly ApplicationProgressEntry[]>([])
+  const [proposal, setProposal] = useState<ApplicationProposalView | null>(null)
+  const [applyBlocked, setApplyBlocked] = useState(false)
+  const [confirmingReject, setConfirmingReject] = useState(false)
+  const [rejectionReason, setRejectionReason] = useState("")
+  const [busy, setBusy] = useState<"proposal" | "apply" | "reject" | null>(null)
+  const [status, setStatus] = useState(`Loading ${project.name} governance boundary.`)
+  const [assistantError, setAssistantError] = useState<string | null>(null)
+  const [executionRoutes, setExecutionRoutes] = useState<readonly ExecutionRoute[]>([LOCAL_EXECUTION_ROUTE])
+  const [executionRouteId, setExecutionRouteId] = useState(DEFAULT_EXECUTION_ROUTE)
+  const [externalEgressApproved, setExternalEgressApproved] = useState(false)
+  const [routeOptionsError, setRouteOptionsError] = useState(false)
+  const operationInFlight = useRef(false)
+  const ownerInteracted = useRef(false)
+  const selectedExecutionRoute = executionRoutes.find((route) => route.id === executionRouteId) ?? LOCAL_EXECUTION_ROUTE
+  const fieldId = `application-${project.key}`
+
+  function showProposal(value: ApplicationProposalView, message: string) {
+    setProposal(value)
+    setApplyBlocked(false)
+    setConfirmingReject(false)
+    setRejectionReason("")
+    setDraft(value.requestText ?? "")
+    setSubmittedRequest(value.requestText ?? null)
+    setEvents(value.progress ?? [])
+    setStatus(message)
+  }
+
+  useEffect(() => {
+    let current = true
+    ownerInteracted.current = false
+    void readApplicationManifest(project).then(async (nextManifest) => {
+      if (!current) return
+      setManifest(nextManifest)
+      const [routesResult, proposalsResult] = await Promise.allSettled([
+        readApplicationExecutionRoutes(project),
+        readApplicationProposalList(project, nextManifest),
+      ])
+      if (!current) return
+      if (routesResult.status === "fulfilled") {
+        setExecutionRoutes(routesResult.value)
+        setRouteOptionsError(false)
+      } else {
+        setExecutionRoutes([LOCAL_EXECUTION_ROUTE])
+        setExecutionRouteId(DEFAULT_EXECUTION_ROUTE)
+        setRouteOptionsError(true)
+      }
+      if (proposalsResult.status === "rejected") throw proposalsResult.reason
+      if (ownerInteracted.current || operationInFlight.current) return
+      const selected = pendingApplicationProposal(proposalsResult.value) ?? proposalsResult.value[0]
+      if (selected) showProposal(selected, selected.status === "READY_FOR_REVIEW"
+        ? "Pending proposal ready for review."
+        : `Saved proposal ${statusLabel(selected.status).toLowerCase()}.`)
+      else setStatus(`Ready for a ${project.name} development request.`)
+    }).catch((cause) => {
+      if (!current || ownerInteracted.current || operationInFlight.current) return
+      setStatus("")
+      setAssistantError(applicationFailureMessage(cause, `The ${project.name} development instrument is unavailable.`))
+    })
+    return () => { current = false }
+  }, [project])
+
+  async function reviewNextProposal() {
+    if (!manifest || busy || operationInFlight.current) return
+    ownerInteracted.current = true
+    operationInFlight.current = true
+    setAssistantError(null)
+    setStatus("Checking for another proposal.")
+    try {
+      const proposals = await readApplicationProposalList(project, manifest)
+      const next = pendingApplicationProposal(proposals, proposal?.proposalId)
+      if (next) showProposal(next, `Next pending proposal ${statusLabel(next.status).toLowerCase()}.`)
+      else setStatus("No other pending proposal is ready for review.")
+    } catch (cause) {
+      setAssistantError(applicationFailureMessage(cause, "Saved proposals could not be loaded."))
+    } finally {
+      operationInFlight.current = false
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    ownerInteracted.current = true
+    if (!manifest || busy || operationInFlight.current) return
+    const requestText = draft.trim()
+    if (!requestText) {
+      setAssistantError("Enter a request for HERMES.")
+      return
+    }
+    if (requestText.length > MAX_REQUEST_LENGTH || requestText.includes("\0")) {
+      setAssistantError("Keep the request to 2,000 characters and remove unsupported control characters.")
+      return
+    }
+    const selectedRoute = selectedExecutionRoute
+    if (selectedRoute.external && !externalEgressApproved) {
+      setAssistantError("Approve the bounded external egress before asking Cerebras.")
+      return
+    }
+    setDraft(requestText)
+    setSubmittedRequest(requestText)
+    setEvents([])
+    setProposal(null)
+    setConfirmingReject(false)
+    setRejectionReason("")
+    setApplyBlocked(false)
+    setAssistantError(null)
+    setStatus("Request submitted to HERMES.")
+    setBusy("proposal")
+    operationInFlight.current = true
+    try {
+      const response = await fetch(project.application.proposalsUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(selectedRoute.external
+          ? { requestText, executionRoute: selectedRoute.id, externalEgressApproved: true }
+          : selectedRoute.id === DEFAULT_EXECUTION_ROUTE ? { requestText } : { requestText, executionRoute: selectedRoute.id }),
+      })
+      if (!response.ok) await applicationResponseJson(response)
+      const observed: ApplicationProgressEntry[] = []
+      const terminal = await readApplicationProposalStream(response, project, manifest, (entry) => {
+        if (!nextApplicationProgress(entry, observed, selectedRoute.external)) {
+          throw new Error("The HERMES activity sequence could not be verified.")
+        }
+        observed.push(entry)
+        setEvents([...observed])
+        setStatus(entry.detail)
+      })
+      if (terminal.type === "error") throw new Error(terminal.error)
+      const verified = terminal.proposal
+      if (verified.status !== "READY_FOR_REVIEW" || verified.executionRoute !== selectedRoute.id
+        || verified.model !== selectedRoute.model || JSON.stringify(verified.progress) !== JSON.stringify(observed)
+        || verified.requestText !== requestText) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+      showProposal(verified, "Proposal ready for review.")
+    } catch (cause) {
+      setStatus("")
+      setAssistantError(applicationFailureMessage(cause, "HERMES could not create a governed proposal."))
+    } finally {
+      setBusy(null)
+      operationInFlight.current = false
+      if (selectedRoute.external) setExternalEgressApproved(false)
+    }
+  }
+
+  async function reconcile(reviewed: ApplicationProposalView): Promise<ApplicationProposalView> {
+    if (!manifest) throw new Error("APPLICATION_MANIFEST_UNAVAILABLE")
+    const current = await readApplicationProposal(project, manifest, reviewed.proposalId)
+    if (!sameApplicationProposalEvidence(current, reviewed)) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+    return current
+  }
+
+  async function applyProposal() {
+    if (!manifest || busy || operationInFlight.current || applyBlocked || !proposal || proposal.status !== "READY_FOR_REVIEW") return
+    const reviewed = proposal
+    ownerInteracted.current = true
+    operationInFlight.current = true
+    setBusy("apply")
+    setAssistantError(null)
+    setStatus("Applying the reviewed proposal.")
+    try {
+      const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(reviewed.proposalId)}/apply`, { method: "POST" })
+      const payload = await applicationResponseJson(response)
+      if (!record(payload) || !exactKeys(payload, ["proposal"])) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+      const applied = await verifiedApplicationProposal(project, manifest, payload.proposal)
+      if (applied.status !== "APPLIED" || !sameApplicationProposalEvidence(applied, reviewed)) {
+        throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+      }
+      setProposal(applied)
+      setStatus("Proposal applied. Preview refreshed.")
+      onPreviewRefresh()
+    } catch (cause) {
+      try {
+        const current = await reconcile(reviewed)
+        setProposal(current)
+        if (current.status === "APPLIED") {
+          setAssistantError(null)
+          setStatus("Proposal applied. Preview refreshed.")
+          onPreviewRefresh()
+        } else if (current.status === "READY_FOR_REVIEW") {
+          setStatus("Proposal remains ready for review.")
+          setAssistantError(applicationFailureMessage(cause, "Apply did not complete."))
+        } else {
+          setStatus(`Proposal ${statusLabel(current.status).toLowerCase()}.`)
+          setAssistantError(null)
+        }
+      } catch {
+        setApplyBlocked(true)
+        setStatus("Apply outcome could not be verified. Apply and Reject are blocked.")
+        setAssistantError("Refresh after the authoritative proposal state is available.")
+      }
+    } finally {
+      operationInFlight.current = false
+      setBusy(null)
+    }
+  }
+
+  async function rejectProposal() {
+    if (!manifest || busy || operationInFlight.current || applyBlocked || !proposal || proposal.status !== "READY_FOR_REVIEW") return
+    const reason = normalizedRejectionReason(rejectionReason)
+    if (!reason) {
+      setAssistantError("Enter a single-line rejection reason of 500 characters or fewer.")
+      return
+    }
+    const reviewed = proposal
+    ownerInteracted.current = true
+    operationInFlight.current = true
+    setBusy("reject")
+    setAssistantError(null)
+    setStatus("Rejecting and discarding the reviewed proposal.")
+    try {
+      const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(reviewed.proposalId)}`, {
+        method: project.application.rejectMethod,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+      })
+      const payload = await applicationResponseJson(response)
+      if (!record(payload) || !exactKeys(payload, ["proposal"])) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+      const rejected = await verifiedApplicationProposal(project, manifest, payload.proposal)
+      if (rejected.status !== "REJECTED" || rejected.rejectionReason !== reason
+        || !sameApplicationProposalEvidence(rejected, reviewed)) throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+      setProposal(rejected)
+      setConfirmingReject(false)
+      setRejectionReason("")
+      setStatus("Proposal rejected and discarded from Apply.")
+    } catch (cause) {
+      try {
+        const current = await reconcile(reviewed)
+        setProposal(current)
+        if (current.status === "REJECTED") {
+          setConfirmingReject(false)
+          setRejectionReason("")
+          setAssistantError(null)
+          setStatus("Proposal rejected and discarded from Apply.")
+        } else if (current.status === "READY_FOR_REVIEW") {
+          setStatus("Proposal remains ready for review.")
+          setAssistantError(applicationFailureMessage(cause, "Reject did not complete."))
+        } else {
+          setStatus(`Proposal ${statusLabel(current.status).toLowerCase()}.`)
+          setAssistantError(null)
+        }
+      } catch {
+        setApplyBlocked(true)
+        setStatus("Reject outcome could not be verified. Apply and Reject are blocked.")
+        setAssistantError("Refresh after the authoritative proposal state is available.")
+      }
+    } finally {
+      operationInFlight.current = false
+      setBusy(null)
+    }
+  }
+
+  return (
+    <section className={styles.assistant} aria-label={`Ask HERMES to develop ${project.name}`}>
+      <header className={styles.header}>
+        <span className={styles.agent}><Bot size={16} aria-hidden /><strong>HERMES development instrument</strong></span>
+        <span className={styles.boundary}>
+          <ShieldCheck size={14} aria-hidden />
+          {manifest ? `${manifest.writablePaths.length} writable files · ${manifest.writablePaths.join(" · ")}` : "Loading governed path boundary"}
+        </span>
+      </header>
+
+      <form className={styles.form} onSubmit={(event) => void submit(event)} aria-busy={busy === "proposal"}>
+        <div className={styles.routeControl}>
+          <label htmlFor={`${fieldId}-execution-route`}>AI execution route</label>
+          <select
+            id={`${fieldId}-execution-route`}
+            value={selectedExecutionRoute.id}
+            aria-describedby={`${fieldId}-route-description`}
+            disabled={busy !== null || !manifest}
+            onChange={(event) => {
+              ownerInteracted.current = true
+              setExecutionRouteId(event.target.value)
+              setExternalEgressApproved(false)
+              setAssistantError(null)
+            }}
+          >
+            {executionRoutes.map((route) => <option key={route.id} value={route.id}>{route.label}</option>)}
+          </select>
+          <p id={`${fieldId}-route-description`} className={styles.routeDisclosure} aria-live="polite">
+            {selectedExecutionRoute.external
+              ? `External and metered. HERMES sends the governed request and the three allowlisted ${project.name} files to Cerebras. Source changes only after review and Apply. No implicit fallback.`
+              : `Runs inside HERMES. The request and ${project.name} source stay in the lab.`}
+          </p>
+          {routeOptionsError ? <p className={styles.routeUnavailable}>External routes are unavailable; local HERMES remains available.</p> : null}
+          {selectedExecutionRoute.external ? (
+            <label className={styles.egressApproval}>
+              <input
+                type="checkbox"
+                checked={externalEgressApproved}
+                disabled={busy !== null}
+                onChange={(event) => setExternalEgressApproved(event.target.checked)}
+              />
+              I confirm this request contains only public or sanitized content and approve sending it with the allowlisted application source to Cerebras.
+            </label>
+          ) : null}
+        </div>
+        <label htmlFor={`${fieldId}-request`}>Ask HERMES to change {project.name}</label>
+        <div className={styles.requestRow}>
+          <textarea
+            id={`${fieldId}-request`}
+            value={draft}
+            onChange={(event) => {
+              ownerInteracted.current = true
+              setDraft(event.target.value)
+              if (selectedExecutionRoute.external && externalEgressApproved) setExternalEgressApproved(false)
+            }}
+            rows={2}
+            maxLength={MAX_REQUEST_LENGTH}
+            disabled={busy !== null || !manifest}
+            placeholder={`Describe one visible change to ${project.name}.`}
+          />
+          <button type="submit" className={styles.ask} disabled={busy !== null || !manifest || (selectedExecutionRoute.external && !externalEgressApproved)}>
+            {selectedExecutionRoute.external ? "Ask HERMES via Cerebras" : "Ask HERMES"}
+          </button>
+        </div>
+      </form>
+
+      {submittedRequest ? (
+        <section className={styles.transcript} aria-label="Submitted request">
+          <span>Submitted request</span><blockquote>{submittedRequest}</blockquote>
+        </section>
+      ) : null}
+      <section className={styles.activity} aria-label="Observed HERMES activity">
+        <div className={styles.activityHeader}><span>Observed activity</span><span>{events.length} milestone{events.length === 1 ? "" : "s"}</span></div>
+        <ol className={styles.log} role="log" aria-label="HERMES activity" aria-live="polite">
+          {events.map((entry, index) => (
+            <li key={`${entry.stage}-${entry.at}-${index}`}><span>{entry.detail}</span><time dateTime={entry.at}>{entry.at}</time></li>
+          ))}
+        </ol>
+      </section>
+      {status ? <p className={styles.status} role="status" aria-live="polite">{status}</p> : null}
+      {assistantError ? <p className={styles.error} role="alert">{assistantError}</p> : null}
+      {proposal ? (
+        <ProposalReview
+          proposal={proposal}
+          applying={busy === "apply"}
+          rejecting={busy === "reject"}
+          applyBlocked={applyBlocked}
+          confirmingReject={confirmingReject}
+          rejectionReason={rejectionReason}
+          onApply={() => void applyProposal()}
+          onBeginReject={() => {
+            ownerInteracted.current = true
+            setConfirmingReject(true)
+            setAssistantError(null)
+          }}
+          onCancelReject={() => {
+            setConfirmingReject(false)
+            setRejectionReason("")
+          }}
+          onRejectionReasonChange={setRejectionReason}
+          onReject={() => void rejectProposal()}
+          onReviewNext={() => void reviewNextProposal()}
+        />
+      ) : null}
+    </section>
+  )
+}
+
+export function ApplicationAssistant({
+  project,
+  onPreviewRefresh,
+}: Readonly<{
+  project: ApplicationVisibleWorkspaceProject
+  onPreviewRefresh: () => void
+}>) {
+  if (project.application.contract === "legacy-v1-v3") {
+    return <LegacyApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
+  }
+  return <GenericApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
+}
+
+export function HelloApplicationAssistant({
+  project = HELLO_APPLICATION_WORKSPACE_PROJECT,
+  onPreviewRefresh,
+}: Readonly<{
+  project?: ApplicationVisibleWorkspaceProject
+  onPreviewRefresh: () => void
+}>) {
+  return <ApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
 }

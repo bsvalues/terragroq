@@ -1,10 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AppWindow, Check, Layers3, MousePointer2 } from "lucide-react"
 
+import type { VisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
 import styles from "./developer-preview-surface.module.css"
-import { HelloApplicationControls } from "./hello-application-controls"
+import { ApplicationControls } from "./hello-application-controls"
+import type { ApplicationRuntimeState } from "./application-ui-contract"
 
 export function developerPreviewWindowTitle(projectName: string): string {
   const name = projectName.trim() || "Project"
@@ -12,24 +14,32 @@ export function developerPreviewWindowTitle(projectName: string): string {
 }
 
 export function DeveloperPreviewSurface({
-  projectKey,
-  projectName,
+  project,
   runningAppUrl,
   onInspectComposition,
 }: Readonly<{
-  projectKey: string
-  projectName: string
+  project: VisibleWorkspaceProject
   runningAppUrl: string | null
   onInspectComposition?: () => void
 }>) {
   const [interactionCount, setInteractionCount] = useState(0)
   const [previewRevision, setPreviewRevision] = useState(0)
-  const name = projectName.trim() || "Project"
-  const terraFusionContract = projectKey === "terrafusion"
-  const helloApplication = projectKey === "hello-application"
+  const [applicationRuntimeState, setApplicationRuntimeState] = useState<ApplicationRuntimeState | "checking">("checking")
+  const name = project.name.trim() || "Project"
+  const terraFusionContract = project.kind === "core" && project.preview === "terrafusion"
+  const application = project.kind === "application" ? project : null
+
+  useEffect(() => {
+    setInteractionCount(0)
+    setPreviewRevision(0)
+    setApplicationRuntimeState("checking")
+  }, [project.key])
+
+  const applicationRunning = applicationRuntimeState === "running"
+  const previewUrl = application?.application.previewUrl ?? runningAppUrl
 
   return (
-    <div className={`${styles.previewHost} ${helloApplication ? styles.helloPreviewHost : ""}`}>
+    <div className={`${styles.previewHost} ${application ? styles.applicationPreviewHost : ""}`}>
       {terraFusionContract && onInspectComposition ? (
         <button
           type="button"
@@ -43,17 +53,38 @@ export function DeveloperPreviewSurface({
         </button>
       ) : null}
 
-      {runningAppUrl ? (
+      {application ? (
         <>
-          {helloApplication ? <HelloApplicationControls onPreviewRefresh={() => setPreviewRevision((current) => current + 1)} /> : null}
-          <iframe
-            key={previewRevision}
-            src={runningAppUrl}
-            title={`Running ${name} application`}
-            sandbox={helloApplication ? "allow-scripts" : "allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"}
-            className={styles.runtimeFrame}
+          <ApplicationControls
+            key={project.key}
+            project={application}
+            onRuntimeStateChange={setApplicationRuntimeState}
+            onPreviewRefresh={() => setPreviewRevision((current) => current + 1)}
           />
+          {applicationRunning && previewUrl ? (
+            <iframe
+              key={previewRevision}
+              src={previewUrl}
+              title={`Running ${name} application`}
+              sandbox="allow-scripts"
+              className={styles.runtimeFrame}
+            />
+          ) : (
+            <div className={styles.applicationUnavailable} role="status">
+              <AppWindow size={22} aria-hidden />
+              <strong>{applicationRuntimeState === "checking" ? "Checking contained runtime" : "Contained runtime is not running"}</strong>
+              <span>Start the contained runtime to open the real {name} preview.</span>
+            </div>
+          )}
         </>
+      ) : runningAppUrl ? (
+        <iframe
+          key={previewRevision}
+          src={runningAppUrl}
+          title={`Running ${name} application`}
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
+          className={styles.runtimeFrame}
+        />
       ) : terraFusionContract ? (
         <div className={styles.unavailable} role="status">
           <AppWindow size={26} aria-hidden />

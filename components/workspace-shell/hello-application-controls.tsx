@@ -3,25 +3,11 @@
 import { useEffect, useRef, useState } from "react"
 import { Play, RotateCw, Square } from "lucide-react"
 
-import { HelloApplicationAssistant } from "./hello-application-assistant"
+import type { ApplicationVisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
+import { HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
+import { ApplicationAssistant, HelloApplicationAssistant } from "./hello-application-assistant"
+import { adaptApplicationRuntimePayload, type ApplicationRuntimeState, type ApplicationRuntimeView } from "./application-ui-contract"
 import styles from "./hello-application-controls.module.css"
-
-type RuntimeSnapshot = Readonly<{
-  state: "stopped" | "starting" | "running" | "failed"
-  pid: number | null
-  url: string | null
-  error?: string | null
-}>
-
-type RuntimeTruth = Readonly<{
-  runtimeBuild: Readonly<{ sha: string; builtAt: string | null }>
-  activeProjectHead: string
-}>
-
-type RuntimeStatusPayload = Readonly<{
-  runtime: RuntimeSnapshot
-  truth: RuntimeTruth
-}>
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json() as T & { error?: string }
@@ -33,16 +19,22 @@ function message(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback
 }
 
-async function readRuntimeStatus(): Promise<RuntimeStatusPayload> {
-  const response = await fetch("/api/projects/hello-application/runtime", { cache: "no-store" })
-  return responseJson<RuntimeStatusPayload>(response)
+async function readRuntimeStatus(project: ApplicationVisibleWorkspaceProject): Promise<ApplicationRuntimeView> {
+  const response = await fetch(project.application.runtimeUrl, { cache: "no-store" })
+  return adaptApplicationRuntimePayload(project, await responseJson<unknown>(response))
 }
 
-export function HelloApplicationControls({
+export function ApplicationControls({
+  project,
   onPreviewRefresh,
-}: Readonly<{ onPreviewRefresh: () => void }>) {
-  const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null)
-  const [runtimeTruth, setRuntimeTruth] = useState<RuntimeTruth | null>(null)
+  onRuntimeStateChange,
+}: Readonly<{
+  project: ApplicationVisibleWorkspaceProject
+  onPreviewRefresh: () => void
+  onRuntimeStateChange?: (state: ApplicationRuntimeState) => void
+}>) {
+  const [runtime, setRuntime] = useState<ApplicationRuntimeView | null>(null)
+  const [runtimeState, setRuntimeState] = useState<ApplicationRuntimeState | null>(null)
   const [runtimeBusy, setRuntimeBusy] = useState(true)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const runtimeOperationInFlight = useRef(false)
@@ -53,6 +45,10 @@ export function HelloApplicationControls({
   useEffect(() => {
     const lifecycle = ++runtimeLifecycle.current
     mounted.current = true
+    setRuntime(null)
+    setRuntimeState(null)
+    setRuntimeError(null)
+    setRuntimeBusy(true)
     requestRuntimeRead(false, lifecycle)
     return () => {
       if (runtimeLifecycle.current !== lifecycle) return
@@ -61,7 +57,7 @@ export function HelloApplicationControls({
       runtimeOperationInFlight.current = false
       queuedRuntimeRead.current = false
     }
-  }, [])
+  }, [project.key])
 
   function activeRuntimeLifecycle(lifecycle: number) {
     return mounted.current && runtimeLifecycle.current === lifecycle
@@ -80,13 +76,15 @@ export function HelloApplicationControls({
 
   async function performRuntimeRead(lifecycle: number) {
     try {
-      const payload = await readRuntimeStatus()
+      const payload = await readRuntimeStatus(project)
       if (activeRuntimeLifecycle(lifecycle) && !queuedRuntimeRead.current) {
-        setRuntime(payload.runtime)
-        setRuntimeTruth(payload.truth)
+        setRuntime(payload)
+        setRuntimeState(payload.state)
+        onRuntimeStateChange?.(payload.state)
       }
     } catch (cause) {
       if (activeRuntimeLifecycle(lifecycle) && !queuedRuntimeRead.current) {
+        setRuntime(null)
         setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_STATUS_UNAVAILABLE")}`)
       }
     } finally {
@@ -98,7 +96,7 @@ export function HelloApplicationControls({
     if (!activeRuntimeLifecycle(lifecycle)) return
     if (clearTruth) {
       setRuntimeError(null)
-      setRuntimeTruth(null)
+      setRuntime(null)
     }
     if (runtimeOperationInFlight.current) {
       queuedRuntimeRead.current = true
@@ -120,19 +118,19 @@ export function HelloApplicationControls({
     runtimeOperationInFlight.current = true
     setRuntimeBusy(true)
     setRuntimeError(null)
-    setRuntimeTruth(null)
+    setRuntime(null)
     try {
-      const response = await fetch("/api/projects/hello-application/runtime", {
+      const response = await fetch(project.application.runtimeUrl, {
         method,
         headers: { "content-type": "application/json" },
       })
-      const payload = await responseJson<{ runtime: RuntimeSnapshot }>(response)
+      await responseJson<unknown>(response)
       if (activeRuntimeLifecycle(lifecycle)) {
-        setRuntime(payload.runtime)
         onPreviewRefresh()
       }
     } catch (cause) {
       if (activeRuntimeLifecycle(lifecycle)) {
+        setRuntime(null)
         setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_RUNTIME_FAILED")}`)
       }
     } finally {
@@ -142,15 +140,14 @@ export function HelloApplicationControls({
   }
 
   return (
-    <section className={styles.controls} aria-label="Hello Application runtime and HERMES change controls">
+    <section className={styles.controls} aria-label={`${project.name} runtime and HERMES change controls`}>
       <div className={styles.runtimeStrip}>
-        <span className={styles.identity}><span aria-hidden className={styles.signal} />Hello Application</span>
-        <span className={styles.runtimeState} data-state={runtime?.state ?? "loading"}>
-          Runtime {runtime?.state ?? "checking"}
-          {runtime?.pid ? <span> · PID {runtime.pid}</span> : null}
+        <span className={styles.identity}><span aria-hidden className={styles.signal} />{project.name}</span>
+        <span className={styles.runtimeState} data-state={runtimeState ?? "loading"}>
+          Runtime {runtimeState ?? "checking"}
         </span>
         <span className={styles.actions}>
-          {runtime?.state === "running" ? (
+          {runtimeState === "running" ? (
             <button type="button" onClick={() => void changeRuntime("DELETE")} disabled={runtimeBusy} aria-label="Stop application">
               <Square size={13} aria-hidden /> Stop
             </button>
@@ -165,15 +162,25 @@ export function HelloApplicationControls({
         </span>
       </div>
 
-      {runtimeTruth ? (
-        <div className={styles.runtimeTruth} aria-label="Hello Application runtime truth">
-          <span>Runtime build <code>{runtimeTruth.runtimeBuild.sha}</code></span>
-          <span>Active project HEAD <code>{runtimeTruth.activeProjectHead}</code></span>
+      {runtime ? (
+        <div className={styles.runtimeTruth} aria-label={`${project.name} runtime truth`}>
+          <span>Runtime build <code>{runtime.runtimeBuildSha}</code></span>
+          <span>Active project HEAD <code>{runtime.activeProjectHead}</code></span>
         </div>
       ) : null}
 
       {runtimeError ? <p className={styles.runtimeError} role="alert">{runtimeError}</p> : null}
-      <HelloApplicationAssistant onPreviewRefresh={() => { void refreshPreviewAndTruth() }} />
+      {project.application.contract === "legacy-v1-v3" ? (
+        <HelloApplicationAssistant project={project} onPreviewRefresh={() => { void refreshPreviewAndTruth() }} />
+      ) : (
+        <ApplicationAssistant project={project} onPreviewRefresh={() => { void refreshPreviewAndTruth() }} />
+      )}
     </section>
   )
+}
+
+export function HelloApplicationControls({
+  onPreviewRefresh,
+}: Readonly<{ onPreviewRefresh: () => void }>) {
+  return <ApplicationControls project={HELLO_APPLICATION_WORKSPACE_PROJECT} onPreviewRefresh={onPreviewRefresh} />
 }

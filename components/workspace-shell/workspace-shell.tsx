@@ -41,7 +41,7 @@ import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 import type { CrossRepositoryChangeSetProjection } from "@/lib/environment/cross-repository-change-set"
 import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
-import type { VisibleWorkspaceProject, WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
+import { DEFAULT_VISIBLE_WORKSPACE_PROJECTS, type VisibleWorkspaceProject, type WorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 import { ProjectSwitcher } from "./project-switcher"
 
 type LineReply = Readonly<{
@@ -684,28 +684,30 @@ export function applyRestoredWorkspaceSelection(
 }
 
 function projectFallbackSpace(
-  projectKey: WorkspaceProjectKey,
+  project: VisibleWorkspaceProject,
   viewportWidth = 1440,
   viewportHeight = 900,
 ): WorkspaceSpace {
   return defaultSpace(
     viewportWidth,
     viewportHeight,
-    projectKey,
-    projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion",
+    project.key,
+    project.name,
   )
 }
 
 export function WorkspaceShell({
   initialSummon = null,
   projectKey = "terrafusion",
-  visibleProjects = [{ key: "terrafusion", name: "TerraFusion OS" }, { key: "williamos", name: "WilliamOS" }],
+  visibleProjects = DEFAULT_VISIBLE_WORKSPACE_PROJECTS,
 }: {
   initialSummon?: SummonedSurface | null
   projectKey?: WorkspaceProjectKey
   visibleProjects?: readonly VisibleWorkspaceProject[]
 }) {
-  const [space, setSpace] = useState<WorkspaceSpace>(() => projectFallbackSpace(projectKey))
+  const visibleProject = visibleProjects.find((candidate) => candidate.key === projectKey)
+    ?? ({ key: projectKey, name: "Project", kind: "core", preview: "neutral" } as const)
+  const [space, setSpace] = useState<WorkspaceSpace>(() => projectFallbackSpace(visibleProject))
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [persistenceError, setPersistenceError] = useState<string | null>(null)
@@ -1159,7 +1161,7 @@ export function WorkspaceShell({
 
   useEffect(() => {
     let cancelled = false
-    const fallback = projectFallbackSpace(projectKey, window.innerWidth, window.innerHeight)
+    const fallback = projectFallbackSpace(visibleProject, window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
       const response = await fetch(spaceEndpoint(projectKey), { cache: "no-store" })
       const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
@@ -1567,7 +1569,7 @@ export function WorkspaceShell({
     const job: PersistJob = {
       worldId: id,
       revision,
-      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision, projectRef.current?.name ?? (projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion")) })),
+      body: JSON.stringify(spaceMutationBody(projectKey, { worldId: id, space: spaceToServer(stateRef.current, revision, projectRef.current?.name ?? visibleProject.name) })),
       storage: storageRef.current,
       browserKey: browserStorageKeyRef.current,
       epoch: transitionEpochRef.current,
@@ -3122,7 +3124,7 @@ export function WorkspaceShell({
       (repository) => repository.key === space.selectedFileRef?.repositoryResourceKey,
     )?.label ?? null
     : null
-  const previewProjectName = project?.name ?? (projectKey === "williamos" ? "WilliamOS" : projectKey === "hello-application" ? "Hello Application" : "TerraFusion")
+  const previewProjectName = project?.name ?? visibleProject.name
   const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
     : selectedKind === "preview" ? projectKey === "terrafusion"
       ? "TerraFusion developer preview"
@@ -4616,10 +4618,11 @@ export function WorkspaceShell({
         </WindowFrame>
         <WindowFrame id="running-app" title={developerPreviewWindowTitle(previewProjectName)} geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
           <DeveloperPreviewSurface
-            projectKey={projectKey}
-            projectName={previewProjectName}
+            project={visibleProject}
             runningAppUrl={space.runningAppUrl}
-            onInspectComposition={projectKey === "terrafusion" ? () => void openRepositoryDeliverySurface("preview-composition") : undefined}
+            onInspectComposition={visibleProject.kind === "core" && visibleProject.preview === "terrafusion"
+              ? () => void openRepositoryDeliverySurface("preview-composition")
+              : undefined}
           />
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
