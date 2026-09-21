@@ -49,6 +49,94 @@ const reviewProposal = {
   reviewPatch,
 }
 
+const genericApplicationId = "focus-board"
+const genericProposalId = "33333333-3333-4333-8333-333333333333"
+const genericOldHead = "6".repeat(40)
+const genericAppliedHead = "7".repeat(40)
+const genericPatch = "diff --git a/src/app.js b/src/app.js\n+document.body.dataset.applied = 'true';\n"
+const genericRequest = "Change the visible starter heading"
+const genericProgress = [
+  ["accepted", "Request accepted"],
+  ["workspace_ready", "Isolated application workspace ready"],
+  ["resident_started", "HERMES AI is editing the isolated application workspace"],
+  ["resident_finished", "HERMES AI editing finished"],
+  ["validation_started", "Contained application validation started"],
+  ["ready_for_review", "Application proposal ready for review"],
+].map(([stage, detail], index) => ({ stage, detail, at: `2026-09-21T01:00:0${index}.000Z` }))
+
+function genericProposal(status: "READY_FOR_REVIEW" | "APPLIED") {
+  return {
+    schemaVersion: 4,
+    proposalId: genericProposalId,
+    applicationId: genericApplicationId,
+    manifestDigest: "8".repeat(64),
+    repositoryDigest: "9".repeat(64),
+    writablePaths: ["src/index.html", "src/styles.css", "src/app.js"],
+    status,
+    requestedBy: "owner",
+    requestText: genericRequest,
+    requestSha256: sha256(genericRequest),
+    executionRoute: "hermes-local",
+    executionProvider: "hermes-local",
+    executionNode: "hermes-node",
+    model: "williamos-qwen3-4b:64k",
+    threadId: "thread-browser-generic",
+    turnId: "turn-browser-generic",
+    providerExecution: null,
+    progress: genericProgress,
+    createdAt: "2026-09-21T01:00:00.000Z",
+    baseSha: genericOldHead,
+    candidateSha: genericAppliedHead,
+    baseRef: "refs/heads/main",
+    branch: `codex/williamos-app-${genericApplicationId}-${genericProposalId}`,
+    changedPaths: ["src/app.js"],
+    patchSha256: sha256(genericPatch),
+    validation: { status: "passed", command: "node --test test/application.test.mjs", output: "ok" },
+    appliedAt: status === "APPLIED" ? "2026-09-21T01:00:06.000Z" : null,
+    appliedCommit: status === "APPLIED" ? genericAppliedHead : null,
+    rejectedAt: null,
+    rejectionReason: null,
+    applyStartedAt: null,
+    applyToken: null,
+    applyProcessId: null,
+    quarantinedAt: null,
+    quarantineReason: null,
+    reviewPatch: genericPatch,
+  }
+}
+
+function genericRuntimePayload(sourceHead: string) {
+  return {
+    runtime: {
+      schemaVersion: 1,
+      applicationId: genericApplicationId,
+      desired: "running",
+      observed: "running",
+      policyDigest: "a".repeat(64),
+      recipeDigest: "b".repeat(64),
+      containerName: `williamos-application-${genericApplicationId}`,
+      active: {
+        generation: sourceHead === genericOldHead ? "c".repeat(64) : "d".repeat(64),
+        sourceHead,
+        manifestDigest: "8".repeat(64),
+        sourceDigest: "e".repeat(64),
+        artifactSha256: "f".repeat(64),
+        imageId: `sha256:${"1".repeat(64)}`,
+        staticImageId: `sha256:${"2".repeat(64)}`,
+        containerId: "3".repeat(64),
+        validated: true,
+      },
+      retiring: null,
+      updatedAt: "2026-09-21T01:00:07.000Z",
+      error: null,
+    },
+    truth: {
+      runtimeBuild: { sha: "4".repeat(40), builtAt: "2026-09-21T00:00:00.000Z" },
+      activeProjectHead: sourceHead,
+    },
+  }
+}
+
 test.beforeAll(() => {
   expect(
     ownerStorageState,
@@ -239,4 +327,114 @@ test("the explicit Cerebras route is reachable and never silently becomes local"
 
   await page.reload({ waitUntil: "domcontentloaded" })
   await expect(controls.getByRole("combobox", { name: "AI execution route" })).toHaveValue("hermes-local")
+})
+
+test("a generic v4 Apply rebuilds the immutable runtime before the new starter behavior becomes visible", async ({ page }) => {
+  let activeHead = genericOldHead
+  let applied = false
+  let proposalListReads = 0
+  const previewHeads: string[] = []
+  const beforeDocument = starterDocument.replace("Your next small step.", "Before governed Apply")
+  const afterDocument = starterDocument.replace("Your next small step.", "After governed Apply")
+  await page.setViewportSize({ width: 820, height: 560 })
+
+  await page.route(`**/api/projects/${genericApplicationId}/application-manifest`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        manifest: {
+          schemaVersion: 1,
+          id: genericApplicationId,
+          displayName: "Focus Board",
+          adapter: "static-web-v1",
+          source: { document: "src/index.html", styles: "src/styles.css", script: "src/app.js", test: "test/application.test.mjs" },
+          ai: { writablePaths: ["src/index.html", "src/styles.css", "src/app.js"] },
+        },
+        manifestDigest: "8".repeat(64),
+        head: genericOldHead,
+      }),
+    })
+  })
+  await page.route(`**/api/projects/${genericApplicationId}/application-execution-routes`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        defaultRoute: "hermes-local",
+        routes: [{ id: "hermes-local", label: "Local HERMES — williamos-qwen3-4b:64k (default)", provider: "hermes-local", model: "williamos-qwen3-4b:64k", external: false, metered: false, available: true }],
+      }),
+    })
+  })
+  await page.route(`**/api/projects/${genericApplicationId}/application-runtime`, async (route) => {
+    if (route.request().method() === "POST") {
+      activeHead = genericAppliedHead
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(genericRuntimePayload(activeHead)) })
+      return
+    }
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(genericRuntimePayload(activeHead)) })
+      return
+    }
+    await route.abort("blockedbyclient")
+  })
+  await page.route(`**/api/projects/${genericApplicationId}/application-proposals/${genericProposalId}/apply`, async (route) => {
+    applied = true
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ proposal: genericProposal("APPLIED") }),
+    })
+  })
+  await page.route(`**/api/projects/${genericApplicationId}/application-proposals`, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.abort("blockedbyclient")
+      return
+    }
+    proposalListReads += 1
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ proposals: [genericProposal(applied ? "APPLIED" : "READY_FOR_REVIEW")] }),
+    })
+  })
+  await page.route(`**/api/projects/${genericApplicationId}/application-preview`, async (route) => {
+    previewHeads.push(activeHead)
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      headers: { "cache-control": "no-store" },
+      body: activeHead === genericAppliedHead ? afterDocument : beforeDocument,
+    })
+  })
+
+  const response = await page.goto(`/?project=${genericApplicationId}`, { waitUntil: "domcontentloaded" })
+  expect(response?.ok()).toBe(true)
+  expect(new URL(page.url()).searchParams.get("project")).toBe(genericApplicationId)
+
+  const controls = page.getByRole("region", { name: "Focus Board runtime and HERMES change controls" })
+  await expect(controls).toBeVisible()
+  const iframe = page.locator('iframe[title="Running Focus Board application"]')
+  await expect(iframe).toHaveAttribute("sandbox", "allow-scripts")
+  const preview = page.frameLocator('iframe[title="Running Focus Board application"]')
+  await expect(preview.getByRole("heading", { name: "Before governed Apply" })).toBeVisible()
+
+  const apply = controls.getByRole("button", { name: "Apply proposal" })
+  await apply.scrollIntoViewIfNeeded()
+  await expect(apply).toBeInViewport()
+  await apply.click()
+
+  await expect(controls.getByText("Applied", { exact: true })).toBeVisible()
+  await expect(controls.getByText("Proposal applied. Running application rebuilt from the applied commit.")).toBeVisible()
+  await expect(controls.getByRole("button", { name: "Review next proposal" })).toBeVisible()
+  await expect(controls.getByRole("button", { name: "Apply proposal" })).toHaveCount(0)
+  await expect(preview.getByRole("heading", { name: "After governed Apply" })).toBeVisible()
+  await expect(iframe).toHaveAttribute("sandbox", "allow-scripts")
+  expect(previewHeads).toEqual([genericOldHead, genericAppliedHead])
+  expect(proposalListReads).toBe(1)
+
+  await controls.getByRole("button", { name: "Review next proposal" }).click()
+  await expect(controls.getByText("No other pending proposal is ready for review.")).toBeVisible()
+  expect(proposalListReads).toBe(2)
 })

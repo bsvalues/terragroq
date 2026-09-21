@@ -3,11 +3,13 @@
 import { FormEvent, useEffect, useRef, useState } from "react"
 import { Bot, Check, ShieldCheck } from "lucide-react"
 
+import { isApplicationProposalErrorCode, type ApplicationProposalErrorCode } from "@/lib/applications/application-proposal-error-codes"
 import type { ApplicationVisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
 import { HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
 import {
   adaptApplicationProposal,
   parseApplicationManifestPayload,
+  type ApplicationActivationResult,
   type ApplicationManifestView,
   type ApplicationProgressEntry,
   type ApplicationProposalView,
@@ -716,7 +718,11 @@ function ProposalReview({
             {proposal.reviewPatch ? (
               <pre className={styles.patch} aria-label="Proposed patch" tabIndex={0}>{proposal.reviewPatch}</pre>
             ) : (
-              <p className={styles.reviewUnavailable}>Patch unavailable — Apply is blocked.</p>
+              <p className={styles.reviewUnavailable}>
+                {proposal.status === "READY_FOR_REVIEW"
+                  ? "Patch unavailable — Apply is blocked."
+                  : "Patch unavailable in this retained receipt."}
+              </p>
             )}
           </section>
         </div>
@@ -1286,10 +1292,34 @@ const APPLICATION_EXTERNAL_PROGRESS_MILESTONES = [
   ["ready_for_review", "Application proposal ready for review"],
 ] as const
 
+const APPLICATION_PROVIDER_FAILURE_MESSAGES: Readonly<Partial<Record<ApplicationProposalErrorCode, string>>> = Object.freeze({
+  EXTERNAL_API_AUTH_FAILURE: "WilliamOS could not authenticate the Cerebras request. Check the governed credential bridge, then try again.",
+  EXTERNAL_API_COST_EVIDENCE_MISSING: "Cerebras cost evidence was incomplete, so WilliamOS refused the response. Try again after provider evidence is restored.",
+  EXTERNAL_API_INCOMPLETE_RESPONSE: "Cerebras returned an incomplete response. No proposal was admitted; try again.",
+  EXTERNAL_API_INSUFFICIENT_CREDIT: "The Cerebras account has insufficient credit for this request. Choose local HERMES or restore provider credit.",
+  EXTERNAL_API_KEY_MISSING: "Cerebras credentials are unavailable to the governed bridge. Choose local HERMES or restore the credential.",
+  EXTERNAL_API_MALFORMED_RESPONSE: "The Cerebras response could not be verified. No proposal was admitted; try again.",
+  EXTERNAL_API_OUTAGE: "Cerebras is temporarily unavailable. Choose local HERMES or try the external route again later.",
+  EXTERNAL_API_RATE_LIMIT: "The Cerebras rate limit was reached. Choose local HERMES or retry after the limit clears.",
+  EXTERNAL_API_TIMEOUT: "The Cerebras request timed out. Choose local HERMES or retry the external route.",
+  EXTERNAL_API_UNSUPPORTED_CAPABILITY: "The selected Cerebras model does not support the required application change capability. Choose another route.",
+})
+
 function applicationFailureMessage(cause: unknown, fallback: string): string {
   const code = cause instanceof Error ? cause.message : ""
+  if (isApplicationProposalErrorCode(code)) {
+    const providerMessage = APPLICATION_PROVIDER_FAILURE_MESSAGES[code]
+    if (providerMessage) return providerMessage
+  } else if (code.startsWith("The HERMES response ")) {
+    return code
+  } else {
+    return fallback
+  }
   if (code.includes("EXECUTION_ROUTE_UNAVAILABLE") || code.includes("CEREBRAS_UNAVAILABLE")) {
     return "The selected AI route is unavailable. Choose another available route and try again."
+  }
+  if (code.includes("CEREBRAS") || code === "EXTERNAL_EGRESS_REFUSED" || code === "SPEND_CAP_EXCEEDS_CEILING") {
+    return "The external AI route refused this bounded request. Review the route and approval, then try again or choose local HERMES."
   }
   if (code.includes("STALE_BASE") || code.includes("MANIFEST_DRIFT")) {
     return "The application changed after this proposal was created. Review a fresh proposal."
@@ -1297,8 +1327,7 @@ function applicationFailureMessage(cause: unknown, fallback: string): string {
   if (code.includes("REPOSITORY_BUSY")) return "The application repository is busy. Try again after the current operation finishes."
   if (code.includes("VALIDATION")) return "The contained application validation did not pass. No source change was applied."
   if (code.includes("SECRET_DETECTED")) return "The proposal was refused because it may contain a secret."
-  if (code.includes("APPLICATION_PROPOSAL")) return fallback
-  return code || fallback
+  return fallback
 }
 
 async function applicationResponseJson(response: Response): Promise<unknown> {
@@ -1450,7 +1479,7 @@ async function readApplicationProposalStream(
       terminal = { type: "proposal", proposal: await verifiedApplicationProposal(project, manifest, value.proposal) }
       return
     }
-    if (value.type === "error" && exactKeys(value, ["type", "error"]) && nonempty(value.error)) {
+    if (value.type === "error" && exactKeys(value, ["type", "error"]) && isApplicationProposalErrorCode(value.error)) {
       terminal = { type: "error", error: value.error }
       return
     }
@@ -1492,10 +1521,10 @@ function pendingApplicationProposal(
 
 function GenericApplicationAssistant({
   project,
-  onPreviewRefresh,
+  onApplied,
 }: Readonly<{
   project: ApplicationVisibleWorkspaceProject
-  onPreviewRefresh: () => void
+  onApplied?: (appliedCommit: string) => Promise<ApplicationActivationResult>
 }>) {
   const [manifest, setManifest] = useState<ApplicationManifestView | null>(null)
   const [draft, setDraft] = useState("")
@@ -1508,6 +1537,7 @@ function GenericApplicationAssistant({
   const [busy, setBusy] = useState<"proposal" | "apply" | "reject" | null>(null)
   const [status, setStatus] = useState(`Loading ${project.name} governance boundary.`)
   const [assistantError, setAssistantError] = useState<string | null>(null)
+  const [runtimeActivationError, setRuntimeActivationError] = useState<string | null>(null)
   const [executionRoutes, setExecutionRoutes] = useState<readonly ExecutionRoute[]>([LOCAL_EXECUTION_ROUTE])
   const [executionRouteId, setExecutionRouteId] = useState(DEFAULT_EXECUTION_ROUTE)
   const [externalEgressApproved, setExternalEgressApproved] = useState(false)
@@ -1526,6 +1556,36 @@ function GenericApplicationAssistant({
     setSubmittedRequest(value.requestText ?? null)
     setEvents(value.progress ?? [])
     setStatus(message)
+  }
+
+  async function retainAppliedReceipt(applied: ApplicationProposalView) {
+    setProposal(applied)
+    setAssistantError(null)
+    setRuntimeActivationError(null)
+    const appliedCommit = applied.appliedCommit
+    if (!appliedCommit) {
+      setStatus("Proposal applied. Start application to build and open the applied commit.")
+      return
+    }
+    let activation: ApplicationActivationResult
+    try {
+      activation = onApplied ? await onApplied(appliedCommit) : { outcome: "start-required" }
+    } catch {
+      activation = {
+        outcome: "failed",
+        message: "The source change is applied, but the contained runtime could not be rebuilt. Use Start application to retry.",
+      }
+    }
+    if (activation.outcome === "activated") {
+      setStatus("Proposal applied. Running application rebuilt from the applied commit.")
+      return
+    }
+    if (activation.outcome === "start-required") {
+      setStatus("Proposal applied. Start application to build and open the applied commit.")
+      return
+    }
+    setStatus("Proposal applied. Runtime rebuild needs attention.")
+    setRuntimeActivationError(activation.message)
   }
 
   useEffect(() => {
@@ -1567,6 +1627,7 @@ function GenericApplicationAssistant({
     ownerInteracted.current = true
     operationInFlight.current = true
     setAssistantError(null)
+    setRuntimeActivationError(null)
     setStatus("Checking for another proposal.")
     try {
       const proposals = await readApplicationProposalList(project, manifest)
@@ -1606,6 +1667,7 @@ function GenericApplicationAssistant({
     setRejectionReason("")
     setApplyBlocked(false)
     setAssistantError(null)
+    setRuntimeActivationError(null)
     setStatus("Request submitted to HERMES.")
     setBusy("proposal")
     operationInFlight.current = true
@@ -1657,6 +1719,7 @@ function GenericApplicationAssistant({
     operationInFlight.current = true
     setBusy("apply")
     setAssistantError(null)
+    setRuntimeActivationError(null)
     setStatus("Applying the reviewed proposal.")
     try {
       const response = await fetch(`${project.application.proposalsUrl}/${encodeURIComponent(reviewed.proposalId)}/apply`, { method: "POST" })
@@ -1666,21 +1729,18 @@ function GenericApplicationAssistant({
       if (applied.status !== "APPLIED" || !sameApplicationProposalEvidence(applied, reviewed)) {
         throw new Error("APPLICATION_PROPOSAL_RESPONSE_INVALID")
       }
-      setProposal(applied)
-      setStatus("Proposal applied. Preview refreshed.")
-      onPreviewRefresh()
+      await retainAppliedReceipt(applied)
     } catch (cause) {
       try {
         const current = await reconcile(reviewed)
-        setProposal(current)
         if (current.status === "APPLIED") {
-          setAssistantError(null)
-          setStatus("Proposal applied. Preview refreshed.")
-          onPreviewRefresh()
+          await retainAppliedReceipt(current)
         } else if (current.status === "READY_FOR_REVIEW") {
+          setProposal(current)
           setStatus("Proposal remains ready for review.")
           setAssistantError(applicationFailureMessage(cause, "Apply did not complete."))
         } else {
+          setProposal(current)
           setStatus(`Proposal ${statusLabel(current.status).toLowerCase()}.`)
           setAssistantError(null)
         }
@@ -1831,6 +1891,7 @@ function GenericApplicationAssistant({
       </section>
       {status ? <p className={styles.status} role="status" aria-live="polite">{status}</p> : null}
       {assistantError ? <p className={styles.error} role="alert">{assistantError}</p> : null}
+      {runtimeActivationError ? <p className={styles.error} role="alert">{runtimeActivationError}</p> : null}
       {proposal ? (
         <ProposalReview
           proposal={proposal}
@@ -1861,14 +1922,16 @@ function GenericApplicationAssistant({
 export function ApplicationAssistant({
   project,
   onPreviewRefresh,
+  onApplied,
 }: Readonly<{
   project: ApplicationVisibleWorkspaceProject
   onPreviewRefresh: () => void
+  onApplied?: (appliedCommit: string) => Promise<ApplicationActivationResult>
 }>) {
   if (project.application.contract === "legacy-v1-v3") {
     return <LegacyApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
   }
-  return <GenericApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
+  return <GenericApplicationAssistant project={project} onApplied={onApplied} />
 }
 
 export function HelloApplicationAssistant({

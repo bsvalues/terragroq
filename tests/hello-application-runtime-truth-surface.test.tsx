@@ -154,9 +154,10 @@ describe("Hello Application runtime truth surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }))
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
-    const stop = screen.getByRole("button", { name: "Stop application" }) as HTMLButtonElement
-    expect(stop.disabled).toBe(true)
-    fireEvent.click(stop)
+    expect(screen.queryByRole("button", { name: "Stop application" })).toBeNull()
+    const start = screen.getByRole("button", { name: "Start application" }) as HTMLButtonElement
+    expect(start.disabled).toBe(true)
+    fireEvent.click(start)
     expect(fetcher).toHaveBeenCalledTimes(2)
 
     resolveRefresh(payload(refreshedHead))

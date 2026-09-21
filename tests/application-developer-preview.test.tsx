@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/components/workspace-shell/hello-application-assistant", () => ({
   ApplicationAssistant: ({ project }: { project: { name: string } }) => <div>Assistant for {project.name}</div>,
+  HelloApplicationAssistant: ({ project }: { project: { name: string } }) => <div>Assistant for {project.name}</div>,
 }))
 
 import { DeveloperPreviewSurface } from "@/components/workspace-shell/developer-preview-surface"
-import { applicationWorkspaceProject } from "@/lib/projects/workspace-project-key"
+import { applicationWorkspaceProject, HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
 
 const project = applicationWorkspaceProject("focus-board", "Focus Board")
 const truth = { runtimeBuild: { sha: "a".repeat(40), builtAt: null }, activeProjectHead: "b".repeat(40) }
@@ -28,6 +29,15 @@ const record = (observed: "stopped" | "running") => ({
   retiring: null,
   updatedAt: "2026-09-21T00:00:00.000Z",
   error: null,
+})
+
+const legacyRuntime = (state: "stopped" | "running") => ({
+  runtime: {
+    state,
+    pid: state === "running" ? 42 : null,
+    url: state === "running" ? "http://127.0.0.1:43117/" : null,
+  },
+  truth,
 })
 
 afterEach(() => {
@@ -91,5 +101,97 @@ describe("contained application developer preview", () => {
     })))
     expect(await screen.findByText("Runtime stopped", { exact: false })).toBeTruthy()
     expect(screen.getByText("Assistant for Notes Pad")).toBeTruthy()
+  })
+
+  it("immediately withholds a running iframe and stays unavailable when a refresh loses runtime truth", async () => {
+    let rejectRefresh!: (reason: Error) => void
+    const refresh = new Promise<Response>((_resolve, reject) => { rejectRefresh = reject })
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ runtime: record("running"), truth }))
+      .mockReturnValueOnce(refresh)
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface project={project} runningAppUrl={project.application.previewUrl} />)
+
+    expect(await screen.findByTitle("Running Focus Board application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Focus Board application")).toBeNull())
+
+    await act(async () => rejectRefresh(new Error("APPLICATION_RUNTIME_UNAVAILABLE")))
+    expect(await screen.findByText("Runtime unavailable", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Focus Board application")).toBeNull()
+  })
+
+  it("immediately withholds the legacy Hello iframe when a refresh loses runtime truth", async () => {
+    let rejectRefresh!: (reason: Error) => void
+    const refresh = new Promise<Response>((_resolve, reject) => { rejectRefresh = reject })
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(legacyRuntime("running")))
+      .mockReturnValueOnce(refresh)
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    expect(await screen.findByTitle("Running Hello Application application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
+
+    await act(async () => rejectRefresh(new Error("HELLO_APPLICATION_STATUS_UNAVAILABLE")))
+    expect(await screen.findByText("Runtime unavailable", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it("withholds the legacy Hello iframe for the full Stop transition", async () => {
+    let resolveStop!: (response: Response) => void
+    const stop = new Promise<Response>((resolve) => { resolveStop = resolve })
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(legacyRuntime("running")))
+      .mockReturnValueOnce(stop)
+      .mockResolvedValueOnce(Response.json(legacyRuntime("stopped")))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    expect(await screen.findByTitle("Running Hello Application application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop application" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
+
+    await act(async () => resolveStop(Response.json({ runtime: { state: "stopped", pid: null, url: null } })))
+    expect(await screen.findByText("Runtime stopped", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it("does not restore the iframe when Stop succeeds but the authoritative status reread fails", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) {
+        if (fetcher.mock.calls.length === 1) return Response.json({ runtime: record("running"), truth })
+        return Response.json({ error: "APPLICATION_RUNTIME_UNAVAILABLE" }, { status: 503 })
+      }
+      if (init.method === "DELETE") return Response.json({ runtime: record("stopped"), truth })
+      return Response.json({ error: "UNEXPECTED" }, { status: 500 })
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface project={project} runningAppUrl={project.application.previewUrl} />)
+
+    expect(await screen.findByTitle("Running Focus Board application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop application" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Focus Board application")).toBeNull())
+    expect(await screen.findByText("Runtime unavailable", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Focus Board application")).toBeNull()
+  })
+
+  it("never mounts an observed-running stale artifact whose source head is behind project HEAD", async () => {
+    const appliedTruth = { ...truth, activeProjectHead: "6".repeat(40) }
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ runtime: record("running"), truth: appliedTruth }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface project={project} runningAppUrl={project.application.previewUrl} />)
+
+    expect(await screen.findByText("Runtime mismatch", { exact: false })).toBeTruthy()
+    expect(screen.queryByTitle("Running Focus Board application")).toBeNull()
+    expect(screen.getByText(/built from an older source commit/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Start application" })).toBeTruthy()
   })
 })

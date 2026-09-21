@@ -8,8 +8,14 @@ export type ApplicationRuntimeView = Readonly<{
   runtimeBuildSha: string
   runtimeBuiltAt: string | null
   activeProjectHead: string
+  activeSourceHead: string | null
   detail: string | null
 }>
+
+export type ApplicationActivationResult =
+  | Readonly<{ outcome: "activated" }>
+  | Readonly<{ outcome: "start-required" }>
+  | Readonly<{ outcome: "failed"; message: string }>
 
 export type ApplicationManifestView = Readonly<{
   displayName: string
@@ -86,6 +92,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const HEAD_REF = /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._\/-]{0,239}$/
 const APPLICATION_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+const APPLICATION_RUNTIME_ERROR = /^APPLICATION_[A-Z0-9_]{1,80}$/
+const LEGACY_RUNTIME_ERROR = /^(?:APPLICATION|HELLO_APPLICATION)_[A-Z0-9_]{1,80}$/
 const GENERIC_STATUSES = new Set(["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "REJECTED", "QUARANTINED_ROLLBACK_FAILED"])
 const GENERIC_ROUTE_EVIDENCE = Object.freeze({
   "hermes-local": Object.freeze({ provider: "hermes-local", model: "williamos-qwen3-4b:64k", node: "hermes-node" }),
@@ -180,11 +188,18 @@ export function adaptApplicationRuntimePayload(project: ApplicationVisibleWorksp
       || !["stopped", "starting", "running", "failed"].includes(String(runtime.state))
       || (runtime.pid !== null && (!Number.isSafeInteger(runtime.pid) || Number(runtime.pid) <= 0))
       || (runtime.url !== null && typeof runtime.url !== "string")
-      || (runtime.error !== undefined && runtime.error !== null && typeof runtime.error !== "string")) {
+      || (runtime.error !== undefined && runtime.error !== null
+        && (typeof runtime.error !== "string" || !LEGACY_RUNTIME_ERROR.test(runtime.error)))) {
       throw new Error("APPLICATION_RUNTIME_RESPONSE_INVALID")
     }
     const state = runtime.state as ApplicationRuntimeState
-    return { ...truth, state, previewAvailable: state === "running", detail: runtime.error as string | null | undefined ?? null }
+    return {
+      ...truth,
+      state,
+      previewAvailable: state === "running",
+      activeSourceHead: null,
+      detail: runtime.error as string | null | undefined ?? null,
+    }
   }
   const runtime = value.runtime
   if (!exactKeys(runtime, ["schemaVersion", "applicationId", "desired", "observed", "policyDigest", "recipeDigest", "containerName", "active", "retiring", "updatedAt", "error"])
@@ -195,11 +210,25 @@ export function adaptApplicationRuntimePayload(project: ApplicationVisibleWorksp
     || typeof runtime.recipeDigest !== "string" || !SHA256.test(runtime.recipeDigest)
     || runtime.containerName !== `williamos-application-${project.key}`
     || !genericGeneration(runtime.active) || !genericGeneration(runtime.retiring)
-    || !timestamp(runtime.updatedAt) || (runtime.error !== null && typeof runtime.error !== "string")) {
+    || !timestamp(runtime.updatedAt) || (runtime.error !== null
+      && (typeof runtime.error !== "string" || !APPLICATION_RUNTIME_ERROR.test(runtime.error)))) {
     throw new Error("APPLICATION_RUNTIME_RESPONSE_INVALID")
   }
-  const state = runtime.observed as ApplicationRuntimeState
-  return { ...truth, state, previewAvailable: state === "running", detail: runtime.error as string | null }
+  const observed = runtime.observed as ApplicationRuntimeState
+  if (observed === "running" && (!record(runtime.active) || runtime.active.validated !== true
+    || runtime.active.imageId === null || runtime.active.staticImageId === null || runtime.active.containerId === null)) {
+    throw new Error("APPLICATION_RUNTIME_RESPONSE_INVALID")
+  }
+  const activeSourceHead = record(runtime.active) ? runtime.active.sourceHead as string : null
+  const staleRunningArtifact = observed === "running" && activeSourceHead !== truth.activeProjectHead
+  const state = staleRunningArtifact ? "mismatch" : observed
+  return {
+    ...truth,
+    state,
+    previewAvailable: state === "running",
+    activeSourceHead,
+    detail: staleRunningArtifact ? "APPLICATION_RUNTIME_SOURCE_HEAD_MISMATCH" : runtime.error as string | null,
+  }
 }
 
 function relativePath(value: unknown): value is string {
@@ -337,7 +366,6 @@ function genericProposal(project: ApplicationVisibleWorkspaceProject, value: unk
   if (status === "QUARANTINED_ROLLBACK_FAILED" && (!timestamp(value.quarantinedAt) || typeof value.quarantineReason !== "string"
     || !/^APPLICATION_PROPOSAL_[A-Z0-9_]{3,80}$/.test(value.quarantineReason)
     || !["appliedAt", "appliedCommit", "rejectedAt", "rejectionReason", "applyStartedAt", "applyToken", "applyProcessId"].every(nullValue))) return null
-  if (["APPLIED", "REJECTED", "QUARANTINED_ROLLBACK_FAILED"].includes(status) && value.reviewPatch !== null) return null
   return value as unknown as ApplicationProposalView
 }
 

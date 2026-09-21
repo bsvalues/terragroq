@@ -6,7 +6,12 @@ import { Play, RotateCw, Square } from "lucide-react"
 import type { ApplicationVisibleWorkspaceProject } from "@/lib/projects/workspace-project-key"
 import { HELLO_APPLICATION_WORKSPACE_PROJECT } from "@/lib/projects/workspace-project-key"
 import { ApplicationAssistant, HelloApplicationAssistant } from "./hello-application-assistant"
-import { adaptApplicationRuntimePayload, type ApplicationRuntimeState, type ApplicationRuntimeView } from "./application-ui-contract"
+import {
+  adaptApplicationRuntimePayload,
+  type ApplicationActivationResult,
+  type ApplicationRuntimeState,
+  type ApplicationRuntimeView,
+} from "./application-ui-contract"
 import styles from "./hello-application-controls.module.css"
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -24,6 +29,29 @@ async function readRuntimeStatus(project: ApplicationVisibleWorkspaceProject): P
   return adaptApplicationRuntimePayload(project, await responseJson<unknown>(response))
 }
 
+const RUNTIME_DETAIL_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  APPLICATION_RUNTIME_POLICY_MISMATCH: "The runtime policy no longer matches this contained application. Repair the runtime policy, then start it again.",
+  APPLICATION_DOCKER_UNAVAILABLE: "The contained runtime engine is unavailable. Restore it, then retry the runtime action.",
+  APPLICATION_DOCKER_TIMEOUT: "The contained runtime engine timed out. Retry the runtime action after it recovers.",
+  APPLICATION_RUNTIME_HEALTH_FAILED: "The rebuilt application did not pass its runtime health check. Review the application, then retry Start.",
+  APPLICATION_RUNTIME_NOT_RUNNING: "The contained application did not remain running. Retry Start after checking the runtime engine.",
+  APPLICATION_RUNTIME_OUTPUT_LIMIT: "The contained runtime returned more output than WilliamOS can safely accept.",
+  APPLICATION_RUNTIME_SOURCE_HEAD_MISMATCH: "The running artifact was built from an older source commit. Use Start application to rebuild the current project HEAD.",
+  APPLICATION_RUNTIME_TRANSITION_PENDING: "A prior runtime generation is still retiring. Retry after that transition finishes.",
+})
+
+function runtimeDetailMessage(runtime: ApplicationRuntimeView): string | null {
+  if (!runtime.detail) return null
+  return RUNTIME_DETAIL_MESSAGES[runtime.detail]
+    ?? (runtime.state === "mismatch"
+      ? "The contained runtime no longer matches its verified policy. Repair it before starting again."
+      : runtime.state === "unavailable"
+        ? "The contained runtime is unavailable. Restore the runtime engine, then retry."
+        : "The contained runtime reported a verified failure. Review the application and retry the runtime action.")
+}
+
+const RUNTIME_REBUILD_FAILURE = "The source change is applied, but the contained runtime could not be rebuilt. Use Start application to retry."
+
 export function ApplicationControls({
   project,
   onPreviewRefresh,
@@ -33,18 +61,22 @@ export function ApplicationControls({
   onPreviewRefresh: () => void
   onRuntimeStateChange?: (state: ApplicationRuntimeState) => void
 }>) {
+  const isLegacy = project.application.contract === "legacy-v1-v3"
   const [runtime, setRuntime] = useState<ApplicationRuntimeView | null>(null)
   const [runtimeState, setRuntimeState] = useState<ApplicationRuntimeState | null>(null)
   const [runtimeBusy, setRuntimeBusy] = useState(true)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const runtimeOperationInFlight = useRef(false)
   const queuedRuntimeRead = useRef(false)
+  const queuedPreviewRefresh = useRef(false)
+  const runtimeTruth = useRef<ApplicationRuntimeView | null>(null)
   const mounted = useRef(false)
   const runtimeLifecycle = useRef(0)
 
   useEffect(() => {
     const lifecycle = ++runtimeLifecycle.current
     mounted.current = true
+    runtimeTruth.current = null
     setRuntime(null)
     setRuntimeState(null)
     setRuntimeError(null)
@@ -54,8 +86,10 @@ export function ApplicationControls({
       if (runtimeLifecycle.current !== lifecycle) return
       runtimeLifecycle.current += 1
       mounted.current = false
+      runtimeTruth.current = null
       runtimeOperationInFlight.current = false
       queuedRuntimeRead.current = false
+      queuedPreviewRefresh.current = false
     }
   }, [project.key])
 
@@ -63,53 +97,82 @@ export function ApplicationControls({
     return mounted.current && runtimeLifecycle.current === lifecycle
   }
 
+  function publishRuntimeTruth(payload: ApplicationRuntimeView) {
+    runtimeTruth.current = payload
+    setRuntime(payload)
+    setRuntimeState(payload.state)
+    onRuntimeStateChange?.(payload.state)
+  }
+
+  function clearRuntimeTruth(state: ApplicationRuntimeState) {
+    runtimeTruth.current = null
+    setRuntime(null)
+    setRuntimeState(state)
+    onRuntimeStateChange?.(state)
+  }
+
   function finishRuntimeOperation(lifecycle: number) {
     if (!activeRuntimeLifecycle(lifecycle)) return
     if (queuedRuntimeRead.current) {
+      const refreshPreview = queuedPreviewRefresh.current
       queuedRuntimeRead.current = false
-      void performRuntimeRead(lifecycle)
+      queuedPreviewRefresh.current = false
+      void performRuntimeRead(lifecycle, refreshPreview)
       return
     }
     runtimeOperationInFlight.current = false
     setRuntimeBusy(false)
   }
 
-  async function performRuntimeRead(lifecycle: number) {
+  async function performRuntimeRead(lifecycle: number, refreshPreview = false) {
     try {
       const payload = await readRuntimeStatus(project)
       if (activeRuntimeLifecycle(lifecycle) && !queuedRuntimeRead.current) {
-        setRuntime(payload)
-        setRuntimeState(payload.state)
-        onRuntimeStateChange?.(payload.state)
+        publishRuntimeTruth(payload)
+        if (refreshPreview && payload.previewAvailable) onPreviewRefresh()
       }
     } catch (cause) {
       if (activeRuntimeLifecycle(lifecycle) && !queuedRuntimeRead.current) {
-        setRuntime(null)
-        setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_STATUS_UNAVAILABLE")}`)
+        if (isLegacy) {
+          clearRuntimeTruth("unavailable")
+          setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_STATUS_UNAVAILABLE")}`)
+        } else {
+          clearRuntimeTruth("unavailable")
+          setRuntimeError("Runtime status is unavailable. Retry Refresh to restore verified runtime truth.")
+        }
       }
     } finally {
       finishRuntimeOperation(lifecycle)
     }
   }
 
-  function requestRuntimeRead(clearTruth = true, lifecycle = runtimeLifecycle.current) {
+  function requestRuntimeRead(
+    clearTruth = true,
+    lifecycle = runtimeLifecycle.current,
+    refreshPreview = false,
+  ) {
     if (!activeRuntimeLifecycle(lifecycle)) return
     if (clearTruth) {
       setRuntimeError(null)
-      setRuntime(null)
+      clearRuntimeTruth("unavailable")
     }
     if (runtimeOperationInFlight.current) {
       queuedRuntimeRead.current = true
+      queuedPreviewRefresh.current ||= refreshPreview
       return
     }
     runtimeOperationInFlight.current = true
     setRuntimeBusy(true)
-    void performRuntimeRead(lifecycle)
+    void performRuntimeRead(lifecycle, refreshPreview)
   }
 
   function refreshPreviewAndTruth() {
-    onPreviewRefresh()
-    requestRuntimeRead()
+    if (isLegacy) {
+      onPreviewRefresh()
+      requestRuntimeRead()
+    } else {
+      requestRuntimeRead(true, runtimeLifecycle.current, true)
+    }
   }
 
   async function changeRuntime(method: "POST" | "DELETE") {
@@ -118,24 +181,72 @@ export function ApplicationControls({
     runtimeOperationInFlight.current = true
     setRuntimeBusy(true)
     setRuntimeError(null)
-    setRuntime(null)
+    clearRuntimeTruth("starting")
+    let mutationSucceeded = false
     try {
       const response = await fetch(project.application.runtimeUrl, {
         method,
         headers: { "content-type": "application/json" },
       })
       await responseJson<unknown>(response)
-      if (activeRuntimeLifecycle(lifecycle)) {
-        onPreviewRefresh()
-      }
+      mutationSucceeded = true
+      if (isLegacy && activeRuntimeLifecycle(lifecycle)) onPreviewRefresh()
     } catch (cause) {
       if (activeRuntimeLifecycle(lifecycle)) {
-        setRuntime(null)
-        setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_RUNTIME_FAILED")}`)
+        if (isLegacy) {
+          clearRuntimeTruth("unavailable")
+          setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_RUNTIME_FAILED")}`)
+        } else {
+          clearRuntimeTruth("unavailable")
+          setRuntimeError(`The contained runtime ${method === "POST" ? "start" : "stop"} outcome is unavailable. Retry the action or Refresh.`)
+        }
       }
     } finally {
-      if (activeRuntimeLifecycle(lifecycle)) queuedRuntimeRead.current = true
+      if (activeRuntimeLifecycle(lifecycle) && mutationSucceeded) {
+        queuedRuntimeRead.current = true
+        queuedPreviewRefresh.current = !isLegacy && method === "POST"
+      }
       finishRuntimeOperation(lifecycle)
+    }
+  }
+
+  async function activateAppliedRuntime(appliedCommit: string): Promise<ApplicationActivationResult> {
+    const lifecycle = runtimeLifecycle.current
+    if (!activeRuntimeLifecycle(lifecycle)) return { outcome: "failed", message: RUNTIME_REBUILD_FAILURE }
+    const wasRunning = runtimeTruth.current?.state === "running" && runtimeTruth.current.previewAvailable
+    if (!wasRunning) {
+      requestRuntimeRead()
+      return { outcome: "start-required" }
+    }
+    if (runtimeOperationInFlight.current) return { outcome: "failed", message: RUNTIME_REBUILD_FAILURE }
+    runtimeOperationInFlight.current = true
+    setRuntimeBusy(true)
+    setRuntimeError(null)
+    clearRuntimeTruth("starting")
+    try {
+      const response = await fetch(project.application.runtimeUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      })
+      const payload = adaptApplicationRuntimePayload(project, await responseJson<unknown>(response))
+      if (!activeRuntimeLifecycle(lifecycle)) return { outcome: "failed", message: RUNTIME_REBUILD_FAILURE }
+      if (!payload.previewAvailable || payload.state !== "running"
+        || payload.activeSourceHead !== appliedCommit || payload.activeProjectHead !== appliedCommit) {
+        throw new Error("APPLICATION_RUNTIME_APPLIED_HEAD_MISMATCH")
+      }
+      publishRuntimeTruth(payload)
+      onPreviewRefresh()
+      return { outcome: "activated" }
+    } catch {
+      if (activeRuntimeLifecycle(lifecycle)) {
+        clearRuntimeTruth("unavailable")
+      }
+      return { outcome: "failed", message: RUNTIME_REBUILD_FAILURE }
+    } finally {
+      if (activeRuntimeLifecycle(lifecycle)) {
+        runtimeOperationInFlight.current = false
+        setRuntimeBusy(false)
+      }
     }
   }
 
@@ -169,11 +280,18 @@ export function ApplicationControls({
         </div>
       ) : null}
 
+      {runtime && runtimeDetailMessage(runtime) ? (
+        <p className={styles.runtimeError} role="status">{runtimeDetailMessage(runtime)}</p>
+      ) : null}
       {runtimeError ? <p className={styles.runtimeError} role="alert">{runtimeError}</p> : null}
       {project.application.contract === "legacy-v1-v3" ? (
         <HelloApplicationAssistant project={project} onPreviewRefresh={() => { void refreshPreviewAndTruth() }} />
       ) : (
-        <ApplicationAssistant project={project} onPreviewRefresh={() => { void refreshPreviewAndTruth() }} />
+        <ApplicationAssistant
+          project={project}
+          onPreviewRefresh={() => { void refreshPreviewAndTruth() }}
+          onApplied={activateAppliedRuntime}
+        />
       )}
     </section>
   )

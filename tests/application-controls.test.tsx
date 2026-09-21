@@ -3,11 +3,23 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+type AppliedActivationResult = Readonly<{ outcome: "activated" | "start-required" | "failed"; message?: string }>
+let activateAppliedCommit: ((appliedCommit: string) => Promise<AppliedActivationResult>) | undefined
+
 vi.mock("@/components/workspace-shell/hello-application-assistant", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/components/workspace-shell/hello-application-assistant")>()
   return {
     ...original,
-    ApplicationAssistant: ({ project }: { project: { name: string } }) => <div>Assistant for {project.name}</div>,
+    ApplicationAssistant: ({
+      project,
+      onApplied,
+    }: {
+      project: { name: string }
+      onApplied?: (appliedCommit: string) => Promise<AppliedActivationResult>
+    }) => {
+      activateAppliedCommit = onApplied
+      return <div>Assistant for {project.name}</div>
+    },
   }
 })
 
@@ -69,9 +81,37 @@ const manifest = {
   ai: { writablePaths: ["src/index.html", "src/styles.css", "src/app.js"] },
 } as const
 
+function genericRuntimePayload(
+  observed: "starting" | "running" | "stopped" | "unavailable" | "mismatch" | "failed",
+  sourceHead = "d".repeat(40),
+  error: string | null = null,
+) {
+  return {
+    runtime: {
+      schemaVersion: 1,
+      applicationId: "focus-board",
+      desired: observed === "running" || observed === "starting" ? "running" : "stopped",
+      observed,
+      policyDigest: "a".repeat(64),
+      recipeDigest: "b".repeat(64),
+      containerName: "williamos-application-focus-board",
+      active: observed === "running" ? {
+        generation: "c".repeat(64), sourceHead, manifestDigest: "e".repeat(64),
+        sourceDigest: "f".repeat(64), artifactSha256: "1".repeat(64), imageId: `sha256:${"2".repeat(64)}`,
+        staticImageId: `sha256:${"3".repeat(64)}`, containerId: "4".repeat(64), validated: true,
+      } : null,
+      retiring: null,
+      updatedAt: "2026-09-21T00:00:00.000Z",
+      error,
+    },
+    truth: { runtimeBuild: { sha: "5".repeat(40), builtAt: null }, activeProjectHead: sourceHead },
+  }
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  activateAppliedCommit = undefined
 })
 
 describe("shared application UI contracts", () => {
@@ -96,7 +136,12 @@ describe("shared application UI contracts", () => {
       },
       truth: { runtimeBuild: { sha: "5".repeat(40), builtAt: null }, activeProjectHead: "d".repeat(40) },
     })
-    expect(runtime).toMatchObject({ state: "running", previewAvailable: true, activeProjectHead: "d".repeat(40) })
+    expect(runtime).toMatchObject({
+      state: "running",
+      previewAvailable: true,
+      activeProjectHead: "d".repeat(40),
+      activeSourceHead: "d".repeat(40),
+    })
     expect(parseApplicationManifestPayload(project, { manifest, manifestDigest: "e".repeat(64), head: "d".repeat(40) }))
       .toMatchObject({ displayName: "Focus Board", writablePaths: manifest.ai.writablePaths })
     expect(() => adaptApplicationRuntimePayload(project, {
@@ -147,6 +192,22 @@ describe("shared application UI contracts", () => {
     expect(() => adaptApplicationProposal(project, { ...generic, model: "unverified-model" }))
       .toThrow("APPLICATION_PROPOSAL_RESPONSE_INVALID")
     expect(() => adaptApplicationProposal(legacyProject, generic)).toThrow("APPLICATION_PROPOSAL_RESPONSE_INVALID")
+    const applied = {
+      ...generic,
+      status: "APPLIED",
+      appliedAt: "2026-09-21T00:00:06.000Z",
+      appliedCommit: generic.candidateSha,
+    }
+    const rejected = {
+      ...generic,
+      status: "REJECTED",
+      rejectedAt: "2026-09-21T00:00:06.000Z",
+      rejectionReason: "Superseded by a new request.",
+    }
+    expect(adaptApplicationProposal(project, applied)).toMatchObject({ status: "APPLIED", reviewPatch: generic.reviewPatch })
+    expect(adaptApplicationProposal(project, rejected)).toMatchObject({ status: "REJECTED", reviewPatch: generic.reviewPatch })
+    expect(adaptApplicationProposal(project, { ...applied, reviewPatch: null })).toMatchObject({ status: "APPLIED", reviewPatch: null })
+    expect(adaptApplicationProposal(project, { ...rejected, reviewPatch: null })).toMatchObject({ status: "REJECTED", reviewPatch: null })
     const legacy = {
       schemaVersion: 2,
       proposalId: "22222222-2222-4222-8222-222222222222",
@@ -213,5 +274,78 @@ describe("ApplicationControls", () => {
       method: "DELETE",
       headers: { "content-type": "application/json" },
     }))
+  })
+
+  it("rebuilds a previously proven running runtime after Apply and only refreshes after the new head is active", async () => {
+    const oldHead = "d".repeat(40)
+    const appliedHead = "6".repeat(40)
+    let resolveActivation!: (value: Response) => void
+    const activationResponse = new Promise<Response>((resolve) => { resolveActivation = resolve })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json(genericRuntimePayload("running", oldHead))
+      if (init.method === "POST") return activationResponse
+      return Response.json({ error: "UNEXPECTED" }, { status: 500 })
+    })
+    const onPreviewRefresh = vi.fn()
+    const onRuntimeStateChange = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<ApplicationControls project={project} onPreviewRefresh={onPreviewRefresh} onRuntimeStateChange={onRuntimeStateChange} />)
+
+    expect(await screen.findByText("Runtime running", { exact: false })).toBeTruthy()
+    expect(activateAppliedCommit).toBeTypeOf("function")
+    const activation = activateAppliedCommit!(appliedHead)
+    await waitFor(() => expect(onRuntimeStateChange).toHaveBeenLastCalledWith("starting"))
+    expect(screen.queryByLabelText("Focus Board runtime truth")).toBeNull()
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+
+    resolveActivation(Response.json(genericRuntimePayload("running", appliedHead)))
+    await expect(activation).resolves.toEqual({ outcome: "activated" })
+    await waitFor(() => expect(onRuntimeStateChange).toHaveBeenLastCalledWith("running"))
+    expect(screen.getByLabelText("Focus Board runtime truth").textContent).toContain(appliedHead)
+    expect(onPreviewRefresh).toHaveBeenCalledOnce()
+    expect(fetcher).toHaveBeenCalledWith(project.application.runtimeUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    })
+  })
+
+  it("does not silently start a stopped runtime after Apply", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json(genericRuntimePayload("stopped")))
+    const onPreviewRefresh = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<ApplicationControls project={project} onPreviewRefresh={onPreviewRefresh} />)
+
+    expect(await screen.findByText("Runtime stopped", { exact: false })).toBeTruthy()
+    expect(await activateAppliedCommit!("6".repeat(40))).toEqual({ outcome: "start-required" })
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0)
+    expect(onPreviewRefresh).not.toHaveBeenCalled()
+  })
+
+  it("keeps the Apply outcome separate when rebuilding the previously running runtime fails", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json(genericRuntimePayload("running"))
+      return Response.json({ error: "APPLICATION_RUNTIME_UNAVAILABLE" }, { status: 503 })
+    })
+    const onRuntimeStateChange = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<ApplicationControls project={project} onPreviewRefresh={vi.fn()} onRuntimeStateChange={onRuntimeStateChange} />)
+
+    expect(await screen.findByText("Runtime running", { exact: false })).toBeTruthy()
+    await expect(activateAppliedCommit!("6".repeat(40))).resolves.toEqual({
+      outcome: "failed",
+      message: "The source change is applied, but the contained runtime could not be rebuilt. Use Start application to retry.",
+    })
+    await waitFor(() => expect(onRuntimeStateChange).toHaveBeenLastCalledWith("unavailable"))
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("shows admitted runtime failure detail in safe human wording", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
+      genericRuntimePayload("mismatch", "d".repeat(40), "APPLICATION_RUNTIME_POLICY_MISMATCH"),
+    )))
+    render(<ApplicationControls project={project} onPreviewRefresh={vi.fn()} />)
+
+    const detail = await screen.findByText(/runtime policy no longer matches/i)
+    expect(detail.textContent).not.toContain("APPLICATION_RUNTIME_POLICY_MISMATCH")
   })
 })
