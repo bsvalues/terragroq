@@ -6,11 +6,12 @@ import { exactKeys, isApplicationId, MAX_APPLICATION_FILE_BYTES, MAX_APPLICATION
 import { readApplicationFile, readApplicationRepository, rejectLinkedPath, resolveApplicationsRoot, type ApplicationHostOptions } from "./application-catalog"
 
 const exec = promisify(execFile)
-export type ApplicationCreationDependencies = Readonly<{ initializeRepository: (root: string) => Promise<void> }>
+export type ApplicationCreationDependencies = Readonly<{ initializeRepository: (root: string, requiredPaths: readonly string[]) => Promise<void> }>
 const dependencies: ApplicationCreationDependencies = {
-  async initializeRepository(root) {
-    for (const args of [["init", "-b", "main"], ["add", "--", "."], ["-c", "user.name=WilliamOS", "-c", "user.email=applications@williamos.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Create application from static-web-v1"]]) {
-      await exec("git", ["-C", root, "-c", "core.hooksPath=", ...args], { windowsHide: true, timeout: 15000, maxBuffer: 16384 })
+  async initializeRepository(root, requiredPaths) {
+    // Force only the pinned file list past ambient ignore rules; never stage a directory or glob.
+    for (const args of [["init", "-b", "main"], ["add", "--force", "--", ...requiredPaths], ["-c", "user.name=WilliamOS", "-c", "user.email=applications@williamos.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Create application from static-web-v1"]]) {
+      await exec("git", ["-C", root, "--literal-pathspecs", "-c", "core.hooksPath=", ...args], { windowsHide: true, timeout: 15000, maxBuffer: 16384 })
     }
   },
 }
@@ -45,7 +46,7 @@ export async function createApplication(input: unknown, options: ApplicationHost
       await fs.mkdir(path.dirname(path.join(temporary, relative)), { recursive: true })
       await fs.writeFile(path.join(temporary, relative), content, { flag: "wx" })
     }
-    await seams.initializeRepository(temporary)
+    await seams.initializeRepository(temporary, [...files.keys()])
     const verified = await readApplicationRepository(temporary, input.id)
     await rejectLinkedPath(root)
     try { await fs.lstat(destination); throw new Error("APPLICATION_EXISTS") } catch (error) {

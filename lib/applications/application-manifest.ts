@@ -42,7 +42,9 @@ export function parseApplicationManifest(value: unknown, folderId: string): Appl
   if (!exactKeys(value.source, ["document", "styles", "script", "test"]) || !exactKeys(value.ai, ["writablePaths"])) return fail()
   const { document, styles, script, test } = value.source
   if (!sourcePath(document) || !sourcePath(styles) || !sourcePath(script) || test !== "test/application.test.mjs"
-    || new Set([document, styles, script, test]).size !== 4) return fail()
+    // V1 runs on Windows. All accepted paths are ASCII POSIX paths, so case folding identifies
+    // aliases without relaxing normalization or permitting the validation file in the writable set.
+    || new Set([document, styles, script, test].map((item) => item.toLowerCase())).size !== 4) return fail()
   const writable = value.ai.writablePaths
   const expected = [document, styles, script]
   if (!Array.isArray(writable) || writable.length !== 3 || new Set(writable).size !== 3

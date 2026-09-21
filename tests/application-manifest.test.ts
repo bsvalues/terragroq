@@ -28,4 +28,13 @@ describe("application manifest v1", () => {
   it.each(["../index.html", "/src/index.html", "src\\index.html", "src/../index.html", "src//index.html", "C:/file", "src/a\0.html", "src/a:stream", "src/CON", "src/x."])("refuses unsafe path %s", (document) => {
     expect(() => parseApplicationManifest({ ...manifest(), source: { ...manifest().source, document } }, "focus-board")).toThrow()
   })
+  it.each([
+    ["styles", "src/INDEX.HTML", "src/styles.css"],
+    ["script", "test/APPLICATION.TEST.MJS", "src/app.js"],
+  ])("refuses Windows case alias in writable %s: %s", (field, alias, original) => {
+    const value = manifest()
+    const aliased = { ...value, source: { ...value.source, [field]: alias },
+      ai: { writablePaths: value.ai.writablePaths.map((item) => item === original ? alias : item) } }
+    expect(() => parseApplicationManifest(aliased, "focus-board")).toThrow("APPLICATION_MANIFEST_INVALID")
+  })
 })

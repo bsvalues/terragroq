@@ -90,11 +90,18 @@ export async function readApplicationRepository(repositoryRoot: string, folderId
   const gitRoot = path.join(repositoryRoot, ".git")
   await rejectLinkedPath(gitRoot, io)
   if (!(await io.lstat(gitRoot)).isDirectory()) throw new Error("APPLICATION_REPOSITORY_INVALID")
-  const git = async (args: string[]) => (await exec("git", ["-C", repositoryRoot, ...args], { windowsHide: true, maxBuffer: 8192, timeout: 10000 })).stdout.trim()
+  const git = async (args: string[]) => (await exec("git", ["-C", repositoryRoot, "--literal-pathspecs", ...args], { windowsHide: true, maxBuffer: 8192, timeout: 10000 })).stdout.trim()
   const top = await io.realpath(await git(["rev-parse", "--show-toplevel"]))
   if (path.relative(await io.realpath(repositoryRoot), top) !== "") throw new Error("APPLICATION_REPOSITORY_INVALID")
   const head = await git(["rev-parse", "--verify", "HEAD"])
   if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error("APPLICATION_REPOSITORY_INVALID")
+  // Working files alone are insufficient: proposal worktrees and fresh checkouts use this commit.
+  const requiredPaths = [".williamos/application.json", ...Object.values(manifest.source)]
+  const entries = (await git(["ls-tree", "-r", "-z", "--full-tree", head, "--", ...requiredPaths])).split("\0").filter(Boolean)
+  const committedPaths = entries.map((entry) => /^(?:100644|100755) blob [a-f0-9]{40,64}\t(.+)$/.exec(entry)?.[1])
+  if (entries.length !== requiredPaths.length || !requiredPaths.every((relative) => committedPaths.includes(relative))) {
+    throw new Error("APPLICATION_REPOSITORY_INCOMPLETE")
+  }
   return { manifest, manifestDigest: applicationManifestDigest(manifest), repositoryRoot: await io.realpath(repositoryRoot), head, projectId: applicationProjectId(manifest.id) }
 }
 

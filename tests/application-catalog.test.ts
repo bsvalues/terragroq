@@ -25,6 +25,33 @@ async function app(root: string, id: string) {
   return destination
 }
 describe("external application catalog", () => {
+  it.each([
+    ["styles", "src/INDEX.HTML", "src/index.html", "src/styles.css"],
+    ["script", "test/APPLICATION.TEST.MJS", "test/application.test.mjs", "src/app.js"],
+  ])("excludes a repository whose writable %s aliases %s on Windows", async (field, alias, target, original) => {
+    const options = await fixture()
+    const repository = await app(options.applicationsRoot, "aliased-app")
+    const manifestPath = path.join(repository, ".williamos/application.json")
+    const value = JSON.parse(await fs.readFile(manifestPath, "utf8"))
+    value.source[field] = alias
+    value.ai.writablePaths = value.ai.writablePaths.map((item: string) => item === original ? alias : item)
+    // Also create the alias on case-sensitive test hosts: the V1 Windows policy must reject it there.
+    await fs.writeFile(path.join(repository, alias), await fs.readFile(path.join(repository, target)))
+    await fs.writeFile(manifestPath, JSON.stringify(value))
+    const catalog = await discoverApplications(options)
+    expect(catalog.applications).toEqual([])
+    expect(catalog.invalid).toEqual([{ id: "aliased-app", error: "APPLICATION_INVALID" }])
+  })
+  it("excludes required files present only in the working tree and missing from HEAD", async () => {
+    const options = await fixture()
+    const repository = await app(options.applicationsRoot, "incomplete-app")
+    execFileSync("git", ["-C", repository, "rm", "--cached", "--", ".williamos/application.json", "test/application.test.mjs"], { windowsHide: true })
+    execFileSync("git", ["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Incomplete snapshot"], { windowsHide: true })
+    expect((await fs.stat(path.join(repository, "test/application.test.mjs"))).isFile()).toBe(true)
+    const catalog = await discoverApplications(options)
+    expect(catalog.applications).toEqual([])
+    expect(catalog.invalid).toEqual([{ id: "incomplete-app", error: "APPLICATION_INVALID" }])
+  })
   it("discovers two independent repositories and isolates an invalid sibling", async () => {
     const options = await fixture()
     await app(options.applicationsRoot, "first-app"); await app(options.applicationsRoot, "second-app")
