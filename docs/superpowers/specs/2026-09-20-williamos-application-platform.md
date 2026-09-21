@@ -1,8 +1,8 @@
 # WilliamOS Application Platform V1
 
-**Status:** executable product contract  
-**Date:** 2026-09-20  
-**Delivery surface:** disposable WilliamOS HERMES runtime on `https://williamos.lan:3543`  
+**Status:** executable product contract
+**Date:** 2026-09-20
+**Delivery surface:** disposable WilliamOS HERMES runtime on `https://williamos.lan:3543`
 **Excluded:** every TerraFusion checkout, runtime, process, task, file, and API
 
 ## User outcome

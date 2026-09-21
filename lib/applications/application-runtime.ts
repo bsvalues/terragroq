@@ -4,7 +4,7 @@ import { discoverApplications, rejectLinkedPath, type CatalogApplication } from 
 import { isApplicationId } from "./application-manifest"
 import { ApplicationRuntimeStore, type RuntimeStoreOptions } from "./application-runtime-store"
 import { createStaticWebArtifact, sha256, verifyStoredArtifact, MAX_ARTIFACT_BYTES, type StaticWebArtifact } from "./static-web-artifact"
-import { baseImage, CONTAINER_ID, createContainerArgs, dockerEnvironment, dockerRunner, equal, IMAGE_ID, labelArgs, loadRuntimePolicy, mismatch, ownedContainer, ownedImage, stable, staticLabels, writeBuildContext, type DockerRunner, type RuntimePolicy } from "./application-runtime-policy"
+import { baseImage, CONTAINER_ID, createContainerArgs, dockerEnvironment, dockerRunner, equal, IMAGE_ID, labelArgs, loadRuntimePolicy, mismatch, ownedContainer, ownedImage, stable, staticLabels, writeBuildContext, type DockerInspectRecord, type DockerRunner, type RuntimePolicy } from "./application-runtime-policy"
 
 export type RuntimeGeneration = {
   generation: string; sourceHead: string; manifestDigest: string; sourceDigest: string; artifactSha256: string
@@ -43,10 +43,18 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     }
     return result.stdout
   }
-  async function inspect(kind: "image" | "container", target: string, optional = false): Promise<any | null> {
+  async function inspect(kind: "image" | "container", target: string): Promise<DockerInspectRecord>
+  async function inspect(kind: "image" | "container", target: string, optional: true): Promise<DockerInspectRecord | null>
+  async function inspect(kind: "image" | "container", target: string, optional = false): Promise<DockerInspectRecord | null> {
     const text = await command([kind, "inspect", target], 15000, 128000, optional ? kind : undefined)
     if (text === null) return null
-    try { const value = JSON.parse(text); if (!Array.isArray(value) || value.length !== 1 || !value[0]) mismatch(); return value[0] }
+    try {
+      const value: unknown = JSON.parse(text)
+      if (!Array.isArray(value) || value.length !== 1) return mismatch()
+      const inspected: unknown = value[0]
+      if (!inspected || typeof inspected !== "object" || Array.isArray(inspected)) return mismatch()
+      return inspected as DockerInspectRecord
+    }
     catch { return mismatch() }
   }
   async function save(record: ApplicationRuntimeRecord) {
@@ -64,9 +72,10 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     finally { await rejectLinkedPath(directory); await fs.rm(directory, { recursive: true, force: true }) }
   }
   const proofName = () => `static-${policy.recipeDigest}.json`
-  async function inspectStaticImage(id: string, base: any, env: string[]) {
+  async function inspectStaticImage(id: string, base: DockerInspectRecord, env: string[]) {
     if (typeof id !== "string" || !IMAGE_ID.test(id)) return mismatch()
     const child = await inspect("image", id, true)
+    if (!child) return mismatch()
     // The reviewed legacy-builder recipe creates exactly WORKDIR and COPY filesystem
     // layers. ENV/USER/ENTRYPOINT/CMD/labels may add metadata-only parent images.
     ownedImage(child, id, env, staticLabels(policy), base.RootFS.Layers, 2)
@@ -78,7 +87,8 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
       visited.add(current.Id)
       ancestry.push({ imageId: current.Id, parentId: current.Parent, layers: current.RootFS.Layers })
       const parent = current.Parent === base.Id ? base : await inspect("image", current.Parent, true)
-      if (!parent || parent.Id !== current.Parent || parent.Os !== "linux" || parent.Architecture !== "amd64"
+      if (!parent) return mismatch()
+      if (parent.Id !== current.Parent || parent.Os !== "linux" || parent.Architecture !== "amd64"
         || parent.RootFS?.Type !== "layers" || !Array.isArray(parent.RootFS.Layers)
         || parent.RootFS.Layers.length < base.RootFS.Layers.length
         || parent.RootFS.Layers.length > current.RootFS.Layers.length
@@ -88,7 +98,7 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     }
     return { child, proof: { schemaVersion: 1, imageId: id, baseImageId: base.Id, policyDigest: policy.digest, recipeDigest: policy.recipeDigest, ancestry } satisfies StaticImageProof }
   }
-  async function verifiedStaticImage(applicationId: string, id: string, base: any, env: string[]) {
+  async function verifiedStaticImage(applicationId: string, id: string, base: DockerInspectRecord, env: string[]) {
     const receipt = await store.readJson<StaticImageProof>(applicationId, proofName())
     if (!receipt || receipt.imageId !== id) return mismatch()
     const verified = await inspectStaticImage(id, base, env)
@@ -145,7 +155,7 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
     const base = await inspect("image", policy.baseImageId), env = baseImage(base, policy)
     const childTag = `williamos-static-runtime:${policy.recipeDigest}`
     const receipt = await store.readJson<StaticImageProof>(record.applicationId, proofName())
-    let child: any
+    let child: DockerInspectRecord
     if (receipt) child = await verifiedStaticImage(record.applicationId, receipt.imageId, base, env)
     else {
       const id = await context(record.applicationId, async (directory) => {
@@ -203,7 +213,8 @@ export function createApplicationRuntime(options: ApplicationRuntimeOptions = {}
       if (!CONTAINER_ID.test(id)) mismatch()
       options.fault?.("after-create")
       object = await container(record, generation, env)
-      if (!object || object.Id !== id) mismatch()
+      if (!object) return mismatch()
+      if (object.Id !== id) return mismatch()
     }
     generation.containerId = object.Id; await save(record)
     if (!object.State.Running) { await command(["start", object.Id]); options.fault?.("after-start") }

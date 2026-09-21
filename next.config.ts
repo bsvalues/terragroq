@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
       "./scripts/application-runtime/Dockerfile",
       "./scripts/application-runtime/server.mjs",
       "./scripts/application-runtime/read-preview.mjs",
+      "./scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1",
       "./starters/static-web-v1/.williamos/application.json",
       "./starters/static-web-v1/src/index.html",
       "./starters/static-web-v1/src/styles.css",

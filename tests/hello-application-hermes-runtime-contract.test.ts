@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -11,6 +14,7 @@ import {
   parseHelloRuntimeEnvironment,
   validateHelloSourceIdentity,
 } from "@/scripts/hello-application/start-williamos-hello-runtime.mjs"
+import * as helloRuntimeLauncher from "@/scripts/hello-application/start-williamos-hello-runtime.mjs"
 
 describe("isolated HERMES Hello runtime contract", () => {
   it("preserves Docker plugin discovery without inheriting runtime secrets", () => {
@@ -41,6 +45,10 @@ describe("isolated HERMES Hello runtime contract", () => {
       sourceRoot: "C:/HermesLab/WilliamOS-Disposable/hello/source",
       canonicalOrigin: "https://williamos.lan:3543",
       hermesRuntimeRoot: "C:/Users/bs/.williamos/hermes-bridge",
+      applicationsRoot: "C:/HermesLab/WilliamOS-Disposable/applications",
+      applicationRuntimeRoot: "C:/Users/bs/.williamos/hermes-bridge",
+      applicationAssetRoot: "C:/HermesLab/WilliamOS-Disposable/hello/runtime",
+      applicationDeploymentRoot: "C:/HermesLab/WilliamOS-Disposable/hello",
     })
 
     expect(parsed).toMatchObject({
@@ -49,10 +57,57 @@ describe("isolated HERMES Hello runtime contract", () => {
       WILLIAMOS_VISIBLE_PROJECTS: "hello-application,williamos",
       WILLIAMOS_HELLO_ENABLED: "1",
       WILLIAMOS_HELLO_CEREBRAS_ROUTING_ENABLED: "1",
+      WILLIAMOS_APPLICATIONS_ROOT: "C:/HermesLab/WilliamOS-Disposable/applications",
+      WILLIAMOS_APPLICATION_RUNTIME_ROOT: "C:/Users/bs/.williamos/hermes-bridge",
+      WILLIAMOS_APPLICATION_ASSET_ROOT: "C:/HermesLab/WilliamOS-Disposable/hello/runtime",
+      WILLIAMOS_APPLICATION_DEPLOYMENT_ROOT: "C:/HermesLab/WilliamOS-Disposable/hello",
+      WILLIAMOS_APPLICATION_RECONCILE_ON_START: "1",
+      WILLIAMOS_APPLICATION_CEREBRAS_ROUTING_ENABLED: "1",
       BETTER_AUTH_URL: "https://williamos.lan:3543",
       BETTER_AUTH_TRUSTED_ORIGINS: "https://williamos.lan:3543",
     })
     expect(Object.keys(parsed).some((key) => key.includes("TERRAFUSION"))).toBe(false)
+  })
+
+  it("accepts only an explicit non-overlapping application topology rooted in the deployment generation", () => {
+    const resolveTopology = (helloRuntimeLauncher as typeof helloRuntimeLauncher & {
+      validateApplicationTopology?: (input: Record<string, string>) => Record<string, string>
+    }).validateApplicationTopology
+    expect(resolveTopology).toBeTypeOf("function")
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hello-application-topology-"))
+    try {
+      const deploymentRoot = path.join(root, "williamos-hello-ai-0123456789ab")
+      const appRoot = path.join(deploymentRoot, "runtime")
+      const sourceRoot = path.join(deploymentRoot, "source")
+      const applicationsRoot = path.join(root, "applications")
+      const bridgeRoot = path.join(root, "bridge")
+      for (const directory of [appRoot, sourceRoot, applicationsRoot, bridgeRoot]) fs.mkdirSync(directory, { recursive: true })
+      const input = {
+        appRoot,
+        sourceRoot,
+        hermesRuntimeRoot: bridgeRoot,
+        applicationsRoot,
+        applicationRuntimeRoot: bridgeRoot,
+        applicationAssetRoot: appRoot,
+        applicationDeploymentRoot: deploymentRoot,
+      }
+      expect(resolveTopology!(input)).toEqual({
+        appRoot: fs.realpathSync(appRoot),
+        sourceRoot: fs.realpathSync(sourceRoot),
+        hermesRuntimeRoot: fs.realpathSync(bridgeRoot),
+        applicationsRoot: fs.realpathSync(applicationsRoot),
+        applicationRuntimeRoot: fs.realpathSync(bridgeRoot),
+        applicationAssetRoot: fs.realpathSync(appRoot),
+        applicationDeploymentRoot: fs.realpathSync(deploymentRoot),
+      })
+      expect(() => resolveTopology!({ ...input, applicationsRoot: path.join(deploymentRoot, "applications") })).toThrow("HELLO_RUNTIME_APPLICATIONS_ROOT_INVALID")
+      expect(() => resolveTopology!({ ...input, applicationRuntimeRoot: applicationsRoot })).toThrow("HELLO_RUNTIME_APPLICATION_RUNTIME_ROOT_INVALID")
+      expect(() => resolveTopology!({ ...input, applicationAssetRoot: sourceRoot })).toThrow("HELLO_RUNTIME_APPLICATION_ASSET_ROOT_INVALID")
+      expect(() => resolveTopology!({ ...input, sourceRoot: path.join(root, "TerraFusion-source") })).toThrow("HELLO_RUNTIME_TERRAFUSION_PATH_REFUSED")
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("fails closed on TerraFusion, unknown, duplicate, or multiline environment entries", () => {

@@ -21,6 +21,18 @@ const empty = (value: unknown) => value == null || (Array.isArray(value) ? value
 export type DockerOptions = Readonly<{ env: Record<string, string | undefined>; timeout: number; maxBuffer: number; shell: false; windowsHide: true; encoding: "utf8" }>
 export type DockerResult = Readonly<{ code: number; stdout: string; stderr: string; timedOut?: boolean }>
 export type DockerRunner = (executable: string, args: string[], options: DockerOptions) => Promise<DockerResult>
+type DockerInspectConfig = Record<string, unknown> & {
+  Env: unknown[]; Volumes: unknown; OnBuild: unknown; Healthcheck: unknown; ExposedPorts: unknown
+  User: unknown; WorkingDir: unknown; Entrypoint: unknown; Cmd: unknown; Labels: unknown; Image: unknown
+  Hostname: unknown; Tty: unknown; OpenStdin: unknown; AttachStdin: unknown
+}
+export type DockerInspectRecord = Record<string, unknown> & {
+  Id: string; Parent: string; Os: string; Architecture: string; Name: string; Image: string; Path: string; Args: unknown[]
+  Config: DockerInspectConfig; RootFS: { Type: string; Layers: string[] }; Mounts: unknown[]
+  HostConfig: Record<string, unknown>
+  State: { Paused: boolean; Restarting: boolean; Dead: boolean; Status: string; Running: boolean }
+  NetworkSettings: { Networks: Record<string, unknown>; Ports: unknown }
+}
 export const dockerRunner: DockerRunner = (executable, args, options) => new Promise((resolve) => {
   // Next augments ProcessEnv with a required NODE_ENV. A Docker child intentionally does not
   // inherit that platform variable; Node itself accepts this exact reviewed environment map.
@@ -47,7 +59,7 @@ export async function loadRuntimePolicy(root: string) {
   return { ...reviewed, digest, recipeDigest, helpers }
 }
 export type RuntimePolicy = Awaited<ReturnType<typeof loadRuntimePolicy>>
-export function baseImage(image: any, policy: RuntimePolicy): string[] {
+export function baseImage(image: DockerInspectRecord, policy: RuntimePolicy): string[] {
   const env: unknown = image?.Config?.Env
   if (image?.Id !== policy.baseImageId || image?.Os !== "linux" || image?.Architecture !== "amd64" || !empty(image.Config.Volumes)
     || !empty(image.Config.OnBuild) || !empty(image.Config.Healthcheck) || !empty(image.Config.ExposedPorts)
@@ -57,7 +69,7 @@ export function baseImage(image: any, policy: RuntimePolicy): string[] {
     || image.RootFS?.Type !== "layers" || !Array.isArray(image.RootFS.Layers) || !image.RootFS.Layers.length) mismatch()
   return env as string[]
 }
-export function ownedImage(image: any, id: string, env: string[], labels: Record<string, string>, parentLayers: string[], extraLayers?: number) {
+export function ownedImage(image: DockerInspectRecord, id: string, env: string[], labels: Record<string, string>, parentLayers: string[], extraLayers?: number) {
   const config = image?.Config
   if (!IMAGE_ID.test(id) || image?.Id !== id || image?.Os !== "linux" || image?.Architecture !== "amd64" || !config
     || config.User !== "10000:10000" || config.WorkingDir !== "/opt/williamos" || !equal(config.Entrypoint, ENTRYPOINT)
@@ -83,7 +95,7 @@ export function createContainerArgs(name: string, image: string, env: string[], 
 
 /** Reject every policy-bearing setting before start and on adoption. Unknown non-default
  * HostConfig fields also fail closed, so new daemon capabilities cannot silently widen access. */
-export function ownedContainer(container: any, expected: { name: string; imageId: string; containerId: string | null; env: string[]; labels: Record<string, string> }) {
+export function ownedContainer(container: DockerInspectRecord, expected: { name: string; imageId: string; containerId: string | null; env: string[]; labels: Record<string, string> }) {
   const config = container?.Config, host = container?.HostConfig
   if (!CONTAINER_ID.test(container?.Id ?? "") || (expected.containerId && container.Id !== expected.containerId) || container.Name !== `/${expected.name}`
     || container.Image !== expected.imageId || config?.Image !== expected.imageId || config.User !== "10000:10000" || config.WorkingDir !== "/opt/williamos"
@@ -113,7 +125,8 @@ export function ownedContainer(container: any, expected: { name: string; imageId
     ReadonlyPaths: ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"],
   }
   for (const [key, requiredPaths] of Object.entries(defaultPaths)) {
-    if (!Array.isArray(host[key]) || !requiredPaths.every((entry) => host[key].includes(entry))) mismatch()
+    const actualPaths = host[key]
+    if (!Array.isArray(actualPaths) || !requiredPaths.every((entry) => actualPaths.includes(entry))) mismatch()
   }
   // Docker's default /dev/shm is a bounded private anonymous tmpfs, not an inherited image volume.
   const allowedDefaults: Record<string, unknown[]> = { ShmSize: [undefined, 67108864], OomScoreAdj: [0], CpuShares: [0], CpuPeriod: [0], CpuQuota: [0], CpuRealtimePeriod: [0], CpuRealtimeRuntime: [0] }

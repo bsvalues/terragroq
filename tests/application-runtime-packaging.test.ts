@@ -20,8 +20,10 @@ describe("application runtime startup and packaging", () => {
     vi.stubEnv("NEXT_PHASE", undefined); seams.reconcile.mockResolvedValue([{ applicationId: "board", observed: "unavailable" }]); await register(); expect(seams.reconcile).toHaveBeenCalledTimes(1)
   })
   it("traces real policy, recipes and helpers into standalone output", async () => {
-    const entries = Object.values(config.outputFileTracingIncludes ?? {}).flat()
-    for (const relative of ["config/application-runtime/static-web-v1.policy.json", "config/execution-fabric/hermes-free-dev-agent-v2.policy.json", "scripts/application-runtime/Dockerfile", "scripts/application-runtime/server.mjs", "scripts/application-runtime/read-preview.mjs", "starters/static-web-v1/.williamos/application.json", "starters/static-web-v1/src/index.html", "starters/static-web-v1/src/styles.css", "starters/static-web-v1/src/app.js", "starters/static-web-v1/test/application.test.mjs"]) {
+    const entries = Object.values(config.outputFileTracingIncludes ?? {}).flat().sort()
+    const trustedAssets = ["config/application-runtime/static-web-v1.policy.json", "config/execution-fabric/hermes-free-dev-agent-v2.policy.json", "scripts/application-runtime/Dockerfile", "scripts/application-runtime/server.mjs", "scripts/application-runtime/read-preview.mjs", "scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1", "starters/static-web-v1/.williamos/application.json", "starters/static-web-v1/src/index.html", "starters/static-web-v1/src/styles.css", "starters/static-web-v1/src/app.js", "starters/static-web-v1/test/application.test.mjs"]
+    expect(entries).toEqual(trustedAssets.map((relative) => `./${relative}`).sort())
+    for (const relative of trustedAssets) {
       expect(entries).toContain(`./${relative}`)
       expect((await fs.stat(path.resolve(relative))).isFile()).toBe(true)
     }

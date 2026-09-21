@@ -91,7 +91,6 @@ const CONTAINER_ID = /^[0-9a-f]{64}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const HEAD_REF = /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._\/-]{0,239}$/
-const APPLICATION_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const APPLICATION_RUNTIME_ERROR = /^APPLICATION_[A-Z0-9_]{1,80}$/
 const LEGACY_RUNTIME_ERROR = /^(?:APPLICATION|HELLO_APPLICATION)_[A-Z0-9_]{1,80}$/
 const GENERIC_STATUSES = new Set(["READY_FOR_REVIEW", "APPLY_IN_PROGRESS", "APPLIED", "REJECTED", "QUARANTINED_ROLLBACK_FAILED"])

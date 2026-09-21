@@ -26,6 +26,62 @@ function required(value, name) {
   return value.trim()
 }
 
+function samePath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+}
+
+function containsPath(root, candidate) {
+  const relative = path.relative(root, candidate)
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+}
+
+function explicitDirectory(value, name) {
+  const supplied = required(value, name)
+  if (!path.isAbsolute(supplied)) throw new Error(`HELLO_RUNTIME_${name}_INVALID`)
+  if (/(^|[\\/._-])terrafusion(?:[_-]os(?:[_-][0-9.]+)?)?([\\/._-]|$)/i.test(supplied)) {
+    throw new Error("HELLO_RUNTIME_TERRAFUSION_PATH_REFUSED")
+  }
+  const resolved = path.resolve(supplied)
+  const item = fs.lstatSync(resolved, { throwIfNoEntry: false })
+  if (!item?.isDirectory() || item.isSymbolicLink()) throw new Error(`HELLO_RUNTIME_${name}_INVALID`)
+  const real = fs.realpathSync(resolved)
+  if (!samePath(real, resolved)) throw new Error(`HELLO_RUNTIME_${name}_INVALID`)
+  return real
+}
+
+export function validateApplicationTopology({
+  appRoot,
+  sourceRoot,
+  hermesRuntimeRoot,
+  applicationsRoot,
+  applicationRuntimeRoot,
+  applicationAssetRoot,
+  applicationDeploymentRoot,
+}) {
+  const topology = {
+    appRoot: explicitDirectory(appRoot, "APP_ROOT"),
+    sourceRoot: explicitDirectory(sourceRoot, "SOURCE_ROOT"),
+    hermesRuntimeRoot: explicitDirectory(hermesRuntimeRoot, "HERMES_RUNTIME_ROOT"),
+    applicationsRoot: explicitDirectory(applicationsRoot, "APPLICATIONS_ROOT"),
+    applicationRuntimeRoot: explicitDirectory(applicationRuntimeRoot, "APPLICATION_RUNTIME_ROOT"),
+    applicationAssetRoot: explicitDirectory(applicationAssetRoot, "APPLICATION_ASSET_ROOT"),
+    applicationDeploymentRoot: explicitDirectory(applicationDeploymentRoot, "APPLICATION_DEPLOYMENT_ROOT"),
+  }
+  if (!samePath(topology.applicationAssetRoot, topology.appRoot)) throw new Error("HELLO_RUNTIME_APPLICATION_ASSET_ROOT_INVALID")
+  if (!samePath(topology.applicationRuntimeRoot, topology.hermesRuntimeRoot)) throw new Error("HELLO_RUNTIME_APPLICATION_RUNTIME_ROOT_INVALID")
+  if (path.basename(topology.appRoot).toLowerCase() !== "runtime"
+    || path.basename(topology.sourceRoot).toLowerCase() !== "source"
+    || !samePath(path.dirname(topology.appRoot), topology.applicationDeploymentRoot)
+    || !samePath(path.dirname(topology.sourceRoot), topology.applicationDeploymentRoot)) {
+    throw new Error("HELLO_RUNTIME_APPLICATION_DEPLOYMENT_ROOT_INVALID")
+  }
+  const excluded = [topology.sourceRoot, topology.applicationDeploymentRoot, topology.applicationAssetRoot, topology.applicationRuntimeRoot]
+  if (excluded.some((entry) => containsPath(entry, topology.applicationsRoot) || containsPath(topology.applicationsRoot, entry))) {
+    throw new Error("HELLO_RUNTIME_APPLICATIONS_ROOT_INVALID")
+  }
+  return topology
+}
+
 function normalizeRepositoryIdentity(value) {
   const raw = String(value ?? "").trim().replace(/\.git$/i, "")
   const ssh = raw.match(/^git@github\.com:(.+)$/i)
@@ -43,7 +99,15 @@ export function validateHelloSourceIdentity(remote) {
   return normalizeRepositoryIdentity(remote) === CANONICAL_REPOSITORY
 }
 
-export function parseHelloRuntimeEnvironment(text, { sourceRoot, canonicalOrigin, hermesRuntimeRoot }) {
+export function parseHelloRuntimeEnvironment(text, {
+  sourceRoot,
+  canonicalOrigin,
+  hermesRuntimeRoot,
+  applicationsRoot,
+  applicationRuntimeRoot,
+  applicationAssetRoot,
+  applicationDeploymentRoot,
+}) {
   if (typeof text !== "string" || text.includes("\0") || text.includes("\r")) throw new Error("HELLO_RUNTIME_ENV_INVALID")
   const values = {}
   for (const line of text.split("\n")) {
@@ -71,6 +135,12 @@ export function parseHelloRuntimeEnvironment(text, { sourceRoot, canonicalOrigin
   values.WILLIAMOS_VISIBLE_PROJECTS = "hello-application,williamos"
   values.WILLIAMOS_DEFAULT_PROJECT = "hello-application"
   values.WILLIAMOS_HERMES_RUNTIME_ROOT = required(hermesRuntimeRoot, "HERMES_RUNTIME_ROOT")
+  values.WILLIAMOS_APPLICATIONS_ROOT = required(applicationsRoot, "APPLICATIONS_ROOT")
+  values.WILLIAMOS_APPLICATION_RUNTIME_ROOT = required(applicationRuntimeRoot, "APPLICATION_RUNTIME_ROOT")
+  values.WILLIAMOS_APPLICATION_ASSET_ROOT = required(applicationAssetRoot, "APPLICATION_ASSET_ROOT")
+  values.WILLIAMOS_APPLICATION_DEPLOYMENT_ROOT = required(applicationDeploymentRoot, "APPLICATION_DEPLOYMENT_ROOT")
+  values.WILLIAMOS_APPLICATION_RECONCILE_ON_START = "1"
+  values.WILLIAMOS_APPLICATION_CEREBRAS_ROUTING_ENABLED = "1"
   values.BETTER_AUTH_URL = required(canonicalOrigin, "CANONICAL_ORIGIN")
   values.BETTER_AUTH_TRUSTED_ORIGINS = values.BETTER_AUTH_URL
   values.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY = "1"
@@ -99,12 +169,25 @@ export async function startHelloWilliamOsRuntime({
   envFile,
   logRoot,
   hermesRuntimeRoot,
+  applicationsRoot,
+  applicationRuntimeRoot,
+  applicationAssetRoot,
+  applicationDeploymentRoot,
   canonicalOrigin = "https://williamos.lan:3543",
   host = "127.0.0.1",
   port = 3201,
 }) {
-  const app = fs.realpathSync(required(appRoot, "APP_ROOT"))
-  const source = fs.realpathSync(required(sourceRoot, "SOURCE_ROOT"))
+  const topology = validateApplicationTopology({
+    appRoot,
+    sourceRoot,
+    hermesRuntimeRoot,
+    applicationsRoot,
+    applicationRuntimeRoot,
+    applicationAssetRoot,
+    applicationDeploymentRoot,
+  })
+  const app = topology.appRoot
+  const source = topology.sourceRoot
   const server = path.join(app, "server.js")
   if (!fs.statSync(server, { throwIfNoEntry: false })?.isFile()) throw new Error("HELLO_RUNTIME_SERVER_MISSING")
   const top = execFileSync("git", ["-C", source, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim()
@@ -115,7 +198,7 @@ export async function startHelloWilliamOsRuntime({
   if (!fs.statSync(helloSource, { throwIfNoEntry: false })?.isFile()) throw new Error("HELLO_RUNTIME_APPLICATION_SOURCE_MISSING")
 
   const environmentText = fs.readFileSync(required(envFile, "ENV_FILE"), "utf8")
-  const configured = parseHelloRuntimeEnvironment(environmentText, { sourceRoot: source, canonicalOrigin, hermesRuntimeRoot })
+  const configured = parseHelloRuntimeEnvironment(environmentText, { sourceRoot: source, canonicalOrigin, ...topology })
   for (const requiredKey of ["DATABASE_URL", "BETTER_AUTH_SECRET", "WILLIAMOS_OWNER_EMAIL"]) {
     if (!configured[requiredKey]?.trim()) throw new Error(`HELLO_RUNTIME_${requiredKey}_REQUIRED`)
   }
@@ -160,10 +243,25 @@ async function main() {
   const envFile = argument("env-file")
   const logRoot = argument("log-root")
   const hermesRuntimeRoot = argument("hermes-runtime-root")
-  if (!appRoot || !sourceRoot || !envFile || !logRoot || !hermesRuntimeRoot) {
-    throw new Error("usage: --app-root= --source-root= --env-file= --log-root= --hermes-runtime-root=")
+  const applicationsRoot = argument("applications-root")
+  const applicationRuntimeRoot = argument("application-runtime-root")
+  const applicationAssetRoot = argument("application-asset-root")
+  const applicationDeploymentRoot = argument("application-deployment-root")
+  if (!appRoot || !sourceRoot || !envFile || !logRoot || !hermesRuntimeRoot || !applicationsRoot
+    || !applicationRuntimeRoot || !applicationAssetRoot || !applicationDeploymentRoot) {
+    throw new Error("usage: --app-root= --source-root= --env-file= --log-root= --hermes-runtime-root= --applications-root= --application-runtime-root= --application-asset-root= --application-deployment-root=")
   }
-  await startHelloWilliamOsRuntime({ appRoot, sourceRoot, envFile, logRoot, hermesRuntimeRoot })
+  await startHelloWilliamOsRuntime({
+    appRoot,
+    sourceRoot,
+    envFile,
+    logRoot,
+    hermesRuntimeRoot,
+    applicationsRoot,
+    applicationRuntimeRoot,
+    applicationAssetRoot,
+    applicationDeploymentRoot,
+  })
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
