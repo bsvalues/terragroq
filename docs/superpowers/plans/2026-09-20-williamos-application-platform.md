@@ -17,7 +17,7 @@
 - Browser/API callers may never supply filesystem roots, commands, images, mounts, network modes, or Docker arguments.
 - Application manifests are schema version 1 with exact keys and a finite `static-web-v1` adapter. Host code derives validation and runtime policy.
 - Application-authored server code must never execute on the HERMES host or in the runtime container.
-- Runtime containers use the reviewed digest-pinned image, `--network none`, read-only root, non-root UID/GID, dropped capabilities, no-new-privileges, explicit resource/log ceilings, no source bind mount, and an explicit secret-free environment.
+- Validation continues to use the reviewed pinned HERMES agent image. Runtime containers use a separate owned minimal static-runtime child image built without pulls from exact cached base ID `sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5`, then launch the exact child ID with `--network none`, read-only root, non-root UID/GID, dropped capabilities, no-new-privileges, explicit resource/log ceilings, no source bind mount, and an explicit secret-free environment.
 - Preview crosses the no-network boundary only through a fixed trusted bounded reader addressed by a verified owned container ID; iframe sandbox is `allow-scripts` and CSP includes `connect-src 'none'`.
 - Durable desired state precedes Docker mutation; reconciliation must be idempotent and must never adopt or remove a container without exact WilliamOS ownership labels and policy/artifact identity.
 - Proposals bind application ID, manifest digest, base commit, exact writable paths, execution route/model, validation result, and patch digest. Reject and Apply are distinct terminal states.
@@ -79,7 +79,8 @@
 - Create `lib/applications/static-web-artifact.ts`
 - Create `lib/applications/application-runtime-store.ts`
 - Create `lib/applications/application-runtime.ts`
-- Create trusted runtime helpers under `scripts/application-runtime/`
+- Create trusted runtime helpers and the owned static-runtime image recipe under `scripts/application-runtime/`
+- Create `config/application-runtime/static-web-v1.policy.json`
 - Create `app/api/projects/[projectKey]/application-runtime/route.ts`
 - Create `app/api/projects/[projectKey]/application-preview/route.ts`
 - Modify build/deployment inclusion only as required for those trusted helpers
@@ -94,12 +95,12 @@
 - Artifact creation reads only the four manifest files, never evaluates source, produces deterministic bounded self-contained HTML, rejects unsafe HTML/base/script escapes and source races, and records source HEAD/manifest/artifact digests.
 - Docker argument arrays contain every exact isolation/resource flag and no caller-controlled token.
 - Docker CLI environment excludes sentinel provider/auth/database/Docker/Node secret settings.
-- Base-image mismatch, inherited disallowed environment/volumes, foreign-label collision, policy drift, timeout, oversize output, and Docker unavailability fail closed.
+- Base-image mismatch, an attempted pull, child-image metadata drift, inherited disallowed environment/volumes, foreign-label collision, policy drift, timeout, oversize output, and Docker unavailability fail closed.
 - Two applications have independent durable records and deterministic containers.
 - Crash-point tests prove desired-state ordering, restart adoption, desired-running restart, desired-stopped retention, and no duplicate container.
 - Preview/health use only the fixed reader and verified stored container ID, enforce output/time limits, and return opaque CSP/sandbox-compatible content.
 
-**Implementation:** Reuse the reviewed validator image/policy and atomic receipt primitives, but implement a new generic runtime. Serialize with an inter-process per-app lock. Containerize a generated immutable artifact plus trusted helpers, never a source mount or app-authored server. Reconcile lazily on runtime/preview reads and explicitly during launcher readiness.
+**Implementation:** Keep the reviewed validator image/policy for tests only. Build and verify a dedicated platform-owned static-runtime child from the exact cached Node 22 slim base with `--pull=false`; set the non-root user, owned workdir, fixed helpers/entrypoint, no volumes, and minimal environment in the recipe. Implement the generic runtime with atomic receipt primitives and a minimal reviewed Docker CLI environment. Serialize with an inter-process per-app lock. Copy a generated immutable artifact into the stopped container, never mount source or execute an app-authored server. Verify child image and full created-container policy before start. Reconcile lazily on runtime/preview reads and explicitly during launcher readiness.
 
 **Verification:** focused runtime/route/deployment tests, mutation check of environment/label/policy branches, TypeScript check, commit.
 
@@ -190,4 +191,3 @@
 ## Completion gate
 
 The branch is complete only after every task has a clean task review, the whole-branch reviewer approves the combined diff, focused application and Hello suites pass, production build passes, and the exact deployed feature HEAD completes the live acceptance sequence. Then use `superpowers:finishing-a-development-branch` and report all ledger rulings with their cost if wrong.
-

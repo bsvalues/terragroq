@@ -74,7 +74,7 @@ Every mutating endpoint requires the existing owner authorization and same-origi
 
 Application-authored server code never executes on the HERMES host or inside the container. The `static-web-v1` host adapter reads the four explicit manifest files without executing them, validates the application in the existing pinned no-network validator, and produces a bounded self-contained HTML artifact. The artifact combines the document, stylesheet, and script without evaluating application JavaScript.
 
-The runtime creates an immutable-generation Docker container from the reviewed, digest-pinned executor image. It copies only the generated artifact and trusted WilliamOS runtime helpers into the stopped container, then starts it with:
+The runtime creates an immutable-generation Docker container from a dedicated reviewed WilliamOS static-runtime image. The existing HERMES agent image remains validator-only: its root user, declared `/opt/data` volume, dispatcher entrypoint, and broad inherited environment make it unsuitable as an application runtime. The static-runtime image is an owned child built from an exact reviewed local base image ID, contains only Node plus the trusted server/preview helpers, declares no volumes, sets an owned working directory and non-root user, and has a fixed entrypoint. The platform records and launches the exact child image ID, never a mutable tag. It copies only the generated artifact into the stopped container, then starts it with:
 
 - `--network none`
 - read-only root filesystem and bounded tmpfs
@@ -86,7 +86,9 @@ The runtime creates an immutable-generation Docker container from the reviewed, 
 - a fixed trusted entrypoint
 - an explicit non-secret container environment
 
-The Docker CLI process receives only the reviewed Windows executable environment needed to reach the intended local Docker engine. Provider keys, database URLs, auth secrets, `NODE_OPTIONS`, ambient Docker endpoints/contexts, and the platform environment do not cross the boundary. The service verifies the base image ID and refuses inherited image environment or volumes outside the adapter policy.
+The Docker CLI process receives only the reviewed Windows executable environment needed to reach the intended local Docker engine. Provider keys, database URLs, auth secrets, `NODE_OPTIONS`, ambient Docker endpoints/contexts, and the platform environment do not cross the boundary. The service verifies both the reviewed base ID at image-build time and the complete child-image metadata before use, then verifies the created container's image, user, entrypoint, environment, mounts, network, read-only flag, capabilities, security options, resources, and logging before start.
+
+For the disposable HERMES-local V1 proof, the already-cached reviewed base is `node:22-bookworm-slim` at local image ID `sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5`. HERMES reported a RepoDigest equal to that local ID but no registry digest in `docker image ls`; therefore this is exact local identity, not independently proven upstream release provenance. No pull is allowed during build. Registry provenance, SBOM, and vulnerability review remain explicit release hardening gates and may not be represented as complete by this local proof.
 
 Because `--network none` cannot publish a preview port, the platform retrieves health and the bounded HTML through a fixed trusted `docker exec` reader selected by container ID from durable state. No shell, route, file, or command comes from the browser. The iframe remains opaque with `sandbox="allow-scripts"`; response CSP includes `connect-src 'none'`.
 
@@ -139,4 +141,3 @@ On the deployed HERMES disposable runtime:
 8. No orphan application proposal worktrees, no unaccounted quarantines, no leaked secret values, and no TerraFusion access or mutation.
 
 The feature is not delivered until this browser journey works. Unit tests, build success, receipts, and container inspection are evidence, not substitutes.
-
