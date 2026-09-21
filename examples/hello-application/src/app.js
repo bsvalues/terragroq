@@ -32,6 +32,7 @@ export function mountHelloApplication(root = document) {
     statusOutput.textContent = snapshot.status
     statusOutput.textContent = `Cerebras route verified · ${snapshot.status}`
     statusOutput.dataset.hermesState = `cerebras-verified`
+    statusOutput.dataset.qwenProof = `complete`
     if (governanceMarker) governanceMarker.textContent = `Governed by HERMES · pulse ${pulseNumber}`
 
     trace.dataset.state = "idle"

@@ -238,6 +238,10 @@ h1 {
   padding-left: 0.5rem;
 }
 
+#pulse-status[data-qwen-proof="complete"] {
+  background: rgba(26, 188, 156, 0.12);
+}
+
 .governance-marker {
   display: inline-flex;
   margin: -1rem 0 2rem;
