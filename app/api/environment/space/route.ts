@@ -1,5 +1,6 @@
 import os from "node:os"
 import path from "node:path"
+import { isWorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 import { createPublicKey, type KeyObject } from "node:crypto"
 
 import {
@@ -965,10 +966,14 @@ function validWorldId(value: unknown): value is string {
 
 function canonicalProjectKey(value: unknown): CanonicalWorkspaceProjectKey | null {
   if (value === undefined || value === null) return "terrafusion"
-  return value === "terrafusion" || value === "williamos" || value === "hello-application" ? value : null
+  return isWorkspaceProjectKey(value) ? value : null
 }
 
 async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
+  if (binding.repositoryIdentity === `application:${binding.projectKey}`
+    && binding.workspaceAppUrl === `/api/projects/${binding.projectKey}/application-preview`) {
+    return new URL(binding.workspaceAppUrl, williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url)).toString()
+  }
   if (binding.projectKey === "hello-application"
     && binding.workspaceAppUrl === "/api/projects/hello-application/preview") {
     return new URL(binding.workspaceAppUrl, williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url)).toString()

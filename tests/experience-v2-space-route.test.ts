@@ -123,9 +123,9 @@ describe("Experience V2 Space route", () => {
   })
 
   it.each([
-    ["GET", () => GET(new Request("http://localhost/api/environment/space?projectKey=foreign"))],
+    ["GET", () => GET(new Request("http://localhost/api/environment/space?projectKey=../foreign"))],
     ["POST", () => POST(new Request("http://localhost/api/environment/space", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectKey: "foreign" }),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectKey: "../foreign" }),
     }))],
     ["PUT", () => PUT(new Request("http://localhost/api/environment/space", {
       method: "PUT", headers: { "content-type": "application/json" },
@@ -135,12 +135,32 @@ describe("Experience V2 Space route", () => {
       method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "a", projectKey: "foreign", adoptionHash: "d".repeat(64) }),
     }))],
-  ])("rejects an unregistered %s project selector before binding or persistence", async (_method, invoke) => {
+  ])("rejects a malformed or unsupported %s project selector before binding or persistence", async (_method, invoke) => {
     seams.resolveBinding.mockClear()
     const response = await invoke()
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual({ error: "SPACE_PROJECT_INVALID" })
     expect(seams.resolveBinding).not.toHaveBeenCalled()
+  })
+
+  it("loads an external app's verified Space and its generic preview, and refuses unknown catalog IDs before persistence", async () => {
+    seams.resolveBinding.mockResolvedValueOnce({ ok: true, binding: {
+      projectKey: "notes-board", repositoryIdentity: "application:notes-board",
+      workspaceAppUrl: "/api/projects/notes-board/application-preview",
+      project: { identity: "c:/applications/notes-board", name: "Notes Board" },
+    } })
+    const response = await GET(new Request("http://localhost/api/environment/space?projectKey=notes-board"))
+    expect(response.status).toBe(200)
+    expect(seams.load).toHaveBeenCalledWith(expect.objectContaining({
+      project: { identity: "c:/applications/notes-board", name: "Notes Board" },
+      workspaceAppUrl: "http://localhost/api/projects/notes-board/application-preview",
+    }))
+    seams.load.mockClear()
+    seams.resolveBinding.mockResolvedValueOnce({ ok: false, error: "APPLICATION_NOT_FOUND" })
+    const missing = await GET(new Request("http://localhost/api/environment/space?projectKey=unknown-app"))
+    expect(missing.status).toBe(503)
+    expect(await missing.json()).toEqual({ error: "APPLICATION_NOT_FOUND" })
+    expect(seams.load).not.toHaveBeenCalled()
   })
 
   it("never degrades an exact missing or project-mismatched lookup into browser state", async () => {

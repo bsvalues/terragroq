@@ -6,6 +6,7 @@ import {
   type CanonicalWorkspaceProjectKey,
 } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
+import { isWorkspaceProjectKey } from "@/lib/projects/workspace-project-key"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -21,7 +22,7 @@ function validWorldId(value: unknown): value is string {
 
 function canonicalProjectKey(value: string | null): CanonicalWorkspaceProjectKey | null {
   if (value === null) return "terrafusion"
-  return value === "terrafusion" || value === "williamos" || value === "hello-application" ? value : null
+  return isWorkspaceProjectKey(value) ? value : null
 }
 
 export async function DELETE(

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "starter-board",
+  "displayName": "Task Board",
+  "adapter": "static-web-v1",
+  "source": { "document": "src/index.html", "styles": "src/styles.css", "script": "src/app.js", "test": "test/application.test.mjs" },
+  "ai": { "writablePaths": ["src/index.html", "src/styles.css", "src/app.js"] }
+}

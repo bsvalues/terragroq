@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { discoverApplications } from "@/lib/applications/application-catalog"
+import { isApplicationId } from "@/lib/applications/application-manifest"
 
 import { and, eq } from "drizzle-orm"
 
@@ -22,10 +24,7 @@ export const WILLIAMOS_REPOSITORY_IDENTITY = "bsvalues/terragroq"
 const HELLO_APPLICATION_PROJECT_KEY = "hello-application"
 const HELLO_APPLICATION_SOURCE_DIRECTORY = path.join("examples", "hello-application")
 
-export type CanonicalWorkspaceProjectKey =
-  | typeof TERRAFUSION_PROJECT_KEY
-  | typeof WILLIAMOS_PROJECT_KEY
-  | typeof HELLO_APPLICATION_PROJECT_KEY
+export type CanonicalWorkspaceProjectKey = string
 
 export type WorkspaceProjectBinding = Readonly<{
   projectId: number
@@ -647,6 +646,36 @@ export async function resolveCanonicalWorkspaceProjectBinding(
   repositoryKey?: unknown,
   options?: WorkspaceProjectBindingOptions,
 ): Promise<WorkspaceProjectBindingResult> {
+  if (isApplicationId(projectKey)) {
+    if (!process.env.WILLIAMOS_APPLICATIONS_ROOT?.trim()) return { ok: false, error: "SPACE_PROJECT_INVALID" }
+    if (repositoryKey !== undefined && repositoryKey !== null && repositoryKey !== "" && repositoryKey !== projectKey) {
+      return { ok: false, error: "WORKSPACE_REPOSITORY_UNKNOWN" }
+    }
+    try {
+      const catalog = await discoverApplications()
+      const application = catalog.applications.find((candidate) => candidate.manifest.id === projectKey)
+      if (!application) return { ok: false, error: "APPLICATION_NOT_FOUND" }
+      const { manifest, repositoryRoot, head } = application
+      const identity = `application:${manifest.id}`
+      const mountKey = `${identity}:external`
+      const repository: WorkspaceRepositoryMountView = {
+        key: manifest.id, identity, label: manifest.displayName, role: "integrated-runtime", suite: null,
+        previewSource: true, defaultRepository: true,
+        mount: { key: mountKey, configured: true, verified: true, branch: null, revision: head, refusal: null },
+      }
+      return { ok: true, binding: {
+        // Catalog applications have no DB Project row. A negative, stable identity cannot impersonate
+        // the positive core Project IDs; Space persistence uses the verified root identity below.
+        projectId: application.projectId,
+        projectKey: manifest.id, projectName: manifest.displayName, repositoryResourceId: null,
+        repositoryKey: manifest.id, repositoryIdentity: identity, repositoryRole: "integrated-runtime",
+        repositoryLabel: manifest.displayName, repositoryPreviewSource: true, repositoryMountKey: mountKey,
+        observedRevision: head, configuredWorkspaceRoot: repositoryRoot, workspaceRoot: repositoryRoot,
+        workspaceAppUrl: `/api/projects/${manifest.id}/application-preview`,
+        project: { ...workspaceProjectFromRoot(repositoryRoot, manifest.displayName), repositories: [repository] },
+      } }
+    } catch { return { ok: false, error: "APPLICATION_CATALOG_UNAVAILABLE" } }
+  }
   if (projectKey === HELLO_APPLICATION_PROJECT_KEY) {
     if (repositoryKey !== undefined && repositoryKey !== null && repositoryKey !== "" && repositoryKey !== "williamos") {
       return { ok: false, error: "WORKSPACE_REPOSITORY_UNKNOWN" }

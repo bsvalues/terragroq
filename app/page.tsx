@@ -9,6 +9,7 @@ import {
 } from "@/lib/projects/owner-project-provisioning"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { discoverApplications } from "@/lib/applications/application-catalog"
 import {
   resolveRequestedWorkspaceProjectKey,
   resolveVisibleWorkspaceProjects,
@@ -59,7 +60,9 @@ export default async function WilliamOSRoot({
   // canonical Projects. Signup cannot safely own this: its post-create hooks run after the user
   // transaction commits, so a transient failure could otherwise strand a valid owner with no
   // usable Space. Awaiting here guarantees the workspace never hydrates ahead of its Project truth.
-  const visibleProjects = resolveVisibleWorkspaceProjects()
+  const applicationCatalog = await discoverApplications().catch(() => ({ applications: [] }))
+  const applicationProjects = applicationCatalog.applications.map(({ manifest }) => ({ key: manifest.id, name: manifest.displayName }))
+  const visibleProjects = resolveVisibleWorkspaceProjects(applicationProjects)
   if (visibleProjects.some((project) => project.key === "terrafusion")) await ensureCanonicalOwnerProjects(userId)
   else await ensureWilliamOsOwnerProject(userId)
   // A superseded route redirected here carrying the surface it used to be. Anything unrecognized is
@@ -67,7 +70,7 @@ export default async function WilliamOSRoot({
   // page, because a stale bookmark is not a fault the owner needs reported.
   const params = await searchParams
   const requested = params.summon
-  const projectKey = resolveRequestedWorkspaceProjectKey(params.project)
+  const projectKey = resolveRequestedWorkspaceProjectKey(params.project, applicationProjects)
   return <Desk
     initialSummon={isSummonedSurface(requested) ? requested : null}
     projectKey={projectKey}

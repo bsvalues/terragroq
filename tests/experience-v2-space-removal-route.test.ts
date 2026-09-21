@@ -46,18 +46,30 @@ describe("Experience V2 Space removal route", () => {
     })
   })
 
-  it("selects the canonical WilliamOS Project and rejects all other selectors", async () => {
+  it("selects the canonical WilliamOS Project and rejects malformed selectors", async () => {
     const williamOsRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=williamos", { method: "DELETE" })
     const selected = await DELETE(williamOsRequest, context("world-b"))
     expect(selected.status).toBe(200)
     expect(seams.resolveBinding).toHaveBeenCalledWith("owner-a", "williamos")
 
     seams.resolveBinding.mockClear()
-    const invalidRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=foreign", { method: "DELETE" })
+    const invalidRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=../foreign", { method: "DELETE" })
     const invalid = await DELETE(invalidRequest, context("world-b"))
     expect(invalid.status).toBe(400)
     expect(await invalid.json()).toEqual({ error: "SPACE_PROJECT_INVALID" })
     expect(seams.resolveBinding).not.toHaveBeenCalled()
+  })
+
+  it("resolves external app IDs through canonical binding and refuses unknown IDs before removal", async () => {
+    const appRequest = new Request("http://localhost/api/environment/spaces/world-b?projectKey=notes-board", { method: "DELETE" })
+    expect((await DELETE(appRequest, context("world-b"))).status).toBe(200)
+    expect(seams.resolveBinding).toHaveBeenCalledWith("owner-a", "notes-board")
+    seams.remove.mockClear()
+    seams.resolveBinding.mockResolvedValueOnce({ ok: false, error: "APPLICATION_NOT_FOUND" })
+    const missing = await DELETE(new Request("http://localhost/api/environment/spaces/world-b?projectKey=unknown-app", { method: "DELETE" }), context("world-b"))
+    expect(missing.status).toBe(503)
+    expect(await missing.json()).toEqual({ error: "APPLICATION_NOT_FOUND" })
+    expect(seams.remove).not.toHaveBeenCalled()
   })
 
   it("rejects malformed route identity before persistence", async () => {
