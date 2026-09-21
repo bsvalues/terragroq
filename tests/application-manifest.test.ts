@@ -16,6 +16,17 @@ describe("application manifest v1", () => {
     expect(applicationManifestDigest(parsed)).toBe(createHash("sha256").update(canonical).digest("hex"))
     expect(applicationManifestDigest(parseApplicationManifest({ ...manifest(), ai: { writablePaths: ["src/app.js", "src/styles.css", "src/index.html"] } }, "focus-board"))).toBe(applicationManifestDigest(parsed))
   })
+  it("preserves safe leading punctuation and consecutive dots in canonical source paths", () => {
+    const value = manifest()
+    value.source = {
+      document: "src/_main.js",
+      styles: "src/-theme.js",
+      script: "assets/theme..css",
+      test: "test/application.test.mjs",
+    }
+    value.ai.writablePaths = [value.source.document, value.source.styles, value.source.script]
+    expect(parseApplicationManifest(value, "focus-board")).toEqual(value)
+  })
   it.each([
     { ...manifest(), schemaVersion: 2 }, { ...manifest(), adapter: "shell" },
     { ...manifest(), command: "node evil.js" }, { ...manifest(), source: { ...manifest().source, extra: "x" } },

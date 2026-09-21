@@ -7,6 +7,7 @@ const seams = vi.hoisted(() => ({
   user: "owner" as string | null,
   create: vi.fn(),
   list: vi.fn(),
+  page: vi.fn(),
   get: vi.fn(),
   reject: vi.fn(),
   apply: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/lib/applications/application-proposal-service.mjs", () => ({
   createApplicationProposal: seams.create,
   getApplicationProposal: seams.get,
   listApplicationProposals: seams.list,
+  listApplicationProposalPage: seams.page,
   rejectApplicationProposal: seams.reject,
   reconcileApplicationProposalCreateIntents: seams.reconcile,
 }))
@@ -55,6 +57,7 @@ beforeEach(async () => {
   seams.user = "owner"
   vi.clearAllMocks()
   seams.list.mockReturnValue([{ proposalId: "existing" }])
+  seams.page.mockReturnValue({ proposals: [{ proposalId: "existing" }], truncated: false })
   seams.get.mockReturnValue({ proposalId: "detail" })
   seams.reject.mockResolvedValue({ proposalId: "detail", status: "REJECTED" })
   seams.apply.mockResolvedValue({ proposalId: "detail", status: "APPLIED" })
@@ -107,12 +110,64 @@ describe("generic application proposal routes", () => {
     expect(seams.apply).toHaveBeenCalledWith(expect.objectContaining({ application: expect.objectContaining({ manifest: expect.objectContaining({ id: "first-board" }) }) }))
   })
 
+  it("lets terminal rejection replay reconcile cleanup when the retry reason is invalid or omitted", async () => {
+    seams.reject.mockResolvedValue({
+      proposalId: "detail",
+      status: "REJECTED",
+      rejectionReason: "Original durable reason",
+    })
+
+    const invalid = await PATCH(request(
+      "/api/projects/first-board/application-proposals/id",
+      "PATCH",
+      { reason: "\u0000Different invalid retry reason" },
+    ), detailContext())
+    const omitted = await PATCH(request(
+      "/api/projects/first-board/application-proposals/id",
+      "PATCH",
+    ), detailContext())
+
+    for (const response of [invalid, omitted]) {
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        proposal: {
+          proposalId: "detail",
+          status: "REJECTED",
+          rejectionReason: "Original durable reason",
+        },
+      })
+    }
+    expect(seams.reject).toHaveBeenCalledTimes(2)
+    expect(seams.reject).toHaveBeenNthCalledWith(1, expect.objectContaining({ reason: undefined }))
+    expect(seams.reject).toHaveBeenNthCalledWith(2, expect.objectContaining({ reason: undefined }))
+
+    seams.reject.mockRejectedValueOnce(new Error("APPLICATION_PROPOSAL_REJECTION_INVALID"))
+    const nonterminal = await PATCH(request(
+      "/api/projects/first-board/application-proposals/id",
+      "PATCH",
+    ), detailContext())
+    expect(nonterminal.status).toBe(400)
+    expect(await nonterminal.json()).toEqual({ error: "APPLICATION_PROPOSAL_REJECTION_INVALID" })
+  })
+
   it("preserves the stable CREATE recovery quarantine code on proposal listing", async () => {
     seams.reconcile.mockRejectedValueOnce(new Error("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN"))
     const response = await GET(request("/api/projects/first-board/application-proposals"), context())
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ error: "APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN" })
     expect(seams.list).not.toHaveBeenCalled()
+  })
+
+  it("surfaces bounded-list truncation and sanitizes listing uncertainty", async () => {
+    seams.page.mockReturnValueOnce({ proposals: [{ proposalId: "newest" }], truncated: true })
+    const truncated = await GET(request("/api/projects/first-board/application-proposals"), context())
+    expect(await truncated.json()).toEqual({ proposals: [{ proposalId: "newest" }], truncated: true })
+
+    seams.reconcile.mockRejectedValueOnce(new Error("APPLICATION_PROPOSAL_LISTING_UNCERTAIN"))
+    const uncertain = await GET(request("/api/projects/first-board/application-proposals"), context())
+    expect(uncertain.status).toBe(503)
+    expect(await uncertain.json()).toEqual({ error: "APPLICATION_PROPOSAL_LISTING_UNCERTAIN" })
+    expect(seams.page).toHaveBeenCalledTimes(1)
   })
 
   it("accepts an explicit local route without external approval and preserves route-unavailable truth", async () => {

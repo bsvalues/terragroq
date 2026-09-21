@@ -15,6 +15,7 @@ import {
   applyApplicationProposal,
   createApplicationProposal,
   getApplicationProposal,
+  listApplicationProposalPage,
   listApplicationProposals,
   reconcileApplicationProposalCreateIntents,
   rejectApplicationProposal,
@@ -53,7 +54,12 @@ const gitShellPath = (target: string) => process.platform === "win32"
   ? target.replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`).replaceAll("\\", "/")
   : target
 
-async function fixture(id: string) {
+async function fixture(id: string, source = {
+  document: "web/page.html",
+  styles: "assets/theme.css",
+  script: "client/main.js",
+  test: "test/application.test.mjs",
+}) {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), `application-proposal-${id}-`))
   roots.push(parent)
   const repositoryRoot = path.join(parent, id)
@@ -64,15 +70,15 @@ async function fixture(id: string) {
     id,
     displayName: id === "focus-board" ? "Focus Board" : "Notes Pad",
     adapter: "static-web-v1",
-    source: { document: "web/page.html", styles: "assets/theme.css", script: "client/main.js", test: "test/application.test.mjs" },
-    ai: { writablePaths: ["web/page.html", "assets/theme.css", "client/main.js"] },
+    source,
+    ai: { writablePaths: [source.document, source.styles, source.script] },
   }
   const files: Record<string, string> = {
     ".williamos/application.json": `${JSON.stringify(manifest, null, 2)}\n`,
-    "web/page.html": "<main>Board</main>\n",
-    "assets/theme.css": "main { color: navy; }\n",
-    "client/main.js": "document.body.dataset.ready = 'true'\n",
-    "test/application.test.mjs": "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('app', () => assert.ok(true))\n",
+    [source.document]: "<main>Board</main>\n",
+    [source.styles]: "main { color: navy; }\n",
+    [source.script]: "document.body.dataset.ready = 'true'\n",
+    [source.test]: "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('app', () => assert.ok(true))\n",
     "owner-notes.txt": "owner base\n",
   }
   for (const [relative, content] of Object.entries(files)) {
@@ -216,7 +222,7 @@ async function crashedApplicationCreate(
       requestText: "Hold after the isolated worktree is created",
       executionRoute: "hermes-local",
       residentTurn: async ({ workspacePath }) => {
-        fs.writeFileSync(workspacePath + "/web/page.html", "<main>Crash candidate</main>\\n");
+        fs.writeFileSync(workspacePath + "/" + ${JSON.stringify(application.manifest.ai.writablePaths[0])}, "<main>Crash candidate</main>\\n");
         return {
           threadId: "crash-thread", turnId: "crash-turn", model: "williamos-qwen3-4b:64k",
           executionNode: "hermes-node", ignoredPathsCreated: [],
@@ -280,6 +286,38 @@ describe("application proposal engine compatibility", () => {
       "examples/hello-application/src/styles.css",
     ])
     expect(helloGovernedPrompt("Change the greeting")).toContain("isolated Hello Application workspace")
+  })
+
+  it("accepts the canonical V1 punctuation path grammar without rewriting authored spelling", () => {
+    const paths = ["src/_main.js", "src/-theme.js", "assets/theme..css"]
+    const engine = createProposalEngine({
+      applicationId: "focus-board",
+      displayName: "Focus Board",
+      allowedPaths: paths,
+      validationPaths: [...paths, "test/application.test.mjs"],
+      validationCommand: "node --test test/application.test.mjs",
+      namespace: "application-proposals/focus-board",
+      receiptSchemaVersion: 4,
+    })
+    expect(engine.allowedPaths).toEqual(paths)
+    expect(engine.validationPaths).toEqual([...paths, "test/application.test.mjs"])
+  })
+
+  it.each([
+    { name: "traversal segment", paths: ["src/../main.js", "src/theme.js"] },
+    { name: "absolute path", paths: ["/src/main.js", "src/theme.js"] },
+    { name: "Windows reserved alias", paths: ["src/CON", "src/theme.js"] },
+    { name: "case alias", paths: ["src/Main.js", "src/main.js"] },
+  ])("refuses a canonical path $name", ({ paths }) => {
+    expect(() => createProposalEngine({
+      applicationId: "focus-board",
+      displayName: "Focus Board",
+      allowedPaths: paths,
+      validationPaths: [...paths, "test/application.test.mjs"],
+      validationCommand: "node --test test/application.test.mjs",
+      namespace: "application-proposals/focus-board",
+      receiptSchemaVersion: 4,
+    })).toThrow("APPLICATION_PROPOSAL_DESCRIPTOR_INVALID")
   })
 
   it("distinguishes an absent proposal branch from a failed branch observation", async () => {
@@ -575,6 +613,7 @@ describe("application proposal lifecycle", () => {
     "patch_published",
     "receipt_staged",
     "receipt_published",
+    "listing_index_published",
   ])("recovers a hard process death at CREATE checkpoint %s", async (crashStage) => {
     const focus = await fixture("focus-board")
     await crashedApplicationCreate(focus.application, focus.runtimeRoot, crashStage)
@@ -590,7 +629,7 @@ describe("application proposal lifecycle", () => {
 
     expect(fs.readdirSync(intentRoot)).toEqual([])
     expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
-    if (crashStage === "receipt_published") {
+    if (["receipt_published", "listing_index_published"].includes(crashStage)) {
       expect(getApplicationProposal({
         applicationId: "focus-board",
         runtimeRoot: focus.runtimeRoot,
@@ -598,6 +637,11 @@ describe("application proposal lifecycle", () => {
         requestedBy: "crash-owner",
       })).toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW", candidateSha: expect.any(String) }))
       expect(git(focus.repositoryRoot, "show-ref", "--hash", "--verify", `refs/heads/${intent.branch}`)).toMatch(/^[0-9a-f]{40,64}$/)
+      expect(listApplicationProposals({
+        applicationId: "focus-board",
+        runtimeRoot: focus.runtimeRoot,
+        requestedBy: "crash-owner",
+      })).toEqual([expect.objectContaining({ proposalId: intent.proposalId })])
     } else {
       expect(fs.existsSync(path.join(focus.runtimeRoot, "application-proposals", "focus-board", `${intent.proposalId}.json`))).toBe(false)
       expect(fs.existsSync(path.join(focus.runtimeRoot, "application-proposals", "focus-board", `${intent.proposalId}.patch`))).toBe(false)
@@ -845,6 +889,71 @@ describe("application proposal lifecycle", () => {
     })).resolves.toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
   })
 
+  it("creates and applies a proposal with canonical punctuation paths", async () => {
+    const source = {
+      document: "src/_main.js",
+      styles: "src/-theme.js",
+      script: "assets/theme..css",
+      test: "test/application.test.mjs",
+    }
+    const focus = await fixture("focus-board", source)
+    const proposal = await createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner-1",
+      requestText: "Update every punctuation path",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalRoutingEnabled: true,
+      externalEgressApproved: true,
+      cerebrasTurn: externalTurn({
+        "src/_main.js": "export const main = true\n",
+        "src/-theme.js": "export const theme = true\n",
+        "assets/theme..css": ".theme { color: teal; }\n",
+      }),
+      validateWorkspace: validation,
+    })
+    expect(proposal.writablePaths).toEqual(["src/_main.js", "src/-theme.js", "assets/theme..css"])
+    expect(proposal.changedPaths).toEqual(["assets/theme..css", "src/-theme.js", "src/_main.js"])
+
+    const applied = await applyApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: proposal.proposalId,
+      requestedBy: "owner-1",
+      validateWorkspace: validation,
+    })
+    expect(applied.status).toBe("APPLIED")
+    expect(fs.readFileSync(path.join(focus.repositoryRoot, "src", "_main.js"), "utf8")).toBe("export const main = true\n")
+    expect(fs.readFileSync(path.join(focus.repositoryRoot, "src", "-theme.js"), "utf8")).toBe("export const theme = true\n")
+    expect(fs.readFileSync(path.join(focus.repositoryRoot, "assets", "theme..css"), "utf8")).toBe(".theme { color: teal; }\n")
+  }, 30_000)
+
+  it("recovers a hard-crashed CREATE whose journal contains canonical punctuation paths", async () => {
+    const focus = await fixture("focus-board", {
+      document: "src/_main.js",
+      styles: "src/-theme.js",
+      script: "assets/theme..css",
+      test: "test/application.test.mjs",
+    })
+    await crashedApplicationCreate(focus.application, focus.runtimeRoot, "receipt_published")
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const baseName = fs.readdirSync(intentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))!
+    const intent = JSON.parse(fs.readFileSync(path.join(intentRoot, baseName), "utf8"))
+
+    await reconcileApplicationProposalCreateIntents({ application: focus.application, runtimeRoot: focus.runtimeRoot })
+
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+    expect(getApplicationProposal({
+      applicationId: "focus-board",
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: intent.proposalId,
+      requestedBy: "crash-owner",
+    })).toEqual(expect.objectContaining({
+      status: "READY_FOR_REVIEW",
+      writablePaths: ["src/_main.js", "src/-theme.js", "assets/theme..css"],
+    }))
+  }, 30_000)
+
   it("refuses a local-model edit that would make the application disappear from the catalog", async () => {
     const { application, runtimeRoot } = await fixture("focus-board")
     await expect(createApplicationProposal({
@@ -937,6 +1046,74 @@ describe("application proposal lifecycle", () => {
       application, runtimeRoot, proposalId: proposal.proposalId, requestedBy: "owner-1", reason: "Discard this draft",
     })).resolves.toEqual(expect.objectContaining({ status: "REJECTED" }))
     expect(git(repositoryRoot, "branch", "--list", proposal.branch)).toBe("")
+  })
+
+  it("replays terminal Reject cleanup from the durable reason when a retry supplies different text", async () => {
+    const focus = await fixture("focus-board")
+    const create = (content: string) => createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner-1",
+      requestText: "Update the page",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalRoutingEnabled: true,
+      externalEgressApproved: true,
+      cerebrasTurn: externalTurn({ "web/page.html": content }),
+      validateWorkspace: validation,
+    })
+    const crashed = await create("<main>Crash-window candidate</main>\n")
+    const later = await create("<main>Later candidate</main>\n")
+    git(focus.repositoryRoot, "branch", "owner-untouched")
+
+    await expect(rejectApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: crashed.proposalId,
+      requestedBy: "owner-1",
+      reason: "Original durable reason",
+      transactionOperations: {
+        checkpoint(stage: string) {
+          if (stage === "terminal_published") throw new Error("SIMULATED_REJECT_CRASH")
+        },
+      },
+    })).rejects.toThrow("SIMULATED_REJECT_CRASH")
+    expect(getApplicationProposal({
+      applicationId: "focus-board",
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: crashed.proposalId,
+      requestedBy: "owner-1",
+    })).toEqual(expect.objectContaining({
+      status: "REJECTED",
+      rejectionReason: "Original durable reason",
+    }))
+    expect(git(focus.repositoryRoot, "branch", "--list", crashed.branch)).toBe(crashed.branch)
+
+    await abandonedRepositoryLock(focus.runtimeRoot, focus.repositoryRoot, crashed.proposalId)
+    const replayed = await rejectApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: crashed.proposalId,
+      requestedBy: "owner-1",
+      reason: "\u0000Different retry reason that is ignored after durable rejection",
+    })
+
+    expect(replayed).toEqual(expect.objectContaining({
+      status: "REJECTED",
+      rejectionReason: "Original durable reason",
+    }))
+    expect(fs.existsSync(applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot))).toBe(false)
+    expect(git(focus.repositoryRoot, "branch", "--list", crashed.branch)).toBe("")
+    expect(git(focus.repositoryRoot, "branch", "--list", later.branch)).toBe(later.branch)
+    expect(git(focus.repositoryRoot, "branch", "--list", "owner-untouched")).toBe("owner-untouched")
+
+    await expect(rejectApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: later.proposalId,
+      requestedBy: "owner-1",
+      reason: "Later mutation remains unblocked",
+    })).resolves.toEqual(expect.objectContaining({ status: "REJECTED" }))
+    expect(git(focus.repositoryRoot, "branch", "--list", "owner-untouched")).toBe("owner-untouched")
   })
 
   it("applies only the reviewed candidate with CAS and returns a bounded duplicate Apply", async () => {
@@ -1253,6 +1430,117 @@ describe("application proposal lifecycle", () => {
       ]))
   })
 
+  it("keeps the bounded collection available while another live Create is still editing", async () => {
+    const { application, runtimeRoot } = await fixture("focus-board")
+    const existing = await createApplicationProposal({
+      application, runtimeRoot, requestedBy: "owner-1", requestText: "Change the theme",
+      executionRoute: "cerebras-qwen-3-8-27b", externalRoutingEnabled: true, externalEgressApproved: true,
+      cerebrasTurn: externalTurn({ "assets/theme.css": "main { color: teal; }\n" }), validateWorkspace: validation,
+    })
+    let editing!: () => void
+    let finish!: () => void
+    const editingStarted = new Promise<void>((resolve) => { editing = resolve })
+    const held = new Promise<void>((resolve) => { finish = resolve })
+    const creating = createApplicationProposal({
+      application,
+      runtimeRoot,
+      requestedBy: "owner-1",
+      requestText: "Hold this live edit",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        editing()
+        await held
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Held edit complete</main>\n")
+        return {
+          threadId: "held-thread", turnId: "held-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+    })
+    await Promise.race([
+      editingStarted,
+      creating.then(() => { throw new Error("live Create completed before its held resident turn") }),
+    ])
+    try {
+      expect(listApplicationProposalPage({
+        applicationId: "focus-board",
+        runtimeRoot,
+        requestedBy: "owner-1",
+      })).toEqual(expect.objectContaining({
+        truncated: false,
+        proposals: [expect.objectContaining({ proposalId: existing.proposalId })],
+      }))
+    } finally { finish() }
+    await expect(creating).resolves.toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
+  }, 30_000)
+
+  it("bounds steady proposal listing while direct historical lookup remains available", async () => {
+    const { application, repositoryRoot, runtimeRoot } = await fixture("focus-board")
+    const first = await createApplicationProposal({
+      application, runtimeRoot, requestedBy: "owner-1", requestText: "Change the theme",
+      executionRoute: "cerebras-qwen-3-8-27b", externalRoutingEnabled: true, externalEgressApproved: true,
+      cerebrasTurn: externalTurn({ "assets/theme.css": "main { color: teal; }\n" }), validateWorkspace: validation,
+    })
+    const directory = path.join(runtimeRoot, "application-proposals", "focus-board")
+    const originalReceipt = JSON.parse(fs.readFileSync(path.join(directory, `${first.proposalId}.json`), "utf8"))
+    const originalPatch = fs.readFileSync(path.join(directory, `${first.proposalId}.patch`))
+    const { addApplicationProposalToListIndex, APPLICATION_PROPOSAL_LIST_LIMIT } = await import("@/lib/applications/proposal-list-index.mjs")
+    await withApplicationRepositoryRecoveryClaim({
+      runtimeRoot,
+      repositoryRoot,
+      action: async () => {
+        for (let index = 1; index <= APPLICATION_PROPOSAL_LIST_LIMIT; index += 1) {
+          const id = `${index.toString(16).padStart(8, "0")}-0000-4000-8000-${index.toString(16).padStart(12, "0")}`
+          const receipt = {
+            ...originalReceipt,
+            proposalId: id,
+            branch: `codex/williamos-app-focus-board-${id}`,
+            ...(index === 1 ? { createdAt: "2000-01-01T00:00:00.000Z" } : {}),
+          }
+          fs.writeFileSync(path.join(directory, `${id}.json`), `${JSON.stringify(receipt, null, 2)}\n`)
+          fs.writeFileSync(path.join(directory, `${id}.patch`), originalPatch)
+          addApplicationProposalToListIndex({
+            runtimeRoot,
+            applicationId: "focus-board",
+            proposalId: id,
+            createdAt: receipt.createdAt,
+            operationToken: randomUUID(),
+          })
+        }
+      },
+    })
+
+    const realReaddir = fs.readdirSync.bind(fs)
+    const readdir = vi.spyOn(fs, "readdirSync").mockImplementation(((target: fs.PathLike, ...args: any[]) => {
+      if (path.resolve(String(target)) === path.resolve(directory)) throw new Error("permanent proposal store was enumerated")
+      return (realReaddir as any)(target, ...args)
+    }) as typeof fs.readdirSync)
+    // Vitest spies do not expose the original implementation through the
+    // wrapper; the bounded path must not call readdirSync at all.
+    try {
+      const page = listApplicationProposalPage({ applicationId: "focus-board", runtimeRoot, requestedBy: "owner-1" })
+      expect(page.proposals).toHaveLength(APPLICATION_PROPOSAL_LIST_LIMIT)
+      expect(page.truncated).toBe(true)
+      const oldestId = "00000001-0000-4000-8000-000000000001"
+      expect(page.proposals.some((proposal: any) => proposal.proposalId === oldestId)).toBe(false)
+      expect(getApplicationProposal({
+        applicationId: "focus-board", runtimeRoot, proposalId: oldestId, requestedBy: "owner-1",
+      })).toEqual(expect.objectContaining({ proposalId: oldestId }))
+    } finally { readdir.mockRestore() }
+
+    fs.unlinkSync(path.join(directory, ".listing.v1.json"))
+    await reconcileApplicationProposalCreateIntents({ application, runtimeRoot })
+    const migrated = listApplicationProposalPage({ applicationId: "focus-board", runtimeRoot, requestedBy: "owner-1" })
+    const oldestId = "00000001-0000-4000-8000-000000000001"
+    expect(migrated.proposals).toHaveLength(APPLICATION_PROPOSAL_LIST_LIMIT)
+    expect(migrated.truncated).toBe(true)
+    expect(migrated.proposals.some((proposal: any) => proposal.proposalId === oldestId)).toBe(false)
+    expect(getApplicationProposal({
+      applicationId: "focus-board", runtimeRoot, proposalId: oldestId, requestedBy: "owner-1",
+    })).toEqual(expect.objectContaining({ proposalId: oldestId }))
+  }, 30_000)
+
   it("removes an owned patch artifact when Create receipt publication fails", async () => {
     const { application, runtimeRoot } = await fixture("focus-board")
     const realRename = fs.renameSync.bind(fs)
@@ -1269,7 +1557,7 @@ describe("application proposal lifecycle", () => {
       })).rejects.toThrow("simulated receipt publication failure")
     } finally { rename.mockRestore() }
     const directory = path.join(runtimeRoot, "application-proposals", "focus-board")
-    expect(fs.existsSync(directory) ? fs.readdirSync(directory) : []).toEqual([])
+    expect(fs.existsSync(directory) ? fs.readdirSync(directory) : []).toEqual([".listing.v1.json"])
   })
 
   it("lists a marker-only Create quarantine when primary receipt publication and cleanup fail", async () => {

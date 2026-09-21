@@ -1,6 +1,6 @@
 import {
   createApplicationProposal,
-  listApplicationProposals,
+  listApplicationProposalPage,
   reconcileApplicationProposalCreateIntents,
 } from "@/lib/applications/application-proposal-service.mjs"
 import { applicationCerebrasCapability, cerebrasCredentialBridgeReady } from "@/lib/applications/cerebras-turn.mjs"
@@ -56,11 +56,12 @@ export async function GET(_request: Request, context: { params: Promise<{ projec
       application: resolved.context.application,
       runtimeRoot: resolved.context.runtimeRoot,
     })
-    return applicationReply({ proposals: listApplicationProposals({
+    const page = listApplicationProposalPage({
       applicationId: resolved.context.application.manifest.id,
       runtimeRoot: resolved.context.runtimeRoot,
       requestedBy: resolved.context.userId,
-    }) })
+    })
+    return applicationReply({ proposals: page.proposals, ...(page.truncated ? { truncated: true } : {}) })
   } catch (error) { return applicationProposalError(error) }
 }
 

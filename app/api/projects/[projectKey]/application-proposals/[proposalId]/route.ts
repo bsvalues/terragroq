@@ -38,9 +38,10 @@ export async function PATCH(request: Request, context: Context) {
   const resolved = await resolveApplicationProposalRouteContext(params.projectKey)
   if (!resolved.ok) return resolved.response
   const parsed = await readBoundedJson(request, MAX_REJECTION_BODY_BYTES)
-  if (!parsed.ok) return invalidRejection()
-  const reason = rejectionReason(parsed.value)
-  if (!reason) return invalidRejection()
+  // Let the service inspect durable state before it admits a new reason. A
+  // terminal REJECTED replay must be able to finish owned cleanup even when a
+  // retry omits the body or no longer satisfies current input validation.
+  const reason = parsed.ok ? rejectionReason(parsed.value) ?? undefined : undefined
   try {
     return applicationReply({ proposal: await rejectApplicationProposal({
       application: resolved.context.application,
