@@ -144,8 +144,51 @@ describe("contained application developer preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }))
     await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
 
-    await act(async () => rejectRefresh(new Error("HELLO_APPLICATION_STATUS_UNAVAILABLE")))
+    await act(async () => rejectRefresh(new Error("HELLO_APPLICATION_STATUS_UNAVAILABLE: C:/secret/status.log")))
     expect(await screen.findByText("Runtime unavailable", { exact: false })).toBeTruthy()
+    expect(screen.getByRole("alert").textContent).toMatch(/runtime status is unavailable.*Retry Refresh/i)
+    expect(screen.getByRole("alert").textContent).not.toMatch(/HELLO_APPLICATION|secret/i)
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it("humanizes an HTTP failure while reading legacy Hello runtime truth", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
+      { error: "HELLO_APPLICATION_STATUS_UNAVAILABLE: C:/secret/status.log" },
+      { status: 503 },
+    )))
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/runtime status is unavailable.*Retry Refresh/i)
+    expect(alert.textContent).not.toMatch(/HELLO_APPLICATION|secret/i)
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it.each(["HTTP", "transport"] as const)("humanizes a %s failure while starting legacy Hello", async (failureKind) => {
+    const startFailure = () => failureKind === "HTTP"
+      ? Promise.resolve(Response.json(
+        { error: "HELLO_APPLICATION_START_FAILED: C:/secret/start.log" },
+        { status: 503 },
+      ))
+      : Promise.reject(new Error("connect ECONNREFUSED C:/secret/start.log"))
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(legacyRuntime("stopped")))
+      .mockImplementationOnce(startFailure)
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    expect(await screen.findByText("Runtime stopped", { exact: false })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Start application" }))
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/start outcome is unavailable.*Retry Start application or Refresh/i)
+    expect(alert.textContent).not.toMatch(/HELLO_APPLICATION|ECONNREFUSED|secret/i)
     expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
   })
 
@@ -174,7 +217,10 @@ describe("contained application developer preview", () => {
   it("keeps the projected legacy Hello iframe withheld when Stop fails", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(Response.json(legacyRuntime("running")))
-      .mockResolvedValueOnce(Response.json({ error: "HELLO_APPLICATION_STOP_FAILED" }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json(
+        { error: "HELLO_APPLICATION_STOP_FAILED: C:/secret/stop.log" },
+        { status: 503 },
+      ))
     vi.stubGlobal("fetch", fetcher)
     render(<DeveloperPreviewSurface
       project={HELLO_APPLICATION_WORKSPACE_PROJECT}
@@ -185,7 +231,29 @@ describe("contained application developer preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop application" }))
     await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
 
-    expect(await screen.findByText("Runtime error: HELLO_APPLICATION_STOP_FAILED")).toBeTruthy()
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/stop outcome is unavailable.*Retry Stop application or Refresh/i)
+    expect(alert.textContent).not.toMatch(/HELLO_APPLICATION|secret/i)
+    expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
+  })
+
+  it("keeps the legacy Hello iframe withheld and humanizes a thrown Stop failure", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(legacyRuntime("running")))
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED C:/secret/stop.log"))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperPreviewSurface
+      project={HELLO_APPLICATION_WORKSPACE_PROJECT}
+      runningAppUrl={HELLO_APPLICATION_WORKSPACE_PROJECT.application.previewUrl}
+    />)
+
+    expect(await screen.findByTitle("Running Hello Application application")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop application" }))
+    await waitFor(() => expect(screen.queryByTitle("Running Hello Application application")).toBeNull())
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/stop outcome is unavailable.*Retry Stop application or Refresh/i)
+    expect(alert.textContent).not.toMatch(/HELLO_APPLICATION|ECONNREFUSED|secret/i)
     expect(screen.queryByTitle("Running Hello Application application")).toBeNull()
   })
 

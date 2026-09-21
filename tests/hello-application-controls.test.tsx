@@ -1437,7 +1437,9 @@ describe("HelloApplicationControls", () => {
     await renderReady(fetcher)
 
     fireEvent.click(screen.getByRole("button", { name: "Start application" }))
-    expect((await screen.findByText("Runtime error: HELLO_APPLICATION_START_FAILED")).getAttribute("role")).toBe("alert")
+    const runtimeAlert = await screen.findByText(/Hello Application start outcome is unavailable.*Retry Start application or Refresh/i)
+    expect(runtimeAlert.getAttribute("role")).toBe("alert")
+    expect(runtimeAlert.textContent).not.toContain("HELLO_APPLICATION_START_FAILED")
 
     await submitRequest()
     expect((await screen.findByText("HERMES request failed: HELLO_PROPOSAL_FAILED")).getAttribute("role")).toBe("alert")

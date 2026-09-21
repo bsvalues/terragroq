@@ -220,7 +220,9 @@ describe("Hello Application runtime truth surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }))
 
-    expect((await screen.findByRole("alert")).textContent).toContain("HELLO_APPLICATION_PROJECT_TRUTH_UNAVAILABLE")
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/runtime status is unavailable.*Retry Refresh/i)
+    expect(alert.textContent).not.toContain("HELLO_APPLICATION_PROJECT_TRUTH_UNAVAILABLE")
     expect(screen.queryByLabelText("Hello Application runtime truth")).toBeNull()
   })
 })

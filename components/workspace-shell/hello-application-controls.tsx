@@ -20,10 +20,6 @@ async function responseJson<T>(response: Response): Promise<T> {
   return payload
 }
 
-function message(cause: unknown, fallback: string): string {
-  return cause instanceof Error && cause.message ? cause.message : fallback
-}
-
 async function readRuntimeStatus(project: ApplicationVisibleWorkspaceProject): Promise<ApplicationRuntimeView> {
   const response = await fetch(project.application.runtimeUrl, { cache: "no-store" })
   return adaptApplicationRuntimePayload(project, await responseJson<unknown>(response))
@@ -41,6 +37,21 @@ const RUNTIME_DETAIL_MESSAGES: Readonly<Record<string, string>> = Object.freeze(
   HELLO_APPLICATION_EXITED: "The Hello Application runtime exited unexpectedly. Use Start application to launch it again.",
   HELLO_APPLICATION_START_TIMEOUT: "The Hello Application runtime did not become ready in time. Retry Start application.",
 })
+
+type LegacyRuntimeFailureOperation = "read" | "start" | "stop"
+
+const LEGACY_RUNTIME_FAILURE_MESSAGES: Readonly<Record<LegacyRuntimeFailureOperation, string>> = Object.freeze({
+  read: "The Hello Application runtime status is unavailable. Retry Refresh to restore verified runtime truth.",
+  start: "The Hello Application start outcome is unavailable. Retry Start application or Refresh to restore verified runtime truth.",
+  stop: "The Hello Application stop outcome is unavailable. Retry Stop application or Refresh to restore verified runtime truth.",
+})
+
+function legacyRuntimeFailureMessage(cause: unknown, operation: LegacyRuntimeFailureOperation): string {
+  if (cause instanceof Error && Object.prototype.hasOwnProperty.call(RUNTIME_DETAIL_MESSAGES, cause.message)) {
+    return RUNTIME_DETAIL_MESSAGES[cause.message]
+  }
+  return LEGACY_RUNTIME_FAILURE_MESSAGES[operation]
+}
 
 function runtimeDetailMessage(runtime: ApplicationRuntimeView): string | null {
   if (!runtime.detail) return null
@@ -137,7 +148,7 @@ export function ApplicationControls({
       if (activeRuntimeLifecycle(lifecycle) && !queuedRuntimeRead.current) {
         if (isLegacy) {
           clearRuntimeTruth("unavailable")
-          setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_STATUS_UNAVAILABLE")}`)
+          setRuntimeError(legacyRuntimeFailureMessage(cause, "read"))
         } else {
           clearRuntimeTruth("unavailable")
           setRuntimeError("Runtime status is unavailable. Retry Refresh to restore verified runtime truth.")
@@ -197,7 +208,7 @@ export function ApplicationControls({
       if (activeRuntimeLifecycle(lifecycle)) {
         if (isLegacy) {
           clearRuntimeTruth("unavailable")
-          setRuntimeError(`Runtime error: ${message(cause, "HELLO_APPLICATION_RUNTIME_FAILED")}`)
+          setRuntimeError(legacyRuntimeFailureMessage(cause, method === "POST" ? "start" : "stop"))
         } else {
           clearRuntimeTruth("unavailable")
           setRuntimeError(`The contained runtime ${method === "POST" ? "start" : "stop"} outcome is unavailable. Retry the action or Refresh.`)
