@@ -1,10 +1,11 @@
 import fs from "node:fs"
+import { EventEmitter } from "node:events"
 import os from "node:os"
 import path from "node:path"
 
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { runCerebrasApplicationTurn } from "@/lib/applications/cerebras-turn.mjs"
+import { invokeCredentialBridge, runCerebrasApplicationTurn } from "@/lib/applications/cerebras-turn.mjs"
 import { assertProposalSecretFree } from "@/lib/applications/proposal-secrets.mjs"
 import { validateApplicationProposalInContainer } from "@/lib/applications/proposal-validation.mjs"
 import { runCerebrasHelloChange } from "@/scripts/execution-fabric/cerebras-hello-change.mjs"
@@ -15,7 +16,7 @@ afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursiv
 function workspace() {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "application-proposal-validation-"))
   roots.push(runtimeRoot)
-  const workspacePath = path.join(runtimeRoot, "proposal-worktrees", "focus-board-proposal")
+  const workspacePath = path.join(runtimeRoot, "worktrees", "focus-board-proposal")
   for (const relative of ["web/page.html", "assets/theme.css", "client/main.js", "test/application.test.mjs"]) {
     const target = path.join(workspacePath, ...relative.split("/"))
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -51,6 +52,22 @@ describe("application proposal secret boundary", () => {
 })
 
 describe("generic Cerebras application turn", () => {
+  it("bounds an early credential-bridge stdin failure", async () => {
+    const child = new EventEmitter() as any
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.stdin = new EventEmitter()
+    child.kill = vi.fn()
+    child.stdin.end = () => queueMicrotask(() => child.stdin.emit("error", Object.assign(new Error("pipe closed"), { code: "EPIPE" })))
+
+    await expect(invokeCredentialBridge({ schemaVersion: 2 }, {
+      resolveBridge: () => path.join(process.cwd(), "bridge.ps1"),
+      spawn: () => child,
+      timeoutMs: 1_000,
+    })).rejects.toThrow("APPLICATION_CEREBRAS_UNAVAILABLE")
+    expect(child.kill).toHaveBeenCalledTimes(1)
+  })
+
   it("authors a schema-v2 generic envelope without a hard-coded Hello path", async () => {
     const fetchImpl = async (input: string | URL | Request) => {
       if (String(input).endsWith("/public/v1/models")) {

@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto"
+import {
+  applicationManifestDigestValue,
+  isApplicationId as isSharedApplicationId,
+  parseApplicationManifestValue,
+} from "./application-identity.mjs"
 
 export type ApplicationManifest = Readonly<{
   schemaVersion: 1
@@ -13,8 +17,7 @@ export const MAX_APPLICATION_MANIFEST_BYTES = 8_192
 const reserved = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i
 
 export function isApplicationId(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value)
-    && !reserved.test(value) && !["terrafusion", "williamos", "hello-application"].includes(value)
+  return isSharedApplicationId(value)
 }
 
 export function exactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
@@ -35,24 +38,9 @@ function sourcePath(value: unknown): value is string {
 }
 
 export function parseApplicationManifest(value: unknown, folderId: string): ApplicationManifest {
-  const fail = () => { throw new Error("APPLICATION_MANIFEST_INVALID") }
-  if (!exactKeys(value, ["schemaVersion", "id", "displayName", "adapter", "source", "ai"])) return fail()
-  if (value.schemaVersion !== 1 || !isApplicationId(value.id) || value.id !== folderId
-    || !validDisplayName(value.displayName) || value.adapter !== "static-web-v1") return fail()
-  if (!exactKeys(value.source, ["document", "styles", "script", "test"]) || !exactKeys(value.ai, ["writablePaths"])) return fail()
-  const { document, styles, script, test } = value.source
-  if (!sourcePath(document) || !sourcePath(styles) || !sourcePath(script) || test !== "test/application.test.mjs"
-    // V1 runs on Windows. All accepted paths are ASCII POSIX paths, so case folding identifies
-    // aliases without relaxing normalization or permitting the validation file in the writable set.
-    || new Set([document, styles, script, test].map((item) => item.toLowerCase())).size !== 4) return fail()
-  const writable = value.ai.writablePaths
-  const expected = [document, styles, script]
-  if (!Array.isArray(writable) || writable.length !== 3 || new Set(writable).size !== 3
-    || !expected.every((item) => writable.includes(item))) return fail()
-  return { schemaVersion: 1, id: value.id, displayName: value.displayName, adapter: "static-web-v1",
-    source: { document, styles, script, test }, ai: { writablePaths: expected } }
+  return parseApplicationManifestValue(value, folderId) as ApplicationManifest
 }
 
 export function applicationManifestDigest(manifest: ApplicationManifest): string {
-  return createHash("sha256").update(JSON.stringify(parseApplicationManifest(manifest, manifest.id)), "utf8").digest("hex")
+  return applicationManifestDigestValue(manifest)
 }

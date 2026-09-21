@@ -4,6 +4,7 @@ import path from "node:path"
 import { promisify } from "node:util"
 import { createHash } from "node:crypto"
 import { applicationManifestDigest, isApplicationId, MAX_APPLICATION_FILE_BYTES, MAX_APPLICATION_MANIFEST_BYTES, parseApplicationManifest, type ApplicationManifest } from "./application-manifest"
+import { bindCatalogApplication, catalogApplicationBinding } from "./application-identity.mjs"
 
 const exec = promisify(execFile)
 export type ApplicationHostOptions = Readonly<{ applicationsRoot?: string; platformRoot?: string }>
@@ -105,7 +106,18 @@ export async function readApplicationRepository(repositoryRoot: string, folderId
   if (entries.length !== requiredPaths.length || !requiredPaths.every((relative) => committedPaths.includes(relative))) {
     throw new Error("APPLICATION_REPOSITORY_INCOMPLETE")
   }
-  return { manifest, manifestDigest: applicationManifestDigest(manifest), repositoryRoot: await io.realpath(repositoryRoot), head, projectId: applicationProjectId(manifest.id) }
+  const canonicalRoot = await io.realpath(repositoryRoot)
+  const rootIdentity = await (io.lstat as unknown as (
+    target: string,
+    options: { bigint: true },
+  ) => Promise<{ dev: bigint; ino: bigint }>)(canonicalRoot, { bigint: true })
+  return bindCatalogApplication(Object.freeze({
+    manifest,
+    manifestDigest: applicationManifestDigest(manifest),
+    repositoryRoot: canonicalRoot,
+    head,
+    projectId: applicationProjectId(manifest.id),
+  }), { repositoryRoot: canonicalRoot, dev: String(rootIdentity.dev), ino: String(rootIdentity.ino) }) as CatalogApplication
 }
 
 export async function discoverApplications(options: ApplicationHostOptions = {}, io: ApplicationFileSystem = fs, deriveProjectId = applicationProjectId): Promise<ApplicationCatalog> {
@@ -125,7 +137,10 @@ export async function discoverApplications(options: ApplicationHostOptions = {},
       applications.push(await readApplicationRepository(path.join(root, id), id, io))
     } catch { invalid.push({ id, error: "APPLICATION_INVALID" }) }
   }
-  const identities = applications.map((application) => ({ ...application, projectId: deriveProjectId(application.manifest.id) }))
+  const identities = applications.map((application) => {
+    const value = Object.freeze({ ...application, projectId: deriveProjectId(application.manifest.id) })
+    return bindCatalogApplication(value, catalogApplicationBinding(application) ?? { repositoryRoot: application.repositoryRoot }) as CatalogApplication
+  })
   const valid = identities.filter((application) => {
     if (!Number.isSafeInteger(application.projectId) || application.projectId >= 0
       || identities.filter((candidate) => candidate.projectId === application.projectId).length !== 1) {
