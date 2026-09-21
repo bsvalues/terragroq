@@ -5,7 +5,7 @@ import path from "node:path"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { invokeCredentialBridge, runCerebrasApplicationTurn } from "@/lib/applications/cerebras-turn.mjs"
+import { cerebrasCredentialBridgeReady, invokeCredentialBridge, runCerebrasApplicationTurn } from "@/lib/applications/cerebras-turn.mjs"
 import { assertProposalSecretFree } from "@/lib/applications/proposal-secrets.mjs"
 import { validateApplicationProposalInContainer } from "@/lib/applications/proposal-validation.mjs"
 import { runCerebrasHelloChange } from "@/scripts/execution-fabric/cerebras-hello-change.mjs"
@@ -52,6 +52,27 @@ describe("application proposal secret boundary", () => {
 })
 
 describe("generic Cerebras application turn", () => {
+  it("advertises bridge readiness only for the exact secret-free READY proof", async () => {
+    const probe = (stdout: string, code = 0) => {
+      const child = new EventEmitter() as any
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.kill = vi.fn()
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from(stdout))
+        child.emit("close", code)
+      })
+      return child
+    }
+    const resolveAssets = () => ({
+      powershell: "C:\\Windows\\powershell.exe",
+      probe: "C:\\fixed\\test-cerebras-credential-ready.ps1",
+    })
+    await expect(cerebrasCredentialBridgeReady({}, { resolveAssets, spawn: () => probe("READY") })).resolves.toBe(true)
+    await expect(cerebrasCredentialBridgeReady({}, { resolveAssets, spawn: () => probe("READY secret") })).resolves.toBe(false)
+    await expect(cerebrasCredentialBridgeReady({}, { resolveAssets, spawn: () => probe("UNAVAILABLE", 1) })).resolves.toBe(false)
+  })
+
   it("bounds an early credential-bridge stdin failure", async () => {
     const child = new EventEmitter() as any
     child.stdout = new EventEmitter()

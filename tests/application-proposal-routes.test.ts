@@ -10,6 +10,8 @@ const seams = vi.hoisted(() => ({
   get: vi.fn(),
   reject: vi.fn(),
   apply: vi.fn(),
+  bridgeReady: vi.fn(),
+  reconcile: vi.fn(),
 }))
 vi.mock("@/lib/session", () => ({ getSession: async () => seams.user ? { user: { id: seams.user } } : null }))
 vi.mock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
@@ -20,6 +22,11 @@ vi.mock("@/lib/applications/application-proposal-service.mjs", () => ({
   getApplicationProposal: seams.get,
   listApplicationProposals: seams.list,
   rejectApplicationProposal: seams.reject,
+  reconcileApplicationProposalCreateIntents: seams.reconcile,
+}))
+vi.mock("@/lib/applications/cerebras-turn.mjs", async (importOriginal) => ({
+  ...await importOriginal() as object,
+  cerebrasCredentialBridgeReady: seams.bridgeReady,
 }))
 
 import { GET as GET_ROUTES } from "@/app/api/projects/[projectKey]/application-execution-routes/route"
@@ -51,6 +58,8 @@ beforeEach(async () => {
   seams.get.mockReturnValue({ proposalId: "detail" })
   seams.reject.mockResolvedValue({ proposalId: "detail", status: "REJECTED" })
   seams.apply.mockResolvedValue({ proposalId: "detail", status: "APPLIED" })
+  seams.bridgeReady.mockResolvedValue(true)
+  seams.reconcile.mockResolvedValue(undefined)
   seams.create.mockImplementation(async ({ onProgress }: any) => {
     onProgress({ stage: "accepted", detail: "Request accepted", at: "2026-09-20T00:00:00.000Z" })
     return { proposalId: "created", status: "READY_FOR_REVIEW" }
@@ -98,6 +107,14 @@ describe("generic application proposal routes", () => {
     expect(seams.apply).toHaveBeenCalledWith(expect.objectContaining({ application: expect.objectContaining({ manifest: expect.objectContaining({ id: "first-board" }) }) }))
   })
 
+  it("preserves the stable CREATE recovery quarantine code on proposal listing", async () => {
+    seams.reconcile.mockRejectedValueOnce(new Error("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN"))
+    const response = await GET(request("/api/projects/first-board/application-proposals"), context())
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: "APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN" })
+    expect(seams.list).not.toHaveBeenCalled()
+  })
+
   it("accepts an explicit local route without external approval and preserves route-unavailable truth", async () => {
     const local = await POST(request("/api/projects/first-board/application-proposals", "POST", {
       requestText: "Keep this local",
@@ -129,6 +146,22 @@ describe("generic application proposal routes", () => {
       expect.objectContaining({ id: "hermes-local", available: true }),
       expect.objectContaining({ id: "cerebras-qwen-3-8-27b", available: false }),
     ]))
+  })
+
+  it("does not advertise or dispatch Cerebras when the fixed credential bridge is not ready", async () => {
+    seams.bridgeReady.mockResolvedValue(false)
+    const routes = await GET_ROUTES(request("/api/projects/first-board/application-execution-routes"), context())
+    expect((await routes.json()).routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "cerebras-qwen-3-8-27b", available: false }),
+    ]))
+    const response = await POST(request("/api/projects/first-board/application-proposals", "POST", {
+      requestText: "Use external inference",
+      executionRoute: "cerebras-qwen-3-8-27b",
+      externalEgressApproved: true,
+    }), context())
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: "APPLICATION_EXECUTION_ROUTE_UNAVAILABLE" })
+    expect(seams.create).not.toHaveBeenCalled()
   })
 
   it("rejects caller roots/models/commands, cross-origin mutation, unknown apps, and unsanitized errors", async () => {

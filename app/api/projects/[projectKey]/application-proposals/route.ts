@@ -1,4 +1,9 @@
-import { createApplicationProposal, listApplicationProposals } from "@/lib/applications/application-proposal-service.mjs"
+import {
+  createApplicationProposal,
+  listApplicationProposals,
+  reconcileApplicationProposalCreateIntents,
+} from "@/lib/applications/application-proposal-service.mjs"
+import { applicationCerebrasCapability, cerebrasCredentialBridgeReady } from "@/lib/applications/cerebras-turn.mjs"
 import { resolveApplicationExecutionRoute } from "@/lib/applications/execution-routing.mjs"
 import { applicationReply, guardApplicationMutation } from "@/lib/applications/application-route-context"
 import {
@@ -47,6 +52,10 @@ export async function GET(_request: Request, context: { params: Promise<{ projec
   const resolved = await resolveApplicationProposalRouteContext((await context.params).projectKey)
   if (!resolved.ok) return resolved.response
   try {
+    await reconcileApplicationProposalCreateIntents({
+      application: resolved.context.application,
+      runtimeRoot: resolved.context.runtimeRoot,
+    })
     return applicationReply({ proposals: listApplicationProposals({
       applicationId: resolved.context.application.manifest.id,
       runtimeRoot: resolved.context.runtimeRoot,
@@ -66,6 +75,11 @@ export async function POST(request: Request, context: { params: Promise<{ projec
   try { input = proposalRequest(parsed.value) }
   catch (error) { return applicationProposalError(error) }
   if (!input) return invalidRequest()
+  if (input.externalEgressApproved === true
+    && (!applicationCerebrasCapability(resolved.context.application).available
+      || !await cerebrasCredentialBridgeReady())) {
+    return applicationReply({ error: "APPLICATION_EXECUTION_ROUTE_UNAVAILABLE" }, 503)
+  }
 
   const encoder = new TextEncoder()
   let writable = true

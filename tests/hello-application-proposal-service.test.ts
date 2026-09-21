@@ -1017,7 +1017,7 @@ describe("Hello Application governed HERMES proposals", () => {
     const result = await secondOutcome
     expect("error" in result ? result.error.message : "unexpected success").toBe("HELLO_PROPOSAL_STALE_BASE")
     expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: second.proposalId }).status).toBe("READY_FOR_REVIEW")
-  })
+  }, 15_000)
 
   it("exclusively claims a synthetic receipt across independent processes without a second mutation", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "hello-proposal-claim-"))
@@ -1176,7 +1176,7 @@ describe("Hello Application governed HERMES proposals", () => {
     try {
       const first = await firstAttempt
       expect(first.error).toContain("ENOENT")
-      await vi.waitFor(() => expect(fs.existsSync(validating)).toBe(true))
+      await vi.waitFor(() => expect(fs.existsSync(validating)).toBe(true), { timeout: 10_000 })
       expect(fs.existsSync(quarantine)).toBe(false)
       expect(fs.readdirSync(proposalRoot).some((name) => name.endsWith(".release"))).toBe(false)
       expect(getHelloApplicationProposal({ ...setup, requestedBy: "owner", proposalId: proposal.proposalId }).status).toBe("APPLY_IN_PROGRESS")

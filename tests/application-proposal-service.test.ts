@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import fs from "node:fs"
 import os from "node:os"
@@ -16,15 +16,22 @@ import {
   createApplicationProposal,
   getApplicationProposal,
   listApplicationProposals,
+  reconcileApplicationProposalCreateIntents,
   rejectApplicationProposal,
 } from "@/lib/applications/application-proposal-service.mjs"
 import {
   acquireApplicationRepositoryLock,
+  applicationProposalProcessIdentity,
   applicationRepositoryLockIdentity,
   applicationRepositoryLockPath,
   releaseApplicationRepositoryLock,
   withApplicationRepositoryRecoveryClaim,
 } from "@/lib/applications/proposal-repository-lock.mjs"
+import {
+  listApplicationProposalCreateIntents,
+  publishApplicationProposalCreateIntent,
+  releaseApplicationProposalCreateIntent,
+} from "@/lib/applications/proposal-create-journal.mjs"
 import {
   HELLO_APPLICATION_ALLOWED_PATHS,
   governedPrompt as helloGovernedPrompt,
@@ -139,6 +146,115 @@ async function abandonedRepositoryRecoveryClaim(runtimeRoot: string, repositoryR
   await once(child.stdout, "data")
   child.kill()
   await once(child, "close")
+}
+
+async function crashedRepositoryLockPublication(
+  runtimeRoot: string,
+  repositoryRoot: string,
+  crashStage: "recovery_claim_linked" | "repository_lock_linked",
+) {
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), "lib/applications/proposal-repository-lock.mjs")).href
+  const script = `
+    import {
+      acquireApplicationRepositoryLock,
+      withApplicationRepositoryRecoveryClaim,
+    } from ${JSON.stringify(moduleUrl)};
+    const checkpoint = (stage) => {
+      if (stage !== ${JSON.stringify(crashStage)}) return;
+      process.stdout.write(stage + "\\n");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    };
+    if (${JSON.stringify(crashStage)} === "recovery_claim_linked") {
+      await withApplicationRepositoryRecoveryClaim({
+        runtimeRoot: ${JSON.stringify(runtimeRoot)},
+        repositoryRoot: ${JSON.stringify(repositoryRoot)},
+        action: async () => "unreachable",
+        transactionOperations: { checkpoint },
+      });
+    } else {
+      await acquireApplicationRepositoryLock({
+        runtimeRoot: ${JSON.stringify(runtimeRoot)},
+        repositoryRoot: ${JSON.stringify(repositoryRoot)},
+        proposalId: "11111111-1111-4111-8111-111111111111",
+        recoverStale: async () => {},
+        transactionOperations: { checkpoint },
+      });
+    }
+  `
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  let stderr = ""
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8") })
+  const closed = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>
+  await Promise.race([
+    once(child.stdout, "data"),
+    closed.then(([code]) => { throw new Error(`lock crash helper exited ${code}: ${stderr}`) }),
+  ])
+  if (!child.kill("SIGKILL")) throw new Error("lock crash helper could not be terminated")
+  await closed
+}
+
+async function crashedApplicationCreate(
+  application: Awaited<ReturnType<typeof readApplicationRepository>>,
+  runtimeRoot: string,
+  crashStage = "worktree_created",
+) {
+  const serviceUrl = pathToFileURL(path.join(process.cwd(), "lib/applications/application-proposal-service.mjs")).href
+  const identityUrl = pathToFileURL(path.join(process.cwd(), "lib/applications/application-identity.mjs")).href
+  const script = `
+    import fs from "node:fs";
+    import { createApplicationProposal } from ${JSON.stringify(serviceUrl)};
+    import { bindCatalogApplication } from ${JSON.stringify(identityUrl)};
+    const application = Object.freeze(${JSON.stringify(application)});
+    bindCatalogApplication(application, { repositoryRoot: application.repositoryRoot });
+    await createApplicationProposal({
+      application,
+      runtimeRoot: ${JSON.stringify(runtimeRoot)},
+      requestedBy: "crash-owner",
+      requestText: "Hold after the isolated worktree is created",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }) => {
+        fs.writeFileSync(workspacePath + "/web/page.html", "<main>Crash candidate</main>\\n");
+        return {
+          threadId: "crash-thread", turnId: "crash-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        };
+      },
+      validateWorkspace: async () => ({ status: "passed", command: "node --test test/application.test.mjs", output: "ok" }),
+      transactionOperations: {
+        checkpoint: async (stage) => {
+          if (stage !== ${JSON.stringify(crashStage)}) return;
+          process.stdout.write(stage + "\\n");
+          await new Promise(() => {});
+        },
+      },
+    });
+  `
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  let stderr = ""
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8") })
+  const closed = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>
+  try {
+    await Promise.race([
+      once(child.stdout, "data"),
+      closed.then(([code]) => { throw new Error(`crash helper exited ${code}: ${stderr}`) }),
+    ])
+    if (!child.kill("SIGKILL")) throw new Error("crash helper could not be terminated")
+    let timer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([
+        closed,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("crash helper termination timed out")), 5_000) }),
+      ])
+    } finally { if (timer) clearTimeout(timer) }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+  }
 }
 
 describe("application proposal engine compatibility", () => {
@@ -297,6 +413,414 @@ describe("application proposal lifecycle", () => {
       executionNode: "hermes-node",
     }))
   })
+
+  it("scavenges a hard-crashed CREATE from its durable application-bound intent", async () => {
+    const focus = await fixture("focus-board")
+    await crashedApplicationCreate(focus.application, focus.runtimeRoot)
+
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const intentNames = fs.readdirSync(intentRoot)
+    expect(intentNames).toHaveLength(1)
+    const intentText = fs.readFileSync(path.join(intentRoot, intentNames[0]), "utf8")
+    const intent = JSON.parse(intentText)
+    expect(intent).toEqual(expect.objectContaining({
+      schemaVersion: 2,
+      applicationId: "focus-board",
+      manifestDigest: focus.application.manifestDigest,
+      repositoryDigest: applicationRepositoryLockIdentity(focus.repositoryRoot),
+      baseSha: focus.application.head,
+      processId: expect.any(Number),
+    }))
+    expect(intentText).not.toContain(focus.repositoryRoot)
+    expect(intentText).not.toContain(focus.runtimeRoot)
+    expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2)
+
+    await expect(createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Create a fresh proposal after recovery",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Recovered</main>\n")
+        return {
+          threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+    })).resolves.toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
+
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+    expect(() => git(focus.repositoryRoot, "show-ref", "--verify", "--quiet", `refs/heads/${intent.branch}`)).toThrow()
+    expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
+  }, 60_000)
+
+  it("fails closed before enumerating an unbounded CREATE recovery directory", async () => {
+    const focus = await fixture("focus-board")
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    fs.mkdirSync(intentRoot, { recursive: true })
+    const processIdentity = applicationProposalProcessIdentity()
+    for (let index = 0; index < 129; index += 1) {
+      const proposalId = randomUUID()
+      const intentToken = randomUUID()
+      fs.writeFileSync(path.join(intentRoot, `${proposalId}.json`), `${JSON.stringify({
+        schemaVersion: 2,
+        applicationId: "focus-board",
+        proposalId,
+        manifestDigest: focus.application.manifestDigest,
+        repositoryDigest: applicationRepositoryLockIdentity(focus.repositoryRoot),
+        writablePaths: focus.application.manifest.ai.writablePaths,
+        baseRef: "refs/heads/main",
+        baseSha: focus.application.head,
+        branch: `codex/williamos-app-focus-board-${proposalId}`,
+        workspaceName: `focus-board-${proposalId}`,
+        intentToken,
+        processId: process.pid,
+        processIdentity,
+        startedAt: new Date().toISOString(),
+        phase: "WORKTREE_PENDING",
+        candidateSha: null,
+        changedPaths: null,
+        patchSha256: null,
+        receiptSha256: null,
+      })}\n`)
+    }
+
+    expect(() => listApplicationProposalCreateIntents(focus.runtimeRoot, "focus-board"))
+      .toThrow("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN")
+
+    for (const name of fs.readdirSync(intentRoot)) fs.unlinkSync(path.join(intentRoot, name))
+    for (let index = 0; index < 33; index += 1) {
+      const proposalId = randomUUID()
+      const intentToken = randomUUID()
+      fs.writeFileSync(path.join(intentRoot, `${proposalId}.json`), `${JSON.stringify({
+        schemaVersion: 2,
+        applicationId: "focus-board",
+        proposalId,
+        manifestDigest: focus.application.manifestDigest,
+        repositoryDigest: applicationRepositoryLockIdentity(focus.repositoryRoot),
+        writablePaths: focus.application.manifest.ai.writablePaths,
+        baseRef: "refs/heads/main",
+        baseSha: focus.application.head,
+        branch: `codex/williamos-app-focus-board-${proposalId}`,
+        workspaceName: `focus-board-${proposalId}`,
+        intentToken,
+        processId: process.pid,
+        processIdentity,
+        startedAt: new Date().toISOString(),
+        phase: "WORKTREE_PENDING",
+        candidateSha: null,
+        changedPaths: null,
+        patchSha256: null,
+        receiptSha256: null,
+      })}\n`)
+    }
+    expect(() => listApplicationProposalCreateIntents(focus.runtimeRoot, "focus-board"))
+      .toThrow("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN")
+  })
+
+  it("refuses the 33rd live CREATE intent and admits one after capacity is released", async () => {
+    const focus = await fixture("focus-board")
+    const repositoryDigest = applicationRepositoryLockIdentity(focus.repositoryRoot)
+    const handles = Array.from({ length: 32 }, () => {
+      const proposalId = randomUUID()
+      return publishApplicationProposalCreateIntent({
+        runtimeRoot: focus.runtimeRoot,
+        applicationId: "focus-board",
+        proposalId,
+        manifestDigest: focus.application.manifestDigest,
+        repositoryDigest,
+        writablePaths: focus.application.manifest.ai.writablePaths,
+        baseRef: "refs/heads/main",
+        baseSha: focus.application.head,
+        branch: `codex/williamos-app-focus-board-${proposalId}`,
+        workspaceName: `focus-board-${proposalId}`,
+        intentToken: randomUUID(),
+        startedAt: new Date().toISOString(),
+      })
+    })
+    const create = () => createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Admit only within bounded CREATE capacity",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Capacity admitted</main>\n")
+        return {
+          threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+    })
+    try {
+      await expect(create()).rejects.toThrow("APPLICATION_PROPOSAL_REPOSITORY_BUSY")
+      expect(listApplicationProposalCreateIntents(focus.runtimeRoot, "focus-board")).toHaveLength(32)
+      releaseApplicationProposalCreateIntent(handles.shift()!)
+      await expect(create()).resolves.toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
+    } finally {
+      for (const handle of handles) releaseApplicationProposalCreateIntent(handle)
+    }
+  }, 30_000)
+
+  it.each([
+    "intent_published",
+    "candidate_bound",
+    "candidate_published",
+    "worktree_removed",
+    "publication_bound",
+    "patch_private_partial",
+    "patch_published",
+    "receipt_staged",
+    "receipt_published",
+  ])("recovers a hard process death at CREATE checkpoint %s", async (crashStage) => {
+    const focus = await fixture("focus-board")
+    await crashedApplicationCreate(focus.application, focus.runtimeRoot, crashStage)
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const baseName = fs.readdirSync(intentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
+    expect(baseName).toBeTruthy()
+    const intent = JSON.parse(fs.readFileSync(path.join(intentRoot, baseName!), "utf8"))
+
+    await reconcileApplicationProposalCreateIntents({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+    })
+
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+    expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
+    if (crashStage === "receipt_published") {
+      expect(getApplicationProposal({
+        applicationId: "focus-board",
+        runtimeRoot: focus.runtimeRoot,
+        proposalId: intent.proposalId,
+        requestedBy: "crash-owner",
+      })).toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW", candidateSha: expect.any(String) }))
+      expect(git(focus.repositoryRoot, "show-ref", "--hash", "--verify", `refs/heads/${intent.branch}`)).toMatch(/^[0-9a-f]{40,64}$/)
+    } else {
+      expect(fs.existsSync(path.join(focus.runtimeRoot, "application-proposals", "focus-board", `${intent.proposalId}.json`))).toBe(false)
+      expect(fs.existsSync(path.join(focus.runtimeRoot, "application-proposals", "focus-board", `${intent.proposalId}.patch`))).toBe(false)
+      expect(() => git(focus.repositoryRoot, "show-ref", "--verify", "--quiet", `refs/heads/${intent.branch}`)).toThrow()
+      expect(git(focus.repositoryRoot, "rev-parse", "HEAD")).toBe(focus.application.head)
+      expect(fs.readFileSync(path.join(focus.repositoryRoot, "web/page.html"), "utf8")).toBe("<main>Board</main>\n")
+    }
+  }, 30_000)
+
+  it("reconciles an owned Git candidate-index lock sidecar after hard process death", async () => {
+    const focus = await fixture("focus-board")
+    await crashedApplicationCreate(focus.application, focus.runtimeRoot, "candidate_bound")
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const baseName = fs.readdirSync(intentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))!
+    const intent = JSON.parse(fs.readFileSync(path.join(intentRoot, baseName), "utf8"))
+    const workspace = path.join(focus.runtimeRoot, "worktrees", intent.workspaceName)
+    const candidateIndex = `${workspace}.candidate-index-${intent.intentToken}`
+    const candidateIndexLock = `${candidateIndex}.lock`
+    expect(fs.existsSync(candidateIndex)).toBe(true)
+    fs.writeFileSync(candidateIndexLock, "interrupted Git index writer\n")
+
+    await reconcileApplicationProposalCreateIntents({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+    })
+
+    expect(fs.existsSync(candidateIndex)).toBe(false)
+    expect(fs.existsSync(candidateIndexLock)).toBe(false)
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+  }, 30_000)
+
+  it("removes a private CREATE journal write when publication fails before linking", async () => {
+    const focus = await fixture("focus-board")
+    const realWrite = fs.writeSync
+    let failed = false
+    const write = vi.spyOn(fs, "writeSync").mockImplementation(((descriptor: number, value: any, ...args: any[]) => {
+      if (!failed && Buffer.isBuffer(value) && value.includes(Buffer.from('"phase": "WORKTREE_PENDING"'))) {
+        failed = true
+        throw new Error("simulated journal write failure")
+      }
+      return (realWrite as any)(descriptor, value, ...args)
+    }) as typeof fs.writeSync)
+    try {
+      await expect(createApplicationProposal({
+        application: focus.application,
+        runtimeRoot: focus.runtimeRoot,
+        requestedBy: "owner",
+        requestText: "Never reaches the resident",
+        executionRoute: "hermes-local",
+        residentTurn: async () => { throw new Error("resident should not run") },
+        validateWorkspace: validation,
+      })).rejects.toThrow("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN")
+    } finally { write.mockRestore() }
+
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    expect(fs.existsSync(intentRoot) ? fs.readdirSync(intentRoot) : []).toEqual([])
+    expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
+  })
+
+  it.each(["candidate_bound", "publication_bound"])(
+    "stops CREATE when the linked %s private record cannot be removed and later reconciles it",
+    async (phase) => {
+      const focus = await fixture("focus-board")
+      const create = (text: string) => createApplicationProposal({
+        application: focus.application,
+        runtimeRoot: focus.runtimeRoot,
+        requestedBy: "owner",
+        requestText: text,
+        executionRoute: "hermes-local",
+        residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+          fs.writeFileSync(path.join(workspacePath, "web/page.html"), `<main>${text}</main>\n`)
+          return {
+            threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+            executionNode: "hermes-node", ignoredPathsCreated: [],
+          }
+        },
+        validateWorkspace: validation,
+      })
+      const realUnlink = fs.unlinkSync
+      let failed = false
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+        if (!failed && String(target).endsWith(`.${phase}.write`)) {
+          failed = true
+          throw new Error("simulated linked journal residue")
+        }
+        return realUnlink(target)
+      }) as typeof fs.unlinkSync)
+      try {
+        await expect(create("Interrupted phase")).rejects.toThrow("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN")
+      } finally { unlink.mockRestore() }
+
+      expect(failed).toBe(true)
+      const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+      expect(fs.readdirSync(intentRoot).some((name) => name.endsWith(`.${phase}.write`))).toBe(true)
+      await reconcileApplicationProposalCreateIntents({ application: focus.application, runtimeRoot: focus.runtimeRoot })
+      expect(fs.readdirSync(intentRoot)).toEqual([])
+      await expect(create("Fresh phase")).resolves.toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
+    },
+    30_000,
+  )
+
+  it("does not retain same-process liveness when the base-intent claim cleanup fails", async () => {
+    const focus = await fixture("focus-board")
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const realUnlink = fs.unlinkSync
+    let failuresRemaining = 3
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+      const value = String(target)
+      if (failuresRemaining > 0 && value.includes("application-proposal-locks") && value.includes(".reap-")
+        && fs.existsSync(intentRoot) && fs.readdirSync(intentRoot).some((name) => name.endsWith(".json"))) {
+        failuresRemaining -= 1
+        throw new Error("simulated post-action recovery-claim cleanup failure")
+      }
+      return realUnlink(target)
+    }) as typeof fs.unlinkSync)
+    try {
+      await expect(createApplicationProposal({
+        application: focus.application,
+        runtimeRoot: focus.runtimeRoot,
+        requestedBy: "owner",
+        requestText: "Publish an intent before the claim cleanup fails",
+        executionRoute: "hermes-local",
+        residentTurn: async () => { throw new Error("resident should not run") },
+        validateWorkspace: validation,
+      })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
+    } finally { unlink.mockRestore() }
+
+    expect(failuresRemaining).toBe(0)
+    expect(fs.readdirSync(intentRoot)).toHaveLength(1)
+    await reconcileApplicationProposalCreateIntents({ application: focus.application, runtimeRoot: focus.runtimeRoot })
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+  })
+
+  it("reconciles a CREATE journal whose oldest release record was already deleted", async () => {
+    const focus = await fixture("focus-board")
+    const realUnlink = fs.unlinkSync
+    let interrupted = false
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+      const value = String(target)
+      if (!interrupted && value.includes("application-proposal-create-intents") && value.endsWith(".candidate.json")) {
+        interrupted = true
+        throw new Error("simulated release interruption")
+      }
+      return realUnlink(target)
+    }) as typeof fs.unlinkSync)
+    let proposal
+    try {
+      proposal = await createApplicationProposal({
+        application: focus.application,
+        runtimeRoot: focus.runtimeRoot,
+        requestedBy: "owner",
+        requestText: "Retain a durable proposal across journal release interruption",
+        executionRoute: "hermes-local",
+        residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+          fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Durable</main>\n")
+          return {
+            threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+            executionNode: "hermes-node", ignoredPathsCreated: [],
+          }
+        },
+        validateWorkspace: validation,
+      })
+    } finally { unlink.mockRestore() }
+
+    expect(interrupted).toBe(true)
+    const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    expect(fs.readdirSync(intentRoot)).toHaveLength(2)
+    await reconcileApplicationProposalCreateIntents({ application: focus.application, runtimeRoot: focus.runtimeRoot })
+    expect(fs.readdirSync(intentRoot)).toEqual([])
+    expect(getApplicationProposal({
+      applicationId: "focus-board",
+      runtimeRoot: focus.runtimeRoot,
+      proposalId: proposal.proposalId,
+      requestedBy: "owner",
+    })).toEqual(expect.objectContaining({ status: "READY_FOR_REVIEW" }))
+  })
+
+  it("reconciles a legitimately rejected crash receipt while retaining one with drifted immutable provenance", async () => {
+    const accepted = await fixture("focus-board")
+    await crashedApplicationCreate(accepted.application, accepted.runtimeRoot, "receipt_published")
+    const acceptedIntentRoot = path.join(accepted.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const acceptedIntent = JSON.parse(fs.readFileSync(path.join(
+      acceptedIntentRoot,
+      fs.readdirSync(acceptedIntentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))!,
+    ), "utf8"))
+    await rejectApplicationProposal({
+      application: accepted.application,
+      runtimeRoot: accepted.runtimeRoot,
+      proposalId: acceptedIntent.proposalId,
+      requestedBy: "crash-owner",
+      reason: "Legitimate terminal transition",
+    })
+    await expect(reconcileApplicationProposalCreateIntents({
+      application: accepted.application,
+      runtimeRoot: accepted.runtimeRoot,
+    })).resolves.toBeUndefined()
+    expect(fs.readdirSync(acceptedIntentRoot)).toEqual([])
+
+    const drifted = await fixture("focus-board")
+    await crashedApplicationCreate(drifted.application, drifted.runtimeRoot, "receipt_published")
+    const driftedIntentRoot = path.join(drifted.runtimeRoot, "application-proposal-create-intents", "focus-board")
+    const driftedIntent = JSON.parse(fs.readFileSync(path.join(
+      driftedIntentRoot,
+      fs.readdirSync(driftedIntentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))!,
+    ), "utf8"))
+    await rejectApplicationProposal({
+      application: drifted.application,
+      runtimeRoot: drifted.runtimeRoot,
+      proposalId: driftedIntent.proposalId,
+      requestedBy: "crash-owner",
+      reason: "Legitimate terminal transition before tampering",
+    })
+    const receiptPath = path.join(drifted.runtimeRoot, "application-proposals", "focus-board", `${driftedIntent.proposalId}.json`)
+    const tampered = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
+    tampered.requestedBy = "different-owner"
+    fs.writeFileSync(receiptPath, `${JSON.stringify(tampered, null, 2)}\n`)
+
+    await expect(reconcileApplicationProposalCreateIntents({
+      application: drifted.application,
+      runtimeRoot: drifted.runtimeRoot,
+    })).rejects.toThrow("APPLICATION_PROPOSAL_CREATION_RECOVERY_UNCERTAIN")
+    expect(fs.readdirSync(driftedIntentRoot).length).toBeGreaterThan(0)
+  }, 30_000)
 
   it("accepts a valid manifest whose writable paths are normalized by the catalog", async () => {
     const { repositoryRoot, runtimeRoot } = await fixture("focus-board")
@@ -817,9 +1341,12 @@ describe("application proposal lifecycle", () => {
     })
     const escapedLocks = path.join(path.dirname(lockStorage.runtimeRoot), "escaped-repository-locks")
     fs.mkdirSync(escapedLocks)
+    const lockDirectory = path.join(lockStorage.runtimeRoot, "application-proposal-locks")
+    expect(fs.readdirSync(lockDirectory)).toEqual([])
+    fs.rmdirSync(lockDirectory)
     fs.symlinkSync(
       escapedLocks,
-      path.join(lockStorage.runtimeRoot, "application-proposal-locks"),
+      lockDirectory,
       process.platform === "win32" ? "junction" : "dir",
     )
     await expect(rejectApplicationProposal({
@@ -888,6 +1415,112 @@ describe("application proposal lifecycle", () => {
       proposalId: proposal.proposalId,
       requestedBy: "owner",
     }).status).toBe("READY_FOR_REVIEW")
+  })
+
+  it("refuses a preplaced candidate-index hardlink before Git can mutate an external file", async () => {
+    const focus = await fixture("focus-board")
+    const externalIndex = path.join(path.dirname(focus.runtimeRoot), "external-index-sentinel")
+    fs.writeFileSync(externalIndex, "")
+    let plantedIndex = ""
+
+    await expect(createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Do not follow a planted candidate index",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Index guarded</main>\n")
+        return {
+          threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+      transactionOperations: {
+        checkpoint(stage: string, state: { workspace?: string }) {
+          if (stage !== "intent_published") return
+          const intentRoot = path.join(focus.runtimeRoot, "application-proposal-create-intents", "focus-board")
+          const baseName = fs.readdirSync(intentRoot).find((name) => /^[0-9a-f-]{36}\.json$/i.test(name))!
+          const intent = JSON.parse(fs.readFileSync(path.join(intentRoot, baseName), "utf8"))
+          plantedIndex = `${state.workspace}.candidate-index-${intent.intentToken}`
+          fs.linkSync(externalIndex, plantedIndex)
+        },
+      },
+    })).rejects.toThrow("APPLICATION_PROPOSAL_WORKTREE_INVALID")
+
+    expect(fs.readFileSync(externalIndex, "utf8")).toBe("")
+    expect(plantedIndex).not.toBe("")
+    expect(fs.existsSync(plantedIndex)).toBe(false)
+  })
+
+  it("removes an owned candidate-index lock sidecar after an interrupted Create", async () => {
+    const focus = await fixture("focus-board")
+    let sidecar = ""
+
+    await expect(createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Clean an interrupted candidate index",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Index cleanup</main>\n")
+        return {
+          threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+      transactionOperations: {
+        checkpoint(stage: string, state: { candidateIndex?: string }) {
+          if (stage !== "candidate_index_prepared") return
+          sidecar = `${state.candidateIndex}.lock`
+          fs.writeFileSync(sidecar, "owned interrupted Git lock\n")
+          throw new Error("simulated candidate-index interruption")
+        },
+      },
+    })).rejects.toThrow("simulated candidate-index interruption")
+
+    expect(sidecar).not.toBe("")
+    expect(fs.existsSync(sidecar)).toBe(false)
+  })
+
+  it("never unlinks a candidate-index lock sidecar hardlinked outside the runtime", async () => {
+    const focus = await fixture("focus-board")
+    const external = path.join(path.dirname(focus.runtimeRoot), "external-index-lock-sentinel")
+    fs.writeFileSync(external, "external sentinel\n")
+    let sidecar = ""
+
+    await expect(createApplicationProposal({
+      application: focus.application,
+      runtimeRoot: focus.runtimeRoot,
+      requestedBy: "owner",
+      requestText: "Refuse an externally linked candidate lock",
+      executionRoute: "hermes-local",
+      residentTurn: async ({ workspacePath }: { workspacePath: string }) => {
+        fs.writeFileSync(path.join(workspacePath, "web/page.html"), "<main>Index lock guarded</main>\n")
+        return {
+          threadId: "local-thread", turnId: "local-turn", model: "williamos-qwen3-4b:64k",
+          executionNode: "hermes-node", ignoredPathsCreated: [],
+        }
+      },
+      validateWorkspace: validation,
+      transactionOperations: {
+        checkpoint(stage: string, state: { candidateIndex?: string }) {
+          if (stage !== "candidate_index_prepared") return
+          sidecar = `${state.candidateIndex}.lock`
+          fs.linkSync(external, sidecar)
+          throw new Error("simulated linked candidate-index interruption")
+        },
+      },
+    })).rejects.toThrow("APPLICATION_PROPOSAL_ARTIFACT_CLEANUP_FAILED")
+
+    expect(sidecar).not.toBe("")
+    expect(fs.readFileSync(external, "utf8")).toBe("external sentinel\n")
+    expect(fs.existsSync(sidecar)).toBe(true)
+    expect(fs.lstatSync(sidecar, { bigint: true }).nlink).toBe(2n)
+    fs.unlinkSync(sidecar)
   })
 
   it("refuses a linked proposal-ref parent before Git can write outside the repository", async () => {
@@ -1081,6 +1714,39 @@ describe("application proposal lifecycle", () => {
     })).resolves.toEqual(expect.objectContaining({ status: "REJECTED" }))
   }, 15_000)
 
+  it.each(["recovery_claim_linked", "repository_lock_linked"] as const)(
+    "recovers a hard-killed %s publication with a retained private hardlink",
+    async (crashStage) => {
+      const focus = await fixture("focus-board")
+      await crashedRepositoryLockPublication(focus.runtimeRoot, focus.repositoryRoot, crashStage)
+      const lockDirectory = path.join(focus.runtimeRoot, "application-proposal-locks")
+      expect(fs.readdirSync(lockDirectory).some((name) => name.endsWith(".write"))).toBe(true)
+
+      if (crashStage === "recovery_claim_linked") {
+        await expect(withApplicationRepositoryRecoveryClaim({
+          runtimeRoot: focus.runtimeRoot,
+          repositoryRoot: focus.repositoryRoot,
+          action: async () => "recovered",
+        })).resolves.toBe("recovered")
+      } else {
+        const recoverStale = vi.fn(async () => {})
+        const claim = await acquireApplicationRepositoryLock({
+          runtimeRoot: focus.runtimeRoot,
+          repositoryRoot: focus.repositoryRoot,
+          proposalId: "22222222-2222-4222-8222-222222222222",
+          recoverStale,
+        })
+        expect(recoverStale).toHaveBeenCalledWith(expect.objectContaining({
+          proposalId: "11111111-1111-4111-8111-111111111111",
+        }))
+        releaseApplicationRepositoryLock(claim)
+      }
+
+      expect(fs.readdirSync(lockDirectory).filter((name) => name.endsWith(".write"))).toEqual([])
+    },
+    20_000,
+  )
+
   it("never publishes a partial recovery claim when its private write fails", async () => {
     const focus = await fixture("focus-board")
     const realWrite = fs.writeFileSync.bind(fs)
@@ -1200,21 +1866,21 @@ describe("application proposal lifecycle", () => {
 
   it("reaps a same-process recovery claim left by persistent release failure", async () => {
     const focus = await fixture("focus-board")
-    const realUnlink = fs.unlinkSync.bind(fs)
-    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
-      if (/\.reap-[0-9a-f-]+\.json$/i.test(String(target))) {
-        const error = Object.assign(new Error("simulated recovery-claim unlink failure"), { code: "EPERM" })
+    const realRename = fs.renameSync.bind(fs)
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (/\.reap-[0-9a-f-]+\.json$/i.test(String(source)) && String(destination).endsWith(".release")) {
+        const error = Object.assign(new Error("simulated recovery-claim release failure"), { code: "EPERM" })
         throw error
       }
-      return realUnlink(target)
-    }) as typeof fs.unlinkSync)
+      return realRename(source, destination)
+    }) as typeof fs.renameSync)
     try {
       await expect(withApplicationRepositoryRecoveryClaim({
         runtimeRoot: focus.runtimeRoot,
         repositoryRoot: focus.repositoryRoot,
         action: async () => "completed action",
       })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
-    } finally { unlink.mockRestore() }
+    } finally { rename.mockRestore() }
     await expect(withApplicationRepositoryRecoveryClaim({
       runtimeRoot: focus.runtimeRoot,
       repositoryRoot: focus.repositoryRoot,
@@ -1226,13 +1892,13 @@ describe("application proposal lifecycle", () => {
     const focus = await fixture("focus-board")
     const proposalId = "11111111-1111-4111-8111-111111111111"
     const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
-    const realUnlink = fs.unlinkSync.bind(fs)
-    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
-      if (/\.reap-[0-9a-f-]+\.json$/i.test(String(target))) {
+    const realRename = fs.renameSync.bind(fs)
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (/\.reap-[0-9a-f-]+\.json$/i.test(String(source)) && String(destination).endsWith(".release")) {
         throw Object.assign(new Error("simulated recovery-claim unlink failure"), { code: "EPERM" })
       }
-      return realUnlink(target)
-    }) as typeof fs.unlinkSync)
+      return realRename(source, destination)
+    }) as typeof fs.renameSync)
     try {
       await expect(acquireApplicationRepositoryLock({
         runtimeRoot: focus.runtimeRoot,
@@ -1240,7 +1906,7 @@ describe("application proposal lifecycle", () => {
         proposalId,
         recoverStale: async () => { throw new Error("unexpected stale recovery") },
       })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
-    } finally { unlink.mockRestore() }
+    } finally { rename.mockRestore() }
     expect(fs.existsSync(lockPath)).toBe(false)
     const claim = await acquireApplicationRepositoryLock({
       runtimeRoot: focus.runtimeRoot,
@@ -1286,14 +1952,14 @@ describe("application proposal lifecycle", () => {
       validateWorkspace: validation,
     })
     const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
-    const realUnlink = fs.unlinkSync.bind(fs)
-    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
-      if (path.resolve(String(target)) === path.resolve(lockPath)) {
-        const error = Object.assign(new Error("simulated persistent unlink failure"), { code: "EPERM" })
+    const realRename = fs.renameSync.bind(fs)
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (path.resolve(String(source)) === path.resolve(lockPath) && String(destination).endsWith(".release")) {
+        const error = Object.assign(new Error("simulated persistent release failure"), { code: "EPERM" })
         throw error
       }
-      return realUnlink(target)
-    }) as typeof fs.unlinkSync)
+      return realRename(source, destination)
+    }) as typeof fs.renameSync)
     let applied
     try {
       applied = await applyApplicationProposal({
@@ -1303,7 +1969,7 @@ describe("application proposal lifecycle", () => {
         requestedBy: "owner",
         validateWorkspace: validation,
       })
-    } finally { unlink.mockRestore() }
+    } finally { rename.mockRestore() }
     expect(applied.status).toBe("APPLIED")
     expect(fs.existsSync(lockPath)).toBe(true)
     await expect(applyApplicationProposal({
@@ -1330,14 +1996,14 @@ describe("application proposal lifecycle", () => {
       validateWorkspace: validation,
     })
     const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
-    const realUnlink = fs.unlinkSync.bind(fs)
-    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
-      if (path.resolve(String(target)) === path.resolve(lockPath)) {
-        const error = Object.assign(new Error("simulated persistent unlink failure"), { code: "EPERM" })
+    const realRename = fs.renameSync.bind(fs)
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (path.resolve(String(source)) === path.resolve(lockPath) && String(destination).endsWith(".release")) {
+        const error = Object.assign(new Error("simulated persistent release failure"), { code: "EPERM" })
         throw error
       }
-      return realUnlink(target)
-    }) as typeof fs.unlinkSync)
+      return realRename(source, destination)
+    }) as typeof fs.renameSync)
     try {
       await expect(applyApplicationProposal({
         application: focus.application,
@@ -1351,7 +2017,7 @@ describe("application proposal lifecycle", () => {
           },
         },
       })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
-    } finally { unlink.mockRestore() }
+    } finally { rename.mockRestore() }
     expect(getApplicationProposal({
       applicationId: "focus-board",
       runtimeRoot: focus.runtimeRoot,
@@ -1597,14 +2263,14 @@ describe("application proposal lifecycle", () => {
       expect(git(focus.repositoryRoot, "status", "--porcelain", "--", ".williamos/application.json", "web/page.html", "assets/theme.css", "client/main.js", "test/application.test.mjs")).toBe("")
     }
     expect(git(focus.repositoryRoot, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1)
-  }, 30_000)
+  }, 60_000)
 
   it("does not let a reused live PID impersonate the original repository-lock process", async () => {
     const focus = await fixture("focus-board")
     const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
     fs.mkdirSync(path.dirname(lockPath), { recursive: true })
     fs.writeFileSync(lockPath, `${JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       token: "11111111-1111-4111-8111-111111111111",
       processId: process.pid,
       processIdentity: process.platform === "win32" ? "win:0000000000" : process.platform === "linux" ? "linux:0" : "posix:not-the-current-process",
@@ -1621,6 +2287,125 @@ describe("application proposal lifecycle", () => {
     })
     expect(recoverStale).toHaveBeenCalledWith(expect.objectContaining({ processId: process.pid }))
     releaseApplicationRepositoryLock(claim)
+  })
+
+  it("recovers a dead pre-process-identity v1 repository lock after upgrade", async () => {
+    const focus = await fixture("focus-board")
+    const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+    fs.writeFileSync(lockPath, `${JSON.stringify({
+      schemaVersion: 1,
+      token: "11111111-1111-4111-8111-111111111111",
+      processId: 2_147_483_647,
+      startedAt: new Date().toISOString(),
+      repositoryDigest: applicationRepositoryLockIdentity(focus.repositoryRoot),
+      proposalId: "22222222-2222-4222-8222-222222222222",
+    }, null, 2)}\n`)
+    const recoverStale = vi.fn(async () => {})
+    const claim = await acquireApplicationRepositoryLock({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      proposalId: "33333333-3333-4333-8333-333333333333",
+      recoverStale,
+    })
+    expect(recoverStale).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, processId: 2_147_483_647 }))
+    expect(claim.value.schemaVersion).toBe(2)
+    releaseApplicationRepositoryLock(claim)
+  })
+
+  it("reaps a dead pre-process-identity v1 recovery claimant after upgrade", async () => {
+    const focus = await fixture("focus-board")
+    const repositoryDigest = applicationRepositoryLockIdentity(focus.repositoryRoot)
+    const token = "11111111-1111-4111-8111-111111111111"
+    const directory = path.join(focus.runtimeRoot, "application-proposal-locks")
+    fs.mkdirSync(directory, { recursive: true })
+    const legacy = path.join(directory, `${repositoryDigest}.reap-${token}.json`)
+    fs.writeFileSync(legacy, `${JSON.stringify({
+      schemaVersion: 1,
+      token,
+      processId: 2_147_483_647,
+      startedAt: new Date().toISOString(),
+      repositoryDigest,
+      ticket: 1,
+    }, null, 2)}\n`)
+    await expect(withApplicationRepositoryRecoveryClaim({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      action: async () => "upgraded",
+    })).resolves.toBe("upgraded")
+    expect(fs.existsSync(legacy)).toBe(false)
+  })
+
+  it("never guesses that a live same-PID v1 lock or recovery claimant is stale", async () => {
+    const focus = await fixture("focus-board")
+    const repositoryDigest = applicationRepositoryLockIdentity(focus.repositoryRoot)
+    const token = "11111111-1111-4111-8111-111111111111"
+    const lockPath = applicationRepositoryLockPath(focus.runtimeRoot, focus.repositoryRoot)
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+    const legacyLock = {
+      schemaVersion: 1,
+      token,
+      processId: process.pid,
+      startedAt: new Date().toISOString(),
+      repositoryDigest,
+      proposalId: "22222222-2222-4222-8222-222222222222",
+    }
+    fs.writeFileSync(lockPath, `${JSON.stringify(legacyLock, null, 2)}\n`)
+    const recoverStale = vi.fn(async () => {})
+    await expect(acquireApplicationRepositoryLock({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      proposalId: "33333333-3333-4333-8333-333333333333",
+      recoverStale,
+    })).rejects.toThrow("APPLICATION_PROPOSAL_REPOSITORY_BUSY")
+    expect(recoverStale).not.toHaveBeenCalled()
+    fs.unlinkSync(lockPath)
+
+    fs.writeFileSync(lockPath, `${JSON.stringify({ ...legacyLock, processIdentity: "linux:123" }, null, 2)}\n`)
+    await expect(acquireApplicationRepositoryLock({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      proposalId: "33333333-3333-4333-8333-333333333333",
+      recoverStale,
+    })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
+    expect(recoverStale).not.toHaveBeenCalled()
+    fs.unlinkSync(lockPath)
+
+    const reaper = path.join(path.dirname(lockPath), `${repositoryDigest}.reap-${token}.json`)
+    fs.writeFileSync(reaper, `${JSON.stringify({
+      schemaVersion: 1,
+      token,
+      processId: process.pid,
+      startedAt: new Date().toISOString(),
+      repositoryDigest,
+      ticket: 1,
+    }, null, 2)}\n`)
+    await expect(withApplicationRepositoryRecoveryClaim({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      waitMs: 25,
+      action: async () => "unreachable",
+    })).rejects.toThrow("APPLICATION_PROPOSAL_REPOSITORY_BUSY")
+    expect(fs.existsSync(reaper)).toBe(true)
+    fs.unlinkSync(reaper)
+
+    fs.writeFileSync(reaper, `${JSON.stringify({
+      schemaVersion: 1,
+      token,
+      processId: process.pid,
+      processIdentity: "linux:123",
+      startedAt: new Date().toISOString(),
+      repositoryDigest,
+      ticket: 1,
+    }, null, 2)}\n`)
+    await expect(withApplicationRepositoryRecoveryClaim({
+      runtimeRoot: focus.runtimeRoot,
+      repositoryRoot: focus.repositoryRoot,
+      waitMs: 25,
+      action: async () => "unreachable",
+    })).rejects.toThrow("APPLICATION_PROPOSAL_LOCK_UNCERTAIN")
+    expect(fs.existsSync(reaper)).toBe(true)
+    fs.unlinkSync(reaper)
   })
 
   it("does not overwrite a concurrently replaced APPLY_IN_PROGRESS receipt", async () => {

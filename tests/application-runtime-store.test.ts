@@ -13,9 +13,11 @@ async function compileStore(root: string) {
   const harness = path.join(root, "harness"); await fs.mkdir(harness)
   for (const name of ["application-runtime-store", "application-catalog", "application-manifest"]) {
     const source = await fs.readFile(path.resolve(`lib/applications/${name}.ts`), "utf8")
-    const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace(/from "\.\/([^"]+)"/g, 'from "./$1.mjs"')
+    const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
+      .replace(/from "\.\/([^"]+)"/g, (_match, dependency: string) => `from "./${dependency.endsWith(".mjs") ? dependency : `${dependency}.mjs`}"`)
     await fs.writeFile(path.join(harness, `${name}.mjs`), compiled)
   }
+  await fs.copyFile(path.resolve("lib/applications/application-identity.mjs"), path.join(harness, "application-identity.mjs"))
   return harness
 }
 describe("durable runtime records and process locks", () => {

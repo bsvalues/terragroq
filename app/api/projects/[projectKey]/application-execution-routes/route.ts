@@ -1,5 +1,5 @@
 import { listApplicationExecutionRoutes, DEFAULT_APPLICATION_EXECUTION_ROUTE } from "@/lib/applications/execution-routing.mjs"
-import { applicationCerebrasCapability } from "@/lib/applications/cerebras-turn.mjs"
+import { applicationCerebrasCapability, cerebrasCredentialBridgeReady } from "@/lib/applications/cerebras-turn.mjs"
 import { applicationReply } from "@/lib/applications/application-route-context"
 import { applicationProposalError, resolveApplicationProposalRouteContext } from "@/lib/applications/application-proposal-route-context"
 
@@ -10,11 +10,13 @@ export async function GET(_request: Request, context: { params: Promise<{ projec
   const resolved = await resolveApplicationProposalRouteContext((await context.params).projectKey)
   if (!resolved.ok) return resolved.response
   try {
+    const sourceCapability = applicationCerebrasCapability(resolved.context.application).available
+    const bridgeReady = sourceCapability && await cerebrasCredentialBridgeReady()
     return applicationReply({
       schemaVersion: 1,
       defaultRoute: DEFAULT_APPLICATION_EXECUTION_ROUTE,
       routes: listApplicationExecutionRoutes({
-        externalCapability: applicationCerebrasCapability(resolved.context.application).available,
+        externalCapability: bridgeReady,
       }),
     })
   } catch (error) { return applicationProposalError(error) }
