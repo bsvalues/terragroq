@@ -3,6 +3,20 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  outputFileTracingIncludes: {
+    "/*": [
+      "./config/application-runtime/static-web-v1.policy.json",
+      "./config/execution-fabric/hermes-free-dev-agent-v2.policy.json",
+      "./scripts/application-runtime/Dockerfile",
+      "./scripts/application-runtime/server.mjs",
+      "./scripts/application-runtime/read-preview.mjs",
+      "./starters/static-web-v1/.williamos/application.json",
+      "./starters/static-web-v1/src/index.html",
+      "./starters/static-web-v1/src/styles.css",
+      "./starters/static-web-v1/src/app.js",
+      "./starters/static-web-v1/test/application.test.mjs",
+    ],
+  },
   /**
    * Superseded routes keep their addresses.
    *

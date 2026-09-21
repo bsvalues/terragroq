@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "adapter": "static-web-v1",
+  "dockerExecutable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+  "dockerConfig": "D:\\HermesServices\\williamos-hermes-agent\\docker-config",
+  "baseImageId": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+  "validatorImageId": "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613",
+  "user": "10000:10000",
+  "workdir": "/opt/williamos",
+  "cpus": "0.5",
+  "memory": "128m",
+  "pids": "32",
+  "tmpfs": "/tmp:rw,noexec,nosuid,nodev,size=16m"
+}

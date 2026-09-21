@@ -1,7 +1,11 @@
-// Next.js instrumentation hook. The Vercel-specific `@vercel/otel` wrapper was removed as part of
-// de-Vercel'ing the stack (the app self-hosts via `output: "standalone"`). This stays a no-op until
-// a vendor-neutral OpenTelemetry provider is wired here (e.g. `@opentelemetry/sdk-node` with an OTLP
-// exporter driven by `OTEL_EXPORTER_OTLP_ENDPOINT`). Kept so the instrumentation entrypoint exists.
-export function register(): void {
-  // no telemetry provider configured
+// Explicit launcher opt-in only: source roots can also be present in builds and test processes.
+export async function register(): Promise<void> {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXT_PHASE === "phase-production-build"
+    || process.env.WILLIAMOS_APPLICATION_RECONCILE_ON_START !== "1"
+    || !process.env.WILLIAMOS_APPLICATIONS_ROOT || !process.env.WILLIAMOS_APPLICATION_RUNTIME_ROOT) return
+  try {
+    const { reconcileApplicationsOnStartup } = await import("./lib/applications/application-runtime")
+    const results = await reconcileApplicationsOnStartup()
+    for (const result of results) if (result.error) console.warn("APPLICATION_STARTUP_RECONCILIATION", result.applicationId, result.observed, result.error)
+  } catch { console.warn("APPLICATION_STARTUP_RECONCILIATION_UNAVAILABLE") }
 }

@@ -45,6 +45,9 @@ export async function resolveApplicationsRoot(options: ApplicationHostOptions = 
   if (!path.isAbsolute(configured) || configured.includes("\0")) throw new Error("APPLICATIONS_ROOT_INVALID")
   const root = path.resolve(configured)
   const excludedRoots = [platform, process.cwd()]
+  for (const configured of [process.env.WILLIAMOS_APPLICATION_ASSET_ROOT, process.env.WILLIAMOS_APPLICATION_DEPLOYMENT_ROOT]) {
+    if (configured) excludedRoots.push(path.resolve(configured))
+  }
   // A runtime may point at a worktree nested inside the primary platform checkout. Its siblings
   // are still platform source, so locating only the innermost worktree is not sufficient.
   for (let ancestor = path.dirname(platform); ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {

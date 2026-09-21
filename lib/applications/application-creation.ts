@@ -21,7 +21,7 @@ export async function createApplication(input: unknown, options: ApplicationHost
   const root = await resolveApplicationsRoot(options)
   if (!root) throw new Error("APPLICATIONS_ROOT_NOT_CONFIGURED")
   // The only starter is platform-owned. Neither request nor host options select an arbitrary template.
-  const starter = path.join(process.env.WILLIAMOS_PROJECT_ROOT?.trim() || process.cwd(), "starters/static-web-v1")
+  const starter = path.join(process.env.WILLIAMOS_APPLICATION_ASSET_ROOT?.trim() || process.cwd(), "starters/static-web-v1")
   const template = parseApplicationManifest(JSON.parse(await readApplicationFile(starter, ".williamos/application.json", MAX_APPLICATION_MANIFEST_BYTES)), "starter-board")
   const files = new Map<string, string>()
   for (const relative of Object.values(template.source)) files.set(relative, await readApplicationFile(starter, relative, MAX_APPLICATION_FILE_BYTES))
