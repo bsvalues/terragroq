@@ -1,0 +1,138 @@
+.spine {
+  flex: none;
+  border-bottom: 1px solid #33414c;
+  background: #0b141b;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.steps {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  flex: 1 1 0;
+  min-width: 0;
+  border-right: 1px solid #23323c;
+}
+
+.step:last-child {
+  border-right: 0;
+}
+
+.stepButton,
+.stepStatic {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: #9fb0b8;
+  font: inherit;
+  text-align: left;
+}
+
+.stepButton {
+  cursor: pointer;
+}
+
+.stepButton:hover {
+  background: #12202a;
+}
+
+.stepButton:focus-visible {
+  outline: 2px solid #4da3c7;
+  outline-offset: -2px;
+}
+
+.stepButton[data-state="current"],
+.stepStatic[data-state="current"] {
+  background: #10202b;
+  color: #eaf1f2;
+}
+
+.stepButton[data-state="done"],
+.stepStatic[data-state="done"] {
+  color: #cfe0dd;
+}
+
+.stepButton[data-state="blocked"],
+.stepStatic[data-state="blocked"] {
+  color: #8a949a;
+}
+
+.marker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #3a4b56;
+  border-radius: 50%;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+}
+
+[data-state="done"] .marker {
+  border-color: #3f7f6b;
+  background: #12312a;
+  color: #7fd0b0;
+}
+
+[data-state="current"] .marker {
+  border-color: #3f7fa0;
+  background: #122a36;
+  color: #7fc4e4;
+}
+
+[data-state="blocked"] .marker {
+  border-color: #4a3b32;
+  background: #241a15;
+  color: #d09a7a;
+}
+
+.ordinal {
+  position: absolute;
+  bottom: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #5b6d78;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.text strong {
+  font-size: 12px;
+  font-weight: 660;
+  letter-spacing: 0.01em;
+}
+
+.detail {
+  overflow: hidden;
+  color: #7d8d96;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-state="current"] .detail {
+  color: #a8bcc4;
+}

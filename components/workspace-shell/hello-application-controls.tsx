@@ -304,6 +304,8 @@ export function ApplicationControls({
           project={project}
           onPreviewRefresh={() => { void refreshPreviewAndTruth() }}
           onApplied={activateAppliedRuntime}
+          runtimeState={runtimeState}
+          onStartRuntime={() => void changeRuntime("POST")}
         />
       )}
     </section>

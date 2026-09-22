@@ -13,7 +13,9 @@ import {
   type ApplicationManifestView,
   type ApplicationProgressEntry,
   type ApplicationProposalView,
+  type ApplicationRuntimeState,
 } from "./application-ui-contract"
+import { ApplicationLoopSpine } from "./application-loop-spine"
 import styles from "./hello-application-assistant.module.css"
 
 type ProgressEntry = Readonly<{
@@ -624,6 +626,37 @@ function statusLabel(status: string): string {
   return status
 }
 
+/** Counts changed lines from the real retained patch. Never estimated. */
+export function patchDiffStat(patch: string | null | undefined): Readonly<{ added: number; removed: number }> {
+  if (!patch) return { added: 0, removed: 0 }
+  let added = 0
+  let removed = 0
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue
+    if (line.startsWith("+")) added += 1
+    else if (line.startsWith("-")) removed += 1
+  }
+  return { added, removed }
+}
+
+/**
+ * One plain-language sentence describing a proposal, derived only from fields the
+ * receipt actually carries: changed paths, the retained patch, and the contained
+ * validation status. It states no count or outcome the receipt does not prove.
+ */
+export function proposalPlainSummary(proposal: {
+  changedPaths: readonly string[]
+  validation: { status: string }
+  reviewPatch?: string | null
+}): string {
+  const count = proposal.changedPaths.length
+  const files = count === 1 ? "1 file" : `${count} files`
+  const names = proposal.changedPaths.join(", ")
+  const diff = patchDiffStat(proposal.reviewPatch)
+  const lines = proposal.reviewPatch ? ` — +${diff.added} −${diff.removed} lines` : ""
+  return `This proposal changes ${files} (${names})${lines}. Contained validation: ${proposal.validation.status}.`
+}
+
 function formatUsd(value: number): string {
   if (value === 0) return "$0.00"
   if (value >= 0.01) return `$${value.toFixed(2)}`
@@ -643,6 +676,7 @@ function ProposalReview({
   onRejectionReasonChange,
   onReject,
   onReviewNext,
+  onRequestUndo,
 }: Readonly<{
   proposal: Proposal | ApplicationProposalView
   applying: boolean
@@ -656,6 +690,7 @@ function ProposalReview({
   onRejectionReasonChange: (value: string) => void
   onReject: () => void
   onReviewNext: () => void
+  onRequestUndo?: (applied: Readonly<{ proposalId: string; baseSha: string; changedPaths: readonly string[] }>) => void
 }>) {
   const schemaOne = proposal.schemaVersion === 1
   const request = proposal.requestText || (schemaOne ? "Unavailable in schema v1" : "Unavailable")
@@ -666,11 +701,19 @@ function ProposalReview({
     : statusLabel(proposal.status)
 
   return (
-    <section className={styles.proposal} aria-label="HERMES proposal">
+    <section className={styles.proposal} aria-label="HERMES proposal" data-application-proposal="true">
       <header className={styles.proposalHeader}>
         <span className={styles.proposalState}><Check size={14} aria-hidden />{proposalState}</span>
         <span>Validation {proposal.validation.status}</span>
       </header>
+
+      <p className={styles.plainSummary} aria-label="Proposal summary">
+        {proposalPlainSummary({
+          changedPaths: proposal.changedPaths,
+          validation: proposal.validation,
+          reviewPatch: "reviewPatch" in proposal ? proposal.reviewPatch : null,
+        })}
+      </p>
 
       <details className={styles.reviewBody} open>
         <summary>Review proposal</summary>
@@ -805,6 +848,26 @@ function ProposalReview({
             </span>
           </div>
         )
+      ) : null}
+
+      {proposal.status === "APPLIED" && onRequestUndo ? (
+        <div className={styles.undoBar} role="group" aria-label="Undo applied change">
+          <span>
+            Undo is authored as a new governed proposal for your review. Nothing is reverted until you
+            review and apply it.
+          </span>
+          <button
+            type="button"
+            onClick={() => onRequestUndo({
+              proposalId: proposal.proposalId,
+              baseSha: proposal.baseSha,
+              changedPaths: proposal.changedPaths,
+            })}
+            aria-label="Ask HERMES to undo this change"
+          >
+            Ask HERMES to undo this change
+          </button>
+        </div>
       ) : null}
 
       {proposal.status === "APPLIED" || proposal.status === "REJECTED" || proposal.status === "QUARANTINED_ROLLBACK_FAILED" ? (
@@ -1522,9 +1585,13 @@ function pendingApplicationProposal(
 function GenericApplicationAssistant({
   project,
   onApplied,
+  runtimeState,
+  onStartRuntime,
 }: Readonly<{
   project: ApplicationVisibleWorkspaceProject
   onApplied?: (appliedCommit: string) => Promise<ApplicationActivationResult>
+  runtimeState?: ApplicationRuntimeState | "checking" | null
+  onStartRuntime?: () => void
 }>) {
   const [manifest, setManifest] = useState<ApplicationManifestView | null>(null)
   const [draft, setDraft] = useState("")
@@ -1546,6 +1613,35 @@ function GenericApplicationAssistant({
   const ownerInteracted = useRef(false)
   const selectedExecutionRoute = executionRoutes.find((route) => route.id === executionRouteId) ?? LOCAL_EXECUTION_ROUTE
   const fieldId = `application-${project.key}`
+  const requestInProgress = busy === "proposal"
+
+  function focusRequestBox() {
+    const box = document.querySelector<HTMLTextAreaElement>('[data-application-request="true"]')
+    if (!box) return
+    box.focus()
+    box.scrollIntoView({ block: "nearest" })
+  }
+
+  function revealProposal() {
+    const panel = document.querySelector<HTMLElement>('[data-application-proposal="true"]')
+    if (!panel) return
+    panel.scrollIntoView({ block: "nearest" })
+  }
+
+  /**
+   * Composes a revert *request*. The governed pipeline has no author-supplied
+   * patch path, so an undo is authored and validated like any other proposal —
+   * this only fills the request with the exact prior commit identities.
+   */
+  function requestUndo(applied: Readonly<{ proposalId: string; baseSha: string; changedPaths: readonly string[] }>) {
+    ownerInteracted.current = true
+    setAssistantError(null)
+    setDraft(
+      `Undo the change applied by proposal ${applied.proposalId}: restore exactly the files that proposal changed (${applied.changedPaths.join(", ")}) to their content at commit ${applied.baseSha}. Change nothing else.`,
+    )
+    setStatus("Undo request prepared. Review it, then send it to HERMES.")
+    focusRequestBox()
+  }
 
   function showProposal(value: ApplicationProposalView, message: string) {
     setProposal(value)
@@ -1812,6 +1908,15 @@ function GenericApplicationAssistant({
 
   return (
     <section className={styles.assistant} aria-label={`Ask HERMES to develop ${project.name}`}>
+      <ApplicationLoopSpine
+              projectName={project.name}
+              runtimeState={runtimeState ?? null}
+              proposalStatus={proposal?.status ?? null}
+              requestInProgress={requestInProgress}
+              onStart={onStartRuntime}
+              onAsk={focusRequestBox}
+              onReview={revealProposal}
+            />
       <header className={styles.header}>
         <span className={styles.agent}><Bot size={16} aria-hidden /><strong>HERMES development instrument</strong></span>
         <span className={styles.boundary}>
@@ -1859,6 +1964,7 @@ function GenericApplicationAssistant({
         <div className={styles.requestRow}>
           <textarea
             id={`${fieldId}-request`}
+            data-application-request="true"
             value={draft}
             onChange={(event) => {
               ownerInteracted.current = true
@@ -1913,6 +2019,7 @@ function GenericApplicationAssistant({
           onRejectionReasonChange={setRejectionReason}
           onReject={() => void rejectProposal()}
           onReviewNext={() => void reviewNextProposal()}
+          onRequestUndo={requestUndo}
         />
       ) : null}
     </section>
@@ -1923,15 +2030,26 @@ export function ApplicationAssistant({
   project,
   onPreviewRefresh,
   onApplied,
+  runtimeState,
+  onStartRuntime,
 }: Readonly<{
   project: ApplicationVisibleWorkspaceProject
   onPreviewRefresh: () => void
   onApplied?: (appliedCommit: string) => Promise<ApplicationActivationResult>
+  runtimeState?: ApplicationRuntimeState | "checking" | null
+  onStartRuntime?: () => void
 }>) {
   if (project.application.contract === "legacy-v1-v3") {
     return <LegacyApplicationAssistant project={project} onPreviewRefresh={onPreviewRefresh} />
   }
-  return <GenericApplicationAssistant project={project} onApplied={onApplied} />
+  return (
+    <GenericApplicationAssistant
+      project={project}
+      onApplied={onApplied}
+      runtimeState={runtimeState ?? null}
+      onStartRuntime={onStartRuntime}
+    />
+  )
 }
 
 export function HelloApplicationAssistant({

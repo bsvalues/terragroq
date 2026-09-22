@@ -57,6 +57,43 @@
 
 .nextBar button:focus-visible { outline: 2px solid #9bd2ec; outline-offset: 2px; }
 
+.plainSummary {
+  margin: 0;
+  padding: 10px 13px;
+  border-bottom: 1px solid #293c47;
+  color: #dfe7e8;
+  background: #0f1c24;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.undoBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px;
+  border-top: 1px solid #293c47;
+  color: #a8bec8;
+  background: #101a22;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.undoBar button {
+  flex: none;
+  padding: 6px 11px;
+  border: 1px solid #3a4b56;
+  border-radius: 6px;
+  background: #16242e;
+  color: #dfe7e8;
+  cursor: pointer;
+  font: inherit;
+}
+
+.undoBar button:hover { background: #1c2f3b; }
+.undoBar button:focus-visible { outline: 2px solid #9bd2ec; outline-offset: 2px; }
+
 .rejectConfirmation {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) auto;
