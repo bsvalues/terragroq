@@ -35,7 +35,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string[]]$TaskName = @("WilliamOS Live", "WilliamOS HTTPS"),
+  [string[]]$TaskName = @("WilliamOS Live", "WilliamOS HTTPS", "WilliamOS Cockpit Watchdog"),
   [string]$LogRoot = "C:\ProgramData\WilliamOS\logs",
   [string]$BackupRoot = "C:\ProgramData\WilliamOS\backups",
   [int]$HealthIntervalMinutes = 15,
@@ -56,6 +56,15 @@ $actions = @{
     Script = "C:\ProgramData\WilliamOS\start-williamos-https.ps1"
     Reason = "owner-facing TLS listener on 3443"
   }
+  # The watchdog is declared here, beside what it watches, so it survives a reinstall for the same
+  # reason the launcher does. It runs more often than the recovery trigger because its job is to
+  # notice, and a probe every 15 minutes would leave 15 minutes of unobserved outage.
+  "WilliamOS Cockpit Watchdog" = @{
+    Script = "C:\ProgramData\WilliamOS\watchdog-williamos-cockpit.ps1"
+    Reason = "liveness probe: records an outage, and clears a hung instance its own trigger cannot"
+    IntervalMinutes = 5
+    InstallFrom = "watchdog-williamos-cockpit.ps1"
+  }
 }
 
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
@@ -68,6 +77,19 @@ if (-not (Test-Path -LiteralPath $powershell)) { throw "powershell.exe not found
 foreach ($name in $TaskName) {
   $spec = $actions[$name]
   if (-not $spec) { throw "No declared action for task '$name'. Declare it here rather than registering an undeclared task." }
+
+  # Install the declared script when the declaration carries one. A declaration nothing installs is
+  # documentation (#1010), and the watchdog is declared here specifically so it survives a reinstall
+  # rather than existing only on the node.
+  if ($spec.InstallFrom) {
+    $sourceScript = Join-Path $PSScriptRoot $spec.InstallFrom
+    if (-not (Test-Path -LiteralPath $sourceScript)) { throw "Declared script source is absent beside this installer: $sourceScript" }
+    $previousTarget = if (Test-Path -LiteralPath $spec.Script) { "$($spec.Script).previous-$stamp" } else { $null }
+    if ($previousTarget) { Copy-Item -LiteralPath $spec.Script -Destination $previousTarget -Force }
+    Copy-Item -LiteralPath $sourceScript -Destination $spec.Script -Force
+    Write-Output ("installed {0} -> {1}" -f $spec.InstallFrom, $spec.Script)
+  }
+
   if (-not (Test-Path -LiteralPath $spec.Script)) { throw "Declared launcher is absent for '$name': $($spec.Script)" }
 
   # Evidence first: the exact prior declaration, so this is reversible without guessing.
@@ -85,10 +107,11 @@ foreach ($name in $TaskName) {
 
   # Both triggers: the login path the operator already relies on, and the recovery path that did not
   # exist. Repetition is the whole point -- without it a dead cockpit waits for a human.
+  $interval = if ($spec.IntervalMinutes) { [int]$spec.IntervalMinutes } else { $HealthIntervalMinutes }
   $triggers = @(
     (New-ScheduledTaskTrigger -AtLogOn),
     (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
-      -RepetitionInterval (New-TimeSpan -Minutes $HealthIntervalMinutes) `
+      -RepetitionInterval (New-TimeSpan -Minutes $interval) `
       -RepetitionDuration (New-TimeSpan -Days 3650))
   )
 
