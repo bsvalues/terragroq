@@ -62,7 +62,9 @@ function Test-Upstream {
     return @{ ok = $true; status = [int]$response.StatusCode; error = "" }
   } catch {
     $status = $null
-    if ($_.Exception.Response) { try { $status = [int]$_.Exception.Response.StatusCode } catch { } }
+    if ($_.Exception.Response) {
+      try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
+    }
     # An HTTP error status still means the service answered. Only a failure to reach it is an outage.
     $reachable = $null -ne $status
     return @{ ok = $reachable; status = $status; error = $_.Exception.Message.Split([char]10)[0] }

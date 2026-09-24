@@ -106,9 +106,16 @@ try {
       $entryParent = Split-Path -Parent $entryTarget
       if (-not [string]::IsNullOrEmpty($entryParent)) { New-Item -ItemType Directory -Path $entryParent -Force -ErrorAction SilentlyContinue | Out-Null }
       Add-Content -LiteralPath $entryTarget -Value $entryLine -Encoding utf8 -ErrorAction Stop
-    } catch { }
+    } catch {
+      # A second target exists precisely so one being unwritable is survivable. Report it rather than
+      # swallow it: this launcher has an invariant against silent catches, and a boot record that
+      # vanished quietly would be the same defect it exists to close.
+      [Console]::Error.WriteLine("BOOT_ENTRY_TARGET_FAILED $entryTarget $($_.Exception.Message)")
+    }
   }
-} catch { }
+} catch {
+  [Console]::Error.WriteLine("BOOT_ENTRY_FAILED $($_.Exception.Message)")
+}
 
 $ErrorActionPreference = "Stop"
 
