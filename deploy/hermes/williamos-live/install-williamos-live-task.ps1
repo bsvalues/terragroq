@@ -64,6 +64,12 @@ $actions = @{
     Reason = "liveness probe: records an outage, and clears a hung instance its own trigger cannot"
     IntervalMinutes = 5
     InstallFrom = "watchdog-williamos-cockpit.ps1"
+    # A watchdog that can hang is a watchdog that has silently died -- the exact defect it exists
+    # to catch. Unset, this setting is PT0S (unlimited): one blocked probe was observed running
+    # 159 minutes having used 1s of CPU while MultipleInstances=IgnoreNew silently discarded every
+    # trigger behind it -- Running, doing nothing, for three hours, its liveness log gone quiet.
+    # The limit must be shorter than IntervalMinutes so a hung instance dies before the next tick.
+    ExecTimeLimitMinutes = 4
   }
 }
 
@@ -115,13 +121,17 @@ foreach ($name in $TaskName) {
       -RepetitionDuration (New-TimeSpan -Days 3650))
   )
 
+  # Unlimited by default: the launcher supervises a served port and must not be killed on a timer,
+  # so the limit is opt-in per declaration rather than a blanket setting for every task.
+  $execLimit = if ($spec.ExecTimeLimitMinutes) { New-TimeSpan -Minutes ([int]$spec.ExecTimeLimitMinutes) } else { [TimeSpan]::Zero }
+
   $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -ExecutionTimeLimit $execLimit `
     -MultipleInstances IgnoreNew
   # Set through the nested object: the idle setting lives on IdleSettings, not on Settings, and a
   # top-level assignment silently does nothing.

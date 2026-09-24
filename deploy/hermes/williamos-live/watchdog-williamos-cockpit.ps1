@@ -53,7 +53,19 @@ function Write-Watch {
 
 function Test-Listening {
   param([int]$Port)
-  return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+  # Bounded on purpose: this replaced Get-NetTCPConnection, a WMI/CIM query with no timeout of its
+  # own, observed blocking an instance for 159 minutes on 1 second of CPU.
+  # It must answer "is anything listening on this port", NOT "can I connect over loopback": 3443
+  # binds 100.97.194.84 and 192.168.88.9 and never 127.0.0.1, so a loopback probe reported a
+  # healthy cockpit as down and began accumulating a false strike toward a needless recovery.
+  # Enumerating listeners keeps the original any-address meaning without the unbounded WMI call.
+  try {
+    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    foreach ($listener in $listeners) { if ($listener.Port -eq $Port) { return $true } }
+    return $false
+  } catch {
+    return $false
+  }
 }
 
 function Test-Upstream {
