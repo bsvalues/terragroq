@@ -242,6 +242,11 @@ foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MO
   }
 }
 $gatePreviousPreference = $ErrorActionPreference
+# The provenance gate is the dominant boot cost, and its duration was the only part of the boot
+# that nothing recorded: the measured BOOT_ENTRY -> BOOT_ALLOWED span runs 82s to 431s and lands
+# almost entirely here, so a slow boot was unattributable. Started before the try so that a slow
+# refusal is timed as well as a slow pass.
+$gateTimer = [System.Diagnostics.Stopwatch]::StartNew()
 try {
   # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed
   # refusal behind a PowerShell error instead of the reason code. Read the exit code; fold the
@@ -253,6 +258,8 @@ try {
   $ErrorActionPreference = $gatePreviousPreference
 }
 $gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+$gateTimer.Stop()
+Write-Boot ("BOOT_GATE_ELAPSED_MS " + [int]$gateTimer.Elapsed.TotalMilliseconds)
 if ($gateExit -ne 0) {
   Deny-Boot "DOOR_PROVENANCE_REFUSED" $gateSummary
 }
