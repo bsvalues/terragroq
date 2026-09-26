@@ -730,7 +730,28 @@ if ($WithDependencies) {
 # older hand-placed generation. Install the repository-owned definition before restart; the exact
 # displaced bytes are part of the rollback manifest above.
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $LiveStartTarget) -Force
-Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
+# Ownership: william-os-devops owns this launcher. On main the two repositories currently AGREE
+# (sha256_lf 1010efb3..., 27,552 bytes), so this is not a stale-copy bug today -- but divergence is
+# demonstrably possible, because this repository already carries a 9,850-byte copy of the same path
+# (2026-08-25) on wb/expv2-journey-run. And the node presently runs a governed revision from
+# william-os-devops that main does not yet contain, so a blind install here would silently revert
+# that instrumentation instead of delivering anything. A deploy that can downgrade a governed
+# artifact is worse than one that leaves it alone, so this step installs only into an EMPTY target
+# and otherwise REFUSES, reporting both hashes under the launcher's own LF normalization -- the only
+# comparison that is meaningful across differently-normalized trees.
+if (Test-Path -LiteralPath $LiveStartTarget -PathType Leaf) {
+  $installedText = [System.IO.File]::ReadAllText($LiveStartTarget)
+  $installedSha = ([BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($installedText.Replace("`r`n", "`n"))))).Replace("-", "").ToLower()
+  $declaredText = [System.IO.File]::ReadAllText($liveStartSource)
+  $declaredSha = ([BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($declaredText.Replace("`r`n", "`n"))))).Replace("-", "").ToLower()
+  if ($declaredSha -ne $installedSha) {
+    throw "START_SCRIPT_OWNERSHIP: refusing to overwrite $LiveStartTarget (sha256_lf=$installedSha) with this repository's copy (sha256_lf=$declaredSha). william-os-devops owns this launcher and GitHub verifies delivery; deploy the launcher from there. Overwriting here would downgrade a governed artifact."
+  }
+  Write-Output "start script matches this repository's copy (sha256_lf=$installedSha); nothing installed"
+} else {
+  Copy-Item -LiteralPath $liveStartSource -Destination $LiveStartTarget -Force
+  Write-Output "start script installed from the repository into an empty target: $LiveStartTarget"
+}
 # #1223 R2: install the gate + attester INTO the trusted directory beside the launchers (validated
 # early beside $liveStartSource). The gate refuses to run from anywhere else.
 $null = New-Item -ItemType Directory -Path $gateTargetDir -Force
