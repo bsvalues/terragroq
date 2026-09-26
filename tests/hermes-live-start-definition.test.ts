@@ -389,6 +389,27 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toMatch(/STALE ARTIFACT/)
   })
 
+  it("refuses a dirty build SHA before it stops the supervised tasks, because attestation can never accept one", () => {
+    // A "-dirty" stamp is undeliverable, not merely untidy. The deploy hands that value to
+    // `attest-deployment.mjs attest --sha=…`, which requires a clean 40-hex revision and rejects it.
+    // Warning-and-proceeding therefore reaches an unavoidable refusal only AFTER Stop-ScheduledTask:
+    // a precondition that costs nothing to check, paid for with a service outage. Observed on HERMES
+    // -- DEPLOY_ATTEST_ERROR ATTEST_SHA_REQUIRED with both tasks already stopped. So the refusal must
+    // (a) precede the stop and (b) actually refuse, rather than warn.
+    const code = executableOnly(deployText)
+    const refusal = code.indexOf('if ($builtSha -like "*-dirty")')
+    const stopTasks = code.indexOf("Stop-ScheduledTask")
+    expect(refusal, "the dirty-SHA branch must exist").toBeGreaterThan(-1)
+    expect(stopTasks, "the deploy must stop the supervised tasks somewhere").toBeGreaterThan(-1)
+    expect(refusal, "a dirty SHA must be refused before any service is stopped").toBeLessThan(stopTasks)
+    const branch = code.slice(refusal, code.indexOf("}", refusal))
+    expect(branch, "a dirty stamp cannot attest, so warning-and-proceeding is never correct").not.toContain("Write-Warning")
+    expect(branch).toMatch(/throw /)
+    // The attestation that makes the refusal correct rather than merely early: it demands a clean hex.
+    expect(code).toMatch(/attest-deployment\.mjs"\) attest --app-root=/)
+    expect(code).toMatch(/--sha="\$\(\$stagedProvenance\.sha\)"/)
+  })
+
   it("still proves the runtime's .env.local survived the copy", () => {
     expect(executableOnly(deployText)).toMatch(/\$envNow -ne \$envGuard/)
   })
