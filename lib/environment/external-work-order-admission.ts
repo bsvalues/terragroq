@@ -107,7 +107,6 @@ export type ExternalWorkOrderAdmissionFailureCode =
   | "CONFIRMATION_STALE"
   | "WORLD_NOT_FOUND"
   | "SPACE_ALREADY_BOUND"
-  | "ACTIVE_OUTCOME_CONFLICT"
   | "EXTERNAL_WORK_ORDER_ALREADY_ADMITTED"
   | "PROJECT_REPOSITORY_MISMATCH"
   | "PERSISTED_BINDING_INVALID"
@@ -540,10 +539,6 @@ export async function admitExternalWorkOrder(
         eq(projectResource.canonicalIdentity, packet.repository),
       )).limit(2)
     if (projects.length !== 1) throw new ExternalWorkOrderAdmissionError("PROJECT_REPOSITORY_MISMATCH")
-    const active = await transaction.select({ id: outcomeQueueItem.id }).from(outcomeQueueItem).where(and(
-      eq(outcomeQueueItem.userId, userId), eq(outcomeQueueItem.lifecycleState, "active"),
-    )).limit(1)
-    if (active.length > 0) throw new ExternalWorkOrderAdmissionError("ACTIVE_OUTCOME_CONFLICT")
     const priorExternal = await transaction.select({ resultBinding: outcomeQueueMutationReceipt.resultBinding })
       .from(outcomeQueueMutationReceipt).where(and(
         eq(outcomeQueueMutationReceipt.userId, userId),
