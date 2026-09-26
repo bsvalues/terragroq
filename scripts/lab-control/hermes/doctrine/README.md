@@ -1,7 +1,7 @@
 # HERMES appliance doctrine detector (#1034 / #1035)
 
 Canonical source for the standing host-doctrine pipeline that runs on the HERMES
-appliance. These files are deployed to `C:\HermesLab\hermes\doctrine\` and executed
+appliance. These files are projected to `C:\HermesLab\hermes\doctrine\` for recovery and to the protected `C:\ProgramData\Hermes\runtime\doctrine\` path for SYSTEM execution, and executed
 by the `HermesDoctrineCheck` SYSTEM scheduled task via `run-hermes-doctrine.ps1`
 (observe -> normalize -> evaluate -> write
 `C:\ProgramData\Hermes\doctrine\current-result.json`); the HERMES console

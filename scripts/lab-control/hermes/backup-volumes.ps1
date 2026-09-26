@@ -91,6 +91,45 @@ function Copy-RecoveryFile {
   }
 }
 
+function Copy-ProtectedTaskDefinition {
+  param(
+    [Parameter(Mandatory=$true)][string]$SourcePath,
+    [Parameter(Mandatory=$true)][string]$ExpectedSha256,
+    [Parameter(Mandatory=$true)][string]$TaskName,
+    [Parameter(Mandatory=$true)][string]$StageRoot
+  )
+  if($TaskName -notmatch '^[A-Za-z0-9-]+$' -or $ExpectedSha256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'RECOVERY_TASK_DEFINITION_METADATA_INVALID'}
+  if(-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)){throw "RECOVERY_TASK_DEFINITION_MISSING task=$TaskName"}
+  $actual=(Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
+  if($actual -ine $ExpectedSha256){throw "RECOVERY_TASK_DEFINITION_HASH_MISMATCH task=$TaskName"}
+  $relative="task-definitions/$TaskName.xml"
+  $destination=Join-Path $StageRoot ($relative -replace '/','\')
+  New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force|Out-Null
+  Copy-Item -LiteralPath $SourcePath -Destination $destination -Force
+  $item=Get-Item -LiteralPath $destination -ErrorAction Stop
+  [pscustomobject][ordered]@{path=$relative;bytes=[int64]$item.Length;sha256=$actual.ToLowerInvariant()}
+}
+
+function Copy-ProtectedRecoveryFile {
+  param(
+    [Parameter(Mandatory=$true)][string]$SourcePath,
+    [Parameter(Mandatory=$true)][string]$RelativePath,
+    [Parameter(Mandatory=$true)][string]$StageRoot,
+    [switch]$Optional
+  )
+  if($RelativePath -notmatch '^protected-state/[A-Za-z0-9._/-]+$' -or $RelativePath -match '(?:^|/)\.\.(?:/|$)'){throw 'RECOVERY_PROTECTED_STATE_PATH_INVALID'}
+  if(-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)){
+    if($Optional){return $null}
+    throw "RECOVERY_PROTECTED_STATE_MISSING path=$RelativePath"
+  }
+  if((Get-Item -LiteralPath $SourcePath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw "RECOVERY_PROTECTED_STATE_REPARSE_REFUSED path=$RelativePath"}
+  $destination=Join-Path $StageRoot ($RelativePath -replace '/','\')
+  New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force|Out-Null
+  Copy-Item -LiteralPath $SourcePath -Destination $destination -Force
+  $item=Get-Item -LiteralPath $destination -ErrorAction Stop
+  [pscustomobject][ordered]@{path=$RelativePath;bytes=[int64]$item.Length;sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()}
+}
+
 $archiveRoot = Resolve-ArchiveRoot -Label $ArchiveVolumeLabel
 $backupDir = Join-Path $archiveRoot "lab-backups\hermes-volumes"
 $backupMount = $backupDir -replace '\\', '/'
@@ -117,7 +156,7 @@ $failed = New-Object System.Collections.Generic.List[string]
 # Existing named-volume backups. These remain local state snapshots; database restore truth is
 # established separately by the recovery target. A successful task may not mean merely "loop ended".
 $vols = @(
-  "hermes_pgdata","hermes_redisdata",
+  "hermes_pgdata","hermes_redisdata","hermes_webuidata","hermes_portainerdata",
   "terrafusion_final_build_20250615_051930_mongo_data",
   "terrafusion_final_build_20250615_051930_postgres_data",
   "terrafusion_final_build_20250615_051930_redis_data"
@@ -155,12 +194,16 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       'hermes/backup-volumes.ps1',
       'hermes/crossnode-sync.ps1',
       'hermes/crossnode-sync-lib.ps1',
+      'hermes/verify-offhost-restore.ps1',
       'hermes/docker-compose.yml',
-      'hermes/hermes-ai.config.json',
       'hermes/lab-health.ps1',
-      'hermes/p40-guard.json',
       'hermes/p40-guard.ps1',
-      'hermes/start-hermes.ps1'
+      'hermes/start-hermes.ps1',
+      'hermes/deploy-hermes-appliance.ps1',
+      'hermes/morning-report.ps1',
+      'hermes/send-hermes-alert.ps1',
+      'hermes/terrafusion-report.ps1',
+      'hermes/verify-durability-after-reboot.ps1'
     )
     $optionalConfig = @(
       'hermes/.env.example',
@@ -168,13 +211,9 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       'hermes/hermes-acceptance.ps1',
       'hermes/hermes-placement.json',
       'hermes/hermes-placement-readiness.ps1',
-      'hermes/install-hermes-ai-durability.ps1',
       'hermes/install-p40-watch.ps1',
-      'hermes/repair-durability-tasks.ps1',
-      'hermes/start-ollama.ps1',
       'hermes/sync-models-to-forge.ps1',
       'hermes/test-crossnode-sync-receipt.ps1',
-      'hermes/verify-durability-after-reboot.ps1',
       'aegis/backup-v1.sh'
     )
     $configInventory = New-Object System.Collections.Generic.List[object]
@@ -185,11 +224,12 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
       $record = Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage -Optional
       if ($null -ne $record) { $configInventory.Add($record) }
     }
-    $ollamaServiceRoot = Join-Path $HermesLabRoot 'hermes\ollama-service'
-    if (Test-Path -LiteralPath $ollamaServiceRoot -PathType Container) {
+    foreach ($recoveryDirectory in @('hermes\ollama-service','hermes\host-attestation','hermes\console','hermes\doctrine')) {
+      $recoveryDirectoryRoot = Join-Path $HermesLabRoot $recoveryDirectory
+      if (-not (Test-Path -LiteralPath $recoveryDirectoryRoot -PathType Container)) { continue }
       $sourceRootPrefix = [IO.Path]::GetFullPath($HermesLabRoot).TrimEnd('\') + '\'
-      foreach ($file in Get-ChildItem -LiteralPath $ollamaServiceRoot -File -Recurse -Force | Sort-Object FullName) {
-        if ($file.Extension -notin @('.ps1', '.json', '.md')) { continue }
+      foreach ($file in Get-ChildItem -LiteralPath $recoveryDirectoryRoot -File -Recurse -Force | Sort-Object FullName) {
+        if ($file.Extension -notin @('.ps1', '.json', '.md', '.mjs', '.js', '.css', '.html')) { continue }
         $fullName = [IO.Path]::GetFullPath($file.FullName)
         if (-not $fullName.StartsWith($sourceRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
           throw "RECOVERY_CONFIG_PATH_ESCAPE path=$fullName"
@@ -197,6 +237,37 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
         $relative = $fullName.Substring($sourceRootPrefix.Length)
         $configInventory.Add((Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage))
       }
+    }
+    $releaseRoot='C:\ProgramData\Hermes\release-rollback'
+    $expectedTaskNames=@('HermesLabHealth','HermesP40Guard','HermesP40Watch','HermesDoctrineCheck','WilliamOS-HERMES-Ollama')
+    $deployedRelease=$null
+    foreach($candidate in @(Get-ChildItem -LiteralPath $releaseRoot -Directory -ErrorAction Stop|Sort-Object Name -Descending)){
+      $candidateReceiptPath=Join-Path $candidate.FullName 'release.json'
+      try{$candidateReceipt=Get-Content -LiteralPath $candidateReceiptPath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop}catch{throw "RECOVERY_RELEASE_RECEIPT_INVALID release=$($candidate.Name)"}
+      if([string]$candidateReceipt.schema -ne 'hermes-appliance-release/2'){continue}
+      $candidateStatus=[string]$candidateReceipt.status
+      if($candidateStatus -in @('STARTED','ROLLBACK_INCOMPLETE')){throw "RECOVERY_DEPLOYMENT_TRANSACTION_UNRESOLVED release=$($candidate.Name) status=$candidateStatus"}
+      if($candidateStatus -eq 'DEPLOYED'){$deployedRelease=[pscustomobject]@{Directory=$candidate;Receipt=$candidateReceipt};break}
+      if($candidateStatus -notin @('PRE_MUTATION_FAILED','ROLLED_BACK')){throw "RECOVERY_RELEASE_STATUS_UNKNOWN release=$($candidate.Name) status=$candidateStatus"}
+    }
+    if($null -eq $deployedRelease){throw 'RECOVERY_DEPLOYED_RELEASE_ABSENT'}
+    $releasePrefix=[IO.Path]::GetFullPath($deployedRelease.Directory.FullName).TrimEnd('\')+'\'
+    $taskRecords=@($deployedRelease.Receipt.tasks)
+    foreach($taskName in $expectedTaskNames){
+      $records=@($taskRecords|Where-Object{[string]$_.name -eq $taskName})
+      if($records.Count -ne 1){throw "RECOVERY_TASK_DEFINITION_RECORD_INVALID task=$taskName"}
+      $definitionPath=[IO.Path]::GetFullPath([string]$records[0].deployedXml)
+      if(-not $definitionPath.StartsWith($releasePrefix,[StringComparison]::OrdinalIgnoreCase)){throw "RECOVERY_TASK_DEFINITION_PATH_ESCAPE task=$taskName"}
+      $configInventory.Add((Copy-ProtectedTaskDefinition -SourcePath $definitionPath -ExpectedSha256 ([string]$records[0].deployedXmlSha256) -TaskName $taskName -StageRoot $configStage))
+    }
+    $configInventory.Add((Copy-ProtectedRecoveryFile -SourcePath (Join-Path $deployedRelease.Directory.FullName 'release.json') -RelativePath 'protected-state/deployment/release.json' -StageRoot $configStage))
+    $configInventory.Add((Copy-ProtectedRecoveryFile -SourcePath 'C:\ProgramData\Hermes\doctrine\doctrine.json' -RelativePath 'protected-state/doctrine/doctrine.json' -StageRoot $configStage))
+    foreach($protectedState in @(
+      @{source='C:\ProgramData\Hermes\health\alerts.log';relative='protected-state/health/alerts.log'},
+      @{source='C:\ProgramData\Hermes\health\health-history.jsonl';relative='protected-state/health/health-history.jsonl'}
+    )){
+      $record=Copy-ProtectedRecoveryFile -SourcePath $protectedState.source -RelativePath $protectedState.relative -StageRoot $configStage -Optional
+      if($null -ne $record){$configInventory.Add($record)}
     }
     $inventoryPath = Join-Path $configStage 'recovery-config-inventory.json'
     [IO.File]::WriteAllText(
@@ -225,6 +296,9 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
 # cross-node transport necessarily carries and hashes it with the generation.
 $stage = Join-Path $env:TEMP "hermes-recovery-$stamp-$([guid]::NewGuid().ToString('N'))"
 try {
+  if ($failed.Count -gt 0) {
+    throw "RECOVERY_GENERATION_INCOMPLETE failed=$($failed -join ',')"
+  }
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   $canaryId = [guid]::NewGuid().ToString('D').ToLowerInvariant()
   $canaryPath = Join-Path $stage 'recovery-canary.txt'
