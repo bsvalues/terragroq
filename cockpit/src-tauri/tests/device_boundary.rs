@@ -7,7 +7,9 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use williamos_cockpit::device::{DeviceProofService, SecretStore};
 
 const HERMES_ORIGIN: &str = "https://hermes.williamos.local";
+const COUNTY_ORIGIN: &str = "http://127.0.0.1:3200";
 const VALID_PROOF: &str = "williamos-device-auth-v1\npurpose=authenticate\nrequestId=123e4567-e89b-42d3-a456-426614174000\nchallenge=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\norigin=https://hermes.williamos.local\nexpiresAt=2099-08-14T12:00:00Z";
+const VALID_COUNTY_PROOF: &str = "williamos-device-auth-v1\npurpose=authenticate\nrequestId=123e4567-e89b-42d3-a456-426614174000\nchallenge=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\norigin=http://127.0.0.1:3200\nexpiresAt=2099-08-14T12:00:00Z";
 
 #[derive(Default)]
 struct MemoryStore {
@@ -75,6 +77,21 @@ fn signs_the_exact_server_proof_without_returning_key_material() {
 }
 
 #[test]
+fn signs_the_exact_county_loopback_http_proof() {
+    let store = MemoryStore::default();
+    let service = DeviceProofService::new(&store, COUNTY_ORIGIN);
+    let public = service.generate_key().unwrap();
+
+    let signed = service.sign(VALID_COUNTY_PROOF).unwrap();
+    let public_der = URL_SAFE_NO_PAD.decode(public.public_key_spki).unwrap();
+    let verifying_key = VerifyingKey::from_public_key_der(&public_der).unwrap();
+    let signature_bytes = URL_SAFE_NO_PAD.decode(&signed.signature).unwrap();
+    let signature = Signature::from_slice(&signature_bytes).unwrap();
+
+    verifying_key.verify(VALID_COUNTY_PROOF.as_bytes(), &signature).unwrap();
+}
+
+#[test]
 fn rejects_empty_or_oversized_proofs_and_credential_ids() {
     let store = MemoryStore::default();
     let service = DeviceProofService::new(&store, HERMES_ORIGIN);
@@ -89,6 +106,16 @@ fn rejects_empty_or_oversized_proofs_and_credential_ids() {
     assert!(service.bind_credential(&"x".repeat(19)).is_err());
     assert!(service.bind_credential(&"x".repeat(81)).is_err());
     assert!(service.bind_credential("not+base64url-credential").is_err());
+}
+
+#[test]
+fn rejects_non_loopback_http_even_when_it_matches_the_configured_origin() {
+    let store = MemoryStore::default();
+    let service = DeviceProofService::new(&store, "http://county.example:3200");
+    let proof = VALID_COUNTY_PROOF.replace("http://127.0.0.1:3200", "http://county.example:3200");
+    service.generate_key().unwrap();
+
+    assert!(service.sign(&proof).is_err());
 }
 
 fn expect_public_spki(encoded: &str) {
