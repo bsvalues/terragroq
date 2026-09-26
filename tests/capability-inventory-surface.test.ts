@@ -2,7 +2,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import * as registry from "@/components/operator/multi-agent-capability-registry"
-import { COMPUTE_CAPABILITY_WORKLOADS, projectComputeCapabilities, type CapabilitySurfaceRow } from "@/lib/environment/capability-inventory-surface"
+import { COMPUTE_CAPABILITY_WORKLOADS, OWNER_RUNNABLE_COMPUTE, projectComputeCapabilities, type CapabilitySurfaceRow } from "@/lib/environment/capability-inventory-surface"
 
 /**
  * The capability surface's whole claim is that it shows the SAME thing dispatch enforces. These
@@ -122,5 +122,28 @@ describe("capability inventory surface", () => {
         expect(row.placementProbe!.reasonCode).toBe("CPU_DEFAULT_THRESHOLD_EVIDENCE_STALE")
       }
     }
+  }, 120_000)
+
+  // The Run control's visibility must be the POST gate's vocabulary projected, never a client
+  // guess: an owner-runnable row shows exactly what OWNER_RUNNABLE_COMPUTE names, and the
+  // screening/rejected records (which the board still lists) show nothing runnable.
+  it("projects ownerRunnable from the single owner-run vocabulary, row-for-row", async () => {
+    const result = await project(async () => HEALTHY)
+    for (const row of result.capabilities as CapabilitySurfaceRow[]) {
+      const runnable = Object.prototype.hasOwnProperty.call(OWNER_RUNNABLE_COMPUTE, row.capabilityId)
+      expect(row.ownerRunnable).toBe(runnable)
+      if (runnable) {
+        // Every owner-runnable capability is an EXECUTABLE_WORKER compute record the registry
+        // itself lists — a map entry naming a non-compute id would be invisible to the board.
+        expect(registry.capability(row.capabilityId)?.kind).toBe("COMPUTE_CAPABILITY")
+      }
+    }
+    // The rejected and screening-only paths appear on the board but offer no run affordance.
+    expect(result.capabilities.find((r: CapabilitySurfaceRow) => r.capabilityId === "gpu-anomaly-screening")?.ownerRunnable).toBe(false)
+    expect(result.capabilities.find((r: CapabilitySurfaceRow) => r.capabilityId === "gpu-dimensional-reduction")?.ownerRunnable).toBe(false)
+    // Pin the exact runnable set itself: a silent drop from the derived map is a product change,
+    // not a test detail. Compare against the registry so the list cannot drift from what exists.
+    const runnableIds = result.capabilities.filter((r: CapabilitySurfaceRow) => r.ownerRunnable).map((r: CapabilitySurfaceRow) => r.capabilityId)
+    expect(runnableIds.sort()).toEqual(["gpu-aggregation", "gpu-clustering", "gpu-tabular-ml"])
   }, 120_000)
 })
