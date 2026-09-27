@@ -16,6 +16,7 @@ import {
   verifyTerraFusionWorkspaceRoot,
 } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
+import { localSetupEnabled } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
 
@@ -32,12 +33,6 @@ type SetupPayload = {
 type SetupOperation = "full" | "terrafusion-root" | "terrafusion-repository-root"
 
 const MAX_SETUP_REQUEST_BYTES = 16_000
-
-function localSetupEnabled() {
-  if (process.env.LOCAL_SETUP_ENABLED === "false") return false
-  if (process.env.LOCAL_SETUP_ENABLED === "true") return true
-  return process.env.NODE_ENV !== "production"
-}
 
 /**
  * Evidence that a request did NOT come straight from this machine.

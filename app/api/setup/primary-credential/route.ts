@@ -9,13 +9,9 @@ import {
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
+import { localSetupEnabled } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
-
-function localSetupEnabled() {
-  if (process.env.LOCAL_SETUP_ENABLED === "false") return false
-  return process.env.NODE_ENV !== "production"
-}
 
 function isLoopbackHost(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
