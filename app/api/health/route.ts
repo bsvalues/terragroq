@@ -2,8 +2,14 @@ import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 import { INFERENCE_BASE_URL } from "@/lib/ai/config"
-import { isLoopbackInferenceBase, resolveOllamaChatModel } from "@/lib/ai/ollama-models"
+import {
+  isLoopbackInferenceBase,
+  readOllamaModelInventory,
+  resolveOllamaChatModelFromInventory,
+  resolveOllamaExactModelFromInventory,
+} from "@/lib/ai/ollama-models"
 import { getBuildProvenance } from "@/lib/build-provenance"
+import { getDeploymentStatus } from "@/lib/deployment/profile"
 
 export const dynamic = "force-dynamic"
 
@@ -14,10 +20,16 @@ type Check = {
 }
 
 export async function GET() {
+  const deployment = getDeploymentStatus()
   const runtime = buildRuntimeStatus()
-  const liveRuntime = isLoopbackInferenceBase(INFERENCE_BASE_URL)
-    ? await resolveOllamaChatModel(INFERENCE_BASE_URL, runtime.chatModel)
+  const loopbackInference = isLoopbackInferenceBase(INFERENCE_BASE_URL)
+  const inventory = loopbackInference ? await readOllamaModelInventory(INFERENCE_BASE_URL) : null
+  const liveRuntime = inventory
+    ? resolveOllamaChatModelFromInventory(inventory, runtime.chatModel)
     : { available: true, model: runtime.chatModel, detail: null }
+  const embeddingRuntime = inventory
+    ? resolveOllamaExactModelFromInventory(inventory, runtime.embeddingModel)
+    : { available: true, model: runtime.embeddingModel, detail: null }
   const readiness = await getAuthReadiness({ probeDatabase: true })
 
   const databaseProbe = readiness.checks.databaseConnectivity ?? readiness.checks.databaseUrl
@@ -39,7 +51,18 @@ export async function GET() {
     warnings: authWarnings.length > 0 ? authWarnings : undefined,
   }
 
-  const healthy = readiness.ready
+  // Preserve the established HERMES aggregate-health behavior. County Development additionally
+  // requires both exact configured local models, not merely any locally installed fallback model.
+  const exactCountyChatModelReady = liveRuntime.available && liveRuntime.model === runtime.chatModel
+  const exactCountyEmbeddingModelReady = embeddingRuntime.available
+  const countyRuntimeReady = deployment.profile !== "county-development"
+    || exactCountyChatModelReady && exactCountyEmbeddingModelReady
+  const healthy = readiness.ready && deployment.valid && countyRuntimeReady
+  const runtimeDetail = deployment.profile === "county-development" && liveRuntime.available && !exactCountyChatModelReady
+    ? `Configured County model ${runtime.chatModel} is not installed.`
+    : deployment.profile === "county-development" && !exactCountyEmbeddingModelReady
+      ? `Configured County embedding model ${runtime.embeddingModel} is not installed.`
+      : liveRuntime.detail ?? embeddingRuntime.detail ?? undefined
 
   return NextResponse.json(
     {
@@ -48,14 +71,22 @@ export async function GET() {
       // The commit this running artifact was built from. The deploy verifies this equals the commit
       // it built, so a stale standalone can never pass as a fresh deploy (#762 deploy doctrine).
       build: getBuildProvenance(),
+      deployment,
       checks: {
+        deployment: {
+          ok: deployment.valid,
+          detail: deployment.valid ? undefined : deployment.violations.join(" "),
+        },
         database,
         auth,
         runtime: {
-          ok: liveRuntime.available,
+          ok: deployment.profile === "county-development"
+            ? exactCountyChatModelReady && exactCountyEmbeddingModelReady
+            : liveRuntime.available,
           chatModel: liveRuntime.model,
-          ...(liveRuntime.detail ? { detail: liveRuntime.detail } : {}),
           embeddingModel: runtime.embeddingModel,
+          embeddingResolvedModel: embeddingRuntime.model,
+          ...(runtimeDetail ? { detail: runtimeDetail } : {}),
           gateway: runtime.gateway,
           provider: runtime.provider,
           fallback: runtime.fallback,

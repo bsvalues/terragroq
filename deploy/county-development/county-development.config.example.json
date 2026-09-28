@@ -1,0 +1,13 @@
+{
+  "schema": "williamos.county-development.config.v1",
+  "deploymentProfile": "county-development",
+  "deploymentId": "benton-county-development",
+  "ownerEmail": "your.county.email@example.gov",
+  "terraFusionRoot": "C:\\Users\\you\\Source\\terrafusion_os_1.0",
+  "appPort": 3200,
+  "postgresPort": 15434,
+  "aiPort": 11434,
+  "chatModel": "qwen2.5-coder:1.5b",
+  "embeddingModel": "snowflake-arctic-embed2",
+  "previewUrl": "http://127.0.0.1:3102/"
+}
