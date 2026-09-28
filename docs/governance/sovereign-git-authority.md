@@ -55,8 +55,12 @@ pure verification code runs locally before it advances.
 
 ## The lifecycle (canonical order)
 
-1. **Assignment** — work proceeds under an existing admission chain (outcome → work order → grant)
-   minted by the Environment on HERMES. A candidate branch is built in a lane worktree.
+1. **Assignment** — work proceeds under an admission chain (outcome → work order → grant) minted by
+   the Environment on HERMES. Steps 1–5 are the **preparation phase**: they run concurrently across
+   lanes and hold NO reservation. The admission chain is minted when the lane is promotion-ready
+   (see *Reservation boundary — the promotion lease*); a lane that is still coding, in review, or
+   remediating review findings does not hold the sovereign slot and does not block other lanes. A
+   candidate branch is built in a lane worktree.
 2. **Local evidence (operative)** — the deterministic suite and the production build are run **on
    the lab machine** against the exact candidate head. GitHub's check runs, when they happen, are
    recorded as a corroborating mirror signal, never required.
@@ -116,6 +120,45 @@ pure verification code runs locally before it advances.
 7. **Reconciliation (mirror → lab)** — for anything that landed on GitHub main outside this
    lifecycle, the path is: fetch `origin/main`, integrate onto `lab/main` **sealed or owner-
    approved**, then re-push the mirror. GitHub main is never fast-forwarded into lab main silently.
+
+## Reservation boundary — the promotion lease (owner directive, CONTROLLING)
+
+**The reservation is a mutex on shared authoritative mutation, never on a lane's life.** The risk
+being fenced is concurrent mutation of integration, promotion, deployment, and rollback state:
+**one authoritative mutation transaction at a time.** That requirement is unchanged and is not
+weakened here.
+
+What changes is its extent. Acquire the sovereign slot/lease **only when a lane is
+promotion-ready** — head frozen, review CLEAN at that exact head, evidence and attestation inputs
+complete — and hold it through the shortest critical section only:
+
+    head re-verification -> integration/promotion -> deploy + rollback capture
+      -> authoritative post-state verification -> release
+
+Release immediately afterward. **If review discovers a defect and the head moves, give up the
+lease**: remediate and re-review outside the critical section, then reacquire when promotion-ready
+again.
+
+Consequences, each of which was a live failure mode:
+
+- **Development, testing, review, review remediation, CI, and attestation preparation happen
+  outside the reservation.** N lanes can be promotion-ready in parallel; the mutex is contended for
+  minutes rather than for the length of a lane.
+- **Admission belongs to the promotion window, not to lane start.** The admission / outcome /
+  work-order chain exists to bind the seal to an exact head. Minting it at lane start is what made a
+  single lane hold the estate's only slot through coding, review, fixes, CI, sealing, merge, and
+  finalize. Late admission is also *safer*: any commit pushed after AUTHORIZE invalidates the
+  exact-head authorization, so a shorter admission→ISSUE gap means fewer stale-digest re-cycles.
+- **Do not widen a lane whose head is under review.** An unrelated change rides in its own lane;
+  otherwise the head move invalidates the review and the seal chain.
+
+Two mechanisms are distinct here and only one was over-broad:
+
+- the execution-engine **lane lease** (`scripts/multi-agent-operator/lane-lease-checkpoint.mjs`:
+  fencing token, generation, heartbeat, `ACTIVE`/`RELEASED`/`EXPIRED`, explicit stale-lease
+  recovery) is scoped to operations and stays as-is;
+- the **authority reservation** (single active outcome slot, historically taken at admission and
+  released only at FINALIZE) is the boundary this section narrows.
 
 ## What is NOT changed
 
