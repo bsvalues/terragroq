@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { PoolClient } from "pg"
+import type { Pool, PoolClient } from "pg"
 import { NextResponse } from "next/server"
 import { hashPassword } from "better-auth/crypto"
 import { pool } from "@/lib/db"
@@ -8,17 +8,34 @@ import {
   validatePrimaryCredentialPayload,
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
+import { getSignupPolicy } from "@/lib/auth-policy"
+import { readBoundedJson } from "@/lib/environment/line-guard"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
+import {
+  claimPrimaryRecovery,
+  isLoopbackHost as isLoopbackHostname,
+  localSetupEnabled,
+  primaryRecoveryEnabled,
+  releasePrimaryRecovery,
+} from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
 
-function localSetupEnabled() {
-  if (process.env.LOCAL_SETUP_ENABLED === "false") return false
-  return process.env.NODE_ENV !== "production"
-}
+/**
+ * Ceiling on a credential request body, matched to the other setup surfaces. This route is reachable
+ * from any local process that can forge the required same-origin `Origin`, so an unbounded body must
+ * not be buffered and parsed here -- the refusal paths return without it now, and the paths that do
+ * read a body read at most this much.
+ */
+const MAX_SETUP_REQUEST_BYTES = 16_000
 
+/**
+ * The request URL is loopback when its HOST is. The host predicate lives in
+ * `@/lib/setup/local-setup-enabled` so the three setup routes cannot disagree about which hosts
+ * count as "this machine"; this wrapper only adapts a `URL` to it.
+ */
 function isLoopbackHost(url: URL) {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+  return isLoopbackHostname(url.hostname)
 }
 
 function isSameOriginLoopback(value: string | null, expectedOrigin: string) {
@@ -44,7 +61,57 @@ function isLocalSetupRequest(req: Request) {
   )
 }
 
-async function getPrimaryRecordState(client: PoolClient) {
+/**
+ * The refusal for an operation this environment is not configured to perform, or `null` when the
+ * operation may proceed.
+ *
+ * Evaluated BEFORE the password is hashed and before any transaction is opened. `hashPassword` is
+ * deliberately expensive and a pooled connection is a shared resource, so a request this surface is
+ * already going to refuse must spend neither: repeated refusals would otherwise consume real CPU and
+ * connection-pool capacity on a loopback surface reachable by any local process.
+ */
+function setupGateRefusal(operation: ReturnType<typeof classifyPrimaryCredentialOperation>) {
+  const allowed = operation === "recovery" ? primaryRecoveryEnabled() : localSetupEnabled()
+  if (allowed) return null
+  return {
+    status: 403 as const,
+    operation,
+    message: operation === "recovery"
+      ? "Primary credential recovery is not armed in this environment. Recovery is a deliberate, "
+        + "process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never persists; it "
+        + "cannot be enabled by LOCAL_SETUP_ENABLED."
+      : "Primary credential provisioning is not enabled in this environment. Contact your platform "
+        + "administrator.",
+  }
+}
+
+/**
+ * The refusal for provisioning when owner provisioning is closed by policy.
+ *
+ * This route CREATEs the first owner account, which is a signup, so it is subject to the signup
+ * policy the rest of the product already enforces (`@/lib/auth-policy`): `AUTH_SIGNUP_MODE=closed`
+ * disables owner provisioning, and `bootstrap` closes once a Primary Operator exists. Before this,
+ * the route gated on `LOCAL_SETUP_ENABLED` alone -- so a deployment explicitly closed for signups
+ * would still have accepted a brand-new Primary credential through the loopback surface.
+ *
+ * The policy is asked rather than re-implemented, so the two cannot drift. Only `provisioning` is
+ * consulted: replacing an existing credential is not a signup.
+ */
+async function signupPolicyRefusal(
+  operation: ReturnType<typeof classifyPrimaryCredentialOperation>,
+  queryable?: Pool | PoolClient,
+) {
+  if (operation !== "provisioning") return null
+  const policy = await getSignupPolicy(queryable)
+  if (policy.open) return null
+  return {
+    status: 403 as const,
+    operation,
+    message: policy.reason ?? "Owner provisioning is closed by policy.",
+  }
+}
+
+async function getPrimaryRecordState(client: Pool | PoolClient) {
   const result = await client.query<{
     auth_record_count: number
     declared_primary_count: number
@@ -134,13 +201,6 @@ async function recoverPrimary(
 }
 
 export async function POST(req: Request) {
-  if (!localSetupEnabled()) {
-    return NextResponse.json(
-      { ok: false, message: "Primary credential setup is disabled in this environment." },
-      { status: 403 },
-    )
-  }
-
   if (!isLocalSetupRequest(req)) {
     return NextResponse.json(
       {
@@ -152,12 +212,36 @@ export async function POST(req: Request) {
     )
   }
 
-  let payload: PrimaryCredentialPayload
-  try {
-    payload = (await req.json()) as PrimaryCredentialPayload
-  } catch {
-    return NextResponse.json({ ok: false, message: "Invalid JSON payload." }, { status: 400 })
+  // If neither capability is available, refuse before parsing the body or touching the database.
+  //
+  // Placed here, immediately after the local-request check, for two reasons: a request that can only
+  // return 403 must not buffer and parse an unbounded JSON body first, and it must not check out a
+  // pooled connection to answer a question this surface is already refusing -- nor disclose through
+  // a 409 whether auth records exist.
+  if (!localSetupEnabled() && !primaryRecoveryEnabled()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Primary credential setup and recovery are both disabled in this environment. Contact your platform administrator.",
+      },
+      { status: 403 },
+    )
   }
+
+  const parsedBody = await readBoundedJson(req, MAX_SETUP_REQUEST_BYTES)
+  if (!parsedBody.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: parsedBody.status === 413
+          ? "Invalid JSON payload: the request body is too large."
+          : "Invalid JSON payload.",
+      },
+      { status: parsedBody.status },
+    )
+  }
+  const payload = parsedBody.value as PrimaryCredentialPayload
 
   let input
   try {
@@ -181,6 +265,61 @@ export async function POST(req: Request) {
     )
   }
 
+  // Classify and refuse BEFORE the expensive work. A cheap read on the pool answers "what would this
+  // request do"; if the environment is not configured for that operation the request ends here,
+  // without hashing a password and without borrowing a pooled connection.
+  let declaredOperation: ReturnType<typeof classifyPrimaryCredentialOperation>
+  try {
+    declaredOperation = classifyPrimaryCredentialOperation(await getPrimaryRecordState(pool))
+  } catch {
+    return NextResponse.json(
+      { ok: false, message: "Primary credential state is unavailable." },
+      { status: 503 },
+    )
+  }
+  if (declaredOperation === "blocked_identity_missing") {
+    // Decided here, not inside the transaction: this refusal is the same whether or not the work
+    // runs, so it must not borrow a pooled client or hash a password to discover it.
+    return NextResponse.json(
+      {
+        ok: false,
+        operation: declaredOperation,
+        message:
+          "Primary identity is not declared in the local auth records. Resolve identity before credential recovery.",
+      },
+      { status: 409 },
+    )
+  }
+  {
+    const refusal = setupGateRefusal(declaredOperation)
+    if (refusal) return NextResponse.json({ ok: false, ...refusal }, { status: refusal.status })
+    // A provisioning run is a signup, so the signup policy applies to it as well.
+    const policyRefusal = await signupPolicyRefusal(declaredOperation)
+    if (policyRefusal) return NextResponse.json({ ok: false, ...policyRefusal }, { status: policyRefusal.status })
+  }
+
+  // Claim the one-shot capability SYNCHRONOUSLY, before any await below. Checking the flag at the gate
+  // and spending it after the transaction would let two concurrent recovery requests both pass that
+  // gate, and the second would overwrite what the first just committed. The first claimant wins; any
+  // other request -- concurrent or later -- sees an unarmed surface. A claim that does not complete
+  // is released, so a failed recovery does not spend the owner's one authorization.
+  let recoveryClaimed = false
+  if (declaredOperation === "recovery") {
+    recoveryClaimed = claimPrimaryRecovery()
+    if (!recoveryClaimed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          operation: declaredOperation,
+          message:
+            "Primary credential recovery is not armed in this environment, or its one-shot capability "
+            + "has already been spent in this process.",
+        },
+        { status: 403 },
+      )
+    }
+  }
+
   try {
     const passwordHash = await hashPassword(input.password)
 
@@ -196,6 +335,50 @@ export async function POST(req: Request) {
           operation,
           message:
             "Primary identity is not declared in the local auth records. Resolve identity before credential recovery.",
+        }
+      }
+
+      // The classification can move under us: a request preflighted as `provisioning` can find the
+      // account already created by a concurrent commit and therefore be a `recovery` by the time it
+      // gets here. Whichever operation it has BECOME is the one that must be authorized, so recovery
+      // takes its claim at the point of use rather than relying on the preflight. Without this an
+      // unarmed request could fall through into a credential replacement.
+      if (operation === "recovery" && !recoveryClaimed) {
+        if (!claimPrimaryRecovery()) {
+          return {
+            ok: false as const,
+            status: 403,
+            operation,
+            message:
+              "Primary credential recovery is not armed in this environment, or its one-shot capability "
+              + "has already been spent in this process.",
+          }
+        }
+        recoveryClaimed = true
+      }
+
+      if (operation !== "recovery" && recoveryClaimed) {
+        // The class changed away from recovery, so nothing was spent -- give the capability back
+        // rather than burning the owner's one authorization on an operation that did not run.
+        releasePrimaryRecovery()
+        recoveryClaimed = false
+      }
+
+      // Re-evaluated inside the transaction for PROVISIONING only: the pre-flight classification is a
+      // cheap read taken outside it, so the state could have moved. Recovery is not re-gated here --
+      // it holds the claim taken above, and re-checking the flag would see the claim it just spent.
+      if (operation === "provisioning") {
+        const setupRefusal = setupGateRefusal(operation)
+        if (setupRefusal) {
+          return { ok: false as const, ...setupRefusal }
+        }
+        // The preflight skipped the signup policy when it classified this request as recovery; the
+        // class can change here, and a provisioning run is a signup whatever the preflight said.
+        // Evaluated on the TRANSACTION client: borrowing a second connection while holding this one
+        // deadlocks the pool under concurrent provisioning.
+        const policyRefusal = await signupPolicyRefusal(operation, client)
+        if (policyRefusal) {
+          return { ok: false as const, ...policyRefusal }
         }
       }
 
@@ -226,6 +409,8 @@ export async function POST(req: Request) {
         }
       }
 
+      // The capability was claimed synchronously before the transaction, so the reset itself is what
+      // spends it: nothing to clear here, and a later request in this process sees an unarmed surface.
       return {
         ok: true as const,
         operation,
@@ -234,6 +419,8 @@ export async function POST(req: Request) {
     })
 
     if (!result.ok) {
+      // Nothing was committed, so the owner's one authorization is not spent by this attempt.
+      if (recoveryClaimed) releasePrimaryRecovery()
       return NextResponse.json(result, { status: result.status })
     }
 
@@ -251,6 +438,9 @@ export async function POST(req: Request) {
       message: result.message,
     })
   } catch {
+    // The transaction rolled back, so the capability was not spent -- give it back. A failed recovery
+    // must not cost the owner their one authorization.
+    if (recoveryClaimed) releasePrimaryRecovery()
     return NextResponse.json(
       {
         ok: false,
