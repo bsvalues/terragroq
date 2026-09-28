@@ -225,19 +225,12 @@ describe("POST /api/setup/primary-credential route contract", () => {
   })
 
   it("bounds the request body when a capability is enabled", async () => {
-    // The post-bootstrap state the reviewer named: setup enabled by the persisted flag, recovery
-    // still unarmed. The fully-disabled guard does not fire here, so the body must be bounded by the
-    // shared reader rather than buffered whole by req.json().
+    // The post-bootstrap state as it actually is in a deployed runtime: LOCAL_SETUP_ENABLED was
+    // persisted by the setup flow and exported by the launcher, and recovery is NOT armed. All three
+    // refusals above are therefore behind us, so what is left to prove is that the body is bounded.
     process.env.NODE_ENV = "production"
     process.env.LOCAL_SETUP_ENABLED = "true"
-    process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
-    queryMock.mockImplementation(async (sql: string) => {
-      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
-      if (sql.includes("count(*)::int as auth_record_count")) {
-        return { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
-      }
-      return { rows: [], rowCount: 0 }
-    })
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
 
     const oversized = JSON.stringify({ ...primaryPayload(), pad: "x".repeat(20_000) })
     const req = new Request("http://localhost:3000/api/setup/primary-credential", {
@@ -257,6 +250,33 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(hashPasswordMock).not.toHaveBeenCalled()
   })
 
+  it("refuses first-owner provisioning when the signup policy says closed", async () => {
+    // The route creates the first owner account, so it is a signup and must obey the same policy as
+    // the rest of the product. Gating on LOCAL_SETUP_ENABLED alone let a deployment that is
+    // explicitly closed for signups accept a brand-new Primary credential over loopback.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    process.env.AUTH_SIGNUP_MODE = "closed"
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 0, declared_primary_count: 0 }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await POST(credentialRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.ok).toBe(false)
+    expect(body.operation).toBe("provisioning")
+    expect(body.message).toContain("AUTH_SIGNUP_MODE=closed")
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since
@@ -264,6 +284,9 @@ describe("POST /api/setup/primary-credential route contract", () => {
     // provisioning run must therefore succeed with the persisted flag alone and recovery unarmed.
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
     process.env.LOCAL_SETUP_ENABLED = "true"
+    // Bootstrap mode without a DSN cannot be evaluated, and the policy refuses rather than guessing;
+    // supply one so this test exercises "bootstrap, no users yet -> open".
+    process.env.DATABASE_URL = "postgres://test@localhost:5432/williamos"
     let provisioned = false
     queryMock.mockImplementation(async (sql: string) => {
       if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }

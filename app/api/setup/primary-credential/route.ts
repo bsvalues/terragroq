@@ -8,6 +8,7 @@ import {
   validatePrimaryCredentialPayload,
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
+import { getSignupPolicy } from "@/lib/auth-policy"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
 import {
@@ -79,6 +80,29 @@ function setupGateRefusal(operation: ReturnType<typeof classifyPrimaryCredential
         + "cannot be enabled by LOCAL_SETUP_ENABLED."
       : "Primary credential provisioning is not enabled in this environment. Contact your platform "
         + "administrator.",
+  }
+}
+
+/**
+ * The refusal for provisioning when owner provisioning is closed by policy.
+ *
+ * This route CREATEs the first owner account, which is a signup, so it is subject to the signup
+ * policy the rest of the product already enforces (`@/lib/auth-policy`): `AUTH_SIGNUP_MODE=closed`
+ * disables owner provisioning, and `bootstrap` closes once a Primary Operator exists. Before this,
+ * the route gated on `LOCAL_SETUP_ENABLED` alone -- so a deployment explicitly closed for signups
+ * would still have accepted a brand-new Primary credential through the loopback surface.
+ *
+ * The policy is asked rather than re-implemented, so the two cannot drift. Only `provisioning` is
+ * consulted: replacing an existing credential is not a signup.
+ */
+async function signupPolicyRefusal(operation: ReturnType<typeof classifyPrimaryCredentialOperation>) {
+  if (operation !== "provisioning") return null
+  const policy = await getSignupPolicy()
+  if (policy.open) return null
+  return {
+    status: 403 as const,
+    operation,
+    message: policy.reason ?? "Owner provisioning is closed by policy.",
   }
 }
 
@@ -264,6 +288,9 @@ export async function POST(req: Request) {
   {
     const refusal = setupGateRefusal(declaredOperation)
     if (refusal) return NextResponse.json({ ok: false, ...refusal }, { status: refusal.status })
+    // A provisioning run is a signup, so the signup policy applies to it as well.
+    const policyRefusal = await signupPolicyRefusal(declaredOperation)
+    if (policyRefusal) return NextResponse.json({ ok: false, ...policyRefusal }, { status: policyRefusal.status })
   }
 
   try {

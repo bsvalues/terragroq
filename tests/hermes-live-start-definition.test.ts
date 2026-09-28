@@ -111,6 +111,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "PORT",
       "DATABASE_URL",
       "LOCAL_SETUP_ENABLED",
+      "WILLIAMOS_PRIMARY_RECOVERY",
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
@@ -131,6 +132,30 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(exportFlag).toBeGreaterThan(read)
     expect(exportFlag).toBeLessThan(serverStart)
     expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
+  })
+
+  it("arms credential recovery only from a consumed one-shot token", () => {
+    // The control has to be bounded: arm-able by an administrator, usable for exactly one process
+    // lifetime, and clear by construction. An ambient machine/user environment variable would be
+    // neither, and reading the value from .env.local would be worst of all -- the setup flow writes
+    // that file, so the value it contains is not an operator decision.
+    const code = executableOnly(startText)
+    const token = code.indexOf('"ARM-PRIMARY-RECOVERY"')
+    const consume = code.indexOf("Move-Item -LiteralPath $recoveryToken")
+    const exportFlag = code.indexOf('$env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed)')
+    const serverStart = code.indexOf("& $node $server")
+
+    expect(token, "the one-shot token must be named in the launcher").toBeGreaterThan(-1)
+    expect(consume, "the token must be consumed (moved), not merely read").toBeGreaterThan(token)
+    expect(exportFlag, "the flag must be exported").toBeGreaterThan(consume)
+    expect(exportFlag, "the flag must be set before the server starts").toBeLessThan(serverStart)
+    // Never arm from an inherited value: the decision is the consumed token, nothing else.
+    expect(code).not.toMatch(/Get-DeclaredEnvValue[^\n]*WILLIAMOS_PRIMARY_RECOVERY/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*\$env:WILLIAMOS_PRIMARY_RECOVERY/)
+    // And the default is unarmed: the export is a conditional, never a bare "true".
+    expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*"true"/)
+    expect(code).toMatch(/RECOVERY_UNARMED/)
+    expect(code).toMatch(/RECOVERY_ARMED_ONE_SHOT/)
   })
 })
 

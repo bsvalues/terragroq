@@ -387,6 +387,37 @@ $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
 $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
+
+# ---------------------------------------------------------------------------------------------
+# ONE-SHOT PRIMARY-CREDENTIAL RECOVERY (#1251).
+#
+# Recovery must be arm-able by an administrator WITHOUT editing .env.local -- nothing a normal setup
+# flow writes may arm it -- and it must clear itself: a process that stays armed after the reset is a
+# standing credential-reset surface, and an ambient machine/user environment variable is not a
+# bounded control.
+#
+# The arming token is a file an administrator creates. The launcher CONSUMES it before starting the
+# server, so the value lives only in this one process lifetime and the next start is unarmed by
+# construction. If the token cannot be consumed, the launcher does NOT arm: a one-shot that can fire
+# twice is worse than no one-shot.
+$recoveryTokenDir = Join-Path (Join-Path $env:ProgramData "WilliamOS") "recovery"
+$recoveryToken = Join-Path $recoveryTokenDir "ARM-PRIMARY-RECOVERY"
+$recoveryArmed = $false
+if (Test-Path -LiteralPath $recoveryToken -PathType Leaf) {
+  $recoveryConsumed = "$recoveryToken.consumed-" + (Get-Date -Format "yyyyMMddTHHmmssZ")
+  try {
+    Move-Item -LiteralPath $recoveryToken -Destination $recoveryConsumed -Force -ErrorAction Stop
+    $recoveryArmed = $true
+    Write-Boot "RECOVERY_ARMED_ONE_SHOT consumed=$recoveryConsumed"
+  } catch {
+    $recoveryArmed = $false
+    Write-Boot "RECOVERY_TOKEN_NOT_CONSUMED token=$recoveryToken detail=$($_.Exception.Message)"
+  }
+}
+$env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed) { "true" } else { "false" }
+if (-not $recoveryArmed) {
+  Write-Boot "RECOVERY_UNARMED"
+}
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.
