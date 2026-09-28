@@ -396,22 +396,34 @@ $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 # standing credential-reset surface, and an ambient machine/user environment variable is not a
 # bounded control.
 #
-# The arming token is a file an administrator creates. The launcher CONSUMES it before starting the
-# server, so the value lives only in this one process lifetime and the next start is unarmed by
-# construction. If the token cannot be consumed, the launcher does NOT arm: a one-shot that can fire
+# WHY THE MACHINE REGISTRY, NOT A FILE: `C:\ProgramData\WilliamOS` inherits a Users write ACE, and
+# `scripts/hermes-bridge/protect-door-artifacts.ps1` deliberately preserves it -- so any file-based
+# token under ProgramData can be created by the limited door user, which would let that process arm
+# recovery and then reset the Primary password. HKLM\SOFTWARE cannot be written without elevation, so
+# the operating system itself enforces "an administrator armed this", and there is no ACL for this
+# launcher to get wrong.
+#
+# The value is CONSUMED (deleted) before the server starts, so it is single-use by construction: the
+# value lives in one process lifetime and the next start is unarmed. If it cannot be consumed -- most
+# likely because this launcher is not elevated -- recovery does NOT arm; a one-shot that can fire
 # twice is worse than no one-shot.
-$recoveryTokenDir = Join-Path (Join-Path $env:ProgramData "WilliamOS") "recovery"
-$recoveryToken = Join-Path $recoveryTokenDir "ARM-PRIMARY-RECOVERY"
+$recoveryKey = "HKLM:\SOFTWARE\WilliamOS\PrimaryRecovery"
+$recoveryValueName = "Arm"
+$declaredRecovery = $null
+try {
+  $declaredRecovery = (Get-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop).$recoveryValueName
+} catch {
+  $declaredRecovery = $null
+}
 $recoveryArmed = $false
-if (Test-Path -LiteralPath $recoveryToken -PathType Leaf) {
-  $recoveryConsumed = "$recoveryToken.consumed-" + (Get-Date -Format "yyyyMMddTHHmmssZ")
+if ("$declaredRecovery" -ieq "true") {
   try {
-    Move-Item -LiteralPath $recoveryToken -Destination $recoveryConsumed -Force -ErrorAction Stop
+    Remove-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop
     $recoveryArmed = $true
-    Write-Boot "RECOVERY_ARMED_ONE_SHOT consumed=$recoveryConsumed"
+    Write-Boot "RECOVERY_ARMED_ONE_SHOT source=$recoveryKey\$recoveryValueName"
   } catch {
     $recoveryArmed = $false
-    Write-Boot "RECOVERY_TOKEN_NOT_CONSUMED token=$recoveryToken detail=$($_.Exception.Message)"
+    Write-Boot "RECOVERY_TOKEN_NOT_CONSUMED source=$recoveryKey\$recoveryValueName detail=$($_.Exception.Message)"
   }
 }
 $env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed) { "true" } else { "false" }

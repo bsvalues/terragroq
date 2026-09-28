@@ -134,28 +134,33 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 
-  it("arms credential recovery only from a consumed one-shot token", () => {
-    // The control has to be bounded: arm-able by an administrator, usable for exactly one process
-    // lifetime, and clear by construction. An ambient machine/user environment variable would be
-    // neither, and reading the value from .env.local would be worst of all -- the setup flow writes
-    // that file, so the value it contains is not an operator decision.
+  it("arms credential recovery only from a consumed, administrator-only one-shot", () => {
+    // The control has to be bounded AND genuinely administrator-gated. A file under ProgramData is
+    // not: that tree inherits a Users write ACE and protect-door-artifacts.ps1 preserves it, so the
+    // limited door user could create the token and arm its own credential reset. HKLM cannot be
+    // written without elevation, so the OS enforces the authority and there is no ACL to get wrong.
     const code = executableOnly(startText)
-    const token = code.indexOf('"ARM-PRIMARY-RECOVERY"')
-    const consume = code.indexOf("Move-Item -LiteralPath $recoveryToken")
+    const key = code.indexOf('"HKLM:\\SOFTWARE\\WilliamOS\\PrimaryRecovery"')
+    const consume = code.indexOf("Remove-ItemProperty -LiteralPath $recoveryKey")
     const exportFlag = code.indexOf('$env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed)')
     const serverStart = code.indexOf("& $node $server")
 
-    expect(token, "the one-shot token must be named in the launcher").toBeGreaterThan(-1)
-    expect(consume, "the token must be consumed (moved), not merely read").toBeGreaterThan(token)
+    expect(key, "the arming input must be the machine registry path").toBeGreaterThan(-1)
+    expect(consume, "the value must be consumed, not merely read").toBeGreaterThan(key)
     expect(exportFlag, "the flag must be exported").toBeGreaterThan(consume)
     expect(exportFlag, "the flag must be set before the server starts").toBeLessThan(serverStart)
-    // Never arm from an inherited value: the decision is the consumed token, nothing else.
+
+    // No file-based token anywhere: that is the forgeable shape this replaced.
+    expect(code).not.toMatch(/ARM-PRIMARY-RECOVERY/)
+    expect(code).not.toMatch(/Move-Item[^\n]*recoveryToken/)
+    // Never arm from an inherited value, and never from .env.local (setup writes that file).
     expect(code).not.toMatch(/Get-DeclaredEnvValue[^\n]*WILLIAMOS_PRIMARY_RECOVERY/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*\$env:WILLIAMOS_PRIMARY_RECOVERY/)
-    // And the default is unarmed: the export is a conditional, never a bare "true".
+    // The default is unarmed: a conditional, never a bare "true".
     expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*"true"/)
     expect(code).toMatch(/RECOVERY_UNARMED/)
     expect(code).toMatch(/RECOVERY_ARMED_ONE_SHOT/)
+    expect(code).toMatch(/RECOVERY_TOKEN_NOT_CONSUMED/)
   })
 })
 
