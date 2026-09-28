@@ -354,6 +354,13 @@ export async function POST(req: Request) {
         recoveryClaimed = true
       }
 
+      if (operation !== "recovery" && recoveryClaimed) {
+        // The class changed away from recovery, so nothing was spent -- give the capability back
+        // rather than burning the owner's one authorization on an operation that did not run.
+        releasePrimaryRecovery()
+        recoveryClaimed = false
+      }
+
       // Re-evaluated inside the transaction for PROVISIONING only: the pre-flight classification is a
       // cheap read taken outside it, so the state could have moved. Recovery is not re-gated here --
       // it holds the claim taken above, and re-checking the flag would see the claim it just spent.
@@ -361,6 +368,12 @@ export async function POST(req: Request) {
         const setupRefusal = setupGateRefusal(operation)
         if (setupRefusal) {
           return { ok: false as const, ...setupRefusal }
+        }
+        // The preflight skipped the signup policy when it classified this request as recovery; the
+        // class can change here, and a provisioning run is a signup whatever the preflight said.
+        const policyRefusal = await signupPolicyRefusal(operation)
+        if (policyRefusal) {
+          return { ok: false as const, ...policyRefusal }
         }
       }
 

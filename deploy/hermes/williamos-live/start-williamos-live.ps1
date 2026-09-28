@@ -387,61 +387,6 @@ $env:NODE_ENV = "production"
 $env:HOSTNAME = $BindHost
 $env:PORT = "$Port"
 $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
-
-# ---------------------------------------------------------------------------------------------
-# PRIMARY-CREDENTIAL RECOVERY WINDOW (#1251).
-#
-# Recovery must be arm-able by an administrator WITHOUT editing .env.local -- nothing a normal setup
-# flow writes may arm it.
-#
-# WHY THE MACHINE REGISTRY: `C:\ProgramData\WilliamOS` inherits a Users write ACE and
-# `scripts/hermes-bridge/protect-door-artifacts.ps1` deliberately preserves it, so a file-based token
-# under ProgramData can be created by the limited door user -- which would let that process arm its
-# own credential reset. HKLM\SOFTWARE cannot be written without elevation, so the operating system
-# enforces "an administrator armed this".
-#
-# WHY THIS LAUNCHER ONLY READS IT: the door runs at RunLevel=Limited with no Administrators allow ACE,
-# so it can read HKLM but cannot delete a value from it. Consumption therefore cannot happen here --
-# an attempt to write would fail closed and leave recovery permanently 403. The administrator sets a
-# UTC DEADLINE instead, and the window closes on its own; the one-shot USE is consumed by the route,
-# which clears the capability after the first successful reset (#1251 review P1).
-$recoveryKey = "HKLM:\SOFTWARE\WilliamOS\PrimaryRecovery"
-$recoveryValueName = "ArmedUntilUtc"
-$declaredRecoveryUntil = $null
-try {
-  $declaredRecoveryUntil = (Get-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop).$recoveryValueName
-} catch {
-  $declaredRecoveryUntil = $null
-}
-$recoveryArmed = $false
-if ("$declaredRecoveryUntil".Trim().Length -gt 0) {
-  try {
-    $recoveryDeadline = [datetime]::Parse(
-      "$declaredRecoveryUntil",
-      [System.Globalization.CultureInfo]::InvariantCulture,
-      [System.Globalization.DateTimeStyles]::AdjustToUniversal)
-    if ($recoveryDeadline -gt [datetime]::UtcNow) {
-      $recoveryArmed = $true
-      Write-Boot "RECOVERY_ARMED_UNTIL $($recoveryDeadline.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
-    } else {
-      Write-Boot "RECOVERY_WINDOW_EXPIRED $($recoveryDeadline.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
-    }
-  } catch {
-    $recoveryArmed = $false
-    Write-Boot "RECOVERY_WINDOW_UNREADABLE value=$declaredRecoveryUntil detail=$($_.Exception.Message)"
-  }
-}
-$env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed) { "true" } else { "false" }
-# The deadline travels WITH the flag: the server rechecks it on every request, so a long-running
-# process stops honouring the capability the moment the window closes rather than at its next start.
-if ($recoveryArmed) {
-  $env:WILLIAMOS_PRIMARY_RECOVERY_UNTIL = "$declaredRecoveryUntil".Trim()
-} else {
-  Remove-Item Env:WILLIAMOS_PRIMARY_RECOVERY_UNTIL -ErrorAction SilentlyContinue
-}
-if (-not $recoveryArmed) {
-  Write-Boot "RECOVERY_UNARMED"
-}
 # Next's env loader does not overwrite a variable already present in process.env, so this wins over
 # the DATABASE_URL in .env.local. That precedence is the whole mechanism, so the deploy proves it on
 # the built artifact rather than citing it.

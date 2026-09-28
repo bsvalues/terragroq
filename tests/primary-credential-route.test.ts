@@ -352,6 +352,40 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(recordStateReads).toBe(2)
   })
 
+  it("reapplies the signup policy when a recovery becomes a provisioning", async () => {
+    // The mirror of the mid-flight case: preflighted as recovery (the preflight skips the signup
+    // policy for recovery, because replacing a credential is not a signup), then the rows vanish and
+    // the transactional classification is provisioning. That IS a signup, so the policy must apply.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    process.env.AUTH_SIGNUP_MODE = "closed"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL = new Date(Date.now() + 3_600_000).toISOString()
+
+    let recordStateReads = 0
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        recordStateReads += 1
+        // Preflight: a declared Primary exists -> recovery. Transaction: the rows are gone -> provisioning.
+        return recordStateReads === 1
+          ? { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+          : { rows: [{ auth_record_count: 0, declared_primary_count: 0 }], rowCount: 1 }
+      }
+      if (/insert into "user"/i.test(sql)) return { rows: [], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await POST(credentialRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.operation).toBe("provisioning")
+    expect(body.message).toContain("AUTH_SIGNUP_MODE=closed")
+    // Nothing ran, so the capability was handed back rather than spent.
+    expect(process.env.WILLIAMOS_PRIMARY_RECOVERY).toBe("true")
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since
