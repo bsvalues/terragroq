@@ -154,18 +154,17 @@ describe("every setup route shares the one declaration", () => {
     expect(src, "the recovery route must not re-inline the enable predicate").not.toMatch(
       /function\s+localSetupEnabled\s*\(/,
     )
-    // The gate must be applied AFTER the operation is classified, so first-owner provisioning keeps
-    // the ordinary setup gate. Gating the whole route on recovery up front 403s a fresh install's
-    // visible "Save Primary credential" action, because a standard setup flow writes
-    // LOCAL_SETUP_ENABLED and nothing ever arms recovery.
-    const classifiedAt = src.indexOf("classifyPrimaryCredentialOperation(")
-    const recoveryGateAt = src.indexOf("primaryRecoveryEnabled()")
-    expect(classifiedAt, "the operation must be classified in this route").toBeGreaterThan(-1)
-    expect(recoveryGateAt, "the recovery gate must exist").toBeGreaterThan(-1)
-    expect(
-      recoveryGateAt,
-      "the recovery opt-in must be evaluated only after the operation is classified",
-    ).toBeGreaterThan(classifiedAt)
+    // The gate must be decided from the classification AND before the expensive work: gating the
+    // route up front on recovery 403s a fresh install's provisioning, and hashing first spends CPU
+    // and a pooled connection on a request that is about to be refused.
+    const classifiedAt = src.indexOf("declaredOperation = classifyPrimaryCredentialOperation(await getPrimaryRecordState(pool))")
+    const gatedAt = src.indexOf("const refusal = setupGateRefusal(declaredOperation)")
+    const hashedAt = src.indexOf("await hashPassword(input.password)")
+    expect(classifiedAt, "the request path must classify the operation").toBeGreaterThan(-1)
+    expect(gatedAt, "the request path must decide the gate from that classification").toBeGreaterThan(-1)
+    expect(hashedAt, "the request path must hash the password").toBeGreaterThan(-1)
+    expect(gatedAt, "the gate must follow the classification").toBeGreaterThan(classifiedAt)
+    expect(hashedAt, "the password must be hashed only after the operation is allowed").toBeGreaterThan(gatedAt)
   })
 
   it("all three routes share the loopback host predicate", () => {

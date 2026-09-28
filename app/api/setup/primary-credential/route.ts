@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { PoolClient } from "pg"
+import type { Pool, PoolClient } from "pg"
 import { NextResponse } from "next/server"
 import { hashPassword } from "better-auth/crypto"
 import { pool } from "@/lib/db"
@@ -49,7 +49,31 @@ function isLocalSetupRequest(req: Request) {
   )
 }
 
-async function getPrimaryRecordState(client: PoolClient) {
+/**
+ * The refusal for an operation this environment is not configured to perform, or `null` when the
+ * operation may proceed.
+ *
+ * Evaluated BEFORE the password is hashed and before any transaction is opened. `hashPassword` is
+ * deliberately expensive and a pooled connection is a shared resource, so a request this surface is
+ * already going to refuse must spend neither: repeated refusals would otherwise consume real CPU and
+ * connection-pool capacity on a loopback surface reachable by any local process.
+ */
+function setupGateRefusal(operation: ReturnType<typeof classifyPrimaryCredentialOperation>) {
+  const allowed = operation === "recovery" ? primaryRecoveryEnabled() : localSetupEnabled()
+  if (allowed) return null
+  return {
+    status: 403 as const,
+    operation,
+    message: operation === "recovery"
+      ? "Primary credential recovery is not armed in this environment. Recovery is a deliberate, "
+        + "process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never persists; it "
+        + "cannot be enabled by LOCAL_SETUP_ENABLED."
+      : "Primary credential provisioning is not enabled in this environment. Contact your platform "
+        + "administrator.",
+  }
+}
+
+async function getPrimaryRecordState(client: Pool | PoolClient) {
   const result = await client.query<{
     auth_record_count: number
     declared_primary_count: number
@@ -179,6 +203,23 @@ export async function POST(req: Request) {
     )
   }
 
+  // Classify and refuse BEFORE the expensive work. A cheap read on the pool answers "what would this
+  // request do"; if the environment is not configured for that operation the request ends here,
+  // without hashing a password and without borrowing a pooled connection.
+  let declaredOperation: ReturnType<typeof classifyPrimaryCredentialOperation>
+  try {
+    declaredOperation = classifyPrimaryCredentialOperation(await getPrimaryRecordState(pool))
+  } catch {
+    return NextResponse.json(
+      { ok: false, message: "Primary credential state is unavailable." },
+      { status: 503 },
+    )
+  }
+  if (declaredOperation !== "blocked_identity_missing") {
+    const refusal = setupGateRefusal(declaredOperation)
+    if (refusal) return NextResponse.json({ ok: false, ...refusal }, { status: refusal.status })
+  }
+
   try {
     const passwordHash = await hashPassword(input.password)
 
@@ -197,31 +238,11 @@ export async function POST(req: Request) {
         }
       }
 
-      // The gate depends on WHAT the request would do, which is only known after classification.
-      //
-      // `provisioning` is the first-owner case: no auth records exist yet, and the standard `/setup`
-      // flow drives it. It keeps the ordinary local-setup gate, because refusing it would leave a
-      // fresh installation unable to provision at all -- the flow writes `LOCAL_SETUP_ENABLED` and
-      // nothing arms recovery, so the visible "Save Primary credential" action would 403 until
-      // somebody injected an environment variable by hand.
-      //
-      // `recovery` is a RESET of a credential that already exists. That is the operation the
-      // separate, never-persisted opt-in exists for: the persisted setup flag is written by the
-      // setup flow itself and carried into the production process by the live launcher, so gating a
-      // reset on it would arm an unauthenticated password replacement by side effect.
-      const setupAllowed = operation === "recovery" ? primaryRecoveryEnabled() : localSetupEnabled()
-      if (!setupAllowed) {
-        return {
-          ok: false as const,
-          status: 403,
-          operation,
-          message: operation === "recovery"
-            ? "Primary credential recovery is not armed in this environment. Recovery is a "
-              + "deliberate, process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never "
-              + "persists; it cannot be enabled by LOCAL_SETUP_ENABLED."
-            : "Primary credential provisioning is not enabled in this environment. Contact your "
-              + "platform administrator.",
-        }
+      // Re-evaluated inside the transaction: the pre-flight classification is a cheap read taken
+      // outside it, so the state could have moved between the two. The refusal is identical.
+      const setupRefusal = setupGateRefusal(operation)
+      if (setupRefusal) {
+        return { ok: false as const, ...setupRefusal }
       }
 
       if (operation === "provisioning") {

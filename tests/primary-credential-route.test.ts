@@ -8,6 +8,7 @@ const hashPasswordMock = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/db", () => ({
   pool: {
     connect: connectMock,
+    query: queryMock,
   },
 }))
 
@@ -154,6 +155,10 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(body.ok).toBe(false)
     expect(body.operation).toBe("recovery")
     expect(body.message).toContain("WILLIAMOS_PRIMARY_RECOVERY")
+    // The refusal must be cheap: no password is hashed and no pooled connection is borrowed for a
+    // request the surface is going to refuse.
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
   })
 
   it("refuses to RESET when nothing is armed at all", async () => {
@@ -168,8 +173,12 @@ describe("POST /api/setup/primary-credential route contract", () => {
     })
 
     const response = await POST(credentialRequest())
+    const body = await response.json()
 
     expect(response.status).toBe(403)
+    expect(body.operation).toBe("recovery")
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
   })
 
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
