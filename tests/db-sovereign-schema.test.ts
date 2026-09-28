@@ -38,7 +38,7 @@ function schemaDatabaseUrl(url: string, schema: string) {
 
 describe("sovereign schema bootstrap DDL", () => {
   it("installs the full WilliamOS table set", () => {
-    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(38)
+    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(39)
   })
 
   it("bootstraps device authentication separately from access grants", () => {

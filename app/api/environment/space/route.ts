@@ -878,6 +878,12 @@ const mergedExternalDependencies: MergedExternalFinalizationDependencies = {
       || [...expectedGrantIds].some((id) => !revokedGrants.some((grant) => grant.id === id))) {
       throw new Error("MERGED_EXTERNAL_DELIVERY_CONTEXT_STALE")
     }
+    // Promotion lease release: the terminal settlement of this adoption's authoritative
+    // delivery frees the target for the next promotion in the same transaction.
+    await transaction.execute(
+      sql`UPDATE "promotion_lease" SET "status" = 'released', "reason" = 'LEASE_FINALIZED', "releasedAt" = ${at}, "updatedAt" = ${at}, "version" = "version" + 1
+          WHERE "status" = 'live' AND "adoptionHash" = ${expected.seal.payload.version === "williamos-delivery-seal.v2" ? expected.seal.payload.adoption.adoptionHash : "INVALID"}`,
+    )
     for (const grant of activeWorkOrderGrants) {
       const revoked = revokedGrants.find((candidate) => candidate.id === grant.id)
       if (!revoked || revoked.status !== "revoked" || revoked.revokedAt?.getTime() !== at.getTime()) {
