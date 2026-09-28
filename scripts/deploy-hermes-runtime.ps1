@@ -422,7 +422,14 @@ if (-not $builtSha -or $builtSha -eq "development" -or $builtSha -eq "unknown") 
   throw "The standalone at $standalone carries no real build SHA (got '$builtSha'). Rebuild with 'pnpm build' from a clean tree so provenance is stamped; a deploy that cannot prove its commit is not allowed."
 }
 if ($builtSha -like "*-dirty") {
-  Write-Warning "The build SHA is $builtSha -- built over uncommitted changes. Proceeding, but the running commit will not exactly match any pushed commit."
+  # A dirty stamp is undeliverable, not merely untidy: `attest-deployment.mjs attest --sha=…` (below)
+  # requires a clean 40-hex revision and rejects "<sha>-dirty", so this deploy can never attest.
+  # Refuse HERE, where nothing has been mutated, instead of warning and proceeding -- proceeding
+  # reaches that rejection only after Stop-ScheduledTask, which turns a precondition that is free to
+  # check into a service outage. Rebuild from a clean tree:
+  #   git -C <source> status --porcelain   # must be empty
+  #   pnpm build
+  throw "The standalone at $standalone was built over uncommitted changes (SHA '$builtSha'). The deployment attestation requires a clean 40-hex revision and rejects a '-dirty' stamp, so this deploy can never complete. Rebuild from a clean tree ('pnpm build') first. Refusing now, before any service is stopped."
 }
 
 # Server-loaded loose trees beyond lib\fabric. The runtime loads three more trees at REQUEST time
