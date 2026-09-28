@@ -1,6 +1,17 @@
 import { pool } from "@/lib/db"
+import type { Pool, PoolClient } from "pg"
 
 export type SignupMode = "open" | "bootstrap" | "closed"
+
+/**
+ * Where the policy's own read runs.
+ *
+ * It takes a queryable rather than reaching for the module-level pool so a caller that ALREADY holds a
+ * transaction client can evaluate the policy on that client. Borrowing a second connection while
+ * holding one deadlocks the pool under concurrent load, and the signup policy is consulted precisely
+ * on the path that is inside a transaction.
+ */
+type SignupPolicyQueryable = Pool | PoolClient
 
 export type SignupPolicy = {
   mode: SignupMode
@@ -19,12 +30,12 @@ function normalizeSignupMode(value: string | undefined): SignupMode {
   }
 }
 
-async function hasExistingUsers() {
-  const result = await pool.query('select 1 from "user" limit 1')
+async function hasExistingUsers(queryable: SignupPolicyQueryable = pool) {
+  const result = await queryable.query('select 1 from "user" limit 1')
   return (result.rowCount ?? 0) > 0
 }
 
-export async function getSignupPolicy(): Promise<SignupPolicy> {
+export async function getSignupPolicy(queryable: SignupPolicyQueryable = pool): Promise<SignupPolicy> {
   const mode = normalizeSignupMode(process.env.AUTH_SIGNUP_MODE)
 
   if (mode === "open") {
@@ -49,7 +60,7 @@ export async function getSignupPolicy(): Promise<SignupPolicy> {
   }
 
   try {
-    const usersExist = await hasExistingUsers()
+    const usersExist = await hasExistingUsers(queryable)
     return usersExist
       ? {
           mode,

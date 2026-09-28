@@ -97,9 +97,12 @@ function setupGateRefusal(operation: ReturnType<typeof classifyPrimaryCredential
  * The policy is asked rather than re-implemented, so the two cannot drift. Only `provisioning` is
  * consulted: replacing an existing credential is not a signup.
  */
-async function signupPolicyRefusal(operation: ReturnType<typeof classifyPrimaryCredentialOperation>) {
+async function signupPolicyRefusal(
+  operation: ReturnType<typeof classifyPrimaryCredentialOperation>,
+  queryable?: Pool | PoolClient,
+) {
   if (operation !== "provisioning") return null
-  const policy = await getSignupPolicy()
+  const policy = await getSignupPolicy(queryable)
   if (policy.open) return null
   return {
     status: 403 as const,
@@ -371,7 +374,9 @@ export async function POST(req: Request) {
         }
         // The preflight skipped the signup policy when it classified this request as recovery; the
         // class can change here, and a provisioning run is a signup whatever the preflight said.
-        const policyRefusal = await signupPolicyRefusal(operation)
+        // Evaluated on the TRANSACTION client: borrowing a second connection while holding this one
+        // deadlocks the pool under concurrent provisioning.
+        const policyRefusal = await signupPolicyRefusal(operation, client)
         if (policyRefusal) {
           return { ok: false as const, ...policyRefusal }
         }
