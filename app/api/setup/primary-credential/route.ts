@@ -9,12 +9,17 @@ import {
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
-import { localSetupEnabled } from "@/lib/setup/local-setup-enabled"
+import { isLoopbackHost as isLoopbackHostname, primaryRecoveryEnabled } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
 
+/**
+ * The request URL is loopback when its HOST is. The host predicate lives in
+ * `@/lib/setup/local-setup-enabled` so the three setup routes cannot disagree about which hosts
+ * count as "this machine"; this wrapper only adapts a `URL` to it.
+ */
 function isLoopbackHost(url: URL) {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+  return isLoopbackHostname(url.hostname)
 }
 
 function isSameOriginLoopback(value: string | null, expectedOrigin: string) {
@@ -130,9 +135,15 @@ async function recoverPrimary(
 }
 
 export async function POST(req: Request) {
-  if (!localSetupEnabled()) {
+  if (!primaryRecoveryEnabled()) {
     return NextResponse.json(
-      { ok: false, message: "Primary credential setup is disabled in this environment." },
+      {
+        ok: false,
+        message:
+          "Primary credential recovery is not armed in this environment. Recovery is a deliberate, "
+          + "process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never persists; it "
+          + "cannot be enabled by LOCAL_SETUP_ENABLED.",
+      },
       { status: 403 },
     )
   }

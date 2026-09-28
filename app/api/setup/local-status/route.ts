@@ -6,12 +6,12 @@ import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-rep
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { getProcessStartedAt, getRuntimeInstanceId } from "@/lib/runtime-instance"
 import { getSession } from "@/lib/session"
-import { localSetupEnabled } from "@/lib/setup/local-setup-enabled"
+import { isLoopbackHost as isLoopbackHostname, localSetupEnabled } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
 
 function isLoopbackHost(url: URL) {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+  return isLoopbackHostname(url.hostname)
 }
 
 export async function GET(req: Request) {

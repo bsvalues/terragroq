@@ -25,6 +25,9 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env = { ...originalEnv }
     process.env.NODE_ENV = "development"
     delete process.env.LOCAL_SETUP_ENABLED
+    // Recovery is a separate, process-only opt-in. These contract tests exercise a deliberate
+    // recovery run, so the flag is armed here; the case where it is NOT armed is asserted below.
+    process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
 
     hashPasswordMock.mockResolvedValue("hashed-primary-password")
     connectMock.mockResolvedValue({
@@ -116,5 +119,50 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(queryMock).toHaveBeenCalledWith("begin")
     expect(queryMock).toHaveBeenCalledWith("commit")
     expect(releaseMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses recovery when only the persisted setup flag is set", async () => {
+    // The regression this separation exists for: `local-config` writes LOCAL_SETUP_ENABLED="true"
+    // into .env.local during full setup and the live launcher carries that file into production, so
+    // a deployment is routinely running with that flag set. It must not arm this route.
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    process.env.LOCAL_SETUP_ENABLED = "true"
+
+    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: JSON.stringify(primaryPayload()),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.ok).toBe(false)
+    expect(body.message).toContain("WILLIAMOS_PRIMARY_RECOVERY")
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses recovery when nothing is set at all", async () => {
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.LOCAL_SETUP_ENABLED
+
+    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: JSON.stringify(primaryPayload()),
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(403)
+    expect(connectMock).not.toHaveBeenCalled()
   })
 })

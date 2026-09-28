@@ -1,5 +1,6 @@
 /**
- * The local-setup gate, and the drift that made two surfaces unreachable.
+ * The local-setup gate, the drift that made two surfaces unreachable, and the boundary that keeps
+ * recovery from being armed by side effect.
  *
  * `/api/setup/local-config`, `/api/setup/local-status` and `/api/setup/primary-credential` each
  * carried their own copy of this predicate. Two copies omitted the explicit-enable branch, so in a
@@ -8,13 +9,27 @@
  * alone honoured the setting, which is why the defect was invisible: the one route anyone would test
  * by hand was the one that worked.
  *
- * The coupling assertions below are the point. A semantics test alone passes again the moment
- * someone re-inlines the predicate in one route.
+ * The fix for that must not open the password-reset route. `local-config` PERSISTS
+ * `LOCAL_SETUP_ENABLED="true"` into `.env.local` during a normal full setup, and the live launcher
+ * carries that file into the production process -- so any route gated on `localSetupEnabled()` is
+ * enabled by the setup flow itself after the first bootstrap, with no further operator action. For
+ * the read-only/setup surfaces that is acceptable; for an unauthenticated credential-reset route
+ * that rewrites the Primary password and deletes every session, it is a security regression. Hence
+ * the separate, process-only, never-persisted recovery flag, and the assertions below that pin the
+ * separation.
+ *
+ * The coupling assertions are the point. A semantics test alone passes again the moment someone
+ * re-inlines the predicate in one route.
  */
 import { describe, expect, it } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
-import { localSetupEnabled } from "@/lib/setup/local-setup-enabled"
+import {
+  PRIMARY_RECOVERY_ENV_VAR,
+  isLoopbackHost,
+  localSetupEnabled,
+  primaryRecoveryEnabled,
+} from "@/lib/setup/local-setup-enabled"
 
 const ROOT = process.cwd()
 const ROUTES = [
@@ -22,6 +37,14 @@ const ROUTES = [
   "app/api/setup/local-status/route.ts",
   "app/api/setup/primary-credential/route.ts",
 ]
+const SETUP_SURFACES = [
+  "app/api/setup/local-config/route.ts",
+  "app/api/setup/local-status/route.ts",
+]
+const RECOVERY_SURFACE = "app/api/setup/primary-credential/route.ts"
+const SHARED_MODULE = "@/lib/setup/local-setup-enabled"
+
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8")
 
 describe("localSetupEnabled semantics", () => {
   it("an explicit opt-out wins in every environment", () => {
@@ -50,12 +73,62 @@ describe("localSetupEnabled semantics", () => {
   })
 })
 
+describe("primaryRecoveryEnabled is a separate decision", () => {
+  it("is armed only by its own literal flag", () => {
+    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "true", NODE_ENV: "production" })).toBe(true)
+    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "true" })).toBe(true)
+    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "false", NODE_ENV: "production" })).toBe(false)
+    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "1" })).toBe(false)
+    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "yes" })).toBe(false)
+  })
+
+  it("is refused when nothing is set, in EVERY environment", () => {
+    // No default-on: unlike localSetupEnabled there is no development carve-out. An unset value
+    // must never mean "armed", because the value this route could otherwise inherit is one the
+    // setup flow writes by itself.
+    expect(primaryRecoveryEnabled({})).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "production" })).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "development" })).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "test" })).toBe(false)
+  })
+
+  it("the persisted setup flag must NOT arm recovery", () => {
+    // The regression this whole separation exists for. `local-config` writes
+    // LOCAL_SETUP_ENABLED="true" into .env.local during full setup, and the launcher carries that
+    // file into the production process; if recovery were gated on that value, a bootstrapped
+    // production deployment would accept an unauthenticated Primary-credential reset from any local
+    // process that can reach the loopback listener with a same-origin Origin header.
+    for (const env of [
+      { LOCAL_SETUP_ENABLED: "true" },
+      { LOCAL_SETUP_ENABLED: "true", NODE_ENV: "production" },
+      { LOCAL_SETUP_ENABLED: "true", NODE_ENV: "development" },
+      { LOCAL_SETUP_ENABLED: "1", NODE_ENV: "development" },
+    ]) {
+      expect(primaryRecoveryEnabled(env), `LOCAL_SETUP_ENABLED must not arm recovery: ${JSON.stringify(env)}`).toBe(false)
+    }
+  })
+
+  it("names its own variable, distinct from the persisted one", () => {
+    expect(PRIMARY_RECOVERY_ENV_VAR).toBe("WILLIAMOS_PRIMARY_RECOVERY")
+    expect(PRIMARY_RECOVERY_ENV_VAR).not.toBe("LOCAL_SETUP_ENABLED")
+  })
+})
+
+describe("isLoopbackHost is the one host predicate", () => {
+  it("accepts exactly the loopback hosts the routes used to inline", () => {
+    for (const host of ["localhost", "127.0.0.1", "::1"]) expect(isLoopbackHost(host)).toBe(true)
+    for (const host of ["192.168.88.9", "williamos.lan", "hermes.local", "127.0.0.2", "", "example.com"]) {
+      expect(isLoopbackHost(host)).toBe(false)
+    }
+  })
+})
+
 describe("every setup route shares the one declaration", () => {
-  for (const rel of ROUTES) {
+  for (const rel of SETUP_SURFACES) {
     it(`${rel} imports the shared predicate and defines no local copy`, () => {
-      const src = fs.readFileSync(path.join(ROOT, rel), "utf8")
+      const src = read(rel)
       expect(src, `${rel} must import the shared predicate`).toMatch(
-        /import\s*\{\s*localSetupEnabled\s*\}\s*from\s*"@\/lib\/setup\/local-setup-enabled"/,
+        /import\s*\{[^}]*localSetupEnabled[^}]*\}\s*from\s*"@\/lib\/setup\/local-setup-enabled"/,
       )
       // A re-inlined copy is how this drifted. Assert the local definition is gone.
       expect(src, `${rel} must not define its own localSetupEnabled`).not.toMatch(
@@ -67,4 +140,47 @@ describe("every setup route shares the one declaration", () => {
       )
     })
   }
+
+  it(`${RECOVERY_SURFACE} gates on recovery, never on the persisted setup flag`, () => {
+    const src = read(RECOVERY_SURFACE)
+    expect(src, "recovery must import its own predicate").toMatch(
+      /import\s*\{[^}]*primaryRecoveryEnabled[^}]*\}\s*from\s*"@\/lib\/setup\/local-setup-enabled"/,
+    )
+    expect(src, "the recovery route must call primaryRecoveryEnabled()").toMatch(/primaryRecoveryEnabled\(\)/)
+    // The precise regression: this route must not be gated on the flag setup persists.
+    expect(src, "the recovery route must NOT gate on localSetupEnabled").not.toMatch(
+      /if\s*\(\s*!\s*localSetupEnabled\(\)\s*\)/,
+    )
+    expect(src, "the recovery route must not re-inline the enable predicate").not.toMatch(
+      /function\s+localSetupEnabled\s*\(/,
+    )
+  })
+
+  it("all three routes share the loopback host predicate", () => {
+    for (const rel of ROUTES) {
+      const src = read(rel)
+      expect(src, `${rel} must import the shared isLoopbackHost`).toMatch(
+        /import\s*\{[^}]*isLoopbackHost[^}]*\}\s*from\s*"@\/lib\/setup\/local-setup-enabled"/,
+      )
+      // The duplicated per-route host comparison is what the shared declaration replaces.
+      expect(src, `${rel} must not re-inline the loopback host list`).not.toMatch(
+        /hostname\s*===\s*"localhost"\s*\|\|\s*url\.hostname\s*===\s*"127\.0\.0\.1"/,
+      )
+    }
+  })
+
+  it("no setup route persists the recovery variable", () => {
+    // Nothing a normal setup flow writes may arm recovery, so the recovery variable must not appear
+    // as a written key anywhere in the setup surfaces.
+    for (const rel of ROUTES) {
+      const src = read(rel)
+      expect(src, `${rel} must not write the recovery variable`).not.toMatch(
+        /\["WILLIAMOS_PRIMARY_RECOVERY"/,
+      )
+      expect(src, `${rel} must not reference the recovery variable as a persisted key`).not.toMatch(
+        /envLine\(\s*"WILLIAMOS_PRIMARY_RECOVERY"/,
+      )
+    }
+    expect(read("lib/setup/local-setup-enabled.ts")).toMatch(/WILLIAMOS_PRIMARY_RECOVERY/)
+  })
 })
