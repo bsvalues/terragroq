@@ -215,7 +215,20 @@ export async function POST(req: Request) {
       { status: 503 },
     )
   }
-  if (declaredOperation !== "blocked_identity_missing") {
+  if (declaredOperation === "blocked_identity_missing") {
+    // Decided here, not inside the transaction: this refusal is the same whether or not the work
+    // runs, so it must not borrow a pooled client or hash a password to discover it.
+    return NextResponse.json(
+      {
+        ok: false,
+        operation: declaredOperation,
+        message:
+          "Primary identity is not declared in the local auth records. Resolve identity before credential recovery.",
+      },
+      { status: 409 },
+    )
+  }
+  {
     const refusal = setupGateRefusal(declaredOperation)
     if (refusal) return NextResponse.json({ ok: false, ...refusal }, { status: refusal.status })
   }

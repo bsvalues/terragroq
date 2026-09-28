@@ -128,9 +128,9 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(body.ok).toBe(false)
     expect(body.operation).toBe("blocked_identity_missing")
     expect(body.message).toContain("Primary identity is not declared")
-    expect(queryMock).toHaveBeenCalledWith("begin")
-    expect(queryMock).toHaveBeenCalledWith("commit")
-    expect(releaseMock).toHaveBeenCalledTimes(1)
+    // Refused from the preflight classification, so the expensive work is not reached.
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
   })
 
   it("refuses to RESET an existing Primary credential on the persisted setup flag alone", async () => {
