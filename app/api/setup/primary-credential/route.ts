@@ -335,10 +335,28 @@ export async function POST(req: Request) {
         }
       }
 
+      // The classification can move under us: a request preflighted as `provisioning` can find the
+      // account already created by a concurrent commit and therefore be a `recovery` by the time it
+      // gets here. Whichever operation it has BECOME is the one that must be authorized, so recovery
+      // takes its claim at the point of use rather than relying on the preflight. Without this an
+      // unarmed request could fall through into a credential replacement.
+      if (operation === "recovery" && !recoveryClaimed) {
+        if (!claimPrimaryRecovery()) {
+          return {
+            ok: false as const,
+            status: 403,
+            operation,
+            message:
+              "Primary credential recovery is not armed in this environment, or its one-shot capability "
+              + "has already been spent in this process.",
+          }
+        }
+        recoveryClaimed = true
+      }
+
       // Re-evaluated inside the transaction for PROVISIONING only: the pre-flight classification is a
-      // cheap read taken outside it, so the state could have moved. Recovery is deliberately not
-      // re-gated here -- it was authorized by the synchronous claim above, and re-checking the flag
-      // now would see the very claim this request just spent.
+      // cheap read taken outside it, so the state could have moved. Recovery is not re-gated here --
+      // it holds the claim taken above, and re-checking the flag would see the claim it just spent.
       if (operation === "provisioning") {
         const setupRefusal = setupGateRefusal(operation)
         if (setupRefusal) {

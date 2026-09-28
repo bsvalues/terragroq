@@ -25,6 +25,9 @@ describe("POST /api/setup/primary-credential route contract", () => {
     vi.clearAllMocks()
     process.env = { ...originalEnv }
     process.env.NODE_ENV = "development"
+    // The route consults the signup policy, and bootstrap mode refuses to be evaluated without a
+    // DSN, so every case here runs with one -- as a deployed runtime always does.
+    process.env.DATABASE_URL = "postgres://test@localhost:5432/williamos"
     delete process.env.LOCAL_SETUP_ENABLED
     // Recovery is a separate, process-only opt-in, bounded by a deadline the server rechecks. These
     // contract tests exercise a deliberate recovery run, so the window is open here; the cases where
@@ -311,6 +314,42 @@ describe("POST /api/setup/primary-credential route contract", () => {
 
     const second = await POST(credentialRequest())
     expect(second.status).toBe(403)
+  })
+
+  it("refuses a request that becomes a recovery mid-flight while unarmed", async () => {
+    // The TOCTOU the review named: two requests preflight while the table is empty, both authorized
+    // as provisioning. The first commits; the second's in-transaction classification now reads
+    // recovery. Since recovery was never armed or claimed for that request, it must be refused rather
+    // than allowed to replace the credential the first request just established.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
+
+    let recordStateReads = 0
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        recordStateReads += 1
+        // First read (preflight) sees an empty table; second read (inside the transaction) sees the
+        // account the concurrent request created.
+        return recordStateReads === 1
+          ? { rows: [{ auth_record_count: 0, declared_primary_count: 0 }], rowCount: 1 }
+          : { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+      }
+      if (/select id from "user" where lower\(email\)/i.test(sql)) {
+        return { rows: [{ id: "primary-user-id" }], rowCount: 1 }
+      }
+      if (/insert into "user"/i.test(sql)) return { rows: [], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await POST(credentialRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.operation).toBe("recovery")
+    expect(recordStateReads).toBe(2)
   })
 
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
