@@ -174,6 +174,23 @@ export async function POST(req: Request) {
     )
   }
 
+  // If neither capability is available, refuse before parsing the body or touching the database.
+  //
+  // Placed here, immediately after the local-request check, for two reasons: a request that can only
+  // return 403 must not buffer and parse an unbounded JSON body first, and it must not check out a
+  // pooled connection to answer a question this surface is already refusing -- nor disclose through
+  // a 409 whether auth records exist.
+  if (!localSetupEnabled() && !primaryRecoveryEnabled()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Primary credential setup and recovery are both disabled in this environment. Contact your platform administrator.",
+      },
+      { status: 403 },
+    )
+  }
+
   let payload: PrimaryCredentialPayload
   try {
     payload = (await req.json()) as PrimaryCredentialPayload
@@ -200,21 +217,6 @@ export async function POST(req: Request) {
         message: error instanceof Error ? error.message : "Invalid Primary credential payload.",
       },
       { status: 400 },
-    )
-  }
-
-  // If neither capability is available, refuse before touching the database. A pooled query here
-  // would check out a connection to answer a question this surface is already refusing, and its
-  // result would disclose whether auth records exist -- which is not something an unauthenticated
-  // loopback caller should be able to read while every credential operation is disabled.
-  if (!localSetupEnabled() && !primaryRecoveryEnabled()) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message:
-          "Primary credential setup and recovery are both disabled in this environment. Contact your platform administrator.",
-      },
-      { status: 403 },
     )
   }
 

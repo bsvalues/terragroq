@@ -200,6 +200,30 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(hashPasswordMock).not.toHaveBeenCalled()
   })
 
+  it("refuses the disabled state before the body is parsed", async () => {
+    // A request that can only return 403 must not buffer and parse an unbounded JSON body first, so
+    // the check has to precede req.json(). A body that is not even valid JSON proves the ordering:
+    // if parsing ran first this would be a 400.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "false"
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+
+    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: "{ this is not json",
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(403)
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since
