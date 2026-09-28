@@ -100,6 +100,65 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     expect(screen.queryByText("working…")).toBeNull()
   })
 
+  it("reuses a restored HERMES window when the same surface is summoned again", async () => {
+    const base = defaultSpace(1440, 900, "world-hermes", "TerraFusion OS Space")
+    const persisted = spaceToServer({
+      ...base,
+      inspectorWindows: {
+        "inspector-hermes": { x: 104, y: 72, width: 560, height: 480, z: 12, minimized: false },
+      },
+      inspectorSeeds: {
+        "inspector-hermes": { kind: "hermes", subject: "HERMES appliance" },
+      },
+      activeWindowId: "inspector-hermes",
+    })
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (url === "/api/environment/space" && method === "GET") {
+        return Response.json({
+          worldId: "world-hermes",
+          space: persisted,
+          project: { identity: "c:/tf-wt-rel-001", name: "TerraFusion OS" },
+        })
+      }
+      if (url === "/api/environment/space" && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { space: unknown }
+        return Response.json({ worldId: "world-hermes", space: body.space, updatedAt: "2026-09-02T00:00:00.000Z" })
+      }
+      if (url === "/api/environment/line" && method === "POST") {
+        return Response.json({
+          worldId: "world-hermes",
+          say: "HERMES is here.",
+          surfaces: [{ kind: "hermes", subject: "HERMES appliance" }],
+        })
+      }
+      if (url === "/api/environment/space/outcome" && method === "POST") {
+        return Response.json({ error: "NO_ACTIVE_OUTCOME" }, { status: 409 })
+      }
+      if (url === "/api/environment/judgment" && method === "POST") {
+        return Response.json({ error: "JUDGMENT_UNAVAILABLE" }, { status: 503 })
+      }
+      if (url === "/api/environment/hermes" && method === "GET") {
+        return Response.json({ error: "HERMES_STATUS_UNAVAILABLE" }, { status: 503 })
+      }
+      if (url.startsWith("/api/loom/files") && method === "GET") {
+        return Response.json({ kind: "directory", entries: [] })
+      }
+      throw new Error(`unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchStub)
+
+    render(<WorkspaceShell initialSummon="hermes" />)
+
+    await waitFor(() => {
+      expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/environment/line").length).toBeGreaterThanOrEqual(2)
+    })
+    await waitFor(() => {
+      expect(screen.getAllByRole("region", { name: "HERMES · Appliance window" })).toHaveLength(1)
+    })
+  })
+
   it("restores a project-bound browser Space when server persistence is unavailable", async () => {
     const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
     const browserStorageKey = "opaque-owner-project-key"
@@ -134,7 +193,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
           }),
         })
       }
-      if (url === "/api/loom/files?path=" && !init?.method) {
+      if (url === "/api/loom/files?path=&projectKey=williamos" && !init?.method) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) })
       }
       if (url.startsWith("/api/loom/files?path=") && !init?.method) {
@@ -193,9 +252,17 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
 describe("EditorSurface in-flight save reconciliation", () => {
   it("saves through the manual owner endpoint and keeps later typing dirty", async () => {
     const saveResponse = deferredResponse()
+    const fileRef = {
+      projectIdentity: "c:/repos/williamos",
+      repositoryResourceKey: "williamos",
+      repositoryMountKey: "williamos:williamos:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "src/real.ts",
+    }
     const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/loom/files?path=" && !init?.method) {
+      if (url === "/api/loom/files?path=&projectKey=williamos" && !init?.method) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) })
       }
       if (url.includes("src%2Freal.ts") && !init?.method) {
@@ -204,6 +271,12 @@ describe("EditorSurface in-flight save reconciliation", () => {
           status: 200,
           json: async () => ({
             kind: "file", path: "src/real.ts", content: "disk before\n", modifiedAt: "2026-08-25T10:00:00.000Z",
+            repository: {
+              key: "williamos",
+              identity: "bsvalues/terragroq",
+              mountKey: "williamos:williamos:configured",
+              observedRevision: "a".repeat(40),
+            },
           }),
         })
       }
@@ -221,7 +294,7 @@ describe("EditorSurface in-flight save reconciliation", () => {
       },
     }
 
-    render(<EditorSurface space={space} onEditorChange={() => undefined} />)
+    render(<EditorSurface project={{ identity: "c:/repos/williamos", name: "WilliamOS" }} projectKey="williamos" space={space} onEditorChange={() => undefined} />)
     const editor = await screen.findByLabelText("Source content")
     fireEvent.change(editor, { target: { value: "content actually submitted\n" } })
     fireEvent.click(screen.getByRole("button", { name: "Save src/real.ts" }))
@@ -238,6 +311,11 @@ describe("EditorSurface in-flight save reconciliation", () => {
     await waitFor(() => expect((screen.getByRole("button", { name: "Save src/real.ts" }) as HTMLButtonElement).disabled).toBe(false))
     expect(screen.getByLabelText("Unsaved")).toBeTruthy()
     const put = fetchStub.mock.calls.find(([input, init]) => String(input) === "/api/loom/files" && init?.method === "PUT")
-    expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ content: "content actually submitted\n" })
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+      content: "content actually submitted\n",
+      fileRef,
+      modifiedAt: "2026-08-25T10:00:00.000Z",
+      projectKey: "williamos",
+    })
   })
 })

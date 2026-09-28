@@ -10,7 +10,7 @@ const fsMocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: sessionMocks.getSession }))
-vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveTerraFusionWorkspaceBinding: bindingMocks.resolve }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveCanonicalWorkspaceProjectBinding: bindingMocks.resolve }))
 vi.mock("node:fs/promises", () => ({ default: fsMocks }))
 
 import { GET } from "@/app/api/loom/files/route"
@@ -65,9 +65,10 @@ describe("workspace file API sensitive-path boundary", () => {
       fileEntry("README.md"),
     ])
 
-    const response = await GET(new Request("http://localhost/api/loom/files?path="))
+    const response = await GET(new Request("http://localhost/api/loom/files?path=&projectKey=williamos"))
 
     expect(response.status).toBe(200)
+    expect(bindingMocks.resolve).toHaveBeenCalledWith("owner-a", "williamos")
     expect((await response.json()).entries.map((entry: { name: string }) => entry.name)).toEqual([
       ".env.example",
       "README.md",

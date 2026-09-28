@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -9,6 +9,34 @@ import { EMPTY_SPINE } from "@/lib/environment/working-world"
 const CLAUDE_REVIEW_ID = "123e4567-e89b-42d3-a456-426614174000"
 const LOCAL_ID = "223e4567-e89b-42d3-a456-426614174000"
 const SESSION_KEY = "williamos:agent-session:world-a:c%3A%2Frepos%2Fterrafusion"
+const OS1_REVISION = "a".repeat(40)
+const OS1_REPOSITORY = {
+  resourceKey: "os-1",
+  identity: "bsvalues/terrafusion_os_1.0",
+  mountKey: "terrafusion:os-1:configured",
+  observedRevision: OS1_REVISION,
+} as const
+
+function reviewerFileBinding(path: string) {
+  return {
+    repository: OS1_REPOSITORY,
+    fileRef: {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+      repositoryMountKey: OS1_REPOSITORY.mountKey,
+      worktreeKey: null,
+      observedRevision: OS1_REVISION,
+      path,
+    },
+  } as const
+}
+
+const OS1_SESSION_FRAME = {
+  repositoryResourceKey: OS1_REPOSITORY.resourceKey,
+  repositoryIdentity: OS1_REPOSITORY.identity,
+  repositoryMountKey: OS1_REPOSITORY.mountKey,
+  observedRevision: OS1_REPOSITORY.observedRevision,
+} as const
 
 vi.mock("next/dynamic", () => ({
   default: () => function Editor() { return <textarea aria-label="Source content" readOnly /> },
@@ -49,6 +77,71 @@ afterEach(() => {
 })
 
 describe("Experience V2 selected Space actions", () => {
+  it("does not let a delayed post-finalization refresh overwrite newer same-Space window state", async () => {
+    const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
+    const serverSpace = spaceToServer({ ...base, revision: 7, activeWindowId: "editor" })
+    const paths = ["components/workspace-shell/workspace-shell.tsx"]
+    const headSha = "a".repeat(40)
+    const adoptionHash = "b".repeat(64)
+    const previewDigest = "c".repeat(64)
+    const seal = {
+      payload: {
+        version: "williamos-delivery-seal.v2",
+        adoption: {
+          adoptionHash,
+          worldId: "world-a",
+          outcome: { id: 11, key: BOUND_SPINE.outcomeKey, version: 4 },
+          workOrder: { id: BOUND_SPINE.workOrderId, ref: "WO-1121", version: "2026-09-03T00:00:00.000Z" },
+          artifact: { pullRequest: 1145, headSha, paths },
+        },
+      },
+      signature: "signed",
+    }
+    let resolveRefresh!: (response: Response) => void
+    const refreshResponse = new Promise<Response>((resolve) => { resolveRefresh = resolve })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space?projectKey=williamos" && !init?.method) return Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: BOUND_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-09-03T12:00:00.000Z" })
+      }
+      if (url === "/api/governance/delivery-adoption" && init?.method === "POST") return Response.json({
+        status: "SEALED", worldId: "world-a", pullRequest: 1145, headSha, paths, previewDigest,
+        adoptionHash, seal, sealBlock: ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(seal, null, 2), "```"].join("\n"),
+      })
+      if (url === "/api/environment/space" && init?.method === "PATCH") return Response.json({
+        status: "FINALIZED", replayed: false, worldId: "world-a", outcomeKey: BOUND_SPINE.outcomeKey,
+        adoptionHash, workOrderId: BOUND_SPINE.workOrderId, pullRequest: 1145, headSha, mergeSha: "d".repeat(40), paths,
+      })
+      if (url === "/api/environment/space?worldId=world-a&projectKey=williamos") return refreshResponse
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+
+    render(<WorkspaceShell projectKey="williamos" />)
+    await waitFor(() => expect((screen.getByRole("button", { name: "Admit external work" }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole("button", { name: "Admit external work" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Finalize merged delivery" }))
+    await waitFor(() => expect(resolveRefresh).toBeTypeOf("function"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Source" }))
+    expect(screen.getByRole("button", { name: "Restore Source" })).toBeTruthy()
+    await act(async () => {
+      resolveRefresh(Response.json({
+        worldId: "world-a", name: "WilliamOS", space: serverSpace, spine: EMPTY_SPINE,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server",
+      }))
+      await refreshResponse
+    })
+
+    expect(screen.getByRole("button", { name: "Restore Source" })).toBeTruthy()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
   it("delegates a Space only as the exact already-authorized saved selected file", async () => {
     const sessionId = "codex-space-file-1"
     const base = defaultSpace(1440, 900, "world-a", "WilliamOS")
@@ -109,6 +202,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(agentRequests).toHaveLength(1))
     expect(agentRequests[0]).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       prompt: "Owner request: Implement the bounded fix.",
       sessionId: null,
       resume: false,
@@ -179,6 +273,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(agentBodies).toHaveLength(1))
     expect(agentBodies[0]).toEqual({
       worldId: "world-a", prompt: "Owner request: Implement this exact Space assignment.",
+      projectKey: "terrafusion",
       provider: "cloud", sessionId: null, resume: false,
     })
     expect(await within(line).findByText("Claude changed only the exact selected file.")).toBeTruthy()
@@ -209,7 +304,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(unavailable.title).toBe("Delegate needs one clean durably saved selected file in a server-bound active Work Order.")
+    expect(unavailable.title).toBe("Delegate needs one selected file, saved and unchanged, inside an active Work Order.")
     expect(screen.getByText(unavailable.title)).toBeTruthy()
     expect(requests.some((url) => url === "/api/loom/codex" || url === "/api/loom/agent")).toBe(false)
   })
@@ -250,7 +345,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Delegate unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(await screen.findByText("Delegate requires a current server-derived exact-path authority proof for Codex or Claude.")).toBeTruthy()
+    expect(await screen.findByText("Delegate needs current approval from the server for Codex or Claude to edit this file.")).toBeTruthy()
     expect(agentRequests).toEqual([])
   })
 
@@ -459,6 +554,7 @@ describe("Experience V2 selected Space actions", () => {
     expect((within(line).getByRole("button", { name: "Working" }) as HTMLButtonElement).disabled).toBe(true)
     expect(requests[0]).toEqual({
       worldId: "world-a",
+      projectKey: "terrafusion",
       text: "Summarize this exact current Space.",
       lineContext: "space-summary",
     })
@@ -474,7 +570,11 @@ describe("Experience V2 selected Space actions", () => {
     fireEvent.change(genericInput, { target: { value: "A separate ordinary question." } })
     fireEvent.click(within(genericLine).getByRole("button", { name: "Send" }))
     await waitFor(() => expect(requests).toHaveLength(2))
-    expect(requests[1]).toEqual({ worldId: "world-a", text: "A separate ordinary question." })
+    expect(requests[1]).toEqual({
+      worldId: "world-a",
+      projectKey: "terrafusion",
+      text: "A separate ordinary question.",
+    })
   })
 
   it("keeps a pending summary bound to its exact Space by refusing cross-Space re-entry", async () => {
@@ -538,7 +638,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(screen.getByText("No durable session exists in this Space; use Delegate.")).toBeTruthy()
+    expect(screen.getByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeTruthy()
     expect(requests).not.toContain("/api/environment/line")
   })
 
@@ -575,7 +675,7 @@ describe("Experience V2 selected Space actions", () => {
 
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     expect(unavailable.disabled).toBe(true)
-    expect(unavailable.title).toBe("This saved session is mutation-capable or not verifiably read-only, so Space Continue did not resume it.")
+    expect(unavailable.title).toBe("This saved session can edit files, so Continue (which is read-only) will not resume it.")
     expect(screen.getByText(unavailable.title)).toBeTruthy()
     expect(requests.some((request) => request.includes("/api/loom/codex") || request.includes("/api/loom/agent"))).toBe(false)
   })
@@ -609,12 +709,12 @@ describe("Experience V2 selected Space actions", () => {
   })
 
   it.each([
-    ["corrupt", "{not-json", "Saved durable sessions are corrupt, so Continue cannot verify an exact session."],
-    ["oversized", "x".repeat(262_145), "Saved durable sessions exceed the safe storage limit, so Continue cannot verify an exact session."],
+    ["corrupt", "{not-json", "The saved session records are unreadable, so Continue cannot verify one. Start fresh with Delegate."],
+    ["oversized", "x".repeat(262_145), "The saved session records are too large to read safely, so Continue cannot verify one. Start fresh with Delegate."],
     ["partial", JSON.stringify({ schemaVersion: 3, selectedSessionKey: null, sessions: [
       { schemaVersion: 1, sessionId: LOCAL_ID, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
       { schemaVersion: 1, sessionId: "codex-partial", role: "Builder", provider: "Codex", assignment: "Broken", target: { kind: "file", path: "./unsafe" }, updatedAt: "2026-08-30T05:19:00.000Z", completedTurns: [] },
-    ] }), "Saved durable-session collection integrity is partial, so Continue cannot verify an exact session."],
+    ] }), "Some saved session records are incomplete, so Continue cannot verify one. Start fresh with Delegate."],
   ] as const)("describes %s durable-session storage truthfully instead of claiming no session exists", async (_state, stored, message) => {
     window.localStorage.setItem(SESSION_KEY, stored)
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
@@ -633,7 +733,7 @@ describe("Experience V2 selected Space actions", () => {
     expect(unavailable.disabled).toBe(true)
     await waitFor(() => expect(unavailable.title).toBe(message))
     expect(await screen.findByText(message)).toBeTruthy()
-    expect(screen.queryByText("No durable session exists in this Space; use Delegate.")).toBeNull()
+    expect(screen.queryByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeNull()
   })
 
   it("describes unavailable durable-session storage truthfully instead of claiming no session exists", async () => {
@@ -661,11 +761,11 @@ describe("Experience V2 selected Space actions", () => {
     }))
     render(<WorkspaceShell />)
 
-    const message = "Durable-session storage is unavailable, so Continue cannot verify an exact session."
+    const message = "Session storage is not available, so Continue cannot verify a saved session."
     const unavailable = await screen.findByRole("button", { name: "Continue unavailable" }) as HTMLButtonElement
     await waitFor(() => expect(unavailable.title).toBe(message))
     expect(await screen.findByText(message)).toBeTruthy()
-    expect(screen.queryByText("No durable session exists in this Space; use Delegate.")).toBeNull()
+    expect(screen.queryByText("No saved session exists in this Space yet. Start one with Delegate.")).toBeNull()
   })
 
   it("continues the exact selected durable Reviewer instead of a newer session and appends its transcript", async () => {
@@ -676,6 +776,7 @@ describe("Experience V2 selected Space actions", () => {
     const selectedReviewer = {
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
       reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:10:00.000Z",
+      ...reviewerFileBinding("src/app.ts"),
       completedTurns: [{ ownerPrompt: "Review it.", finalResult: "Saved review", completedAt: "2026-08-30T05:10:00.000Z" }],
     }
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({
@@ -709,13 +810,15 @@ describe("Experience V2 selected Space actions", () => {
     expect(within(line).getByRole("button", { name: "Stop Space continuation" })).toBeTruthy()
     await waitFor(() => expect(requests).toHaveLength(1))
     expect(requests).toEqual([{ url: "/api/loom/agent", body: {
-      mode: "review", path: "src/app.ts",
+      mode: "review", projectKey: "terrafusion", path: "src/app.ts",
+      fileRef: reviewerFileBinding("src/app.ts").fileRef,
       focus: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "cloud", sessionId: CLAUDE_REVIEW_ID, resume: true,
+      repositoryKey: "os-1",
     } }])
 
     resolveContinuation(new Response(`${[
-      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true },
+      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: CLAUDE_REVIEW_ID, result: "Continued selected review." } },
       { type: "done", code: 0, reason: null },
     ].map((frame) => JSON.stringify(frame)).join("\n")}\n`))
@@ -737,7 +840,7 @@ describe("Experience V2 selected Space actions", () => {
   it("stops only the exact pre-acceptance Space continuation and ignores a late settlement", async () => {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [{
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }] }))
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
     let continuationSignal: AbortSignal | null = null
@@ -811,7 +914,7 @@ describe("Experience V2 selected Space actions", () => {
     }
     const reviewer = {
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({
       schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [local, reviewer],
@@ -836,7 +939,7 @@ describe("Experience V2 selected Space actions", () => {
     await waitFor(() => expect(resolveContinuation).toBeTypeOf("function"))
     fireEvent.click(screen.getByRole("button", { name: "Thinker · Local · Conversation" }))
     resolveContinuation(new Response(`${[
-      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true },
+      { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: CLAUDE_REVIEW_ID, result: "STALE REVIEW CONTINUATION" } },
       { type: "done", code: 0, reason: null },
     ].map((frame) => JSON.stringify(frame)).join("\n")}\n`))
@@ -852,8 +955,8 @@ describe("Experience V2 selected Space actions", () => {
     const first = "323e4567-e89b-42d3-a456-426614174000"
     const second = "423e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: null, sessions: [
-      { schemaVersion: 1, sessionId: second, role: "Reviewer", provider: "Claude", assignment: "Review second.ts", reviewPath: "second.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
-      { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review first.ts", reviewPath: "first.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
+      { schemaVersion: 1, sessionId: second, role: "Reviewer", provider: "Claude", assignment: "Review second.ts", reviewPath: "second.ts", ...reviewerFileBinding("second.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
+      { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review first.ts", reviewPath: "first.ts", ...reviewerFileBinding("first.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [] },
     ] }))
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -904,6 +1007,8 @@ describe("Experience V2 selected Space actions", () => {
     await screen.findByRole("button", { name: "Stop Local Thinker turn" })
     expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
     expect(agentRequests).toEqual([{
+      worldId: "world-a",
+      projectKey: "terrafusion",
       prompt: "Continue this exact saved session from its canonical transcript. Re-establish context and report the next bounded result without changing files, runtime state, target, or authority.",
       provider: "local",
       sessionId: LOCAL_ID,
@@ -923,7 +1028,7 @@ describe("Experience V2 selected Space actions", () => {
   it("reattaches to a pending Reviewer without invalidating its presentation owner and shows natural settlement", async () => {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${CLAUDE_REVIEW_ID}`, sessions: [{
       schemaVersion: 1, sessionId: CLAUDE_REVIEW_ID, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts",
-      reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
+      reviewPath: "src/app.ts", ...reviewerFileBinding("src/app.ts"), updatedAt: "2026-08-30T05:20:00.000Z", completedTurns: [],
     }] }))
     const encoder = new TextEncoder()
     let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -939,7 +1044,7 @@ describe("Experience V2 selected Space actions", () => {
         agentRequests.push(JSON.parse(String(init.body)))
         return new Response(new ReadableStream<Uint8Array>({ start(value) {
           controller = value
-          value.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true })}\n`))
+          value.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true, ...OS1_SESSION_FRAME })}\n`))
         } }))
       }
       if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })

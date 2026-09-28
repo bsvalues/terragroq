@@ -246,6 +246,8 @@ describe("William judgment Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(await screen.findByRole("button", { name: "Enter Beta" }))
     await waitFor(() => expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=world-b")).toBe(true))
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     await screen.findByRole("button", { name: "Enter Beta, current Space" })
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalizeJcs } from './canonical-json.mjs';
+import { mergePublishedRuntimes, registryRuntimePublications } from './adopt-model-runtime.mjs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback = null) {
@@ -11,6 +12,7 @@ function arg(name, fallback = null) {
 }
 
 const seedPath = arg('--seed', 'config/execution-fabric/registry.seed.json');
+const adoptionPath = arg('--adoption', 'config/execution-fabric/model-runtime-adoption.json');
 const schemaPath = arg('--schema', 'config/execution-fabric/registry.schema.json');
 const evidenceDir = arg('--evidence-dir', '.artifacts/execution-fabric');
 const outPath = arg('--out', '.artifacts/execution-fabric/registry.snapshot.json');
@@ -25,6 +27,9 @@ function readJson(filePath, label) {
   }
 }
 const seed = readJson(seedPath, 'seed');
+// The reviewed model-runtime adoption record: adopted runtimes and their bound model inventory are
+// part of the registry the placement engine reads, not merely recorded beside it.
+const adoption = readJson(adoptionPath, 'adoption');
 const schema = readJson(schemaPath, 'schema');
 // The registry declares the version of the schema that validates it, so it is READ from that schema
 // rather than restated here. A restated literal is how a bump lands emitting the old version: the
@@ -484,11 +489,22 @@ function readProbe(declared) {
     const expectedIdentity = declared.identity;
     const observedIdentity = x.node.identity;
     if (!expectedIdentity?.machine_id_sha256) throw new Error('trusted machine identity pin is missing');
+    // A node may legitimately probe under more than one hostname (an mDNS short name vs the full
+    // machine name). The reviewed identity contract owns those aliases, so resolve the observed
+    // hostname through it: accept the declared seed hostname OR any alias the contract assigns to
+    // THIS node. Comparison stays case-insensitive as before; machine-id and source remain exact
+    // pins. An alias claimed by another node, or by no node, never matches here.
+    const acceptedHostnames = new Set([String(expectedIdentity.hostname).trim().toLowerCase()]);
+    for (const [alias, claimNode] of hostnameClaims) {
+      if (claimNode === declared.id) acceptedHostnames.add(alias);
+    }
+    const probeHostname = String(x.node.hostname).trim().toLowerCase();
+    const identityHostname = String(observedIdentity?.hostname).trim().toLowerCase();
     if (
-      String(x.node.hostname).trim().toLowerCase() !== String(expectedIdentity.hostname).trim().toLowerCase() ||
+      !acceptedHostnames.has(probeHostname) ||
       observedIdentity?.machine_id_sha256 !== expectedIdentity.machine_id_sha256 ||
       observedIdentity?.source !== expectedIdentity.source ||
-      String(observedIdentity?.hostname).trim().toLowerCase() !== String(expectedIdentity.hostname).trim().toLowerCase()
+      !acceptedHostnames.has(identityHostname)
     ) {
       throw new Error('trusted machine identity mismatch');
     }
@@ -521,9 +537,18 @@ function declaredFallback(declared) {
   const evidenceWarning = probeWarnings.has(declared.id)
     ? `LIVE_PROBE_INVALID ${probeWarnings.get(declared.id)}`
     : 'LIVE_PROBE_MISSING';
+  const mergedWarnings = [...(declared.warnings || []), evidenceWarning];
   return {
     ...declared,
-    warnings: [...(declared.warnings || []), evidenceWarning],
+    // Even without a live probe, the adopted runtimes and their reviewed model inventory belong in
+    // the registry so the Fabric can see what was adopted — while the constraint below keeps the
+    // node unschedulable until a live probe actually reports it.
+    runtimes: mergePublishedRuntimes(
+      declared.runtimes || [],
+      registryRuntimePublications(adoption, declared.id),
+      mergedWarnings,
+    ),
+    warnings: [...new Set(mergedWarnings)],
     constraints: [...new Set([...(declared.constraints || []), 'not-schedulable-without-live-probe'])]
   };
 }
@@ -565,7 +590,11 @@ const probedNodes = seed.nodes.map((declared) => {
     gpus: probe.node.gpus || [],
     disks: probe.node.disks || [],
     network: probe.node.network || [],
-    runtimes: probe.node.runtimes || [],
+    runtimes: mergePublishedRuntimes(
+      probe.node.runtimes || [],
+      registryRuntimePublications(adoption, declared.id),
+      mergedWarnings,
+    ),
     constraints: [
       ...new Set([
         ...(declared.constraints || []),
@@ -652,7 +681,18 @@ function projectAegisCapabilityHealth(node) {
   };
 }
 
-const nodes = probedNodes.map(node => node.id === 'aegis' ? projectAegisCapabilityHealth(node) : node);
+function projectDaedalusCompute(node) {
+  const gate = nodeProbeGateReason(node);
+  const runtime = node.runtimes.find(runtime => runtime.kind === 'remote-resident-model' && ['healthy', 'running'].includes(runtime.state) && runtime.details?.models?.includes('Qwen/Qwen3-8B'));
+  const constrained = node.constraints?.some(value => value.startsWith('not-schedulable-'));
+  const ready = !gate && !constrained && Boolean(runtime);
+  const observed = node.evidence.observed_at;
+  const expires = new Date(Date.parse(observed) + dynamicTtl * 1000).toISOString();
+  return { ...node, capability_health: { ...node.capability_health,
+    compute: capabilityAxis(ready ? 'READY' : 'UNKNOWN', ready ? 'MODEL_WORKER_OBSERVED_READY' : gate ?? 'MODEL_RUNTIME_UNPROVEN', observed, expires, null, runtime?.details?.observation ?? null)
+  } };
+}
+const nodes = probedNodes.map(node => node.id === 'aegis' ? projectAegisCapabilityHealth(node) : node.id === 'daedalus' ? projectDaedalusCompute(node) : node);
 
 // Fail-closed semantic invariants.
 const errors = [];

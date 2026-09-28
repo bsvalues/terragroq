@@ -4,7 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LOOM_OPERATIONS, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import styles from "./experience-spatial.module.css"
 import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snapshot-history"
-import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type ToolRunTranscript } from "./tool-run-history"
+import {
+  loadToolRunHistory,
+  persistToolRunTranscript,
+  type DeveloperToolRepositoryIdentity,
+  type ToolOutputLine,
+  type ToolRunTranscript,
+} from "./tool-run-history"
 
 type DeveloperToolKind = "tests" | "diff" | "terminal"
 export type LiveDiffContext = Readonly<{ path: string; fingerprint: string }>
@@ -19,6 +25,7 @@ type ActiveRun = {
   lines: ToolOutputLine[]
   historyScope: string | null
   historyStorage: Pick<Storage, "getItem" | "setItem"> | null
+  repositoryContext: DeveloperToolRepositoryIdentity | undefined
 }
 
 function terminalAlias(id: string): string | null {
@@ -39,8 +46,28 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
+function repositoryIdentityMatches(
+  expected: DeveloperToolRepositoryIdentity,
+  received: Readonly<{
+    repositoryKey?: unknown
+    repositoryIdentity?: unknown
+    repositoryMountKey?: unknown
+    observedRevision?: unknown
+  }>,
+): boolean {
+  return received.repositoryKey === expected.repositoryKey
+    && received.repositoryIdentity === expected.repositoryIdentity
+    && received.repositoryMountKey === expected.repositoryMountKey
+    && received.observedRevision === expected.observedRevision
+}
+
+export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", repositoryKey = null, repositoryLabel = null, repositoryContext, worldId = null, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
+  projectKey?: "terrafusion" | "williamos"
+  repositoryKey?: string | null
+  repositoryLabel?: string | null
+  /** Undefined keeps isolated component harnesses compatible; null explicitly means the product has no verified checkout identity. */
+  repositoryContext?: DeveloperToolRepositoryIdentity | null
   worldId?: string | null
   selectedPath: string | null
   active?: boolean
@@ -52,6 +79,11 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
   onRunningChange?: (running: Readonly<{ kind: "tests" | "terminal"; operationId: string }> | null) => void
   onLiveDiffContextChange?: (context: LiveDiffContext | null) => void
 }) {
+  const repositoryContextKey = repositoryContext === undefined
+    ? "legacy"
+    : repositoryContext === null
+      ? "unavailable"
+      : `${repositoryContext.projectKey}\u0000${repositoryContext.repositoryKey}\u0000${repositoryContext.repositoryIdentity}\u0000${repositoryContext.repositoryMountKey}\u0000${repositoryContext.observedRevision}`
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
   const [diffSnapshot, setDiffSnapshot] = useState(false)
@@ -70,6 +102,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
   const runSequence = useRef(0)
   const historyScopeRef = useRef(historyScope)
   const historyStorageRef = useRef(historyStorage)
+  const repositoryContextRef = useRef(repositoryContext)
   const surfaceKindRef = useRef(kind)
   surfaceKindRef.current = kind
   const diffController = useRef<AbortController | null>(null)
@@ -90,6 +123,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
   }, [kind, running])
   useEffect(() => { historyScopeRef.current = historyScope }, [historyScope])
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
+  useEffect(() => { repositoryContextRef.current = repositoryContext }, [repositoryContext])
 
   const loadDiff = useCallback(async (path = selectedPath, preserveSavedSnapshot = false): Promise<"refreshed" | "failed" | "aborted"> => {
     const epoch = diffRequestEpoch.current + 1
@@ -104,14 +138,39 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     }
     liveDiffContextChanged.current?.(null)
     setError(null)
-    const query = path ? `?path=${encodeURIComponent(path)}` : ""
+    const params = new URLSearchParams()
+    if (path) params.set("path", path)
+    if (projectKey === "williamos") params.set("projectKey", "williamos")
+    if (repositoryKey) params.set("repositoryKey", repositoryKey)
+    const query = params.size > 0 ? `?${params.toString()}` : ""
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
+    const exactRepositoryContext = repositoryContextRef.current
     try {
+      if (exactRepositoryContext === null) throw new Error("REPOSITORY_CONTEXT_UNAVAILABLE")
+      if (exactRepositoryContext && (exactRepositoryContext.projectKey !== projectKey || exactRepositoryContext.repositoryKey !== repositoryKey)) {
+        throw new Error("DIFF_REPOSITORY_CONTEXT_MISMATCH")
+      }
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
-      const payload = await response.json() as { error?: string; path?: string; state?: string; fingerprint?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
+      const payload = await response.json() as {
+        error?: string
+        path?: string
+        state?: string
+        fingerprint?: string
+        diff?: string
+        status?: string
+        note?: string
+        untracked?: boolean
+        repository?: Readonly<{ key?: unknown; identity?: unknown; mountKey?: unknown; observedRevision?: unknown }>
+      }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
       if (diffRequestEpoch.current !== epoch || abort.signal.aborted) return "aborted"
+      if (exactRepositoryContext && !repositoryIdentityMatches(exactRepositoryContext, {
+        repositoryKey: payload.repository?.key,
+        repositoryIdentity: payload.repository?.identity,
+        repositoryMountKey: payload.repository?.mountKey,
+        observedRevision: payload.repository?.observedRevision,
+      })) throw new Error("DIFF_REPOSITORY_IDENTITY_MISMATCH")
       const nextDiff = payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? ""
       const nextStatus = payload.status ?? ""
       setDiff(nextDiff)
@@ -150,7 +209,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
-  }, [selectedPath])
+  }, [projectKey, repositoryContextKey, repositoryKey, selectedPath])
 
   useEffect(() => {
     if (kind !== "diff") return
@@ -227,7 +286,8 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
       const relevantHistory = historyForSurface(restored.runs, kind)
       setHistory(relevantHistory)
       setSelectedTranscriptId(relevantHistory.at(-1)?.id ?? null)
-      if (restored.error) setHistoryVerdict("Saved browser transcript history was corrupt and was not loaded.")
+      if (restored.error === "TOOL_RUN_HISTORY_UNSAFE") setHistoryVerdict("Saved browser transcript history contained unsafe output and was not loaded.")
+      else if (restored.error) setHistoryVerdict("Saved browser transcript history was corrupt and was not loaded.")
     } catch {
       setHistory([])
       setHistoryVerdict("Saved browser transcript history is unavailable.")
@@ -302,12 +362,22 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     setError(null)
     setCommandVerdict(null)
     setHistoryVerdict(null)
+    const exactRepositoryContext = repositoryContextRef.current
+    if (exactRepositoryContext === null) {
+      setError("REPOSITORY_CONTEXT_UNAVAILABLE")
+      return
+    }
+    if (exactRepositoryContext && (exactRepositoryContext.projectKey !== projectKey || exactRepositoryContext.repositoryKey !== repositoryKey)) {
+      setError("TOOL_RUN_REPOSITORY_CONTEXT_MISMATCH")
+      return
+    }
     const catalogued = LOOM_OPERATIONS.find((candidate) => candidate.id === operation)
     const startedAt = new Date().toISOString()
     const current: ActiveRun = {
       id: `${startedAt}:${++runSequence.current}`, kind, operationId: operation,
       operationLabel: catalogued?.label ?? operations.find((candidate) => candidate.id === operation)?.label ?? operation,
       alias, startedAt, lines: [], historyScope: historyScopeRef.current, historyStorage: historyStorageRef.current,
+      repositoryContext: exactRepositoryContext ?? undefined,
     }
     activeRun.current = current
     setRunning(operation)
@@ -317,14 +387,23 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
     try {
       const response = await fetch("/api/loom/run", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand
-          ? { ...(worldId ? { worldId } : {}), operation, terminalCommand }
-          : { ...(worldId ? { worldId } : {}), operation }),
+          ? { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation, terminalCommand }
+          : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
-      if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
+      if (!response.ok) {
+        // The route refuses operations the selected repository cannot run, with a reason naming the
+        // cause. Showing only the status code would hide the one fact the operator can act on.
+        const refused = await response.json().catch(() => null) as { error?: unknown; detail?: unknown } | null
+        const detail = typeof refused?.detail === "string" ? refused.detail : null
+        const code = typeof refused?.error === "string" ? refused.error : null
+        throw new Error(detail ?? code ?? `RUN_${response.status}`)
+      }
+      if (!response.body) throw new Error(`RUN_${response.status}`)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let startedVerified = current.repositoryContext === undefined
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -333,9 +412,26 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
         buffer = complete.pop() ?? ""
         for (const entry of complete) {
           if (!entry.trim()) continue
-          let event: { type?: string; text?: string; code?: number | null; reason?: string | null }
+          let event: {
+            type?: string
+            text?: string
+            code?: number | null
+            reason?: string | null
+            operation?: unknown
+            repositoryKey?: unknown
+            repositoryIdentity?: unknown
+            repositoryMountKey?: unknown
+            observedRevision?: unknown
+          }
           try { event = JSON.parse(entry) } catch { continue }
-          if (event.type === "stdout" || event.type === "stderr") {
+          if (event.type === "started") {
+            if (event.operation !== operation || (current.repositoryContext && !repositoryIdentityMatches(current.repositoryContext, event))) {
+              throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_MISMATCH")
+            }
+            startedVerified = true
+          } else if (!startedVerified) {
+            throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED")
+          } else if (event.type === "stdout" || event.type === "stderr") {
             current.lines.push({ channel: event.type, text: event.text ?? "" })
             if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines([...current.lines])
           } else if (event.type === "exit") {
@@ -351,6 +447,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
           }
         }
       }
+      if (!startedVerified) throw new Error("TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED")
       if (!receivedExit && activeRun.current?.id === current.id) {
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
@@ -361,16 +458,37 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
       if ((caught as Error)?.name !== "AbortError" && activeRun.current?.id === current.id) {
         const present = presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)
         if (present) setError(caught instanceof Error ? caught.message : "RUN_UNAVAILABLE")
-        const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
+        if ((caught as Error)?.message === "TOOL_RUN_REPOSITORY_IDENTITY_MISMATCH"
+          || (caught as Error)?.message === "TOOL_RUN_REPOSITORY_IDENTITY_UNVERIFIED") {
+          activeRun.current = null
+          setRunning(null)
+          current.lines = []
+          if (present) setLines([])
+          controller.current?.abort()
+          return
+        }
+        // A refusal is an explainable outcome, not an interruption. Persisting only "INTERRUPTED" made
+        // the actionable reason disappear as soon as the transcript was selected or restored, because
+        // the header prefers the saved transcript's truth over the transient error. The reason the route
+        // gave is what the operator can act on, so it belongs in the saved lines AND in the durable
+        // outcome: the persisted status stays "interrupted" (the stored schema's vocabulary) while the
+        // reason carries the real refusal text, which is what the header renders for that transcript.
+        const reason = caught instanceof Error ? caught.message : "RUN_UNAVAILABLE"
+        // The persisted outcome schema bounds `reason` to 200 characters, and a preflight detail that
+        // embeds the checkout path routinely exceeds that. Oversize text makes the transcript fail
+        // validation and be dropped entirely -- losing the very explanation this path exists to keep.
+        // The saved line keeps the full text (its bound is far larger); only the outcome reason is cut.
+        const persistedReason = reason.length <= 200 ? reason : `${reason.slice(0, 197)}...`
+        const next = [...current.lines, { channel: "meta", text: reason } satisfies ToolOutputLine]
         current.lines = next
         if (present) setLines(next)
-        settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
+        settleRun(current, { status: "interrupted", code: null, reason: persistedReason }, next)
       }
     } finally {
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
       if (controller.current === abort) controller.current = null
     }
-  }, [kind, operations, settleRun, stop])
+  }, [kind, operations, projectKey, repositoryKey, settleRun, stop, worldId])
 
   const executeCommand = useCallback(() => {
     const operation = resolveProjectTerminalCommand(command)
@@ -394,7 +512,9 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
   const visibleLines = selectedTranscript?.lines ?? lines
   const transcriptTruth = selectedTranscript?.outcome.status === "completed" ? "Saved browser transcript · not live evidence"
     : selectedTranscript?.outcome.status === "cancelled" ? "Cancelled · not completed or live evidence"
-      : selectedTranscript ? "Interrupted · not completed or live evidence" : null
+    : selectedTranscript?.outcome.reason && selectedTranscript.outcome.reason !== "INTERRUPTED"
+      ? selectedTranscript.outcome.reason
+    : selectedTranscript ? "Interrupted · not completed or live evidence" : null
   const title = kind === "tests" ? "Focused validation" : kind === "diff" ? "Current change" : "Project terminal"
   const surfaceRunning = activeRun.current?.kind === kind ? running : null
 
@@ -404,7 +524,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
       <div className={styles.utilityBody}>
         {kind === "diff" ? <>
           <div className={styles.utilityControls}>
-            <span className={styles.muted}>{selectedPath ? `HEAD · ${selectedPath}` : "HEAD · working tree"}</span>
+            <span className={styles.muted}>{repositoryLabel ? `${repositoryLabel} · ` : ""}{selectedPath ? `HEAD · ${selectedPath}` : "HEAD · working tree"}</span>
             <button type="button" className={styles.utilityButton} onClick={refreshDiff}>Refresh</button>
           </div>
           {status ? <pre className={styles.utilityOutput}>{status}</pre> : null}
@@ -427,7 +547,7 @@ export function DeveloperToolsSurface({ kind, worldId = null, selectedPath, acti
             Read-only project shell · git status, diff, and log accept common inspection flags. Build and test remain bounded actions.
           </p> : null}
           <div className={styles.utilityControls}>
-            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
+            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>Run repository tests</button>
               : operations.map((operation) => <button key={operation.id} type="button" aria-label={operation.label} className={styles.utilityButton}
                 disabled={surfaceRunning !== null} title={operation.intent} onClick={() => { const alias = terminalAlias(operation.id); if (alias) { setCommand(alias); void run(operation.id, alias) } }}>{operation.label}</button>)}
             {surfaceRunning ? <button type="button" className={styles.utilityStop} onClick={stop}>Stop</button> : null}

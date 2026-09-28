@@ -20,6 +20,15 @@ const CONFIRMATION = "ADMIT_EXTERNAL_WORK_ORDER" as const
 type AdmissionStep = "capture" | "review" | "complete"
 type ArtifactRestoreState = "idle" | "checking" | "none" | "artifact"
 type ExternalSource = "github" | "other"
+type ContractReservation = Readonly<{
+  contractIdentity: string
+  revisionIdentity: string
+  role: "producer" | "consumer"
+}>
+type EnvironmentReservation = Readonly<{
+  environmentIdentity: string
+  access: "exclusive" | "shared-read"
+}>
 
 type AdmissionResult = Readonly<{
   status: "ADMITTED" | "ALREADY_ADMITTED"
@@ -43,6 +52,8 @@ type ExternalWorkOrderPacket = Readonly<{
   authorityEvidence: readonly string[]
   reservedPaths: readonly string[]
   forbiddenPaths?: readonly string[]
+  contractReservations: readonly ContractReservation[]
+  environmentReservations: readonly EnvironmentReservation[]
   validators?: readonly string[]
   acceptanceCriteria?: readonly string[]
   pullRequest?: Readonly<{ number: number; headSha: string }>
@@ -79,6 +90,31 @@ function lines(value: string): string[] {
   return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))]
 }
 
+const RESERVATION_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/
+
+function contractReservationLines(value: string): ContractReservation[] | null {
+  const entries = lines(value)
+  const parsed = entries.map((entry) => {
+    const [contractIdentity, revisionIdentity, role, ...extra] = entry.split("|").map((part) => part.trim())
+    if (extra.length || !RESERVATION_IDENTITY.test(contractIdentity ?? "")
+      || !RESERVATION_IDENTITY.test(revisionIdentity ?? "")
+      || (role !== "producer" && role !== "consumer")) return null
+    return { contractIdentity, revisionIdentity, role }
+  })
+  return parsed.every((entry): entry is ContractReservation => entry !== null) ? parsed : null
+}
+
+function environmentReservationLines(value: string): EnvironmentReservation[] | null {
+  const entries = lines(value)
+  const parsed = entries.map((entry) => {
+    const [environmentIdentity, access, ...extra] = entry.split("|").map((part) => part.trim())
+    if (extra.length || !RESERVATION_IDENTITY.test(environmentIdentity ?? "")
+      || (access !== "exclusive" && access !== "shared-read")) return null
+    return { environmentIdentity, access }
+  })
+  return parsed.every((entry): entry is EnvironmentReservation => entry !== null) ? parsed : null
+}
+
 function compactDigest(value: string): string {
   return value.length > 20 ? `${value.slice(0, 10)}…${value.slice(-8)}` : value
 }
@@ -95,12 +131,27 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
 }
 
+function isContractReservationArray(value: unknown): value is ContractReservation[] {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry)
+    && typeof entry.contractIdentity === "string"
+    && typeof entry.revisionIdentity === "string"
+    && (entry.role === "producer" || entry.role === "consumer"))
+}
+
+function isEnvironmentReservationArray(value: unknown): value is EnvironmentReservation[] {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry)
+    && typeof entry.environmentIdentity === "string"
+    && (entry.access === "exclusive" || entry.access === "shared-read"))
+}
+
 function isExternalWorkOrderPacket(value: unknown): value is ExternalWorkOrderPacket {
   if (!isRecord(value)) return false
   if (value.source !== "github" && value.source !== "other") return false
   if (typeof value.externalRef !== "string" || typeof value.title !== "string"
     || typeof value.objective !== "string" || typeof value.repository !== "string"
-    || !isStringArray(value.authorityEvidence) || !isStringArray(value.reservedPaths)) return false
+    || !isStringArray(value.authorityEvidence) || !isStringArray(value.reservedPaths)
+    || !isContractReservationArray(value.contractReservations)
+    || !isEnvironmentReservationArray(value.environmentReservations)) return false
   if (value.forbiddenPaths !== undefined && !isStringArray(value.forbiddenPaths)) return false
   if (value.validators !== undefined && !isStringArray(value.validators)) return false
   if (value.acceptanceCriteria !== undefined && !isStringArray(value.acceptanceCriteria)) return false
@@ -139,12 +190,16 @@ export function ExternalWorkOrderAdmission({
   bound = false,
   className,
   onAdmitted,
+  onFinalized,
+  onFinalizationRefreshError,
 }: {
   worldId: string | null
   persisted: boolean
   bound?: boolean
   className?: string
   onAdmitted?: (result: AdmissionResult) => void | Promise<void>
+  onFinalized?: () => void | Promise<void>
+  onFinalizationRefreshError?: (message: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<AdmissionStep>("capture")
@@ -156,6 +211,8 @@ export function ExternalWorkOrderAdmission({
   const [authorityEvidence, setAuthorityEvidence] = useState("")
   const [reservedPaths, setReservedPaths] = useState("")
   const [forbiddenPaths, setForbiddenPaths] = useState("")
+  const [contractReservations, setContractReservations] = useState("")
+  const [environmentReservations, setEnvironmentReservations] = useState("")
   const [validators, setValidators] = useState("")
   const [acceptanceCriteria, setAcceptanceCriteria] = useState("")
   const [pullRequestNumber, setPullRequestNumber] = useState("")
@@ -172,6 +229,8 @@ export function ExternalWorkOrderAdmission({
     const pullRequest = pullRequestNumber.trim() || pullRequestHead.trim()
       ? { number: pullNumber, headSha: pullRequestHead.trim() }
       : undefined
+    const contracts = contractReservationLines(contractReservations)
+    const environments = environmentReservationLines(environmentReservations)
     return {
       source,
       externalRef: externalRef.trim(),
@@ -180,14 +239,22 @@ export function ExternalWorkOrderAdmission({
       repository: repository.trim(),
       authorityEvidence: lines(authorityEvidence),
       reservedPaths: lines(reservedPaths),
+      contractReservations: contracts ?? [],
+      environmentReservations: environments ?? [],
       validators: lines(validators),
       acceptanceCriteria: lines(acceptanceCriteria),
       ...(lines(forbiddenPaths).length ? { forbiddenPaths: lines(forbiddenPaths) } : {}),
       ...(pullRequest ? { pullRequest } : {}),
     }
-  }, [acceptanceCriteria, authorityEvidence, externalRef, forbiddenPaths, objective, pullRequestHead, pullRequestNumber, repository, reservedPaths, source, title, validators])
+  }, [acceptanceCriteria, authorityEvidence, contractReservations, environmentReservations, externalRef, forbiddenPaths, objective, pullRequestHead, pullRequestNumber, repository, reservedPaths, source, title, validators])
 
   const validationError = useMemo(() => {
+    if (contractReservationLines(contractReservations) === null) {
+      return "Each contract reservation must use: contract | revision | producer or consumer."
+    }
+    if (environmentReservationLines(environmentReservations) === null) {
+      return "Each environment reservation must use: environment | exclusive or shared-read."
+    }
     if (!externalWorkOrder.externalRef || !externalWorkOrder.title || !externalWorkOrder.objective
       || !externalWorkOrder.repository || externalWorkOrder.authorityEvidence.length === 0
       || externalWorkOrder.reservedPaths.length === 0 || externalWorkOrder.validators.length === 0
@@ -200,7 +267,7 @@ export function ExternalWorkOrderAdmission({
       return "A pull request binding needs a positive number and an exact lowercase 40-character head SHA."
     }
     return null
-  }, [externalWorkOrder])
+  }, [contractReservations, environmentReservations, externalWorkOrder])
 
   function reset() {
     setStep("capture")
@@ -216,6 +283,17 @@ export function ExternalWorkOrderAdmission({
     setOpen(next)
     if (next && worldId && persisted) setArtifactRestoreState(bound ? "artifact" : "checking")
     if (!next) reset()
+  }
+
+  async function handleDeliveryFinalized() {
+    handleOpen(false)
+    try {
+      await onFinalized?.()
+    } catch (cause) {
+      onFinalizationRefreshError?.(
+        cause instanceof Error ? cause.message : "SPACE_REFRESH_UNAVAILABLE",
+      )
+    }
   }
 
   const handleArtifactAvailability = useCallback((available: boolean) => {
@@ -324,7 +402,7 @@ export function ExternalWorkOrderAdmission({
 
         {step === "capture" && worldId && persisted && artifactRestoreState !== "none" ? (
           <div className="p-6">
-            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} />
+            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} onFinalized={handleDeliveryFinalized} />
           </div>
         ) : step === "capture" ? (
           <form onSubmit={(event) => void review(event)} className="grid gap-5 p-6">
@@ -351,6 +429,14 @@ export function ExternalWorkOrderAdmission({
               </label>
               <label className={labelClass}>Authority evidence <span className="font-normal normal-case tracking-normal text-[#6f7a6c]">one reference per line</span>
                 <textarea value={authorityEvidence} onChange={(event) => setAuthorityEvidence(event.target.value)} className={`${controlClass} min-h-20 resize-y font-mono normal-case tracking-normal`} placeholder="owner-decision:…" />
+              </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className={labelClass}>Contract reservations <span className="font-normal normal-case tracking-normal text-[#6f7a6c]">optional · contract | revision | role</span>
+                <textarea value={contractReservations} onChange={(event) => setContractReservations(event.target.value)} className={`${controlClass} min-h-20 resize-y font-mono normal-case tracking-normal`} placeholder="atlas-projection-v1 | 1.0.0 | producer" />
+              </label>
+              <label className={labelClass}>Environment reservations <span className="font-normal normal-case tracking-normal text-[#6f7a6c]">optional · environment | access</span>
+                <textarea value={environmentReservations} onChange={(event) => setEnvironmentReservations(event.target.value)} className={`${controlClass} min-h-20 resize-y font-mono normal-case tracking-normal`} placeholder="preview:terrafusion:3102 | exclusive" />
               </label>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -397,6 +483,8 @@ export function ExternalWorkOrderAdmission({
               <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Objective</dt><dd>{preview.externalWorkOrder.objective}</dd></div>
               <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Authority evidence</dt><dd className="font-mono">{preview.externalWorkOrder.authorityEvidence.join(" · ")}</dd></div>
               <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Reserved paths</dt><dd className="font-mono">{preview.externalWorkOrder.reservedPaths.join(" · ")}</dd></div>
+              <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Contracts</dt><dd className="font-mono">{preview.externalWorkOrder.contractReservations.length ? preview.externalWorkOrder.contractReservations.map((claim) => `${claim.contractIdentity}@${claim.revisionIdentity} ${claim.role}`).join(" · ") : "None declared"}</dd></div>
+              <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Environments</dt><dd className="font-mono">{preview.externalWorkOrder.environmentReservations.length ? preview.externalWorkOrder.environmentReservations.map((claim) => `${claim.environmentIdentity} ${claim.access}`).join(" · ") : "None declared"}</dd></div>
               {preview.externalWorkOrder.pullRequest ? <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Pull request</dt><dd className="font-mono">#{preview.externalWorkOrder.pullRequest.number} · {preview.externalWorkOrder.pullRequest.headSha}</dd></div> : null}
               <div className="grid gap-1 sm:grid-cols-[130px_1fr]"><dt className="text-[#778273]">Provenance digest</dt><dd className="break-all font-mono" data-testid="provenance-digest">{preview.provenanceDigest}</dd></div>
             </dl>
@@ -419,7 +507,7 @@ export function ExternalWorkOrderAdmission({
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Authority</dt><dd>{result.authority.level} · Codex</dd></div>
               <div className="flex justify-between gap-4"><dt className="text-[#778273]">Provenance</dt><dd title={result.provenanceDigest}>{compactDigest(result.provenanceDigest)}</dd></div>
             </dl>
-            <DeliveryAdoption worldId={result.worldId} />
+            <DeliveryAdoption worldId={result.worldId} onFinalized={handleDeliveryFinalized} />
             {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
             <div className="flex justify-end"><button type="button" onClick={() => handleOpen(false)} className="rounded border border-[#687b63] bg-[#1a2419] px-4 py-2 text-xs font-semibold text-[#e5eee1]">Continue in Space</button></div>
           </section>

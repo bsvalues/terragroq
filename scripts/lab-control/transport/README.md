@@ -15,8 +15,9 @@ presents its device certificate to HERMES's own TLS proxy and gets a session exa
 LAN. The overlay is not a trust boundary, not an authentication mechanism, and not a substitute for
 one.
 
-The relay is deliberately a **TCP** forward. TLS -- including the client certificate carrying OMEN's
-device identity -- is negotiated end to end between OMEN and `hermes-https-proxy`. Nothing in the path
+The retired relay was deliberately a **TCP** forward. The current route is a direct listener on the
+HERMES Tailscale address. In both designs, TLS -- including the client certificate carrying OMEN's
+device identity -- is negotiated end to end with `hermes-https-proxy`; no intermediate transport
 terminates, decrypts, or inspects it.
 
 > **Do not replace this with cloudflared or any TLS-terminating tunnel.** Terminating TLS at a
@@ -27,19 +28,20 @@ terminates, decrypts, or inspects it.
 
 | Script | Runs on | Purpose |
 |---|---|---|
-| `hermes-cockpit-relay.ps1` | HERMES, elevated | portproxy from the overlay address to the LAN bind, plus a narrowly scoped inbound rule |
+| `hermes-cockpit-relay.ps1` | HERMES, elevated | verify that the obsolete relay is absent and the exact direct listener/firewall own the endpoint; migration remains in the rollback-capturing deployer |
 | `omen-cockpit-route.ps1` | OMEN, elevated | resolve `williamos.lan` to the overlay address (`-Restore` reverts to the LAN) |
 | `verify-cockpit-transport.ps1` | OMEN | prove both paths authenticate **and** that an uncertificated request is still refused |
 
 All three are idempotent and verify their own result rather than trusting the command's exit code.
 
-## Why `hermes-cockpit-relay.ps1` exists instead of a one-line code change
+## Why relay retirement stays in the deployer
 
-`scripts/hermes-https-proxy.mjs` hardcodes `HERMES_HTTPS_HOST = "192.168.88.9"`, so the listener binds
-the LAN interface only and the overlay address cannot reach it. Editing that constant is a
-control-plane change owned by the HERMES lane while #871 is the active gate there, so reachability is
-solved outside the application. If that bind ever becomes configurable, this relay should be removed
-rather than kept as a second mechanism.
+The HERMES proxy now owns two explicit listeners: the LAN address and the Tailscale overlay address.
+The older portproxy used the same overlay endpoint and therefore collides with the direct listener.
+`deploy-hermes-runtime.ps1` removes only that exact historical mapping after capturing it for rollback.
+The standalone relay script now refuses to remove a surviving mapping; it verifies the direct proxy
+and narrowly scoped firewall only after migration. TLS and device-certificate handling remain in the
+repository-owned proxy.
 
 ## The control case is the assertion that matters
 
@@ -53,9 +55,9 @@ collapsing them either cries wolf or hides a breach.
 
 ## Operational notes
 
-- **Both `Tailscale` and `iphlpsvc` must be `Automatic` on HERMES.** portproxy is implemented by
-  `iphlpsvc`; if it is not automatic the relay silently disappears at the next reboot. The relay script
-  asserts this rather than assuming it.
+- **`Tailscale` must be `Automatic` on HERMES.** The proxy keeps the LAN listener alive and retries the
+  overlay bind when Tailscale is temporarily unavailable; the canonical route still fails deployment
+  verification until it is actually reachable.
 - **Node keys expire 2027-02-15.** Expiry is a silent break: the cockpit simply becomes unreachable,
   most likely while travelling. Re-authenticate before then or disable key expiry for these two nodes.
 - **Tradeoff, accepted deliberately:** because `williamos.lan` now resolves to the overlay, the cockpit

@@ -288,6 +288,83 @@ describe("Experience V2 Brain Council surface", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: new RegExp(session.question) })).toBeTruthy())
   })
 
+  it("dispatches Council with the exact repository-qualified selected file identity", async () => {
+    const worldId = "11111111-1111-4111-8111-111111111111"
+    const fileRef = {
+      projectIdentity: "c:/repos/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "src/App.tsx",
+    }
+    const base = defaultSpace(1440, 900, worldId, "TerraFusion")
+    const space = {
+      ...base,
+      activeWindowId: "editor" as const,
+      selectedPath: fileRef.path,
+      selectedFileRef: fileRef,
+      editor: {
+        ...base.editor,
+        openFiles: [fileRef.path],
+        openFileRefs: [fileRef],
+        panes: base.editor.panes.map((pane) => pane.id === "primary"
+          ? { ...pane, activePath: fileRef.path, activeFileRef: fileRef }
+          : pane),
+      },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId,
+        space: spaceToServer(space),
+        spine: EMPTY_SPINE,
+        project: {
+          identity: "c:/repos/terrafusion",
+          name: "TerraFusion",
+          repositories: [{
+            key: "atlas",
+            identity: "bsvalues/terrafusion-atlas",
+            label: "Atlas",
+            role: "suite-source",
+            suite: "atlas",
+            previewSource: false,
+            defaultRepository: false,
+            mount: {
+              key: fileRef.repositoryMountKey,
+              configured: true,
+              verified: true,
+              branch: "main",
+              revision: fileRef.observedRevision,
+              refusal: null,
+            },
+          }],
+        },
+        storage: "server",
+        browserStorageKey: null,
+      })
+      if (url === "/api/environment/space" && init?.method === "PUT") return Response.json({ saved: true })
+      if (url === "/api/environment/council" && init?.method === "POST") return Response.json({
+        session: { ...session, context: { spaceName: "TerraFusion", kind: "file", label: "atlas · src/App.tsx" } },
+      })
+      if (url === "/api/environment/judgment") return Response.json({ error: "unavailable" }, { status: 503 })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({})
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Council" }))
+    await screen.findByText(session.question)
+
+    const councilCall = fetcher.mock.calls.find(([url, init]) => String(url) === "/api/environment/council" && init?.method === "POST")
+    expect(JSON.parse(String(councilCall?.[1]?.body)).selectedContext).toEqual({
+      kind: "file",
+      label: "atlas · src/App.tsx",
+    })
+  })
+
   it.each([
     { role: "HERMES" as const, assignee: "hermes-codex-bridge", providerLabel: "Local execution" },
     { role: "Executor" as const, assignee: "builder-a", providerLabel: "builder-a · codex" },

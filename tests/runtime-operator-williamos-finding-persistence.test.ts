@@ -7,6 +7,14 @@ import { afterEach, describe, expect, it } from "vitest"
 import { createWilliamOSAdapters } from "../scripts/runtime-operator/williamos-adapters.mjs"
 import { deriveAndQueueFindings } from "../scripts/runtime-operator/operational-kernel.mjs"
 
+// A live grant, expressed RELATIVE TO NOW. This fixture previously pinned an absolute instant
+// (2026-09-20T13:00:00Z), so the suite passed until that moment and then failed permanently: the
+// adapter's active-grant check compares the expiry against the clock, and every test expecting a
+// specific authority wall instead received the generic DERIVED_AUTHORITY_WALL, because the
+// fixture's own grant read as expired. A relative instant cannot lapse.
+const LIVE_GRANT_EXPIRY = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+
+
 const roots: string[] = []
 const EMPTY_EFFECTS = {
   spendsMoney: false,
@@ -147,7 +155,7 @@ function databaseFor({
         allowedActions: ["implement"],
         blockedActions: ["host-storage-mutation"],
         status: "active",
-        expiresAt: new Date("2026-09-20T13:00:00Z"),
+        expiresAt: LIVE_GRANT_EXPIRY,
         revokedAt: null,
       }] }
       if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: findings.map((finding) => ({
@@ -254,7 +262,7 @@ function transactionalDatabase({
         grantRef: "GRANT-0018",
         grantStatus,
         grantRevokedAt: null,
-        grantExpiresAt: new Date("2026-09-20T13:00:00Z"),
+        grantExpiresAt: LIVE_GRANT_EXPIRY,
         grantAllowedActions: ["implement"],
         grantBlockedActions,
         grantScope,
@@ -494,7 +502,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       workOrderId: "WO-0031",
       grantRef: "GRANT-0018",
       grantStatus: "active",
-      grantExpiresAt: new Date("2026-09-20T13:00:00Z"),
+      grantExpiresAt: LIVE_GRANT_EXPIRY,
       forbiddenPaths: ["scripts/runtime-operator/blocked.mjs"],
       commitAllowed: true,
       tagAllowed: false,

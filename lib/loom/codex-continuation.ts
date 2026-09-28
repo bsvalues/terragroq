@@ -2,6 +2,7 @@ import {
   validateWorkingWorld,
   type WorkingWorldSnapshot,
 } from "@/lib/environment/working-world"
+import { canonicalWorkspaceObjectKey, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export type CodexContinuationInput = Readonly<{
   worldId: string
@@ -18,7 +19,7 @@ export type CodexContinuationInput = Readonly<{
 }>
 
 export type CodexContinuationPlan =
-  | Readonly<{ status: "NEXT_ASSIGNMENT"; selectedPath: string; task: string }>
+  | Readonly<{ status: "NEXT_ASSIGNMENT"; selectedPath: string; task: string; repositoryKey?: string }>
   | Readonly<{ status: "ASSIGNMENT_IN_FLIGHT"; selectedPath: string }>
   | Readonly<{ status: "PATH_RESERVATION_NOT_EXACT"; reservation: string }>
   | Readonly<{ status: "PATH_RESERVATION_UNAVAILABLE"; selectedPath: string }>
@@ -39,11 +40,23 @@ export type CodexContinuationRecord = Readonly<{
   allowedPaths: readonly string[]
   completedPaths: readonly string[]
   assignedPaths: readonly string[]
+  repository?: CodexContinuationRepositoryIdentity
+}>
+
+export type CodexContinuationRepositoryIdentity = Readonly<{
+  projectIdentity: string
+  repositoryResourceKey: string
+  repositoryIdentity: string
+  repositoryMountKey: string
+  observedRevision: string
 }>
 
 export type CodexContinuationDependencies = Readonly<{
   load: (userId: string, worldId: string) => Promise<CodexContinuationRecord | null>
-  inspectTarget: (selectedPath: string) => Promise<boolean>
+  inspectTarget: (
+    selectedPath: string,
+    repository: CodexContinuationRepositoryIdentity,
+  ) => Promise<boolean>
   persist: (input: Readonly<{
     userId: string
     worldId: string
@@ -63,6 +76,7 @@ export type CodexContinuationEvidenceEvent = Readonly<{
   committed?: boolean
   terminal?: boolean
   recordedAt?: string
+  repository?: Omit<CodexContinuationRepositoryIdentity, "projectIdentity">
 }>
 
 export const CODEX_CONTINUATION_ASSIGNMENT_LEASE_MS = 65 * 60_000
@@ -80,9 +94,34 @@ function eventMetadata(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function eventRepository(
+  facts: Record<string, unknown> | null,
+): Omit<CodexContinuationRepositoryIdentity, "projectIdentity"> | undefined {
+  const values = [
+    facts?.repositoryResourceKey,
+    facts?.repositoryIdentity,
+    facts?.repositoryMountKey,
+    facts?.observedRevision,
+  ]
+  if (values.every((value) => value === undefined || value === null)) return undefined
+  if (typeof facts?.repositoryResourceKey !== "string" || !facts.repositoryResourceKey
+    || typeof facts.repositoryIdentity !== "string" || !facts.repositoryIdentity
+    || typeof facts.repositoryMountKey !== "string" || !facts.repositoryMountKey
+    || typeof facts.observedRevision !== "string" || !/^[a-f0-9]{40,64}$/.test(facts.observedRevision)) {
+    throw new Error("CODEX_CONTINUATION_REPOSITORY_INVALID")
+  }
+  return {
+    repositoryResourceKey: facts.repositoryResourceKey,
+    repositoryIdentity: facts.repositoryIdentity,
+    repositoryMountKey: facts.repositoryMountKey,
+    observedRevision: facts.observedRevision,
+  }
+}
+
 /** Normalize the two canonical receipt shapes plus the existing terminal agent event. */
 export function codexContinuationEvidenceEvent(row: Readonly<Record<string, unknown>>): CodexContinuationEvidenceEvent {
   const facts = eventMetadata(row.metadata)
+  const repository = eventRepository(facts)
   const entityType = String(row.entityType) as CodexContinuationEvidenceEvent["entityType"]
   const selectedPath = entityType === "loom_codex_assignment"
     ? (typeof facts?.promotionPath === "string" ? facts.promotionPath : undefined)
@@ -95,6 +134,7 @@ export function codexContinuationEvidenceEvent(row: Readonly<Record<string, unkn
     terminal: row.eventType === "LOOP_STOPPED",
     recordedAt: row.createdAt instanceof Date ? row.createdAt.toISOString()
       : typeof row.createdAt === "string" ? row.createdAt : undefined,
+    ...(repository ? { repository } : {}),
   }
 }
 
@@ -105,13 +145,22 @@ export function deriveCodexPathEvidence(
 ): Readonly<{
   assignedPaths: string[]
   completedPaths: string[]
+  repository?: Omit<CodexContinuationRepositoryIdentity, "projectIdentity">
 }> {
   const terminalThreads = new Set(events
     .filter((event) => event.entityType === "loom_agent" && event.terminal)
     .map((event) => event.entityId))
-  const completedPaths = events
+  const completedEvents = events
     .filter((event) => event.entityType === "loom_codex_ready" && event.committed && event.selectedPath)
-    .map((event) => event.selectedPath!)
+  const completedPaths = completedEvents.map((event) => event.selectedPath!)
+  const repositoryFacts = completedEvents.map((event) => event.repository)
+  const repositoryKeys = new Set(repositoryFacts
+    .filter((value): value is NonNullable<typeof value> => value !== undefined)
+    .map((value) => JSON.stringify(value)))
+  if (repositoryKeys.size > 1) throw new Error("CODEX_CONTINUATION_REPOSITORY_DRIFT")
+  const repository = completedEvents.length > 0 && repositoryFacts.every((value) => value !== undefined)
+    ? repositoryFacts[0] ?? null
+    : null
   const assignedPaths = events
     .filter((event) => event.entityType === "loom_codex_assignment"
       && event.selectedPath
@@ -122,6 +171,7 @@ export function deriveCodexPathEvidence(
   return {
     assignedPaths: normalizedPaths(assignedPaths),
     completedPaths: normalizedPaths(completedPaths),
+    ...(repository ? { repository } : {}),
   }
 }
 
@@ -180,26 +230,75 @@ export function planCodexContinuation(input: CodexContinuationInput): CodexConti
 export function selectContinuationPath(
   world: WorkingWorldSnapshot,
   selectedPath: string,
+  repository?: CodexContinuationRepositoryIdentity,
 ): WorkingWorldSnapshot {
   const canonicalPath = normalizedPaths([selectedPath])[0]
   const space = world.space
   if (!canonicalPath || !space || !space.activePaneId) throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
   const activePane = space.panes.find((pane) => pane.id === space.activePaneId)
   if (!activePane) throw new Error("CONTINUATION_SPACE_UNAVAILABLE")
-  if (activePane.filePath === canonicalPath && space.selection?.filePath === canonicalPath) return world
-  const openFiles = space.openFiles.includes(canonicalPath)
-    ? [...space.openFiles]
-    : [...space.openFiles, canonicalPath]
+  const currentFileRef = space.selection?.fileRef
+    ?? activePane.fileRef
+    ?? (() => {
+      const matching = space.fileRefs?.filter((ref) => ref.path === activePane.filePath) ?? []
+      return matching.length === 1 ? matching[0] : undefined
+    })()
+  const selectedFileRef: WorkspaceFileRef | undefined = repository
+    ? {
+        projectIdentity: repository.projectIdentity,
+        repositoryResourceKey: repository.repositoryResourceKey,
+        repositoryMountKey: repository.repositoryMountKey,
+        worktreeKey: null,
+        observedRevision: repository.observedRevision,
+        path: canonicalPath,
+      }
+    : currentFileRef ? { ...currentFileRef, path: canonicalPath } : undefined
+  const exactSelectionMatches = !selectedFileRef || (
+    activePane.fileRef != null
+    && space.selection?.fileRef !== undefined
+    && canonicalWorkspaceObjectKey(activePane.fileRef) === canonicalWorkspaceObjectKey(selectedFileRef)
+    && canonicalWorkspaceObjectKey(space.selection.fileRef) === canonicalWorkspaceObjectKey(selectedFileRef)
+  )
+  if (activePane.filePath === canonicalPath && space.selection?.filePath === canonicalPath && exactSelectionMatches) return world
+
+  if (space.fileRefs !== undefined && !selectedFileRef) {
+    throw new Error("CONTINUATION_REPOSITORY_IDENTITY_UNAVAILABLE")
+  }
+  if (repository && space.fileRefs === undefined && space.openFiles.length > 0) {
+    throw new Error("CONTINUATION_REPOSITORY_IDENTITY_UNAVAILABLE")
+  }
+  const selectedObjectKey = selectedFileRef ? canonicalWorkspaceObjectKey(selectedFileRef) : null
+  const existingFileRefs = space.fileRefs ?? (repository ? [] : undefined)
+  const alreadyOpen = selectedObjectKey
+    ? existingFileRefs?.some((ref) => canonicalWorkspaceObjectKey(ref) === selectedObjectKey) === true
+    : space.openFiles.includes(canonicalPath)
+  const openFiles = alreadyOpen ? [...space.openFiles] : [...space.openFiles, canonicalPath]
+  const fileRefs = existingFileRefs === undefined
+    ? undefined
+    : alreadyOpen
+      ? [...existingFileRefs]
+      : [...existingFileRefs, selectedFileRef!]
   if (openFiles.length > 64) throw new Error("CONTINUATION_SPACE_FILE_CAPACITY")
-  const selection = { filePath: canonicalPath, anchor: 0, head: 0 }
+  const selection = {
+    filePath: canonicalPath,
+    ...(selectedFileRef ? { fileRef: selectedFileRef } : {}),
+    anchor: 0,
+    head: 0,
+  }
   return validateWorkingWorld({
     ...world,
     space: {
       ...space,
       revision: space.revision + 1,
       openFiles,
+      ...(fileRefs !== undefined ? { fileRefs } : {}),
       panes: space.panes.map((pane) => pane.id === space.activePaneId
-        ? { ...pane, filePath: canonicalPath, selection: { anchor: 0, head: 0 } }
+        ? {
+            ...pane,
+            filePath: canonicalPath,
+            ...(selectedFileRef ? { fileRef: selectedFileRef } : {}),
+            selection: { anchor: 0, head: 0 },
+          }
         : pane),
       selection,
       activeWindowId: space.windows.some((window) => window.id === "workspace-editor")
@@ -243,11 +342,13 @@ export async function prepareCodexContinuation(
       assignedPaths: record.assignedPaths,
     })
     if (plan.status !== "NEXT_ASSIGNMENT") return plan
-    if (!await dependencies.inspectTarget(plan.selectedPath)) {
+    if (!record.repository) throw new Error("CODEX_CONTINUATION_REPOSITORY_UNAVAILABLE")
+    if (!await dependencies.inspectTarget(plan.selectedPath, record.repository)) {
       return { status: "PATH_RESERVATION_UNAVAILABLE", selectedPath: plan.selectedPath }
     }
-    const nextWorld = selectContinuationPath(record.world, plan.selectedPath)
-    if (nextWorld === record.world) return plan
+    const nextWorld = selectContinuationPath(record.world, plan.selectedPath, record.repository)
+    const exactPlan = { ...plan, repositoryKey: record.repository.repositoryResourceKey }
+    if (nextWorld === record.world) return exactPlan
     const persisted = await dependencies.persist({
       userId: input.userId,
       worldId: input.worldId,
@@ -258,7 +359,7 @@ export async function prepareCodexContinuation(
       grantId: record.grantId,
       authorityVersion: record.authorityVersion,
     })
-    if (persisted === "PERSISTED") return plan
+    if (persisted === "PERSISTED") return exactPlan
   }
   return { status: "SPACE_PERSISTENCE_BUSY" }
 }
@@ -283,8 +384,12 @@ export async function readCodexContinuation(
     completedPaths: record.completedPaths,
     assignedPaths: record.assignedPaths,
   })
-  if (plan.status === "NEXT_ASSIGNMENT" && !await dependencies.inspectTarget(plan.selectedPath)) {
-    return { status: "PATH_RESERVATION_UNAVAILABLE", selectedPath: plan.selectedPath }
+  if (plan.status === "NEXT_ASSIGNMENT") {
+    if (!record.repository) throw new Error("CODEX_CONTINUATION_REPOSITORY_UNAVAILABLE")
+    if (!await dependencies.inspectTarget(plan.selectedPath, record.repository)) {
+      return { status: "PATH_RESERVATION_UNAVAILABLE", selectedPath: plan.selectedPath }
+    }
+    return { ...plan, repositoryKey: record.repository.repositoryResourceKey }
   }
   return plan
 }

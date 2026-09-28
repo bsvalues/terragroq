@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import { getSession } from "@/lib/session"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -21,11 +21,26 @@ export const runtime = "nodejs"
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  const url = new URL(request.url)
+  const projectKey = url.searchParams.get("projectKey") ?? "terrafusion"
+  const repositoryKey = url.searchParams.get("repositoryKey")
+  const projectBinding = repositoryKey === null
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey)
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, projectKey, undefined, repositoryKey)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const projectRoot = projectBinding.binding.workspaceRoot
+  const binding = projectBinding.binding
+  const projectRoot = binding.workspaceRoot
+  const repository = {
+    key: binding.repositoryKey,
+    identity: binding.repositoryIdentity,
+    role: binding.repositoryRole,
+    label: binding.repositoryLabel,
+    previewSource: binding.repositoryPreviewSource,
+    mountKey: binding.repositoryMountKey,
+    observedRevision: binding.observedRevision,
+  }
 
-  const requested = new URL(request.url).searchParams.get("path")
+  const requested = url.searchParams.get("path")
   if (requested === null || requested === "") return Response.json({ error: "DIFF_PATH_REQUIRED" }, { status: 400 })
   if (isSensitiveWorkspacePath(requested)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 400 })
@@ -41,11 +56,12 @@ export async function GET(request: Request) {
   try {
     const snapshot = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (snapshot.state === "git-unavailable") {
-      return Response.json({ error: "GIT_UNAVAILABLE", state: snapshot.state, path: snapshot.path }, { status: 503 })
+      return Response.json({ error: "GIT_UNAVAILABLE", state: snapshot.state, path: snapshot.path, repository }, { status: 503 })
     }
     if (snapshot.state === "oversize") {
       return Response.json({
         ...snapshot,
+        repository,
         untracked: false,
         diff: "",
         note: "The current patch exceeds the Changes grounding limit.",
@@ -53,11 +69,11 @@ export async function GET(request: Request) {
     }
     if (snapshot.state === "untracked") {
       return Response.json(
-        { ...snapshot, untracked: true, diff: "", note: "This file is new — it is not in git yet." },
+        { ...snapshot, repository, untracked: true, diff: "", note: "This file is new — it is not in git yet." },
         { headers: { "cache-control": "no-store" } },
       )
     }
-    return Response.json({ ...snapshot, untracked: false, diff: snapshot.patch }, { headers: { "cache-control": "no-store" } })
+    return Response.json({ ...snapshot, repository, untracked: false, diff: snapshot.patch }, { headers: { "cache-control": "no-store" } })
   } catch {
     // A repository with no commits, or a git failure, must not look like "nothing has changed".
     return Response.json({ error: "DIFF_UNAVAILABLE" }, { status: 503 })

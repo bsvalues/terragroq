@@ -1213,4 +1213,158 @@ export type AcceleratorReservation = z.infer<typeof AcceleratorReservationSchema
 export type InferenceExecution = z.infer<typeof InferenceExecutionSchema>
 export type CapabilityEvaluation = z.infer<typeof CapabilityEvaluationSchema>
 export type ElasticWorker = z.infer<typeof ElasticWorkerSchema>
+// ─── IF-02: whole-fabric topology (spec 09 §2 FabricLink; 11 FabricTopologySnapshot) ────────────
+// Measured inter-node links and the reconciled topology projection. A configured Ethernet speed is
+// inventory, not usable throughput: freshnessState marks whether the measurement is current, and a
+// STALE/UNKNOWN/FAILED link must never be presented as AVAILABLE placement capacity (spec 11 proof 5).
+
+export const FabricFreshnessStateSchema = z.enum(["LIVE", "STALE", "UNKNOWN", "FAILED"])
+
+export const FabricLinkSchema = z
+  .object({
+    id: IdentifierSchema,
+    fromNodeId: IdentifierSchema,
+    toNodeId: IdentifierSchema,
+    transportClass: IdentifierSchema,
+    measuredBandwidthBytesPerSecond: FiniteNonNegativeSchema.optional(),
+    latencyMsP50: FiniteNonNegativeSchema.optional(),
+    latencyMsP95: FiniteNonNegativeSchema.optional(),
+    reliability: z.number().min(0).max(1).optional(),
+    trustClass: IdentifierSchema,
+    observedAt: TimestampSchema.optional(),
+    freshnessState: FabricFreshnessStateSchema,
+    evidenceRef: NonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .superRefine((link, context) => {
+    if (link.latencyMsP50 !== undefined && link.latencyMsP95 !== undefined && link.latencyMsP95 < link.latencyMsP50) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "p95 latency cannot be below p50", path: ["latencyMsP95"] })
+    }
+    // A link measured LIVE must carry at least one measurement; otherwise it is an assertion, not evidence.
+    if (link.freshnessState === "LIVE"
+      && link.measuredBandwidthBytesPerSecond === undefined && link.latencyMsP50 === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "a LIVE link must carry a measured bandwidth or latency", path: ["freshnessState"] })
+    }
+  })
+
+// A node's discovery record: its immutable identity plus its probe observation, with the same freshness
+// discipline as links. The probe detail itself stays in the evidence store; the snapshot carries the
+// placement-relevant projection, never a guessed capability.
+export const FabricNodeObservationSchema = z
+  .object({
+    nodeId: IdentifierSchema,
+    role: IdentifierSchema.optional(),
+    observedAt: TimestampSchema.optional(),
+    freshnessState: FabricFreshnessStateSchema,
+    capacity: z.record(z.union([z.number().finite(), z.string(), z.boolean(), z.null()])).optional(),
+    bottleneck: z.record(z.union([z.number().finite(), z.string(), z.boolean(), z.null()])).optional(),
+    evidenceRef: NonEmptyStringSchema.optional(),
+  })
+  .strict()
+
+export const FabricTopologySnapshotSchema = z
+  .object({
+    schemaVersion: PositiveIntegerSchema,
+    generatedAt: TimestampSchema,
+    nodes: z.array(FabricNodeObservationSchema),
+    links: z.array(FabricLinkSchema),
+    digest: DigestSchema,
+    evidenceRefs: z.array(NonEmptyStringSchema),
+  })
+  .strict()
+
+export type FabricFreshnessState = z.infer<typeof FabricFreshnessStateSchema>
+export type FabricLink = z.infer<typeof FabricLinkSchema>
+export type FabricNodeObservation = z.infer<typeof FabricNodeObservationSchema>
+export type FabricTopologySnapshot = z.infer<typeof FabricTopologySnapshotSchema>
+
+
+export const CapabilityVerdictSchema = z.enum([
+  "UNKNOWN",
+  "SUPPORTED",
+  "MEASURED",
+  "PROVEN",
+  "DEGRADED",
+  "FAILED",
+  "RETIRED",
+])
+
+/**
+ * IF-05 — capability evidence for a model/runtime binding.
+ *
+ * A measured or proven verdict binds an exact model artifact, runtime, runtime configuration digest,
+ * compute class, and evaluation run. `promotedBy` records the independent identity that promoted the
+ * binding; the promotion engine (scripts/execution-fabric/eval-lab.mjs) refuses promotion when the
+ * subject model/lane would mark itself proven while expanding production eligibility.
+ */
+export const CapabilityEvidenceSchema = z
+  .object({
+    id: IdentifierSchema,
+    capability: NonEmptyStringSchema,
+    verdict: CapabilityVerdictSchema,
+    modelArtifactId: IdentifierSchema,
+    runtimeId: IdentifierSchema,
+    runtimeRevision: ImmutableRevisionSchema,
+    runtimeConfigDigest: DigestSchema,
+    computeResourceClass: IdentifierSchema,
+    evaluationId: IdentifierSchema,
+    evidenceRef: NonEmptyStringSchema,
+    measuredAt: TimestampSchema,
+    metrics: z.record(z.union([z.number(), z.string(), z.boolean(), z.null()])),
+    promotedBy: IdentifierSchema.optional(),
+    subjectIdentity: IdentifierSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    // A PROVEN verdict is only meaningful with an independent promoter: the evidence must name
+    // promotedBy, and that promoter may not be the subject identity being measured.
+    if (value.verdict === "PROVEN") {
+      if (!value.promotedBy) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "PROVEN evidence requires promotedBy (independent promotion)" })
+      if (value.subjectIdentity && value.promotedBy === value.subjectIdentity) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "PROVEN evidence cannot be self-attested by the subject" })
+    }
+  })
+
+/**
+ * IF-05 — one run of an evaluation task against a subject binding. The runner records metrics; the
+ * verdict is computed by the promotion engine, never asserted by the subject under measurement.
+ */
+export const EvaluationRunSchema = z
+  .object({
+    id: IdentifierSchema,
+    taskId: IdentifierSchema,
+    capability: NonEmptyStringSchema,
+    subject: z
+      .object({
+        modelArtifactId: IdentifierSchema,
+        runtimeId: IdentifierSchema,
+        runtimeRevision: ImmutableRevisionSchema,
+        runtimeConfigDigest: DigestSchema,
+        computeResourceClass: IdentifierSchema,
+      })
+      .strict(),
+    metrics: z.record(z.union([z.number(), z.string(), z.boolean(), z.null()])),
+    outcome: z.enum(["PASS", "FAIL", "ERROR"]),
+    ranAt: TimestampSchema,
+    evaluatorRef: NonEmptyStringSchema,
+    evidenceRef: NonEmptyStringSchema,
+  })
+  .strict()
+
+/**
+ * IF-05 — the result of scoping prior evidence against a current binding. This is a REPORT, not a
+ * mutated evidence object: the original evidence is never rewritten, and the report names exactly
+ * which binding field changed so the caller can act on it.
+ */
+export const ScopedEvidenceReportSchema = z
+  .object({
+    evidence: CapabilityEvidenceSchema,
+    inScope: z.boolean(),
+    scopeReason: z.enum(["model-revision-changed", "runtime-changed", "runtime-config-changed", "compute-class-changed"]).nullable(),
+  })
+  .strict()
+
+export type CapabilityVerdict = z.infer<typeof CapabilityVerdictSchema>
+export type CapabilityEvidence = z.infer<typeof CapabilityEvidenceSchema>
+export type EvaluationRun = z.infer<typeof EvaluationRunSchema>
+
 export type InferenceReceipt = z.infer<typeof InferenceReceiptSchema>

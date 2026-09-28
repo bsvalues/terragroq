@@ -1,10 +1,18 @@
 import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
 export const MAX_TOOL_RUN_TRANSCRIPT_BYTES = 98_304
 
 export type ToolOutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
+export type DeveloperToolRepositoryIdentity = Readonly<{
+  projectKey: "terrafusion" | "williamos"
+  repositoryKey: string
+  repositoryIdentity: string
+  repositoryMountKey: string
+  observedRevision: string
+}>
 export type ToolRunTranscript = Readonly<{
   schemaVersion: 1
   id: string
@@ -23,8 +31,8 @@ export type ToolRunTranscript = Readonly<{
 
 type ToolRunEnvelope = Readonly<{ schemaVersion: 1; runs: readonly ToolRunTranscript[] }>
 type ToolRunStorage = Pick<Storage, "getItem" | "setItem">
-type ToolRunCleanupStorage = Pick<Storage, "removeItem">
-export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | null }>
+type ToolRunCleanupStorage = Pick<Storage, "removeItem"> & Partial<Pick<Storage, "length" | "key">>
+export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | "TOOL_RUN_HISTORY_UNSAFE" | null }>
 export type ToolRunHistoryVerdict = Readonly<{ ok: boolean; runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_NOT_SAVED" | null }>
 
 function record(value: unknown, error: string): Record<string, unknown> {
@@ -53,14 +61,84 @@ function bytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
 }
 
+function sanitizedLines(lines: readonly ToolOutputLine[]): readonly ToolOutputLine[] {
+  const unsafeChannels = new Set<ToolOutputLine["channel"]>()
+  for (const channel of ["stdout", "stderr", "meta"] as const) {
+    const text = lines.filter((line) => line.channel === channel).map((line) => line.text).join("")
+    const detector = createToolOutputRedactor()
+    if (detector.push(text) + detector.end() !== text) unsafeChannels.add(channel)
+  }
+  if (unsafeChannels.size === 0) return lines
+
+  const redactors = new Map<ToolOutputLine["channel"], ReturnType<typeof createToolOutputRedactor>>()
+  const sanitized: ToolOutputLine[] = []
+  const append = (channel: ToolOutputLine["channel"], output: string) => {
+    for (let offset = 0; offset < output.length; offset += 16_384) {
+      sanitized.push({ channel, text: output.slice(offset, offset + 16_384) })
+    }
+  }
+  for (const line of lines) {
+    if (!unsafeChannels.has(line.channel)) {
+      sanitized.push(line)
+      continue
+    }
+    const redactor = redactors.get(line.channel) ?? createToolOutputRedactor()
+    redactors.set(line.channel, redactor)
+    const output = redactor.push(line.text)
+    if (output) append(line.channel, output)
+  }
+  for (const [channel, redactor] of redactors) {
+    const output = redactor.end()
+    if (output) append(channel, output)
+  }
+  return sanitized
+}
+
 export function toolRunHistoryStorageKey(scope: string): string {
   if (typeof scope !== "string" || scope.length > 500 || !/^(server|browser):\S+$/.test(scope)) throw new Error("TOOL_RUN_SCOPE_INVALID")
   return `williamos:tool-runs:v1:${scope}`
 }
 
+function scopeIdentity(value: string, field: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 240 || /[\0\s]/.test(value)) {
+    throw new Error(`TOOL_RUN_${field}_INVALID`)
+  }
+  return encodeURIComponent(value)
+}
+
+/**
+ * Bind browser evidence to the exact checkout revision that produced it. The Space and repository
+ * key remain human-useful prefixes, while canonical repository, mount and revision identities stop
+ * a restored transcript or diff snapshot from appearing beside a different checkout.
+ */
+export function repositoryQualifiedToolHistoryScope(
+  scope: string,
+  repository: DeveloperToolRepositoryIdentity,
+): string {
+  if (repository.projectKey !== "terrafusion" && repository.projectKey !== "williamos") {
+    throw new Error("TOOL_RUN_PROJECT_KEY_INVALID")
+  }
+  if (!/^[a-f0-9]{40,64}$/.test(repository.observedRevision)) {
+    throw new Error("TOOL_RUN_REVISION_INVALID")
+  }
+  const qualified = `${scope}:project:${repository.projectKey}:repository:${scopeIdentity(repository.repositoryKey, "REPOSITORY_KEY")}`
+    + `:identity:${scopeIdentity(repository.repositoryIdentity, "REPOSITORY_IDENTITY")}`
+    + `:mount:${scopeIdentity(repository.repositoryMountKey, "REPOSITORY_MOUNT")}`
+    + `:revision:${repository.observedRevision}`
+  toolRunHistoryStorageKey(qualified)
+  return qualified
+}
+
 export function removeToolRunHistory(storage: ToolRunCleanupStorage, scope: string): boolean {
   try {
-    storage.removeItem(toolRunHistoryStorageKey(scope))
+    const baseKey = toolRunHistoryStorageKey(scope)
+    if (typeof storage.length === "number" && typeof storage.key === "function") {
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key!(index))
+        .filter((key): key is string => key === baseKey || Boolean(key?.startsWith(`${baseKey}:`)))
+      for (const key of keys) storage.removeItem(key)
+    } else {
+      storage.removeItem(baseKey)
+    }
     return true
   } catch {
     return false
@@ -104,7 +182,7 @@ function validateToolRunTranscriptShape(raw: unknown, enforceByteLimit: boolean)
     startedAt: iso(run.startedAt, "TOOL_RUN_STARTED_AT_INVALID"),
     endedAt: iso(run.endedAt, "TOOL_RUN_ENDED_AT_INVALID"),
     outcome: { status: outcome.status, code: outcome.code as number | null, reason: outcome.reason as string | null },
-    lines,
+    lines: sanitizedLines(lines),
   }
   if (Date.parse(transcript.endedAt) < Date.parse(transcript.startedAt)) throw new Error("TOOL_RUN_TIME_INVALID")
   if (enforceByteLimit && bytes(transcript) > MAX_TOOL_RUN_TRANSCRIPT_BYTES) throw new Error("TOOL_RUN_TRANSCRIPT_TOO_LARGE")
@@ -147,7 +225,20 @@ export function loadToolRunHistory(storage: ToolRunStorage, scope: string): Tool
   const raw = storage.getItem(key)
   if (raw === null) return { runs: [], error: null }
   try {
-    return { runs: validateEnvelope(JSON.parse(raw)).runs, error: null }
+    const parsed = JSON.parse(raw)
+    const envelope = validateEnvelope(parsed)
+    const parsedRuns = (parsed as { runs: Array<{ lines: unknown }> }).runs
+    const unsafeOutputRewritten = envelope.runs.some((run, index) => (
+      JSON.stringify(run.lines) !== JSON.stringify(parsedRuns[index]?.lines)
+    ))
+    if (unsafeOutputRewritten) {
+      try {
+        storage.setItem(key, JSON.stringify(envelope))
+      } catch {
+        return { runs: [], error: "TOOL_RUN_HISTORY_UNSAFE" }
+      }
+    }
+    return { runs: envelope.runs, error: null }
   } catch {
     return { runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" }
   }

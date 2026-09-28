@@ -82,6 +82,23 @@ export type NoSelectionReason =
   | "ONLY_BLOCKED_OUTCOMES"
   | "ALL_OUTCOMES_TERMINAL"
   | "NO_ELIGIBLE_OUTCOME"
+  | "ORPHANED_ACTIVE_MISSION"
+  | "PARENT_MISSION_BINDING_REQUIRED"
+
+export interface ParentMissionIdentity {
+  missionKey: string
+  externalRef: string
+  goalRef: string
+  worldId: string
+  projectId: number
+  repository: string
+}
+
+export interface PersistedParentMissionState {
+  integrity: "VERIFIED" | "BINDING_REQUIRED"
+  unresolved: readonly ParentMissionIdentity[]
+  resolved: readonly ParentMissionIdentity[]
+}
 
 export type OutcomeIneligibilityReason =
   | "LIFECYCLE_INELIGIBLE"
@@ -108,6 +125,7 @@ export type OutcomeSelection =
       selected: false
       reason: NoSelectionReason
       blockers: readonly OutcomeSelectionBlocker[]
+      parentMissions?: PersistedParentMissionState
     }
 
 export interface SelectOutcomeOptions {
@@ -115,6 +133,7 @@ export interface SelectOutcomeOptions {
   allowedRiskClasses?: readonly string[]
   validApprovalDecisionIds?: readonly number[]
   validAuthorityGrantRefs?: readonly string[]
+  parentMissions?: PersistedParentMissionState
 }
 
 export type OutcomeMutationError =
@@ -328,15 +347,33 @@ export function selectNextOutcome(
     })
   }
 
+  const reason = primaryNoSelectionReason(
+    ordered,
+    blockers,
+    allowedRisks,
+    validApprovalDecisionIds,
+    validAuthorityGrantRefs,
+  )
+  const terminalChildSet = reason === "EMPTY_QUEUE" || reason === "ALL_OUTCOMES_TERMINAL"
+  if (terminalChildSet && options.parentMissions?.integrity === "BINDING_REQUIRED") {
+    return {
+      selected: false,
+      reason: "PARENT_MISSION_BINDING_REQUIRED",
+      blockers,
+      parentMissions: options.parentMissions,
+    }
+  }
+  if (terminalChildSet && (options.parentMissions?.unresolved.length ?? 0) > 0) {
+    return {
+      selected: false,
+      reason: "ORPHANED_ACTIVE_MISSION",
+      blockers,
+      parentMissions: options.parentMissions,
+    }
+  }
   return {
     selected: false,
-    reason: primaryNoSelectionReason(
-      ordered,
-      blockers,
-      allowedRisks,
-      validApprovalDecisionIds,
-      validAuthorityGrantRefs,
-    ),
+    reason,
     blockers,
   }
 }

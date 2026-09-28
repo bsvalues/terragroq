@@ -108,6 +108,7 @@
   height: 37px;
   display: flex;
   align-items: center;
+  overflow: hidden;
   gap: 11px;
   padding: 0 16px;
   border-bottom: 1px solid #20271f;
@@ -116,7 +117,7 @@
 
 .objectLabel { max-width: 46vw; overflow: hidden; color: #aab5a6; font-family: var(--font-geist-mono), monospace; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .objectLabel strong { color: #e6ebe3; font-family: var(--font-geist-sans), sans-serif; font-size: 11px; }
-.objectActions { gap: 4px; margin-left: auto; }
+.objectActions { min-width: 0; gap: 4px; margin-left: auto; }
 .action,
 .overlayButton,
 .lineClose {
@@ -466,6 +467,24 @@
   box-shadow: 0 30px 110px rgb(0 0 0 / 70%);
 }
 
+.previewHost { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.previewCompositionButton {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid #596653;
+  border-radius: 4px;
+  color: #d5ded1;
+  background: rgb(15 20 15 / 92%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 36%);
+  font: 8.5px var(--font-geist-mono), monospace;
+}
+
 @media (max-width: 1040px) {
   .topBar { grid-template-columns: minmax(220px, 1fr) auto; }
   .agentPresence { display: contents; }
@@ -485,6 +504,18 @@
   .objectLabel { max-width: 34vw; }
   .objectActions { max-width: 62vw; overflow-x: auto; }
   .objectActions .action { flex: 0 0 auto; }
+  .objectBar > [role="status"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
   .windowLayer { inset: 85px 0 0; }
   .williamConversationRail { top: 85px; }
   .williamDrawerTrigger { right: 8px; bottom: 52px; }

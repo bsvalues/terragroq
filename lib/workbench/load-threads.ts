@@ -410,6 +410,7 @@ export async function loadAuthenticatedWorkbenchThreads(
 
   return projectWorkbenchThreads({
     userId, projectId, conversationPersistence: "MISSING", truncatedSourceKinds: [...truncatedSourceKinds],
+    threadListTruncated,
     threads: threads.map((thread) => {
       const roots = persistedBindings.filter((row) => row.threadId === thread.id && row.role === "root")
       const root = roots.length === 1 ? roots[0] : null

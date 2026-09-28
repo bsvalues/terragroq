@@ -56,6 +56,8 @@ export default async function WilliamOSRoot({
   // A superseded route redirected here carrying the surface it used to be. Anything unrecognized is
   // simply dropped: an unknown surface name opens the ordinary empty environment rather than an error
   // page, because a stale bookmark is not a fault the owner needs reported.
-  const requested = (await searchParams).summon
-  return <Desk initialSummon={isSummonedSurface(requested) ? requested : null} />
+  const params = await searchParams
+  const requested = params.summon
+  const projectKey = params.project === "williamos" ? "williamos" : "terrafusion"
+  return <Desk initialSummon={isSummonedSurface(requested) ? requested : null} projectKey={projectKey} />
 }

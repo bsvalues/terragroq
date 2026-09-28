@@ -4,14 +4,19 @@ import { resolveProjectTerminalAlias, resolveProjectTerminalCommand } from "@/li
 import {
   loadToolRunHistory,
   persistToolRunTranscript,
+  removeToolRunHistory,
+  repositoryQualifiedToolHistoryScope,
   toolRunHistoryStorageKey,
   type ToolRunTranscript,
 } from "@/components/workspace-shell/tool-run-history"
 
-class MemoryStorage implements Pick<Storage, "getItem" | "setItem"> {
+class MemoryStorage implements Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length"> {
   readonly values = new Map<string, string>()
+  get length() { return this.values.size }
   getItem(key: string) { return this.values.get(key) ?? null }
   setItem(key: string, value: string) { this.values.set(key, value) }
+  removeItem(key: string) { this.values.delete(key) }
+  key(index: number) { return [...this.values.keys()][index] ?? null }
 }
 
 function transcript(index: number, text = `output ${index}`): ToolRunTranscript {
@@ -75,6 +80,48 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(() => toolRunHistoryStorageKey("browser-local")).toThrow("TOOL_RUN_SCOPE_INVALID")
   })
 
+  it("qualifies restored evidence by canonical repository, mount and exact revision", () => {
+    const base = {
+      projectKey: "terrafusion" as const,
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    }
+    const first = repositoryQualifiedToolHistoryScope("server:world-a", base)
+    const nextRevision = repositoryQualifiedToolHistoryScope("server:world-a", {
+      ...base,
+      observedRevision: "b".repeat(40),
+    })
+    const otherMount = repositoryQualifiedToolHistoryScope("server:world-a", {
+      ...base,
+      repositoryMountKey: "terrafusion:atlas:worktree-2",
+    })
+
+    expect(first).toContain(":identity:bsvalues%2Fterrafusion-atlas")
+    expect(first).toContain(":mount:terrafusion%3Aatlas%3Aconfigured")
+    expect(first).not.toBe(nextRevision)
+    expect(first).not.toBe(otherMount)
+  })
+
+  it("removes every exact-revision history when its disposable Space is deleted", () => {
+    const storage = new MemoryStorage()
+    const repository = {
+      projectKey: "terrafusion" as const,
+      repositoryKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision: "a".repeat(40),
+    }
+    const first = repositoryQualifiedToolHistoryScope("server:deleted-world", repository)
+    const second = repositoryQualifiedToolHistoryScope("server:deleted-world", { ...repository, observedRevision: "b".repeat(40) })
+    expect(persistToolRunTranscript(storage, first, transcript(1)).ok).toBe(true)
+    expect(persistToolRunTranscript(storage, second, transcript(2)).ok).toBe(true)
+
+    expect(removeToolRunHistory(storage, "server:deleted-world")).toBe(true)
+    expect(storage.length).toBe(0)
+  })
+
   it("rejects corrupt persisted history without exposing invented transcripts", () => {
     const storage = new MemoryStorage()
     storage.setItem(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [{ id: "invented" }] }))
@@ -88,6 +135,99 @@ describe("Experience V2 bounded tool transcript history", () => {
 
     expect(persistToolRunTranscript(storage, "server:world-a", transcript(1)).ok).toBe(true)
     expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [transcript(1)], error: null })
+  })
+
+  it("sanitizes unsafe restored output in memory and rewrites the persisted transcript", () => {
+    const storage = new MemoryStorage()
+    const unsafe = transcript(1, "DATABASE_URL=postgresql://owner:restored-password@db.example.test/app")
+    storage.setItem(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+
+    const loaded = loadToolRunHistory(storage, "server:world-a")
+
+    expect(loaded.error).toBeNull()
+    expect(loaded.runs[0]?.lines[0]?.text).toBe("DATABASE_URL=[REDACTED]")
+    expect(storage.getItem(toolRunHistoryStorageKey("server:world-a"))).not.toContain("restored-password")
+  })
+
+  it("removes an entire semicolon-delimited connection string from restored history", () => {
+    const storage = new MemoryStorage()
+    const unsafe = transcript(1, "AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=owner;AccountKey=QWxhZGRpbjpPcGVuU2VzYW1l;EndpointSuffix=core.windows.net")
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+
+    const loaded = loadToolRunHistory(storage, "server:world-a")
+
+    expect(loaded.runs[0]?.lines[0]?.text).toBe("AZURE_STORAGE_CONNECTION_STRING=[REDACTED]")
+    expect(JSON.stringify(loaded)).not.toMatch(/AccountKey|QWxhZGRpbjpPcGVuU2VzYW1l/)
+  })
+
+  it("removes an entire space-bearing ADO.NET connection string from restored history", () => {
+    const storage = new MemoryStorage()
+    const unsafe = transcript(1, "SQL_CONNECTION_STRING=Data Source=db.example.test;Initial Catalog=app;User ID=owner;Pwd=U3BhY2VkQ3JlZGVudGlhbA==")
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+
+    const loaded = loadToolRunHistory(storage, "server:world-a")
+
+    expect(loaded.runs[0]?.lines[0]?.text).toBe("SQL_CONNECTION_STRING=[REDACTED]")
+    expect(JSON.stringify(loaded)).not.toMatch(/Pwd=|U3BhY2VkQ3JlZGVudGlhbA/)
+  })
+
+  it("fails closed when unsafe restored output cannot be replaced atomically", () => {
+    const storage = new MemoryStorage()
+    const unsafe = transcript(1, "DATABASE_URL=postgresql://owner:restored-password@db.example.test/app")
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+    storage.setItem = () => { throw new DOMException("quota", "QuotaExceededError") }
+
+    expect(loadToolRunHistory(storage, "server:world-a")).toEqual({
+      runs: [],
+      error: "TOOL_RUN_HISTORY_UNSAFE",
+    })
+  })
+
+  it("sanitizes a restored truncated private-key block instead of requiring a closing marker", () => {
+    const storage = new MemoryStorage()
+    const unsafe = {
+      ...transcript(1),
+      lines: [
+        { channel: "stderr" as const, text: "-----BEGIN PRIVATE KEY-----\n" },
+        { channel: "stderr" as const, text: "truncated-private-key-body" },
+      ],
+    }
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+
+    const loaded = loadToolRunHistory(storage, "server:world-a")
+
+    expect(loaded.error).toBeNull()
+    expect(loaded.runs[0]?.lines).toEqual([{ channel: "stderr", text: "[REDACTED_PRIVATE_KEY]\n" }])
+    expect(storage.getItem(toolRunHistoryStorageKey("server:world-a"))).not.toContain("truncated-private-key-body")
+  })
+
+  it("fails closed when a truncated private-key block cannot be safely rewritten", () => {
+    const storage = new MemoryStorage()
+    const unsafe = transcript(1, "-----BEGIN PRIVATE KEY-----\ntruncated-private-key-body")
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [unsafe] }))
+    storage.setItem = () => { throw new DOMException("quota", "QuotaExceededError") }
+
+    expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [], error: "TOOL_RUN_HISTORY_UNSAFE" })
+  })
+
+  it("does not require a storage rewrite merely because safe JSON keys have a different order", () => {
+    const storage = new MemoryStorage()
+    const safe = transcript(1)
+    const reordered = {
+      lines: safe.lines,
+      outcome: safe.outcome,
+      endedAt: safe.endedAt,
+      startedAt: safe.startedAt,
+      alias: safe.alias,
+      operationLabel: safe.operationLabel,
+      operationId: safe.operationId,
+      id: safe.id,
+      schemaVersion: safe.schemaVersion,
+    }
+    storage.values.set(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ runs: [reordered], schemaVersion: 1 }))
+    storage.setItem = () => { throw new DOMException("quota", "QuotaExceededError") }
+
+    expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [safe], error: null })
   })
 
   it("rejects a structurally valid transcript that invents an operation or display alias", () => {

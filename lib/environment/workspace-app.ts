@@ -2,6 +2,28 @@ import { createHash } from "node:crypto"
 
 const HTML_IDENTITY_LIMIT = 64 * 1024
 const IDENTITY_HEADER = "x-williamos-workspace-app"
+const COMPOSITION_HEADER = "x-williamos-preview-composition"
+const COMPOSITION_HEADER_LIMIT = 8 * 1024
+const COMPOSITION_PAYLOAD_LIMIT = 6 * 1024
+const REVISION_IDENTITY = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/
+const RUNTIME_INSTANCE = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/
+const ARTIFACT_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,199}$/
+const SUITES = ["forge", "atlas", "dais", "dossier", "gpt"] as const
+
+export type WorkspacePreviewRuntimeComposition = Readonly<{
+  schemaVersion: 1
+  runtime: Readonly<{
+    repositoryIdentity: "bsvalues/terrafusion_os_1.0"
+    revision: string
+    instance: string
+  }>
+  consumedArtifacts: readonly Readonly<{
+    suite: typeof SUITES[number]
+    repositoryIdentity: string
+    artifactIdentity: string
+    sourceRevision: string
+  }>[]
+}>
 
 export type WorkspaceAppAdmission =
   | Readonly<{ ok: true; url: string }>
@@ -19,6 +41,7 @@ export type WorkspacePreviewEvidence = Readonly<{
   identity: "TerraFusion" | "unverified"
   reachable: boolean
   frameable: boolean
+  composition: WorkspacePreviewRuntimeComposition | null
   checkedAt: string
   limitations: Readonly<{ dom: "unavailable"; console: "unavailable"; network: "unavailable" }>
   fingerprint: string
@@ -115,14 +138,79 @@ const PREVIEW_LIMITATIONS = {
   network: "unavailable",
 } as const
 
-function previewEvidence(input: Omit<WorkspacePreviewEvidence, "schemaVersion" | "checkedAt" | "limitations" | "fingerprint">, now: () => Date): WorkspacePreviewEvidence {
-  const fingerprint = createHash("sha256").update(JSON.stringify({ schemaVersion: 1, ...input })).digest("hex")
+function previewEvidence(
+  input: Omit<WorkspacePreviewEvidence, "schemaVersion" | "checkedAt" | "limitations" | "fingerprint" | "composition">
+    & Readonly<{ composition?: WorkspacePreviewRuntimeComposition | null }>,
+  now: () => Date,
+): WorkspacePreviewEvidence {
+  const normalized = { ...input, composition: input.composition ?? null }
+  const fingerprint = createHash("sha256").update(JSON.stringify({ schemaVersion: 1, ...normalized })).digest("hex")
   return {
     schemaVersion: 1,
-    ...input,
+    ...normalized,
     checkedAt: now().toISOString(),
     limitations: PREVIEW_LIMITATIONS,
     fingerprint,
+  }
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index])
+}
+
+/** Decode only the bounded, versioned attestation emitted by the admitted runtime boundary. */
+function runtimeComposition(response: Response): WorkspacePreviewRuntimeComposition | null {
+  const encoded = response.headers.get(COMPOSITION_HEADER)?.trim() ?? ""
+  if (!encoded || encoded.length > COMPOSITION_HEADER_LIMIT || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null
+  let parsed: unknown
+  try {
+    const bytes = Buffer.from(encoded, "base64url")
+    if (bytes.byteLength > COMPOSITION_PAYLOAD_LIMIT || bytes.toString("base64url") !== encoded) return null
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== "object") return null
+  const candidate = parsed as Record<string, unknown>
+  if (!exactKeys(candidate, ["schemaVersion", "runtime", "consumedArtifacts"])
+    || candidate.schemaVersion !== 1
+    || !candidate.runtime || typeof candidate.runtime !== "object"
+    || !Array.isArray(candidate.consumedArtifacts) || candidate.consumedArtifacts.length > SUITES.length) return null
+  const runtime = candidate.runtime as Record<string, unknown>
+  if (!exactKeys(runtime, ["repositoryIdentity", "revision", "instance"])
+    || runtime.repositoryIdentity !== "bsvalues/terrafusion_os_1.0"
+    || typeof runtime.revision !== "string" || !REVISION_IDENTITY.test(runtime.revision)
+    || typeof runtime.instance !== "string" || !RUNTIME_INSTANCE.test(runtime.instance)) return null
+
+  const seen = new Set<string>()
+  const consumedArtifacts: WorkspacePreviewRuntimeComposition["consumedArtifacts"][number][] = []
+  for (const value of candidate.consumedArtifacts) {
+    if (!value || typeof value !== "object") return null
+    const artifact = value as Record<string, unknown>
+    if (!exactKeys(artifact, ["suite", "repositoryIdentity", "artifactIdentity", "sourceRevision"])
+      || typeof artifact.suite !== "string" || !SUITES.includes(artifact.suite as typeof SUITES[number])
+      || artifact.repositoryIdentity !== `bsvalues/terrafusion-${artifact.suite}`
+      || typeof artifact.artifactIdentity !== "string" || !ARTIFACT_IDENTITY.test(artifact.artifactIdentity)
+      || typeof artifact.sourceRevision !== "string" || !REVISION_IDENTITY.test(artifact.sourceRevision)
+      || seen.has(artifact.suite)) return null
+    seen.add(artifact.suite)
+    consumedArtifacts.push({
+      suite: artifact.suite as typeof SUITES[number],
+      repositoryIdentity: artifact.repositoryIdentity,
+      artifactIdentity: artifact.artifactIdentity,
+      sourceRevision: artifact.sourceRevision,
+    })
+  }
+  return {
+    schemaVersion: 1,
+    runtime: {
+      repositoryIdentity: runtime.repositoryIdentity,
+      revision: runtime.revision.toLowerCase(),
+      instance: runtime.instance,
+    },
+    consumedArtifacts,
   }
 }
 
@@ -239,7 +327,7 @@ export async function inspectWorkspaceApp(
     }
     return previewEvidence({
       status: "attached", reason: null, configuredUrl: canonicalConfiguredUrl, admittedUrl: finalUrl.toString(),
-      origin, identity: "TerraFusion", reachable: true, frameable: true,
+      origin, identity: "TerraFusion", reachable: true, frameable: true, composition: runtimeComposition(response),
     }, now)
   } catch {
     return previewEvidence({
@@ -265,6 +353,6 @@ export async function admitWorkspaceApp(
   if (!url) return { ok: false, reason: "URL_INVALID" }
   const evidence = await inspectWorkspaceApp(configured, williamOrigin, fetcher)
   return evidence.status === "attached"
-    ? { ok: true, url: url.toString() }
+    ? { ok: true, url: evidence.admittedUrl! }
     : { ok: false, reason: evidence.reason ?? "UNREACHABLE" }
 }

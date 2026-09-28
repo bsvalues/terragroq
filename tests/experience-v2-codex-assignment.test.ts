@@ -35,7 +35,18 @@ async function repositoryFixture() {
   return root
 }
 
-function world(selectedPath = "src/selected.ts", revision = 7): WorkingWorldSnapshot {
+function world(
+  selectedPath = "src/selected.ts",
+  revision = 7,
+  fileRef?: Readonly<{
+    projectIdentity: string
+    repositoryResourceKey: string
+    repositoryMountKey: string
+    worktreeKey: string | null
+    observedRevision: string
+    path: string
+  }>,
+): WorkingWorldSnapshot {
   return {
     ...createWorkingWorld({
       intent: "Implement the active outcome",
@@ -60,8 +71,8 @@ function world(selectedPath = "src/selected.ts", revision = 7): WorkingWorldSnap
         frame: { x: 0, y: 0, width: 800, height: 600 }, z: 1, minimized: false,
       }],
       openFiles: [selectedPath],
-      panes: [{ id: "workspace-pane", filePath: selectedPath, selection: null }],
-      selection: null,
+      panes: [{ id: "workspace-pane", filePath: selectedPath, selection: null, ...(fileRef ? { fileRef } : {}) }],
+      selection: fileRef ? { kind: "file", filePath: selectedPath, fileRef } : null,
       activeWindowId: "workspace-editor",
       activePaneId: "workspace-pane",
       runningAppUrl: null,
@@ -179,6 +190,95 @@ describe("server-derived Codex assignment", () => {
     expect(assignment.assignmentHash).toMatch(/^[0-9a-f]{64}$/)
     expect(assignment.binding.reservationVersion).toMatch(/^[0-9a-f]{64}$/)
     expect(assignment.binding.grantVersion).toBe("grant-hash")
+  })
+
+  it("binds a Core Seven assignment to the exact selected repository mount and revision", async () => {
+    const observedRevision = "b".repeat(40)
+    const fileRef = {
+      projectIdentity: "c:/work/terrafusion_os_1.0",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision,
+      path: "src/selected.ts",
+    }
+    const assignment = await deriveCodexAssignment({
+      userId: "owner-1",
+      worldId: "world-1",
+      projectRoot: "C:/physical/terrafusion-atlas",
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryResourceKey: "atlas",
+        repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryMountKey: "terrafusion:atlas:configured",
+        observedRevision,
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
+    }, {
+      loadRecord: async () => record({
+        world: world("src/selected.ts", 7, fileRef),
+        project: {
+          id: 1,
+          key: "terrafusion",
+          repositoryResourceKey: "atlas",
+          repositoryIdentity: "bsvalues/terrafusion-atlas",
+          repositoryMountKey: "terrafusion:atlas:configured",
+          observedRevision,
+        },
+      }),
+      inspectTarget: async (root) => {
+        expect(root).toBe("C:/physical/terrafusion-atlas")
+        return target
+      },
+    })
+
+    expect(assignment.binding).toMatchObject({
+      repositoryResourceKey: "atlas",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      observedRevision,
+    })
+    expect(assignment.selectedFileRef).toEqual(fileRef)
+  })
+
+  it("refuses a Core Seven assignment when the selected revision no longer matches the verified mount", async () => {
+    const fileRef = {
+      projectIdentity: "c:/work/terrafusion_os_1.0",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "b".repeat(40),
+      path: "src/selected.ts",
+    }
+
+    await expect(deriveCodexAssignment({
+      userId: "owner-1",
+      worldId: "world-1",
+      projectRoot: "C:/physical/terrafusion-atlas",
+      projectBinding: {
+        projectId: 1,
+        projectKey: "terrafusion",
+        repositoryResourceKey: "atlas",
+        repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryMountKey: "terrafusion:atlas:configured",
+        observedRevision: "c".repeat(40),
+        spaceIdentity: "c:/work/terrafusion_os_1.0",
+      },
+    }, {
+      loadRecord: async () => record({
+        world: world("src/selected.ts", 7, fileRef),
+        project: {
+          id: 1,
+          key: "terrafusion",
+          repositoryResourceKey: "atlas",
+          repositoryIdentity: "bsvalues/terrafusion-atlas",
+          repositoryMountKey: "terrafusion:atlas:configured",
+          observedRevision: "b".repeat(40),
+        },
+      }),
+      inspectTarget: async () => target,
+    })).rejects.toMatchObject({ code: "CODEX_ASSIGNMENT_REFUSED" })
   })
 
   it("accepts a normalized multi-path Work Order reservation while promoting only the selected file", async () => {

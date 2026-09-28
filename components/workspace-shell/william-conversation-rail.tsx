@@ -17,6 +17,7 @@ export function WilliamConversationRail({
   judgment,
   input,
   busy,
+  ready,
   judgmentBusy,
   canThinkAgain,
   canInspectJudgment,
@@ -41,6 +42,7 @@ export function WilliamConversationRail({
   judgment: string
   input: string
   busy: boolean
+  ready: boolean
   judgmentBusy: boolean
   canThinkAgain: boolean
   canInspectJudgment: boolean
@@ -161,11 +163,11 @@ export function WilliamConversationRail({
             onChange={(event) => onInput(event.target.value)}
             placeholder="Ask William about this Space"
             rows={3}
-            disabled={busy}
+            disabled={busy || !ready}
           />
           <div>
             <button type="button" className={spatial.williamLineButton} onClick={onOpenLine}><Command size={13} />The Line <kbd>Ctrl K</kbd></button>
-            <button type="submit" className={spatial.williamSendButton} aria-label="Send to William" disabled={busy || !input.trim()}>{busy ? "Thinking" : "Send"}<Send size={13} /></button>
+            <button type="submit" className={spatial.williamSendButton} aria-label="Send to William" disabled={busy || !ready || !input.trim()}>{busy ? "Thinking" : ready ? "Send" : "Opening Space"}<Send size={13} /></button>
           </div>
         </form>
 

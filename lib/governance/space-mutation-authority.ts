@@ -3,6 +3,7 @@ import { validateWorkingWorld } from "@/lib/environment/working-world"
 import { authorityGrantFactsFromRow, grantCovers, isGrantActive } from "@/lib/governance/authority"
 import { reservationCoversRequestedPath } from "@/lib/governance/work-context-gate"
 import { providedAuthorityRank, requiredAuthorityRank } from "@/lib/goal/taxonomy"
+import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export type SpaceMutationAuthorityRecord = Readonly<{
   world: Readonly<{
@@ -12,8 +13,15 @@ export type SpaceMutationAuthorityRecord = Readonly<{
     workOrderId: number | null
     resources: readonly string[]
     selectedPath: string | null
+    selectedFileRef?: WorkspaceFileRef | null
   }>
-  project: Readonly<{ id: number; key: string; repositoryIdentity: string }>
+  project: Readonly<{
+    id: number
+    key: string
+    repositoryResourceKey?: string
+    repositoryIdentity: string
+    repositoryRelationship?: string
+  }>
   outcome: Readonly<{ outcomeKey: string; lifecycleState: string; activeWorkOrderId: number | null }>
   workOrder: Readonly<{
     id: number
@@ -41,7 +49,10 @@ export type SpaceMutationAuthorityRecord = Readonly<{
 export type SpaceMutationProjectBinding = Readonly<{
   projectId: number
   projectKey: string
+  repositoryResourceKey?: string
   repositoryIdentity: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
   spaceIdentity: string
 }>
 
@@ -51,7 +62,10 @@ export type SpaceMutationAuthority = Readonly<{
   worldRevision: number
   projectId: number
   projectKey: string
+  repositoryResourceKey?: string
   repositoryIdentity: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
   outcomeKey: string
   workOrderId: number
   grantId: number
@@ -89,7 +103,9 @@ async function loadRecord(userId: string, worldId: string): Promise<SpaceMutatio
   const result = await pool.query(
     `SELECT world."snapshot" AS "worldSnapshot",
       project_row."id" AS "projectId", project_row."key" AS "projectKey",
+      project_resource."resourceKey" AS "repositoryResourceKey",
       project_resource."canonicalIdentity" AS "repositoryIdentity",
+      project_resource."relationship" AS "repositoryRelationship",
       outcome."outcomeKey", outcome."lifecycleState", outcome."activeWorkOrderId",
       work."id" AS "workOrderId", work."status" AS "workOrderStatus",
       work."authorityLevel" AS "workOrderAuthorityLevel", work."authorityGrantId",
@@ -100,6 +116,17 @@ async function loadRecord(userId: string, worldId: string): Promise<SpaceMutatio
       authority_row."allowedActions", authority_row."blockedActions",
       authority_row."expiresAt", authority_row."revokedAt"
     FROM "working_world" world
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        world."snapshot"::jsonb #>> '{space,selection,fileRef,repositoryResourceKey}',
+        (
+          SELECT pane #>> '{fileRef,repositoryResourceKey}'
+          FROM jsonb_array_elements(COALESCE(world."snapshot"::jsonb #> '{space,panes}', '[]'::jsonb)) pane
+          WHERE pane ->> 'id' = world."snapshot"::jsonb #>> '{space,activePaneId}'
+          LIMIT 1
+        )
+      ) AS "repositoryResourceKey"
+    ) selected_repository ON true
     LEFT JOIN "project" project_row
       ON project_row."userId" = world."userId"
       AND project_row."id" = (world."snapshot"::jsonb #>> '{spine,projectId}')::integer
@@ -107,7 +134,13 @@ async function loadRecord(userId: string, worldId: string): Promise<SpaceMutatio
       ON project_resource."userId" = project_row."userId"
       AND project_resource."projectId" = project_row."id"
       AND project_resource."type" = 'repo'
-      AND project_resource."relationship" = 'primary-repo'
+      AND (
+        project_resource."resourceKey" = selected_repository."repositoryResourceKey"
+        OR (
+          selected_repository."repositoryResourceKey" IS NULL
+          AND project_resource."relationship" = 'primary-repo'
+        )
+      )
     LEFT JOIN "outcome_queue_item" outcome
       ON outcome."userId" = world."userId"
       AND outcome."outcomeKey" = (world."snapshot"::jsonb #>> '{spine,outcomeKey}')
@@ -132,6 +165,7 @@ async function loadRecord(userId: string, worldId: string): Promise<SpaceMutatio
   }
   const activePane = snapshot.space?.panes.find((pane) => pane.id === snapshot.space?.activePaneId) ?? null
   const selectedPath = snapshot.space?.selection?.filePath ?? activePane?.filePath ?? null
+  const selectedFileRef = snapshot.space?.selection?.fileRef ?? activePane?.fileRef ?? null
   return {
     world: {
       revision: snapshot.space?.revision ?? 0,
@@ -140,8 +174,15 @@ async function loadRecord(userId: string, worldId: string): Promise<SpaceMutatio
       workOrderId: snapshot.spine.workOrderId,
       resources: snapshot.resources,
       selectedPath,
+      selectedFileRef,
     },
-    project: { id: Number(row.projectId), key: String(row.projectKey), repositoryIdentity: String(row.repositoryIdentity) },
+    project: {
+      id: Number(row.projectId),
+      key: String(row.projectKey),
+      repositoryResourceKey: row.repositoryResourceKey == null ? undefined : String(row.repositoryResourceKey),
+      repositoryIdentity: String(row.repositoryIdentity),
+      repositoryRelationship: row.repositoryRelationship == null ? undefined : String(row.repositoryRelationship),
+    },
     outcome: {
       outcomeKey: String(row.outcomeKey), lifecycleState: String(row.lifecycleState),
       activeWorkOrderId: row.activeWorkOrderId == null ? null : Number(row.activeWorkOrderId),
@@ -223,7 +264,10 @@ export async function deriveSpaceMutationAuthority(
   const base = {
     owner: input.userId, worldId: input.worldId, worldRevision: record.world.revision,
     projectId: record.project.id, projectKey: record.project.key,
+    ...(input.binding.repositoryResourceKey ? { repositoryResourceKey: input.binding.repositoryResourceKey } : {}),
     repositoryIdentity: record.project.repositoryIdentity, outcomeKey: record.outcome.outcomeKey,
+    ...(input.binding.repositoryMountKey ? { repositoryMountKey: input.binding.repositoryMountKey } : {}),
+    ...(input.binding.observedRevision ? { observedRevision: input.binding.observedRevision } : {}),
     workOrderId: record.workOrder.id, grantId: record.grant.id, actor,
   }
   if (input.target.kind === "selected-file") {
@@ -231,6 +275,26 @@ export async function deriveSpaceMutationAuthority(
       refuse("the requested capability does not match selected-file mutation authority")
     }
     const selectedPath = record.world.selectedPath
+    const selectedFileRef = record.world.selectedFileRef ?? null
+    if (selectedFileRef) {
+      if (!input.binding.repositoryResourceKey || !input.binding.repositoryMountKey || !input.binding.observedRevision
+        || selectedFileRef.projectIdentity !== input.binding.spaceIdentity
+        || selectedFileRef.repositoryResourceKey !== input.binding.repositoryResourceKey
+        || selectedFileRef.repositoryMountKey !== input.binding.repositoryMountKey
+        || selectedFileRef.observedRevision !== input.binding.observedRevision
+        || selectedFileRef.path !== selectedPath
+        || record.project.repositoryResourceKey !== selectedFileRef.repositoryResourceKey) {
+        refuse("the selected file is stale or belongs to a different verified repository mount")
+      }
+    } else if (record.project.repositoryRelationship !== undefined
+      && record.project.repositoryRelationship !== "primary-repo") {
+      refuse("a legacy path-only selection can bind only to the primary repository")
+    }
+    if (input.binding.repositoryResourceKey !== undefined
+      && record.project.repositoryResourceKey !== undefined
+      && input.binding.repositoryResourceKey !== record.project.repositoryResourceKey) {
+      refuse("the Space selection belongs to a different repository resource")
+    }
     if (!selectedPath || (input.target.requestedPath != null && selectedPath !== input.target.requestedPath)
       || allowed.length === 0 || !reservationCoversRequestedPath(selectedPath, allowed).ok
       || forbidden.some((reservation) => reservationCoversRequestedPath(selectedPath, [reservation]).ok)) {

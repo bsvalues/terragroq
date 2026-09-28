@@ -1,5 +1,11 @@
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { pool } from "@/lib/db"
+import {
+  verifyAssignmentContextManifest,
+  type AssignmentContextManifest,
+} from "@/lib/loom/assignment-context-manifest"
+import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
+import type { ContractReservation, EnvironmentReservation } from "@/lib/loom/repository-reservations"
 
 /**
  * Receipts for everything the workroom actually does.
@@ -41,6 +47,8 @@ export interface LoomCodexAssignmentReceipt {
   grantVersion: string
   allowed: readonly string[]
   forbidden: readonly string[]
+  contracts: readonly ContractReservation[]
+  environments: readonly EnvironmentReservation[]
   reservationVersion: string
   selectedPath: string
   assignmentHash: string
@@ -49,14 +57,123 @@ export interface LoomCodexAssignmentReceipt {
   executionBindingHash: string
   isolatedBaseSha: string
   resumed: boolean
+  repositoryResourceKey?: string
+  repositoryIdentity?: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
+  contextManifest?: AssignmentContextManifest
 }
 
 function isDigest(value: string, length = 64): boolean {
   return new RegExp(`^[0-9a-f]{${length}}$`, "i").test(value)
 }
 
+type RepositoryReceiptIdentity = Readonly<{
+  repositoryResourceKey: string
+  repositoryIdentity: string
+  repositoryMountKey: string
+  observedRevision: string
+}>
+
+/**
+ * A completely absent repository identity is a legacy primary-repository receipt. Once any part of
+ * the repository identity is present, all four immutable fields must match the server-owned catalog.
+ * This keeps old primary sessions readable without letting a new secondary-repository session shed
+ * the repository boundary that authorized it.
+ */
+function repositoryReceiptIdentity(input: Readonly<{
+  repositoryResourceKey?: unknown
+  repositoryIdentity?: unknown
+  repositoryMountKey?: unknown
+  observedRevision?: unknown
+}>): RepositoryReceiptIdentity | null {
+  const values = [
+    input.repositoryResourceKey,
+    input.repositoryIdentity,
+    input.repositoryMountKey,
+    input.observedRevision,
+  ]
+  if (values.every((value) => value === undefined || value === null)) return null
+  if (typeof input.repositoryResourceKey !== "string"
+    || typeof input.repositoryIdentity !== "string"
+    || typeof input.repositoryMountKey !== "string"
+    || typeof input.observedRevision !== "string"
+    || !/^[a-f0-9]{40,64}$/.test(input.observedRevision)) {
+    throw new Error("CODEX_RECEIPT_REPOSITORY_INVALID")
+  }
+  const selection = resolveWorkspaceRepositorySelection(
+    input.repositoryResourceKey === "williamos" ? "williamos" : "terrafusion",
+    input.repositoryResourceKey,
+  )
+  if (!selection.ok
+    || selection.repository.identity !== input.repositoryIdentity
+    || selection.repository.mountKey !== input.repositoryMountKey) {
+    throw new Error("CODEX_RECEIPT_REPOSITORY_INVALID")
+  }
+  return {
+    repositoryResourceKey: input.repositoryResourceKey,
+    repositoryIdentity: input.repositoryIdentity,
+    repositoryMountKey: input.repositoryMountKey,
+    observedRevision: input.observedRevision,
+  }
+}
+
+function exactStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && [...left].sort().every((value, index) => value === [...right].sort()[index])
+}
+
+function assignmentContextReceipt(input: Readonly<{
+  threadId: string
+  worldId: string
+  workOrderId: number
+  assignmentHash: string
+  allowed: readonly string[]
+  selectedPath: string
+  baseSha: string
+  repository: RepositoryReceiptIdentity | null
+  contextManifest?: AssignmentContextManifest
+}>): AssignmentContextManifest | null {
+  if (!input.repository && input.contextManifest === undefined) return null
+  const manifest = input.contextManifest
+  if (!input.repository || !manifest || !verifyAssignmentContextManifest(manifest).ok
+    || manifest.assignment.assignmentId !== input.threadId
+    || manifest.assignment.worldId !== input.worldId
+    || manifest.assignment.workOrderId !== input.workOrderId
+    || manifest.assignment.assignmentHash !== input.assignmentHash
+    || manifest.targetRepository.repositoryKey !== input.repository.repositoryResourceKey
+    || manifest.targetRepository.repositoryIdentity !== input.repository.repositoryIdentity
+    || manifest.checkout.repositoryMountKey !== input.repository.repositoryMountKey
+    || manifest.checkout.baseRevision !== input.repository.observedRevision
+    || manifest.checkout.baseRevision !== input.baseSha
+    || manifest.mutationPosture.target.repositoryKey !== input.repository.repositoryResourceKey
+    || manifest.mutationPosture.target.repositoryIdentity !== input.repository.repositoryIdentity
+    || !exactStrings(manifest.mutationPosture.target.writablePaths, input.allowed)
+    || !manifest.mutationPosture.target.writablePaths.includes(input.selectedPath)) {
+    throw new Error("CODEX_ASSIGNMENT_RECEIPT_CONTEXT_INVALID")
+  }
+  return manifest
+}
+
 /** Persist the immutable, server-derived assignment before any provider turn can execute. */
 export async function recordLoomCodexAssignment(input: LoomCodexAssignmentReceipt): Promise<void> {
+  let repository: RepositoryReceiptIdentity | null
+  try {
+    repository = repositoryReceiptIdentity(input)
+  } catch {
+    throw new Error("CODEX_ASSIGNMENT_RECEIPT_REPOSITORY_INVALID")
+  }
+  const contextManifest = assignmentContextReceipt({
+    threadId: input.threadId,
+    worldId: input.worldId,
+    workOrderId: input.workOrderId,
+    assignmentHash: input.assignmentHash,
+    allowed: input.allowed,
+    selectedPath: input.selectedPath,
+    baseSha: input.isolatedBaseSha,
+    repository,
+    contextManifest: input.contextManifest,
+  })
   if (!input.userId || !input.threadId || !input.worldId || !input.outcomeKey
     || !input.selectedPath || !input.workspace || input.taskText.length > 32_000
     || !isDigest(input.assignmentHash) || !isDigest(input.taskDigest)
@@ -90,6 +207,8 @@ export async function recordLoomCodexAssignment(input: LoomCodexAssignmentReceip
     reservation: {
       allowed: [...input.allowed],
       forbidden: [...input.forbidden],
+      contracts: [...input.contracts],
+      environments: [...input.environments],
       version: input.reservationVersion,
     },
     promotionPath: input.selectedPath,
@@ -97,6 +216,8 @@ export async function recordLoomCodexAssignment(input: LoomCodexAssignmentReceip
     task: { digest: input.taskDigest, text: input.taskText },
     executionBindingHash: input.executionBindingHash,
     isolatedBaseSha: input.isolatedBaseSha,
+    ...(repository ?? {}),
+    ...(contextManifest ? { contextManifest } : {}),
   }
   const result = await pool.query(
     `INSERT INTO "governance_event"
@@ -125,6 +246,11 @@ export async function commitLoomCodexSuccess(input: {
   baseSha: string
   taskDigest: string
   executionBindingHash: string
+  repositoryResourceKey?: string
+  repositoryIdentity?: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
+  contextManifest?: AssignmentContextManifest
   promotionAudit: Readonly<{
     userId: string
     path: string
@@ -134,6 +260,23 @@ export async function commitLoomCodexSuccess(input: {
     modifiedAt?: string
   }>
 }): Promise<void> {
+  let repository: RepositoryReceiptIdentity | null
+  try {
+    repository = repositoryReceiptIdentity(input)
+  } catch {
+    throw new Error("CODEX_SUCCESS_RECEIPT_REPOSITORY_INVALID")
+  }
+  const contextManifest = assignmentContextReceipt({
+    threadId: input.threadId,
+    worldId: input.worldId,
+    workOrderId: input.workOrderId,
+    assignmentHash: input.assignmentHash,
+    allowed: input.contextManifest?.mutationPosture.target.writablePaths ?? [],
+    selectedPath: input.selectedPath,
+    baseSha: input.baseSha,
+    repository,
+    contextManifest: input.contextManifest,
+  })
   if (input.promotionAudit.userId !== input.userId
     || input.promotionAudit.path !== input.selectedPath
     || input.promotionAudit.outcome !== "SAVED"
@@ -163,6 +306,8 @@ export async function commitLoomCodexSuccess(input: {
     baseSha: input.baseSha,
     taskDigest: input.taskDigest,
     executionBindingHash: input.executionBindingHash,
+    ...(repository ?? {}),
+    ...(contextManifest ? { contextManifest } : {}),
   }
   try {
     await client.query("BEGIN")
@@ -181,6 +326,7 @@ export async function commitLoomCodexSuccess(input: {
         assignmentHash: input.assignmentHash,
         promotionDigest: input.promotionDigest,
         executionBindingHash: input.executionBindingHash,
+        ...(repository ?? {}),
       })],
     )
     await client.query(

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 
 import {
   normalizeRepositoryIdentity,
@@ -14,6 +16,7 @@ const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
 const originalSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
 const originalWilliamOsRoot = process.env.WILLIAMOS_PROJECT_ROOT
 const originalWilliamOsSpaceIdentity = process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
+const originalAtlasRoot = process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT
 
 afterEach(() => {
   if (originalRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
@@ -24,6 +27,8 @@ afterEach(() => {
   else process.env.WILLIAMOS_PROJECT_ROOT = originalWilliamOsRoot
   if (originalWilliamOsSpaceIdentity === undefined) delete process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY
   else process.env.WILLIAMOS_PROJECT_SPACE_IDENTITY = originalWilliamOsSpaceIdentity
+  if (originalAtlasRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT
+  else process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = originalAtlasRoot
 })
 
 function dependencies(
@@ -31,7 +36,11 @@ function dependencies(
     projectId: number
     projectKey: string
     projectName: string
+    repositoryResourceId?: number
     repositoryIdentity: string
+    repositoryLabel?: string
+    repositoryKey?: string | null
+    repositoryRelationship?: string
   }>[] = [{
     projectId: 2,
     projectKey: "terrafusion",
@@ -44,6 +53,7 @@ function dependencies(
     loadProjectRows: async () => rows,
     readGitRemoteOrigin: async () => remote,
     readGitTopLevel: async (root) => root,
+    readGitRevision: async () => "1".repeat(40),
     realpath: async (root) => root,
   }
 }
@@ -98,6 +108,284 @@ describe("TerraFusion workspace Project binding", () => {
       "owner",
       dependencies(undefined, "git@github.com:bsvalues/terragroq.git"),
     )).resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
+  })
+
+  it("resolves an Atlas operation through its server-owned verified mount", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const atlasRow = {
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "suite-source",
+    }
+
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      dependencies([atlasRow], "git@github.com:bsvalues/terrafusion-atlas.git"),
+      "atlas",
+    )).resolves.toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        repositoryKey: "atlas",
+        repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryRole: "suite-source",
+        repositoryLabel: "Atlas",
+        repositoryPreviewSource: false,
+        repositoryMountKey: "terrafusion:atlas:configured",
+        observedRevision: "1".repeat(40),
+        workspaceRoot: expect.stringMatching(/repos[\\/]terrafusion-atlas$/),
+      }),
+    })
+  })
+
+  it("resolves one repository operation without rebuilding the full Core Seven catalog", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const rows = [{
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "suite-source",
+    }]
+    let projectReads = 0
+    let remoteReads = 0
+    const seams: WorkspaceProjectBindingDependencies = {
+      ...dependencies(rows),
+      loadProjectRows: async () => {
+        projectReads += 1
+        return rows
+      },
+      readGitRemoteOrigin: async () => {
+        remoteReads += 1
+        return "git@github.com:bsvalues/terrafusion-atlas.git"
+      },
+    }
+
+    const result = await resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      seams,
+      "atlas",
+    )
+
+    expect(result.ok).toBe(true)
+    expect(projectReads).toBe(1)
+    expect(remoteReads).toBe(1)
+  })
+
+  it("does not truncate the persisted repository estate at an arbitrary row count", async () => {
+    const source = await readFile(path.join(process.cwd(), "lib/projects/workspace-project-binding.ts"), "utf8")
+    const loader = source.slice(source.indexOf("async loadProjectRows"), source.indexOf("readGitRemoteOrigin,"))
+
+    expect(loader).not.toMatch(/\.limit\(\d+\)/)
+  })
+
+  it("projects all Core Seven repositories with independent mount truth into the Space Project", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const rows = [
+      {
+        projectId: 2,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion OS",
+        repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+        repositoryKey: "os-1",
+        repositoryRelationship: "primary-repo",
+      },
+      {
+        projectId: 2,
+        projectKey: "terrafusion",
+        projectName: "TerraFusion OS",
+        repositoryIdentity: "bsvalues/terrafusion-atlas",
+        repositoryKey: "atlas",
+        repositoryRelationship: "suite-source",
+      },
+    ]
+    const seams: WorkspaceProjectBindingDependencies = {
+      loadProjectRows: async () => rows,
+      readGitRemoteOrigin: async (root) => root.endsWith("terrafusion-atlas")
+        ? "git@github.com:bsvalues/terrafusion-atlas.git"
+        : "git@github.com:bsvalues/terrafusion_os_1.0.git",
+      readGitTopLevel: async (root) => root,
+      readGitRevision: async (root) => root.endsWith("terrafusion-atlas") ? "a".repeat(40) : "1".repeat(40),
+      readGitBranch: async (root) => root.endsWith("terrafusion-atlas") ? "feature/atlas" : "main",
+      realpath: async (root) => root,
+    }
+
+    const result = await resolveTerraFusionWorkspaceBinding("owner", seams)
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        project: expect.objectContaining({
+          repositories: expect.arrayContaining([
+            expect.objectContaining({
+              key: "os-1",
+              role: "integrated-runtime",
+              previewSource: true,
+              mount: {
+                key: "terrafusion:os-1:configured",
+                configured: true,
+                verified: true,
+                branch: "main",
+                revision: "1".repeat(40),
+                refusal: null,
+              },
+            }),
+            expect.objectContaining({
+              key: "atlas",
+              role: "suite-source",
+              mount: {
+                key: "terrafusion:atlas:configured",
+                configured: true,
+                verified: true,
+                branch: "feature/atlas",
+                revision: "a".repeat(40),
+                refusal: null,
+              },
+            }),
+            expect.objectContaining({
+              key: "sovereign-os",
+              role: "sovereign-planning-and-promotion",
+              previewSource: false,
+              mount: {
+                key: "terrafusion:sovereign-os:configured",
+                configured: false,
+                verified: false,
+                branch: null,
+                revision: null,
+                refusal: "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED",
+              },
+            }),
+          ]),
+        }),
+      }),
+    })
+    if (!result.ok) throw new Error(result.error)
+    expect(result.binding.project.repositories).toHaveLength(7)
+  })
+
+  it("keeps explicitly attached historical repositories outside the Core Seven and read-only by default", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    const rows = [{
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryResourceId: 8,
+      repositoryIdentity: "bsvalues/TerraFusionSync",
+      repositoryKey: "terrafusion-sync-history",
+      repositoryRelationship: "attached-source",
+      repositoryLabel: "TerraFusionSync history",
+    }, {
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryResourceId: 2,
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0",
+      repositoryKey: "os-1",
+      repositoryRelationship: "primary-repo",
+      repositoryLabel: "OS 1.0",
+    }]
+
+    const result = await resolveTerraFusionWorkspaceBinding("owner", dependencies(rows))
+
+    if (!result.ok) throw new Error(result.error)
+    expect(result.binding.project.repositories).toHaveLength(8)
+    expect(result.binding.project.repositories?.at(-1)).toEqual({
+      repositoryResourceId: 8,
+      key: "terrafusion-sync-history",
+      identity: "bsvalues/terrafusionsync",
+      label: "TerraFusionSync history",
+      role: "attached-source",
+      suite: null,
+      previewSource: false,
+      defaultRepository: false,
+      mount: {
+        key: "terrafusion:terrafusion-sync-history:attached",
+        configured: false,
+        verified: false,
+        branch: null,
+        revision: null,
+        refusal: "ATTACHED_SOURCE_READ_ONLY_REFERENCE",
+      },
+    })
+  })
+
+  it("fails closed for an unknown, unconfigured, or mismatched Core Seven mount", async () => {
+    const loadProjectRows = async () => {
+      throw new Error("catalog rejection must happen before durable lookup")
+    }
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner", "terrafusion", { ...dependencies(), loadProjectRows }, "TerraFusionSync",
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_REPOSITORY_UNKNOWN" })
+
+    delete process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner", "terrafusion", dependencies(), "atlas",
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_REPOSITORY_MOUNT_NOT_CONFIGURED" })
+
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const atlasRow = {
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "suite-source",
+    }
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      dependencies([atlasRow], "git@github.com:bsvalues/terrafusion-forge.git"),
+      "atlas",
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" })
+  })
+
+  it("refuses a repository resource whose persisted role does not match the server catalog", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const wronglyClassifiedAtlas = {
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "sovereign-planning-and-promotion",
+    }
+
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      dependencies([wronglyClassifiedAtlas], "git@github.com:bsvalues/terrafusion-atlas.git"),
+      "atlas",
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_REPOSITORY_RESOURCE_INVALID" })
+  })
+
+  it("refuses a selected mount whose current revision cannot be verified", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ATLAS_ROOT = "/repos/terrafusion-atlas"
+    const atlasRow = {
+      projectId: 2,
+      projectKey: "terrafusion",
+      projectName: "TerraFusion OS",
+      repositoryIdentity: "bsvalues/terrafusion-atlas",
+      repositoryKey: "atlas",
+      repositoryRelationship: "suite-source",
+    }
+    const seams = dependencies([atlasRow], "git@github.com:bsvalues/terrafusion-atlas.git")
+
+    await expect(resolveCanonicalWorkspaceProjectBinding(
+      "owner",
+      "terrafusion",
+      { ...seams, readGitRevision: async () => "not-a-commit" },
+      "atlas",
+    )).resolves.toEqual({ ok: false, error: "WORKSPACE_REVISION_UNAVAILABLE" })
   })
 
   it("verifies a bootstrap checkout against canonical TerraFusion without trusting the browser", async () => {
@@ -164,10 +452,10 @@ describe("TerraFusion workspace Project binding", () => {
       ok: true,
       binding: expect.objectContaining({
         workspaceRoot: expect.stringMatching(/physical[\\/]terrafusion$/),
-        project: {
+        project: expect.objectContaining({
           identity: expect.stringMatching(/links[\\/]terrafusion$/),
           name: "TerraFusion OS",
-        },
+        }),
       }),
     })
   })
@@ -183,10 +471,10 @@ describe("TerraFusion workspace Project binding", () => {
       binding: expect.objectContaining({
         configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terrafusion_os_1\.0$/),
         workspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terrafusion_os_1\.0$/),
-        project: {
+        project: expect.objectContaining({
           identity: expect.stringMatching(/repos[\\/]original[\\/]terrafusion_os_1\.0$/),
           name: "TerraFusion OS",
-        },
+        }),
       }),
     })
   })
@@ -222,7 +510,11 @@ describe("WilliamOS workspace Project binding", () => {
     projectId: 1,
     projectKey: "williamos",
     projectName: "WilliamOS",
+    repositoryResourceId: 1,
     repositoryIdentity: "bsvalues/terragroq",
+    repositoryKey: "williamos",
+    repositoryRelationship: "primary-repo",
+    repositoryLabel: "WilliamOS",
   }
 
   it("binds only the declared WilliamOS checkout to the canonical TerraGroq repository", async () => {
@@ -238,7 +530,28 @@ describe("WilliamOS workspace Project binding", () => {
         projectName: "WilliamOS",
         repositoryIdentity: "bsvalues/terragroq",
         workspaceAppUrl: null,
-        project: expect.objectContaining({ name: "WilliamOS", identity: expect.stringMatching(/repos[\\/]terragroq$/) }),
+        project: expect.objectContaining({
+          name: "WilliamOS",
+          identity: expect.stringMatching(/repos[\\/]terragroq$/),
+          repositories: [{
+            repositoryResourceId: 1,
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            label: "WilliamOS",
+            role: "integrated-runtime",
+            suite: null,
+            previewSource: true,
+            defaultRepository: true,
+            mount: {
+              key: "williamos:williamos:configured",
+              configured: true,
+              verified: true,
+              branch: null,
+              revision: "1".repeat(40),
+              refusal: null,
+            },
+          }],
+        }),
       }),
     })
   })
@@ -255,7 +568,15 @@ describe("WilliamOS workspace Project binding", () => {
       ok: true,
       binding: expect.objectContaining({
         configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terragroq$/),
-        project: { identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/), name: "WilliamOS" },
+        project: expect.objectContaining({
+          identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/),
+          name: "WilliamOS",
+          repositories: [expect.objectContaining({
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mount: expect.objectContaining({ verified: true, revision: "1".repeat(40) }),
+          })],
+        }),
       }),
     })
   })

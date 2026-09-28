@@ -3,6 +3,11 @@ import os from "node:os"
 import path from "node:path"
 
 import {
+  EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+  compareCanonicalStrings,
+  isCanonicalGitHubRepositoryIdentity,
+} from "../../lib/outcome-queue/contract.mjs"
+import {
   acquireNextEligibleOutcome,
   bindOutcomeQueueWorkOrder,
   completeOutcomeQueueItem,
@@ -66,6 +71,72 @@ import { createRuntimeFindingDbConsumer } from "../runtime-findings/db-consumer.
 
 const DECLARED_PRIMARY_EMAIL = "bsvalues@gmail.com"
 const QUEUE_LEASE_DURATION_MS = 50 * 60 * 1000
+const PARENT_MISSION_NO_SELECTION_REASONS = new Set([
+  "ORPHANED_ACTIVE_MISSION",
+  "PARENT_MISSION_BINDING_REQUIRED",
+])
+
+function unresolvedParentMissionSelection(acquired) {
+  if (!PARENT_MISSION_NO_SELECTION_REASONS.has(acquired?.reason)) return null
+  const state = acquired?.parentMissions
+  const unresolved = state?.unresolved
+  const exactKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+  const canonicalText = (value, maxLength) => typeof value === "string"
+    && value.length > 0 && value.length <= maxLength
+    && value.trim() === value && !value.includes("\0")
+  const validIdentity = (mission, resolved = false) => {
+    const keys = ["missionKey", "externalRef", "goalRef", "worldId", "projectId", "repository"]
+    if (resolved) keys.push("terminalState")
+    if (!exactKeys(mission, keys)
+      || !isCanonicalGitHubRepositoryIdentity(mission.repository)
+      || !canonicalText(mission.externalRef, 300)
+      || !canonicalText(mission.goalRef, 200) || !canonicalText(mission.worldId, 200)
+      || !Number.isSafeInteger(mission.projectId) || mission.projectId <= 0
+      || (resolved && !["SATISFIED", "REVOKED"].includes(mission.terminalState))) return false
+    const external = /^github:([^#]+)#([1-9][0-9]*)$/.exec(mission.externalRef)
+    if (!external || external[1] !== mission.repository) return false
+    const issueNumber = Number(external[2])
+    if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) return false
+    const expectedMissionKey = `external-parent:${canonicalDigest({
+      version: EXTERNAL_PARENT_MISSION_BINDING_VERSION,
+      source: "github",
+      repository: mission.repository,
+      externalRef: mission.externalRef,
+      issueNumber,
+      goalRef: mission.goalRef,
+    })}`
+    return mission.missionKey === expectedMissionKey
+  }
+  const canonicallyOrdered = (missions) => missions.every((mission, index) => (
+    index === 0 || compareCanonicalStrings(missions[index - 1].missionKey, mission.missionKey) < 0
+  ))
+  const exactState = state && typeof state === "object"
+    && Object.keys(state).sort().join("\0") === "integrity\0resolved\0unresolved"
+    && Array.isArray(state.resolved) && Array.isArray(unresolved)
+  const exactNoSelection = acquired?.outcome === null && acquired?.acquired === false
+    && acquired?.replayed === false && acquired?.reclaimed === false
+  const valid = acquired.reason === "ORPHANED_ACTIVE_MISSION"
+    ? exactNoSelection && exactState && state.integrity === "VERIFIED" && unresolved.length > 0
+      && unresolved.every((mission) => validIdentity(mission))
+      && state.resolved.every((mission) => validIdentity(mission, true))
+      && canonicallyOrdered(unresolved) && canonicallyOrdered(state.resolved)
+      && new Set([...unresolved, ...state.resolved].map((mission) => mission.missionKey)).size
+        === unresolved.length + state.resolved.length
+    : exactNoSelection && exactState && state.integrity === "BINDING_REQUIRED"
+      && unresolved.length === 0 && state.resolved.length === 0
+  if (!valid) {
+    wall("Unresolved parent mission selection evidence is invalid",
+      "HERMES_OUTCOME_QUEUE_PARENT_MISSION_PROOF_WALL")
+  }
+  return {
+    result: acquired.reason === "ORPHANED_ACTIVE_MISSION"
+      ? "PARENT_MISSION_CHILD_DERIVATION_UNAVAILABLE"
+      : "PARENT_MISSION_BINDING_REQUIRED",
+    reasonCode: acquired.reason,
+    parentMissions: state,
+  }
+}
 
 function wall(message, code) {
   throw Object.assign(new Error(message), { code })
@@ -1370,6 +1441,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         checkpointProofProvider,
         now: now(),
       })
+      const parentMissionSelection = unresolvedParentMissionSelection(acquired)
+      if (parentMissionSelection) return parentMissionSelection
       if (!acquired?.outcome || !acquired.acquired) return null
       const item = acquired.outcome
       try {

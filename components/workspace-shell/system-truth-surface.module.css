@@ -1,0 +1,77 @@
+.surface {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #0d110d;
+}
+
+.meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #283027;
+  color: #91a08d;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9.5px;
+}
+
+.controls { display: flex; gap: 6px; }
+
+.button {
+  border: 1px solid #3b4939;
+  border-radius: 5px;
+  padding: 5px 8px;
+  background: #151c15;
+  color: #b9c7b5;
+  font: inherit;
+  cursor: pointer;
+}
+.button:hover { border-color: #70836b; background: #1a231a; }
+.button:disabled { cursor: default; opacity: .45; }
+
+.body {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: #b6c0b2;
+}
+
+.row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.subhead { margin: 4px 0 0; color: #748070; font-size: 9px; text-transform: uppercase; letter-spacing: .18em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips span {
+  border: 1px solid #283027;
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: #101510;
+}
+
+.signals { display: flex; flex-direction: column; gap: 8px; padding: 0; }
+.signals li {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr) 5.5rem;
+  column-gap: 8px;
+  row-gap: 1px;
+  border: 1px solid #1c241b;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: #0f140f;
+}
+.signals li strong { color: #d4e3cf; }
+.signals li > span:last-child { grid-column: 1 / -1; }
+
+.issues { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid #79514a; border-radius: 6px; background: #21130f; }
+
+.pass { color: #90c27f; }
+.warn { color: #c2a06f; }
+.fail { color: #d38b78; }
+.muted { color: #778273; }
+
+.footer { margin-top: auto; padding-top: 8px; border-top: 1px solid #1c241b; color: #667262; font-size: 9.5px; }

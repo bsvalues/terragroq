@@ -6,11 +6,26 @@ Pure reads — never modifies anything.
 
 import json
 import os
+import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 VAULT = PROJECT_ROOT / os.environ.get("WILLIAMOS_VAULT", "WilliamOS")
+
+
+def _git(*args):
+    """Run a read-only git command in the project root; None on any failure."""
+    try:
+        r = subprocess.run(
+            ["git", *args],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
 
 DRAFT_FOLDERS = {
     "doctrine": VAULT / "80_DoctrinePromotion" / "drafts",
@@ -42,6 +57,20 @@ def _today():
 
 def _posix(p: Path) -> str:
     return str(p).replace("\\", "/")
+
+
+def _display_path(p: Path) -> str:
+    """Posix path, relative to the project root when it is inside it.
+
+    WILLIAMOS_VAULT is a documented override, so the vault may legitimately live
+    outside the repository. relative_to() raises in that case, which turned a
+    supported configuration into a crash in the review queue summary.
+    """
+    try:
+        return _posix(p.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return _posix(p)
+
 
 
 def _parse_frontmatter(text: str) -> tuple:
@@ -128,14 +157,31 @@ def get_latest_cockpit() -> dict | None:
 
 
 def get_review_queue_summary() -> dict:
+    """Summarise the promotion draft queues.
+
+    A missing draft folder and an empty draft folder are different facts. The
+    earlier shape reported ``count: 0`` for both, so a queue whose directory did
+    not exist was indistinguishable from a queue that was genuinely clear — and
+    the product reported "0 pending" as health. Each queue now carries explicit
+    ``exists``/``status``, and the summary names the unavailable ones so the
+    condition is visible instead of inferred.
+
+    The remedy for a missing queue is the product's own scaffold:
+    ``python scripts/william.py init`` creates every REQUIRED_DIRS entry.
+    """
     queues = {}
+    unavailable = []
     for name, folder in DRAFT_FOLDERS.items():
+        path = _display_path(folder)
         if folder.exists():
             count = sum(1 for f in folder.glob("*.md"))
-            queues[name] = {"count": count, "path": _posix(folder.relative_to(PROJECT_ROOT))}
+            queues[name] = {"count": count, "path": path, "exists": True, "status": "ok"}
         else:
-            queues[name] = {"count": 0, "path": _posix(folder.relative_to(PROJECT_ROOT))}
-    queues["total"] = sum(q["count"] for q in queues.values())
+            unavailable.append(name)
+            queues[name] = {"count": 0, "path": path, "exists": False, "status": "MISSING"}
+    queues["total"] = sum(q["count"] for q in queues.values() if isinstance(q, dict))
+    queues["unavailable"] = unavailable
+    queues["healthy"] = not unavailable
     return queues
 
 
@@ -149,35 +195,50 @@ def get_backup_info() -> dict:
 
 
 def get_git_info() -> dict:
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-        )
-        latest = r.stdout.strip() if r.returncode == 0 else None
-    except Exception:
-        latest = None
+    latest = _git("log", "--oneline", "-1")
 
-    try:
-        r2 = subprocess.run(
-            ["git", "remote"],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-        )
-        has_remote = bool(r2.stdout.strip()) if r2.returncode == 0 else False
-    except Exception:
-        has_remote = False
+    # The branch name is its own fact. It was previously absent from this dict,
+    # so consumers fell back to the commit subject and the briefing displayed a
+    # commit message in the branch field.
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":  # detached HEAD carries no branch name
+        branch = None
 
-    try:
-        r3 = subprocess.run(
-            ["git", "tag", "-l"],
-            capture_output=True, text=True, cwd=str(PROJECT_ROOT),
-        )
-        tags = [t.strip() for t in r3.stdout.strip().split("\n") if t.strip()] if r3.returncode == 0 else []
-    except Exception:
-        tags = []
+    has_remote = bool(_git("remote"))
 
-    return {"latest_commit": latest, "has_remote": has_remote, "tags": tags}
+    tag_out = _git("tag", "-l")
+    tags = [t.strip() for t in tag_out.split("\n") if t.strip()] if tag_out else []
+
+    return {"branch": branch, "latest_commit": latest, "has_remote": has_remote, "tags": tags}
+
+
+def _version_key(tag: str):
+    """Sort key for tags like v1.2.0 / v1.3.1, so 'latest' is not alphabetical."""
+    nums = [int(n) for n in re.findall(r"\d+", tag)]
+    return (len(nums), nums)
+
+
+def get_version_info() -> dict:
+    """Resolve the product version from a single source of truth.
+
+    Three unrelated numbers were reported for one release: the FastAPI app
+    version, the /api/status version, a hard-coded engine string, and the git
+    tags. The tags are the real history, so they are the source; an explicit
+    WILLIAMOS_VERSION override is honoured for packaged builds; when neither is
+    available the version is ``unknown`` rather than a guessed literal.
+    """
+    override = os.environ.get("WILLIAMOS_VERSION")
+    if override:
+        return {"version": override, "version_source": "env", "latest_tag": override}
+
+    tag_out = _git("tag", "-l")
+    tags = [t.strip() for t in tag_out.split("\n") if t.strip()] if tag_out else []
+    if not tags:
+        return {"version": "unknown", "version_source": "unknown", "latest_tag": None}
+
+    latest = max(tags, key=_version_key)
+    return {"version": latest, "version_source": "git-tag", "latest_tag": latest}
+
 
 
 def get_home_summary() -> dict:

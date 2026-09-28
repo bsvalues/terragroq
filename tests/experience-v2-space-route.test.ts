@@ -115,7 +115,7 @@ describe("Experience V2 Space route", () => {
     }))],
     ["PATCH", () => PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "a", projectKey: "foreign" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "a", projectKey: "foreign", adoptionHash: "d".repeat(64) }),
     }))],
   ])("rejects an unregistered %s project selector before binding or persistence", async (_method, invoke) => {
     seams.resolveBinding.mockClear()
@@ -205,7 +205,7 @@ describe("Experience V2 Space route", () => {
     expect(await response.json()).toEqual({ error: "SPACE_PERSISTENCE_UNAVAILABLE" })
   })
 
-  it("returns a typed conflict when the bounded project collection already has twelve Spaces", async () => {
+  it("returns a typed conflict when the bounded project collection is full", async () => {
     seams.create.mockRejectedValueOnce(new Error("SPACE_LIMIT_REACHED"))
     const response = await POST(new Request("http://localhost/api/environment/space", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Thirteen" }),
@@ -216,6 +216,21 @@ describe("Experience V2 Space route", () => {
 })
 
 describe("merged external Space delivery finalization", () => {
+  it("accepts an admission without an artifact target and rejects an explicit partial target", async () => {
+    await import("@/app/api/environment/space/route")
+    const valid = (globalThis as Record<string, unknown>)
+      .__williamosMergedExternalAdmittedPullRequestIsValid as (value: unknown) => boolean
+
+    expect(valid(undefined)).toBe(true)
+    expect(valid({ number: 1148, headSha: "a".repeat(40) })).toBe(true)
+    expect(valid({ number: 1148 })).toBe(false)
+    expect(valid({ headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: "1148", headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: true, headSha: "a".repeat(40) })).toBe(false)
+    expect(valid({ number: 1148, headSha: "a".repeat(40), widened: true })).toBe(false)
+    expect(valid(null)).toBe(false)
+  })
+
   it("accepts only the known raw-pg delivery expiry representation while live authority is fresh", async () => {
     await import("@/app/api/environment/space/route")
     const expiryIsExact = (globalThis as Record<string, unknown>)
@@ -343,11 +358,13 @@ describe("merged external Space delivery finalization", () => {
     expect(exact(["owner/path.ts"], queueBlocked)).toBe(false)
   })
 
-  it("requires the locked Space revision to equal the signed revision", () => {
+  it("accepts monotonic Space saves after the signed authority snapshot and rejects rollback", () => {
     const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalSpaceRevisionIsExact as (input: Record<string, unknown>) => boolean
     const active = { persistedRevision: 7, signedRevision: 7, lifecycleState: "active", workOrderStatus: "active" }
     expect(exact(active)).toBe(true)
-    expect(exact({ ...active, persistedRevision: 8 })).toBe(false)
+    expect(exact({ ...active, persistedRevision: 19 })).toBe(true)
+    expect(exact({ ...active, persistedRevision: 6 })).toBe(false)
+    expect(exact({ ...active, signedRevision: 20 })).toBe(false)
     expect(exact({ ...active, persistedRevision: "7" })).toBe(false)
     const replay = { ...active, lifecycleState: "completed", workOrderStatus: "closed" }
     expect(exact({ ...replay, persistedRevision: 8 })).toBe(true)
@@ -362,7 +379,7 @@ describe("merged external Space delivery finalization", () => {
     const context = {
       owner: "owner", worldId: "space-1", spaceRevision: 0,
       workspace: "C:/HermesLab/williamos-source", repository: "https://github.com/bsvalues/terragroq",
-      pullRequest: 1124, admittedHeadSha: "a".repeat(40),
+      pullRequest: 1139, admittedHeadSha: "c".repeat(40),
       outcome: { id: 48, key: "external:anchor", version: 1 },
       workOrder: { id: 74, ref: "WO-74", version: "2026-09-01T19:07:15.475Z" },
       grant: { id: 79, ref: "GRANT-79", version: "b".repeat(64), expiresAt: "2026-09-04T19:07:15.475Z" },
@@ -370,7 +387,7 @@ describe("merged external Space delivery finalization", () => {
       reservation: { allowed: artifactAllowed, forbidden, version: "c".repeat(64) },
     }
     const artifact = {
-      pullRequest: 1124, headSha: "a".repeat(40), pullRequestBaseSha: "d".repeat(40),
+      pullRequest: 1139, headSha: "c".repeat(40), pullRequestBaseSha: "d".repeat(40),
       baseRefSha: "e".repeat(40), baseSha: "f".repeat(40), paths: artifactAllowed,
     }
     const previewDigest = hashRecord({ version: "williamos-delivery-seal.v2", value: { context, artifact } })
@@ -382,7 +399,7 @@ describe("merged external Space delivery finalization", () => {
     const base = {
       authorizationMetadata: { adoptionHash, previewDigest, idempotencyKey, context, artifact },
       userId: "owner", worldId: "space-1", repository: "bsvalues/terragroq",
-      pullRequest: 1124, headSha: "a".repeat(40), spaceRevision: 0,
+      pullRequest: 1139, headSha: "c".repeat(40), spaceRevision: 0,
       outcome: context.outcome, workOrder: context.workOrder,
       implementationGrant: { id: 79, ref: "GRANT-79", version: "b".repeat(64) },
       anchorAllowed, anchorForbidden: forbidden,
@@ -391,6 +408,7 @@ describe("merged external Space delivery finalization", () => {
       signedAdoptionHash: adoptionHash, signedReservation: context.reservation,
     }
     expect(exact(base)).toBe(true)
+    expect(exact({ ...base, headSha: "a".repeat(40) })).toBe(false)
     expect(exact({ ...base, anchorAllowed: artifactAllowed })).toBe(false)
     expect(exact({ ...base, admittedAllowed: artifactAllowed })).toBe(false)
     expect(exact({ ...base, admittedForbidden: [...forbidden].reverse() })).toBe(false)
@@ -399,7 +417,7 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({ ...base, authorizationMetadata: { ...base.authorizationMetadata, previewDigest: "0".repeat(64) } })).toBe(false)
   })
 
-  it("loads an exact delivery subset without conflating it with the full anchor reservation", () => {
+  it("keeps an exact prospective adoption distinct from the historical implementation anchor", () => {
     const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalDeliveryPathsAreExact as (input: Record<string, unknown>) => boolean
     const anchorPaths = [
       "app/api/environment/space/route.ts",
@@ -412,7 +430,12 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({ ...base, artifactPaths: [anchorPaths[1], ...artifactPaths] })).toBe(false)
     expect(exact({ ...base, reservationPaths: anchorPaths })).toBe(false)
     expect(exact({ ...base, deliveryPaths: anchorPaths })).toBe(false)
-    expect(exact({ ...base, anchorPaths: [artifactPaths[0]] })).toBe(false)
+    expect(exact({ ...base, anchorPaths: [` ${anchorPaths[0]}`, ...anchorPaths.slice(1)] })).toBe(false)
+    const deliveryOnlyPaths = [...artifactPaths, "lib/governance/git-delivery.ts"].sort()
+    expect(exact({
+      anchorPaths, artifactPaths: deliveryOnlyPaths,
+      reservationPaths: deliveryOnlyPaths, deliveryPaths: deliveryOnlyPaths,
+    })).toBe(true)
     const directoryArtifactPaths = ["app/api/environment/space/route.ts", "tests/experience-v2-space-route.test.ts"]
     expect(exact({
       anchorPaths: ["app/**", "tests/**"], artifactPaths: directoryArtifactPaths,
@@ -421,7 +444,31 @@ describe("merged external Space delivery finalization", () => {
     expect(exact({
       anchorPaths: ["app/**", "tests/**"], artifactPaths: ["testosterone/escape.ts"],
       reservationPaths: ["testosterone/escape.ts"], deliveryPaths: ["testosterone/escape.ts"],
-    })).toBe(false)
+    })).toBe(true)
+  })
+
+  it("requires canonical ledger identities for the sealed finalization evidence chain", () => {
+    const exact = (globalThis as Record<string, unknown>).__williamosMergedExternalEvidenceIdentitiesAreExact as (input: Record<string, unknown>) => boolean
+    const validationDigest = "1".repeat(64)
+    const reviewDigest = "2".repeat(64)
+    const base = {
+      sealEntityId: "signed-seal",
+      sealSignature: "signed-seal",
+      adoptionHash: "3".repeat(64),
+      authorization: { entityType: "williamos_artifact_adoption_authorization", entityId: "3".repeat(64) },
+      validation: { entityType: "williamos_artifact_adoption_validation", entityId: validationDigest },
+      review: { entityType: "williamos_artifact_adoption_review", entityId: reviewDigest },
+      validationDigest,
+      reviewDigest,
+    }
+    expect(exact(base)).toBe(true)
+    expect(exact({ ...base, sealEntityId: "wrong" })).toBe(false)
+    expect(exact({ ...base, authorization: { ...base.authorization, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, authorization: { ...base.authorization, entityId: "4".repeat(64) } })).toBe(false)
+    expect(exact({ ...base, validation: { ...base.validation, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, validation: { ...base.validation, entityId: "5".repeat(64) } })).toBe(false)
+    expect(exact({ ...base, review: { ...base.review, entityType: "wrong" } })).toBe(false)
+    expect(exact({ ...base, review: { ...base.review, entityId: "6".repeat(64) } })).toBe(false)
   })
 
   it("loads historical Ed25519 verification keys from the configured public-key ring", () => {
@@ -441,6 +488,7 @@ describe("merged external Space delivery finalization", () => {
 
   const headSha = "a".repeat(40)
   const mergeSha = "b".repeat(40)
+  const adoptionHash = "d".repeat(64)
   const context = {
     worldId: "space-1",
     outcomeKey: "external:outcome",
@@ -455,6 +503,7 @@ describe("merged external Space delivery finalization", () => {
     headSha,
     paths: ["app/api/environment/space/route.ts", "tests/experience-v2-space-route.test.ts"],
     admissionDigest: "c".repeat(64),
+    adoptionHash,
     seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } as never,
     terminal: false,
   }
@@ -471,7 +520,7 @@ describe("merged external Space delivery finalization", () => {
     })
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(complete).toHaveBeenCalledWith("owner", mixedContext, mixedInspection)
@@ -491,7 +540,7 @@ describe("merged external Space delivery finalization", () => {
     seams.assertOwner.mockReturnValueOnce({ ok: false, failure: "NOT_OWNER", detail: "current owner required" })
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(403)
     expect(await response.json()).toEqual({ error: "NOT_OWNER", detail: "current owner required" })
@@ -514,12 +563,23 @@ describe("merged external Space delivery finalization", () => {
     }
   }
 
+  it("loads and finalizes only the owner-selected exact persisted adoption", async () => {
+    const deps = dependencies()
+    ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
+    const response = await PATCH(new Request("http://localhost/api/environment/space", {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
+    }))
+    expect(response.status).toBe(200)
+    expect(deps.load).toHaveBeenCalledWith("owner", "space-1", adoptionHash)
+  })
+
   it("terminalizes only after the exact sealed head and paths are merged into protected main", async () => {
     const deps = dependencies()
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
@@ -549,7 +609,7 @@ describe("merged external Space delivery finalization", () => {
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({ error: "MERGED_EXTERNAL_DELIVERY_NOT_PROVEN" })
@@ -567,7 +627,7 @@ describe("merged external Space delivery finalization", () => {
     ;(globalThis as Record<string, unknown>).__williamosMergedExternalFinalizationDependencies = deps
     const response = await PATCH(new Request("http://localhost/api/environment/space", {
       method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos" }),
+      body: JSON.stringify({ mode: "FINALIZE_MERGED_EXTERNAL_DELIVERY", worldId: "space-1", projectKey: "williamos", adoptionHash }),
     }))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ status: "FINALIZED", replayed: true })

@@ -11,6 +11,14 @@ import {
   selectContinuationPath,
 } from "@/lib/loom/codex-continuation"
 
+const CONTINUATION_REPOSITORY = {
+  projectIdentity: "/srv/williamos/projects/terrafusion",
+  repositoryResourceKey: "atlas",
+  repositoryIdentity: "bsvalues/terrafusion-atlas",
+  repositoryMountKey: "terrafusion:atlas:configured",
+  observedRevision: "a".repeat(40),
+} as const
+
 describe("Experience V2 Codex continuation", () => {
   it("reads the canonical nested assignment receipt shape and top-level ready receipt shape", () => {
     const recordedAt = "2026-08-31T17:00:00.000Z"
@@ -33,11 +41,31 @@ describe("Experience V2 Codex continuation", () => {
         entityType: "loom_codex_ready",
         entityId: "thread-ready",
         createdAt: recordedAt,
-        metadata: { selectedPath: "a.ts", committed: true },
+        metadata: {
+          selectedPath: "a.ts",
+          committed: true,
+          repositoryResourceKey: CONTINUATION_REPOSITORY.repositoryResourceKey,
+          repositoryIdentity: CONTINUATION_REPOSITORY.repositoryIdentity,
+          repositoryMountKey: CONTINUATION_REPOSITORY.repositoryMountKey,
+          observedRevision: CONTINUATION_REPOSITORY.observedRevision,
+        },
       }),
     ]).toEqual([
       { entityType: "loom_codex_assignment", entityId: "thread-live", selectedPath: "b.ts", committed: false, terminal: false, recordedAt },
-      { entityType: "loom_codex_ready", entityId: "thread-ready", selectedPath: "a.ts", committed: true, terminal: false, recordedAt },
+      {
+        entityType: "loom_codex_ready",
+        entityId: "thread-ready",
+        selectedPath: "a.ts",
+        committed: true,
+        terminal: false,
+        recordedAt,
+        repository: {
+          repositoryResourceKey: CONTINUATION_REPOSITORY.repositoryResourceKey,
+          repositoryIdentity: CONTINUATION_REPOSITORY.repositoryIdentity,
+          repositoryMountKey: CONTINUATION_REPOSITORY.repositoryMountKey,
+          observedRevision: CONTINUATION_REPOSITORY.observedRevision,
+        },
+      },
     ])
   })
 
@@ -209,6 +237,140 @@ describe("Experience V2 Codex continuation", () => {
     expect(selected.space?.windows).toEqual(world.space.windows)
   })
 
+  it("retains one exact completed-assignment repository identity and rejects receipt drift", () => {
+    const atlas = {
+      repositoryResourceKey: CONTINUATION_REPOSITORY.repositoryResourceKey,
+      repositoryIdentity: CONTINUATION_REPOSITORY.repositoryIdentity,
+      repositoryMountKey: CONTINUATION_REPOSITORY.repositoryMountKey,
+      observedRevision: CONTINUATION_REPOSITORY.observedRevision,
+    }
+    const forge = {
+      repositoryResourceKey: "forge",
+      repositoryIdentity: "bsvalues/terrafusion-forge",
+      repositoryMountKey: "terrafusion:forge:configured",
+      observedRevision: "f".repeat(40),
+    }
+    expect(deriveCodexPathEvidence([
+      { entityType: "loom_codex_ready", entityId: "atlas-a", selectedPath: "a.ts", committed: true, repository: atlas },
+      { entityType: "loom_codex_ready", entityId: "atlas-b", selectedPath: "b.ts", committed: true, repository: atlas },
+    ])).toEqual({ assignedPaths: [], completedPaths: ["a.ts", "b.ts"], repository: atlas })
+    expect(() => deriveCodexPathEvidence([
+      { entityType: "loom_codex_ready", entityId: "atlas", selectedPath: "a.ts", committed: true, repository: atlas },
+      { entityType: "loom_codex_ready", entityId: "forge", selectedPath: "b.ts", committed: true, repository: forge },
+    ])).toThrow("CODEX_CONTINUATION_REPOSITORY_DRIFT")
+  })
+
+  it("keeps the continuation selection bound to the active repository mount and revision", () => {
+    const activeFileRef = {
+      projectIdentity: "/srv/williamos/projects/terrafusion",
+      repositoryResourceKey: "atlas",
+      repositoryMountKey: "terrafusion:atlas:configured",
+      worktreeKey: null,
+      observedRevision: "a".repeat(40),
+      path: "src/previous.ts",
+    }
+    const initialSpace = createDefaultSpace(null)
+    const world = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        ...initialSpace,
+        openFiles: [activeFileRef.path],
+        fileRefs: [activeFileRef],
+        panes: [{
+          id: "workspace-pane",
+          filePath: activeFileRef.path,
+          fileRef: activeFileRef,
+          selection: { anchor: 4, head: 4 },
+        }],
+        selection: { filePath: activeFileRef.path, fileRef: activeFileRef, anchor: 4, head: 4 },
+      },
+    }
+
+    const selected = selectContinuationPath(world, "src/next.ts")
+    const expectedFileRef = { ...activeFileRef, path: "src/next.ts" }
+
+    expect(selected.space).toMatchObject({
+      openFiles: ["src/previous.ts", "src/next.ts"],
+      fileRefs: [activeFileRef, expectedFileRef],
+      selection: { filePath: "src/next.ts", fileRef: expectedFileRef, anchor: 0, head: 0 },
+      panes: [{
+        id: "workspace-pane",
+        filePath: "src/next.ts",
+        fileRef: expectedFileRef,
+        selection: { anchor: 0, head: 0 },
+      }],
+    })
+  })
+
+  it("persists the next path in the completed assignment repository after the owner selects another repository", async () => {
+    const forgeFileRef = {
+      projectIdentity: "/srv/williamos/projects/terrafusion",
+      repositoryResourceKey: "forge",
+      repositoryMountKey: "terrafusion:forge:configured",
+      worktreeKey: null,
+      observedRevision: "f".repeat(40),
+      path: "src/forge-selected.ts",
+    }
+    const initialSpace = createDefaultSpace(null)
+    const world = {
+      ...createWorkingWorld({ intent: "Finish the Atlas slice" }),
+      space: {
+        ...initialSpace,
+        openFiles: [forgeFileRef.path],
+        fileRefs: [forgeFileRef],
+        panes: [{
+          id: "workspace-pane",
+          filePath: forgeFileRef.path,
+          fileRef: forgeFileRef,
+          selection: { anchor: 0, head: 0 },
+        }],
+        selection: { filePath: forgeFileRef.path, fileRef: forgeFileRef, anchor: 0, head: 0 },
+      },
+    }
+    const persist = vi.fn().mockResolvedValue("PERSISTED")
+
+    await prepareCodexContinuation({
+      userId: "owner",
+      worldId: "space-atlas",
+      outcomeKey: "OUTCOME-ATLAS",
+      workOrderId: 42,
+      grantId: 17,
+      completedPath: "src/atlas-completed.ts",
+    }, {
+      load: vi.fn().mockResolvedValue({
+        snapshot: JSON.stringify(world),
+        authorityVersion: "authority-v1",
+        world,
+        outcomeKey: "OUTCOME-ATLAS",
+        workOrderId: 42,
+        grantId: 17,
+        title: "Finish Atlas",
+        objective: "Continue the Atlas assignment.",
+        acceptanceCriteria: ["Keep the repository boundary exact."],
+        validators: ["pnpm test"],
+        allowedPaths: ["src/atlas-completed.ts", "src/atlas-next.ts"],
+        completedPaths: ["src/atlas-completed.ts"],
+        assignedPaths: [],
+        repository: CONTINUATION_REPOSITORY,
+      }),
+      inspectTarget: vi.fn().mockResolvedValue(true),
+      persist,
+    })
+
+    const persistedWorld = JSON.parse(persist.mock.calls[0][0].nextSnapshot)
+    expect(persistedWorld.space.selection).toMatchObject({
+      filePath: "src/atlas-next.ts",
+      fileRef: {
+        projectIdentity: "/srv/williamos/projects/terrafusion",
+        repositoryResourceKey: "atlas",
+        repositoryMountKey: "terrafusion:atlas:configured",
+        worktreeKey: null,
+        observedRevision: "a".repeat(40),
+        path: "src/atlas-next.ts",
+      },
+    })
+  })
+
   it("restores the same pending assignment without generating another Space revision", () => {
     const world = {
       ...createWorkingWorld({ intent: "Finish Experience V2" }),
@@ -249,6 +411,7 @@ describe("Experience V2 Codex continuation", () => {
         allowedPaths: ["lib/loom/codex-continuation.ts", "app/api/loom/codex/route.ts"],
         completedPaths: ["lib/loom/codex-continuation.ts"],
         assignedPaths: [],
+        repository: CONTINUATION_REPOSITORY,
       }),
       inspectTarget: vi.fn().mockResolvedValue(true),
       persist,
@@ -320,6 +483,7 @@ describe("Experience V2 Codex continuation", () => {
       allowedPaths: ["a.ts", "b.ts"],
       completedPaths: ["a.ts"],
       assignedPaths: [],
+      repository: CONTINUATION_REPOSITORY,
     })
 
     const inspectTarget = vi.fn().mockResolvedValue(true)
@@ -349,6 +513,7 @@ describe("Experience V2 Codex continuation", () => {
       allowedPaths: ["a.ts", "missing-file.ts"],
       completedPaths: ["a.ts"],
       assignedPaths: [],
+      repository: CONTINUATION_REPOSITORY,
     })
     const inspectTarget = vi.fn().mockResolvedValue(false)
     const persist = vi.fn()

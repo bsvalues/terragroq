@@ -15,10 +15,57 @@ import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
+import { createAssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
 const ASSIGNMENT_HASH = "a".repeat(64)
+const REVIEW_REVISION = "b".repeat(40)
+const REVIEW_REPOSITORY = { resourceKey: "os-1", identity: "bsvalues/terrafusion_os_1.0", mountKey: "terrafusion:os-1:configured", observedRevision: REVIEW_REVISION } as const
+const ATLAS_REPOSITORY = { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: REVIEW_REVISION } as const
+const REVIEW_FILE_REF = { projectIdentity: "c:/repos/terrafusion", repositoryResourceKey: "os-1", repositoryMountKey: "terrafusion:os-1:configured", worktreeKey: null, observedRevision: REVIEW_REVISION, path: "src/app.ts" } as const
+const WORKSPACE_REPOSITORY = { key: "os-1", identity: REVIEW_REPOSITORY.identity, label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: REVIEW_REPOSITORY.mountKey, configured: true, verified: true, branch: "main", revision: REVIEW_REVISION, refusal: null } }
+const WORKSPACE_DIFF_IDENTITY = { repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } } as const
+const reviewFileRef = (path = "src/app.ts") => ({ ...REVIEW_FILE_REF, path })
+const reviewInput = { fileRef: REVIEW_FILE_REF, repositoryKey: "os-1" } as const
+const reviewSessionFrame = { repositoryResourceKey: "os-1", repositoryIdentity: REVIEW_REPOSITORY.identity, repositoryMountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
+const atlasSessionFrame = { repositoryResourceKey: "atlas", repositoryIdentity: ATLAS_REPOSITORY.identity, repositoryMountKey: ATLAS_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } as const
+const RESERVATION_CLAIMS = {
+  contracts: [{ contractIdentity: "workspace-shell-v2", revisionIdentity: "2.0.0", role: "producer" as const }],
+  environments: [{ environmentIdentity: "preview:terrafusion:3102", access: "shared-read" as const }],
+}
+const RESERVATION_CONTEXT = createAssignmentContextManifest({
+  assignment: {
+    assignmentId: "codex-reservations",
+    worldId: "world-1",
+    workOrderId: 1122,
+    assignmentHash: ASSIGNMENT_HASH,
+    createdAt: "2026-09-04T00:00:00.000Z",
+  },
+  project: { id: 2, key: "terrafusion", name: "TerraFusion" },
+  targetRepository: {
+    repositoryResourceId: 10,
+    repositoryKey: "os-1",
+    repositoryIdentity: REVIEW_REPOSITORY.identity,
+    role: "integrated-runtime",
+  },
+  checkout: {
+    repositoryMountKey: REVIEW_REPOSITORY.mountKey,
+    nodeIdentity: "omen",
+    worktreeKey: "codex-reservations",
+    baseRevision: REVIEW_REVISION,
+  },
+  mutationPosture: { writablePaths: ["src/app.ts"], referenceRepositories: [] },
+  sources: [{
+    kind: "instruction",
+    repositoryResourceId: 10,
+    repositoryKey: "os-1",
+    repositoryIdentity: REVIEW_REPOSITORY.identity,
+    revisionIdentity: REVIEW_REVISION,
+    path: "AGENTS.md",
+    blobHash: "c".repeat(64),
+  }],
+})
 const DELEGATE_SPINE = {
   ...EMPTY_SPINE,
   outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
@@ -46,22 +93,34 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function workspaceResponse(storage: "browser" | "server" = "browser", delegate = false) {
-  const space = {
+function workspaceResponse(storage: "browser" | "server" = "browser", delegate = false, exactRepository = false) {
+  const space = exactRepository ? {
+    ...defaultSpace(), ...(delegate ? { revision: 7 } : {}), selectedPath: "src/app.ts", selectedFileRef: REVIEW_FILE_REF, activeWindowId: "editor" as const,
+    editor: { openFiles: ["src/app.ts", "src/other.ts"], openFileRefs: [REVIEW_FILE_REF, reviewFileRef("src/other.ts")], panes: [{ id: "primary" as const, activePath: "src/app.ts", activeFileRef: REVIEW_FILE_REF, selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+  } : {
     ...defaultSpace(), ...(delegate ? { revision: 7 } : {}), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
     editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
-  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: delegate ? DELEGATE_SPINE : EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
+  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: delegate ? DELEGATE_SPINE : EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion", ...(exactRepository ? { repositories: [WORKSPACE_REPOSITORY] } : {}) }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
 }
 
 function exactDelegateEligibility(url: string, eligibleActor: "codex" | "claude" = "codex"): Response | null {
   if (!url.startsWith("/api/loom/agent?")) return null
-  const actor = new URL(url, "http://localhost").searchParams.get("actor")
+  const params = new URL(url, "http://localhost").searchParams
+  const actor = params.get("actor")
   return Response.json(actor === eligibleActor ? {
     eligible: true, worldId: "server-world", worldRevision: 8,
     outcomeKey: "WILLIAMOS_EXPERIENCE_V2", workOrderId: 1122, grantId: 45,
     actor: eligibleActor, selectedPath: "src/app.ts",
+    ...(params.get("repositoryKey") ? reviewSessionFrame : {}),
   } : { eligible: false, reason: "EXACT_PATH_AUTHORITY_UNAVAILABLE" })
+}
+
+function exactWorkspaceFileResponse(payload: Record<string, unknown>): Response {
+  return Response.json({
+    ...payload,
+    repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION },
+  })
 }
 
 async function openWilliamConversation() {
@@ -69,8 +128,8 @@ async function openWilliamConversation() {
   return screen.findByRole("complementary", { name: "William conversation" })
 }
 
-function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, executionSession, autoContinue, onAutoContinuation })
+function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", projectKey = "terrafusion", autoContinue = false, onAutoContinuation }: { executionSession?: ProjectedWorldWorkerSession | null; ownerScope?: string; worldScope?: string; worldId?: string | null; projectKey?: "williamos" | "terrafusion" | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, projectKey, executionSession, autoContinue, onAutoContinuation })
   expose = controller
   return (
     <AgentSessionStrip
@@ -85,19 +144,32 @@ function Harness({ executionSession = null, ownerScope = OWNER_SCOPE, worldScope
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("fails closed without the active canonical project and does not probe a provider or continuation", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness projectKey={null} autoContinue />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." })
+    })).rejects.toThrow("AGENT_PROJECT_REQUIRED")
+    await act(async () => { await Promise.resolve() })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it("restores and starts a pending server continuation after reload", async () => {
     const onAutoContinuation = vi.fn()
     const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url.startsWith("/api/loom/codex/continuation")) {
         return Promise.resolve(Response.json({
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue the bound Work Order in src/other.ts.",
+          repositoryKey: "atlas",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-restored-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-restored-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...atlasSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Restored continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -112,8 +184,11 @@ describe("Experience V2 real agent sessions", () => {
     ]))
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(onAutoContinuation).toHaveBeenCalledWith({ status: "WORK_ORDER_PATHS_COMPLETE" })
-    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1")
-    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1&projectKey=terrafusion")
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({
+      automatic: true,
+      repositoryKey: "atlas",
+    })
   })
 
   it("starts a restored automatic assignment as a fresh session even when an older saved session matches its path", async () => {
@@ -138,10 +213,11 @@ describe("Experience V2 real agent sessions", () => {
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue the current Work Order in src/other.ts.",
+          repositoryKey: "os-1",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-fresh-other", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-fresh-other", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Fresh automatic continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -172,10 +248,11 @@ describe("Experience V2 real agent sessions", () => {
           status: "NEXT_ASSIGNMENT",
           selectedPath: "src/other.ts",
           task: "Continue after a transient read failure.",
+          repositoryKey: "os-1",
         }))
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-retried-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-retried-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Retried continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -200,7 +277,7 @@ describe("Experience V2 real agent sessions", () => {
         return continuationResponse
       }
       return Promise.resolve(ndjson(
-        { type: "session", sessionId: "codex-strict-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId: "codex-strict-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Strict continuation completed." },
         { type: "done", code: 0, reason: null },
@@ -215,6 +292,7 @@ describe("Experience V2 real agent sessions", () => {
       status: "NEXT_ASSIGNMENT",
       selectedPath: "src/other.ts",
       task: "Continue the bound Work Order in src/other.ts.",
+      repositoryKey: "os-1",
     })))
 
     await waitFor(() => expect(expose!.savedSessions).toEqual([
@@ -226,13 +304,13 @@ describe("Experience V2 real agent sessions", () => {
   it("continues a server-derived Codex assignment without another owner action", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-slice-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue the bound Work Order in src/other.ts." },
+        { type: "session", sessionId: "codex-slice-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue the bound Work Order in src/other.ts.", repositoryKey: "os-1" },
         { type: "result", text: "First slice complete." },
         { type: "done", code: 0, reason: null },
       ))
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-slice-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "session", sessionId: "codex-slice-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64), ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Second slice complete." },
         { type: "done", code: 0, reason: null },
@@ -254,7 +332,9 @@ describe("Experience V2 real agent sessions", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       automatic: true,
+      repositoryKey: "os-1",
       sessionId: null,
       resume: false,
     })
@@ -269,13 +349,13 @@ describe("Experience V2 real agent sessions", () => {
     const selectionVisible = new Promise<void>((resolve) => { releaseSelection = resolve })
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-visible-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+        { type: "session", sessionId: "codex-visible-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly.", repositoryKey: "os-1" },
         { type: "result", text: "First slice complete." },
         { type: "done", code: 0, reason: null },
       ))
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: "codex-visible-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "session", sessionId: "codex-visible-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64), ...reviewSessionFrame },
         { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
         { type: "result", text: "Second slice complete." },
         { type: "done", code: 0, reason: null },
@@ -308,8 +388,8 @@ describe("Experience V2 real agent sessions", () => {
 
   it("preserves the completed slice when visible Space synchronization blocks continuation", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(ndjson(
-      { type: "session", sessionId: "codex-sync-blocked", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
-      { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+      { type: "session", sessionId: "codex-sync-blocked", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
+      { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly.", repositoryKey: "os-1" },
       { type: "result", text: "The first slice is durably complete." },
       { type: "done", code: 0, reason: null },
     ))
@@ -359,11 +439,11 @@ describe("Experience V2 real agent sessions", () => {
     },
     {
       label: "Claude Reviewer",
-      descriptor: { schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      descriptor: { schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { mode: "review", path: "src/app.ts", focus: "Continue exactly.", provider: "cloud", sessionId: "223e4567-e89b-42d3-a456-426614174000", resume: true },
+      body: { mode: "review", path: "src/app.ts", ...reviewInput, focus: "Continue exactly.", provider: "cloud", sessionId: "223e4567-e89b-42d3-a456-426614174000", resume: true },
       events: [
-        { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true },
+        { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Review continued." } },
         { type: "done", code: 0, reason: null },
       ],
@@ -372,7 +452,7 @@ describe("Experience V2 real agent sessions", () => {
       label: "Local Thinker",
       descriptor: { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
       url: "/api/loom/agent",
-      body: { prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
+      body: { worldId: "world-1", prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
       events: [
         { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Local", mode: "delegate", resumed: true, continuity: "browser-replayed" },
         { type: "result", text: "Local continued." }, { type: "done", code: 0, reason: null },
@@ -401,7 +481,7 @@ describe("Experience V2 real agent sessions", () => {
     await act(async () => { await expose!.continueSession({ sessionKey, prompt: "Continue exactly." }) })
 
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(url)
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(body)
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ projectKey: "terrafusion", ...body })
     const stored = JSON.parse(String(window.localStorage.getItem(key)))
     expect(stored.sessions).toEqual([expect.objectContaining({
       provider: descriptor.provider,
@@ -455,7 +535,7 @@ describe("Experience V2 real agent sessions", () => {
       schemaVersion: 3,
       selectedSessionKey: `Claude:${first}`,
       sessions: [
-        { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review current work", reviewPath: "src/app.ts", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review current work", reviewPath: "src/app.ts", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) }, updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
         { schemaVersion: 1, sessionId: second, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] },
       ],
     })
@@ -465,8 +545,8 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(projection.state).toBe("available")
     expect(projection.sessions).toEqual([
-      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified" }),
-      expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified" }),
+      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified", updatedAt: "2026-08-29T10:00:00.000Z", repository: { resourceKey: "atlas", identity: "bsvalues/terrafusion-atlas", mountKey: "terrafusion:atlas:configured", observedRevision: "a".repeat(40) } }),
+      expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified", updatedAt: "2026-08-29T10:01:00.000Z" }),
     ])
     expect(window.localStorage.getItem(key)).toBe(stored)
   })
@@ -571,10 +651,10 @@ describe("Experience V2 real agent sessions", () => {
     act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-concurrent", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
 
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "123e4567-e89b-42d3-a456-426614174000"
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
 
     let local!: Promise<unknown>
     act(() => { local = expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." }) })
@@ -643,9 +723,9 @@ describe("Experience V2 real agent sessions", () => {
 
     const reviewId = "323e4567-e89b-42d3-a456-426614174000"
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams.has("Review")).toBe(true))
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await waitFor(() => expect(expose!.activeSessionIds).toEqual([
       "Codex:codex-stop-isolation",
       `Claude:${reviewId}`,
@@ -687,9 +767,9 @@ describe("Experience V2 real agent sessions", () => {
 
     const reviewId = "623e4567-e89b-42d3-a456-426614174000"
     let review!: Promise<unknown>
-    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput }) })
     await waitFor(() => expect(streams).toHaveLength(2))
-    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await waitFor(() => expect(expose!.activeSessionIds).toContain(`Claude:${reviewId}`))
 
     act(() => expect(expose!.selectSession(`Claude:${reviewId}`)).toBe(true))
@@ -716,7 +796,7 @@ describe("Experience V2 real agent sessions", () => {
     ]))
 
     let redirect!: Promise<unknown>
-    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Redirect exactly." }) })
+    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, focus: "Redirect exactly." }) })
     await waitFor(() => expect(streams).toHaveLength(3))
     expect(requests[2]).toMatchObject({
       url: "/api/loom/agent",
@@ -1031,18 +1111,19 @@ describe("Experience V2 real agent sessions", () => {
     const encoder = new TextEncoder()
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const rawUrl = String(input)
+      const url = rawUrl.replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(rawUrl)
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z", repository: { key: "os-1", identity: REVIEW_REPOSITORY.identity, mountKey: REVIEW_REPOSITORY.mountKey, observedRevision: REVIEW_REVISION } }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if ((url === "/api/loom/codex" || url === "/api/loom/agent") && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { mode?: string; provider?: string }
         const lane = url === "/api/loom/codex" ? "Codex" : body.mode === "review" ? "Review" : "Local"
@@ -1059,14 +1140,14 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Build safely." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
     await waitFor(() => expect(streams.has("Codex")).toBe(true))
-    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-ui-concurrent", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH })}\n`)))
+    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-ui-concurrent", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame })}\n`)))
     await screen.findByRole("button", { name: "Stop Codex Builder turn" })
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "423e4567-e89b-42d3-a456-426614174000"
-    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame })}\n`)))
     await screen.findByRole("button", { name: "Stop Claude Reviewer turn" })
 
     fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
@@ -1299,7 +1380,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem("williamos:agent-session:owner-b:project-b", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${bId}`, sessions: [descriptor(bId, "B only")] }))
     const observed: string[][] = []
     function Probe({ ownerScope, worldScope }: { ownerScope: string; worldScope: string }) {
-      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, executionSession: null })
+      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, projectKey: "terrafusion", executionSession: null })
       observed.push(controller.sessions.map((session) => session.assignment))
       return <span>{controller.sessions.map((session) => session.assignment).join(",") || "No sessions"}</span>
     }
@@ -1464,12 +1545,12 @@ describe("Experience V2 real agent sessions", () => {
       schemaVersion: 2,
       selectedSessionId: reviewId,
       sessions: [
-        { schemaVersion: 1, sessionId: reviewId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: reviewId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
         { schemaVersion: 1, sessionId: builderId, role: "Builder", provider: "Claude", assignment: "src/other.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
       ],
     }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: reviewId, resumed: true },
+      { type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Verified review" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -1478,7 +1559,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: reviewId, resume: true, path: "src/app.ts", mode: "review" })
@@ -1727,21 +1808,21 @@ describe("Experience V2 real agent sessions", () => {
   it("requires a fresh provider choice and cancels stale Delegate intent when selection changes", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "delta", text: "Working from src/app.ts." },
         { type: "result", text: "Completed the captured assignment." },
         { type: "done", code: 0, reason: null },
@@ -1804,7 +1885,7 @@ describe("Experience V2 real agent sessions", () => {
       cancel() { cancelled = true },
     }))
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1813,8 +1894,8 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(agentResponse)
@@ -1867,32 +1948,32 @@ describe("Experience V2 real agent sessions", () => {
     let sourceReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(exactWorkspaceFileResponse({
           kind: "file", path: "src/app.ts",
           content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n",
           modifiedAt: sourceReads === 1 ? "2026-08-28T12:00:00.000Z" : "2026-08-28T12:01:00.000Z",
         }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({
         kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z",
       }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "result", text: "Updated src/app.ts." },
         { type: "done", code: 0, reason: null },
       ))
@@ -1922,7 +2003,7 @@ describe("Experience V2 real agent sessions", () => {
 
   it("shows a truthful Local inference refusal in the open Line", async () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1931,7 +2012,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         return Promise.resolve(Response.json({ error: "LOCAL_MODEL_UNAVAILABLE" }, { status: 503 }))
       }
@@ -1959,7 +2040,7 @@ describe("Experience V2 real agent sessions", () => {
       cancel() { cancelled = true },
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
@@ -1968,7 +2049,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(response)
@@ -2016,26 +2097,26 @@ describe("Experience V2 real agent sessions", () => {
     let sourceReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -2068,30 +2149,30 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
           { type: "result", text: "The repository mutation committed." },
           { type: "done", code: 0, reason: null },
         ))
@@ -2107,7 +2188,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText("The repository mutation committed.")).toBeTruthy()
@@ -2132,26 +2213,26 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url, "claude")
+      const eligibility = exactDelegateEligibility(String(input), "claude")
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: delegationStarted ? "+export const version = 2" : "" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: delegationStarted ? "+export const version = 2" : "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority },
+          { type: "session", sessionId, provider: "Claude", mode: "delegate", resumed: false, ...authority, ...reviewSessionFrame },
           { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Claude committed the exact file." } },
           { type: "done", code: 0, reason: null },
         ))
@@ -2167,7 +2248,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText("Claude committed the exact file.")).toBeTruthy()
@@ -2186,30 +2267,30 @@ describe("Experience V2 real agent sessions", () => {
     let source: HTMLTextAreaElement | null = null
     let resolveSourceRefresh: ((response: Response) => void) | null = null
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         sourceReads += 1
-        if (failRefresh && delegationStarted) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        if (failRefresh && delegationStarted) return Promise.resolve(exactWorkspaceFileResponse({ error: "read failed" }, { status: 500 }))
         if (makeDirty && delegationStarted) return new Promise<Response>((resolve) => { resolveSourceRefresh = resolve })
-        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+        return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: delegationStarted ? "export const version = 2\n" : "export const version = 1\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       }
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+        return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") {
         delegationStarted = true
         return Promise.resolve(ndjson(
-          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+          { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH, ...reviewSessionFrame },
           { type: "result", text: "The repository mutation committed." },
           { type: "done", code: 0, reason: null },
         ))
@@ -2227,7 +2308,7 @@ describe("Experience V2 real agent sessions", () => {
     if (makeDirty) {
       await waitFor(() => expect(resolveSourceRefresh).not.toBeNull())
       fireEvent.change(source!, { target: { value: "owner unsaved buffer\n" } })
-      await act(async () => resolveSourceRefresh!(Response.json({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
+      await act(async () => resolveSourceRefresh!(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" })))
     }
 
     expect(await screen.findByText(expected)).toBeTruthy()
@@ -2253,12 +2334,12 @@ describe("Experience V2 real agent sessions", () => {
       }],
     }))
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -2296,12 +2377,12 @@ describe("Experience V2 real agent sessions", () => {
     }
     const localId = "223e4567-e89b-42d3-a456-426614174000"
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/agent" && init?.method === "POST") return Promise.resolve(ndjson(
         { type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
         { type: "result", text: "Canonical local result." },
@@ -2344,12 +2425,12 @@ describe("Experience V2 real agent sessions", () => {
       ],
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
@@ -2381,18 +2462,18 @@ describe("Experience V2 real agent sessions", () => {
       sessions: [{ schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/old.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] }],
     }))
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true))
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server", true, true))
       if (url === "/api/environment/space" && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
         return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: DELEGATE_SPINE, judgment: null }))
       }
-      const eligibility = exactDelegateEligibility(url)
+      const eligibility = exactDelegateEligibility(String(input))
       if (eligibility && !init?.method) return Promise.resolve(eligibility)
-      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(exactWorkspaceFileResponse({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
     render(<WorkspaceShell />)
@@ -2436,6 +2517,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Selected file: src/app.ts\nOwner request: Fix the defect.",
       sessionId: null,
       resume: false,
@@ -2537,6 +2619,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/loom/codex")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Continue.",
       sessionId,
       resume: true,
@@ -2692,6 +2775,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).has("x-williamos-work-context")).toBe(false)
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-authorized",
+      projectKey: "terrafusion",
       prompt: "Work.",
       sessionId: null,
       resume: false,
@@ -2812,7 +2896,7 @@ describe("Experience V2 real agent sessions", () => {
       sessions: [{ provider: "Local", sessionId, role: "Thinker", assignment: "Conversation", completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
     })
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
-      prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
+      worldId: "world-1", projectKey: "terrafusion", prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
     })
 
     first.unmount()
@@ -2974,7 +3058,7 @@ describe("Experience V2 real agent sessions", () => {
   it("allows bounded Claude diagnostics after Review result without replacing its report", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId, resumed: false },
+      { type: "session", sessionId, provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical review report" } },
       { type: "stderr", text: "Claude transport cleanup diagnostic" },
       { type: "done", code: 0, reason: null },
@@ -2983,7 +3067,7 @@ describe("Experience V2 real agent sessions", () => {
     let report = ""
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: (text) => { report = text } })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: (text) => { report = text } })
     })
     expect(report).toBe("Canonical review report")
   })
@@ -3074,7 +3158,7 @@ describe("Experience V2 real agent sessions", () => {
     })
   })
 
-  it("keeps a newer successful HERMES poll when an older failed read settles afterward", async () => {
+  it("serializes HERMES polling so a slow read cannot starve every later update", async () => {
     const spine = {
       ...EMPTY_SPINE,
       projectId: 1,
@@ -3088,8 +3172,8 @@ describe("Experience V2 real agent sessions", () => {
       ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
       editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
     }
-    let settleOlderRead!: (response: Response) => void
-    const olderRead = new Promise<Response>((resolve) => { settleOlderRead = resolve })
+    let settleSlowRead!: (response: Response) => void
+    const slowRead = new Promise<Response>((resolve) => { settleSlowRead = resolve })
     const successfulSession: ProjectedWorldWorkerSession = {
       id: "world-worker:server-world:41:hermes-codex-bridge",
       worldId: "server-world",
@@ -3111,20 +3195,20 @@ describe("Experience V2 real agent sessions", () => {
     }) as typeof setInterval)
     vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null,
       }))
       if (url.startsWith("/api/environment/execution?")) {
         executionReads += 1
-        if (executionReads === 1) return olderRead
+        if (executionReads === 1) return slowRead
         return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: successfulSession }))
       }
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-31T22:00:00Z" }))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ ...WORKSPACE_DIFF_IDENTITY, path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     }))
@@ -3132,11 +3216,148 @@ describe("Experience V2 real agent sessions", () => {
     render(<WorkspaceShell />)
     await waitFor(() => expect(poll).not.toBeNull())
     act(() => poll!())
-    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(executionReads).toBe(1)
 
-    await act(async () => settleOlderRead(new Response(null, { status: 503 })))
+    await act(async () => settleSlowRead(new Response(null, { status: 503 })))
+    act(() => poll!())
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
+    expect(executionReads).toBe(2)
     expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
     expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
+  it("aborts a hung HERMES read so a later poll can recover assignment truth", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "implementing" as const,
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Recover assignment polling",
+      status: "implementing",
+      evidence: "focused tests · PASS",
+      observedAt: "2026-09-03T14:00:00.000Z",
+    }
+    let executionReads = 0
+    let executionSignal: AbortSignal | null = null
+    const polls: Array<() => void> = []
+    let expireRead: (() => void) | null = null
+    const realSetTimeout = globalThis.setTimeout
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: TimerHandler) => {
+      polls.push(callback as () => void)
+      return 1 as unknown as ReturnType<typeof setInterval>
+    }) as typeof setInterval)
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (delay === 12_000) {
+        expireRead = callback as () => void
+        return 2 as unknown as ReturnType<typeof setTimeout>
+      }
+      return realSetTimeout(callback, delay)
+    }) as typeof setTimeout)
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) {
+        executionReads += 1
+        if (executionReads === 1) return new Promise<Response>((_resolve, reject) => {
+          executionSignal = init?.signal ?? null
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted", "AbortError")))
+        })
+        return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
+      }
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(expireRead).not.toBeNull())
+    await act(async () => { expireRead!(); await Promise.resolve() })
+    expect(executionSignal?.aborted).toBe(true)
+    expect(await screen.findByText(/Assignment refresh unavailable/)).toBeTruthy()
+
+    await act(async () => { await new Promise<void>((resolve) => realSetTimeout(resolve, 0)) })
+    await act(async () => { polls.forEach((poll) => poll()); await Promise.resolve() })
+    expect(executionReads).toBe(2)
+    expect(await screen.findByRole("button", { name: /HERMES · Local execution · Recover assignment polling/i })).toBeTruthy()
+    expect(screen.queryByText(/Assignment refresh unavailable/)).toBeNull()
+  })
+
+  it("opens a server-owned assignment even when browser session persistence is unavailable", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "validating" as const,
+    }
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Inspect persisted execution",
+      status: "validating",
+      evidence: "focused tests · PASS",
+      observedAt: "2026-09-03T13:00:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ worldId: "server-world", ...spine, session: executionSession }))
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    const worker = await screen.findByRole("button", { name: /HERMES · Local execution · Inspect persisted execution/i })
+    const persist = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage denied") })
+    fireEvent.click(worker)
+
+    expect(await screen.findByText("Assignment · Work Order #41")).toBeTruthy()
+    expect(persist).not.toHaveBeenCalled()
+  })
+
+  it("disambiguates otherwise identical restored conversations even when they share one update minute", () => {
+    const sessions = [
+      { id: "Local:aaaaaaaa-aaaa-4aaa-8aaa-111112345678", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:16.157Z" },
+      { id: "Local:bbbbbbbb-bbbb-4bbb-8bbb-222212345678", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "resume unverified", evidence: "saved conversation", truth: "resume-unverified" as const, kind: "durable-session" as const, mode: "delegate" as const, updatedAt: "2026-09-02T05:31:16.157Z" },
+    ]
+
+    render(<AgentSessionStrip sessions={sessions} />)
+
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Thinker · Local · Conversation · 2026-09-02 05:31Z · 2 of 2" })).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 1 of 2")).toBeTruthy()
+    expect(screen.getByText("Conversation · 2026-09-02 05:31Z · 2 of 2")).toBeTruthy()
   })
 
   it("marks assignment refresh truthfully, removes mismatches, recovers automatically, and keeps Mission Control unknown", async () => {
@@ -3171,7 +3392,7 @@ describe("Experience V2 real agent sessions", () => {
     }) as unknown as typeof setInterval)
     vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined)
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         spaces: [{ worldId: "server-world", name: "Experience V2", updatedAt: "2026-09-01T19:00:00.000Z", space: spaceToServer(space) }],
@@ -3256,7 +3477,7 @@ describe("Experience V2 real agent sessions", () => {
     }
     const space = defaultSpace(1440, 900, "server-world", "Experience V2")
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
         worldId: "server-world", space: spaceToServer(space), spine,
         project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
@@ -3319,6 +3540,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("ready · resumable session")).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Make the selected change.",
       provider: "cloud",
       sessionId: null,
@@ -3329,6 +3551,78 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Claude:${sessionId}`,
       sessions: [{ sessionId, role: "Builder", provider: "Claude", assignment: "Change src/app.ts" }],
     })
+  })
+
+  it("persists and restores exact server-recorded execution reservation claims", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      {
+        type: "session",
+        sessionId: "codex-reservations",
+        assignmentId: "codex-reservations",
+        provider: "Codex",
+        mode: "delegate",
+        resumed: false,
+        selectedPath: "src/app.ts",
+        assignmentHash: ASSIGNMENT_HASH,
+        ...reviewSessionFrame,
+        contextManifest: RESERVATION_CONTEXT,
+        reservationClaims: RESERVATION_CLAIMS,
+      },
+      { type: "result", text: "Recorded exact reservation evidence." },
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change the captured file.",
+        target: { kind: "file", path: "src/app.ts" },
+        repositoryKey: "os-1",
+      })
+    })
+
+    expect(expose!.sessions[0]).toMatchObject({ reservationClaims: RESERVATION_CLAIMS })
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions[0].reservationClaims).toEqual(RESERVATION_CLAIMS)
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({
+      truth: "resume-unverified",
+      reservationClaims: RESERVATION_CLAIMS,
+    }))
+  })
+
+  it("rejects malformed or non-mutating session-authored reservation claims", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      {
+        type: "session",
+        sessionId: "codex-reservations",
+        assignmentId: "codex-reservations",
+        provider: "Codex",
+        mode: "delegate",
+        resumed: false,
+        selectedPath: "src/app.ts",
+        assignmentHash: ASSIGNMENT_HASH,
+        ...reviewSessionFrame,
+        contextManifest: RESERVATION_CONTEXT,
+        reservationClaims: { contracts: RESERVATION_CLAIMS.contracts },
+      },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(expose!.runAgentTurn({
+      provider: "Codex",
+      role: "Builder",
+      assignment: "src/app.ts",
+      prompt: "Change the captured file.",
+      target: { kind: "file", path: "src/app.ts" },
+      repositoryKey: "os-1",
+    })).rejects.toThrow("AGENT_STREAM_INVALID")
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
   })
 
   it("persists and restores only the exact server-bound file target earned by a successful Codex Builder session", async () => {
@@ -3540,7 +3834,7 @@ describe("Experience V2 real agent sessions", () => {
     ["Claude Builder without a server binding", () => expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Work.", target: { kind: "file", path: "src/app.ts" } })],
     ["Local conversation", () => expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "src/app.ts", prompt: "Think.", target: { kind: "file", path: "src/app.ts" } })],
     ["non-Builder delegate", () => expose!.runAgentTurn({ provider: "Claude", role: "Reviewer", assignment: "src/app.ts", prompt: "Inspect.", target: { kind: "file", path: "src/app.ts" } })],
-    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", target: { kind: "file", path: "src/app.ts" } })],
+    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, target: { kind: "file", path: "src/app.ts" } })],
   ])("refuses target metadata on %s", async (_case, start) => {
     vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INELIGIBLE_TARGET") }))
     render(<Harness />)
@@ -3642,6 +3936,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.descriptorState).toBe("verified")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       worldId: "world-1",
+      projectKey: "terrafusion",
       prompt: "Continue the work.",
       provider: "cloud",
       sessionId,
@@ -3771,9 +4066,9 @@ describe("Experience V2 real agent sessions", () => {
   it("resumes Review only from a matching Reviewer and captured-path descriptor", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
-    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId, resumed: true },
+      { type: "session", sessionId, provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Review report" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -3783,12 +4078,12 @@ describe("Experience V2 real agent sessions", () => {
 
     let report = ""
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Security", onReviewComplete: (text) => { report = text } })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, focus: "Security", onReviewComplete: (text) => { report = text } })
     })
 
     expect(report).toBe("Review report")
     expect(expose!.sessions[0]).toMatchObject({ mode: "review", reviewPath: "src/app.ts" })
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", focus: "Security", provider: "cloud", sessionId, resume: true })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", projectKey: "terrafusion", path: "src/app.ts", ...reviewInput, focus: "Security", provider: "cloud", sessionId, resume: true })
   })
 
   it.each([
@@ -3828,6 +4123,7 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/app.ts",
       mode: "review",
       path: "src/app.ts",
+      ...reviewInput,
       focus: "Continue exactly.",
       requiredSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
     })).rejects.toThrow("AGENT_REVIEW_PRIOR_REQUIRED")
@@ -3849,6 +4145,8 @@ describe("Experience V2 real agent sessions", () => {
         provider: "Claude",
         assignment: "Review src/app.ts",
         reviewPath: "src/app.ts",
+        fileRef: REVIEW_FILE_REF,
+        repository: REVIEW_REPOSITORY,
         updatedAt: "2026-08-29T10:00:00.000Z",
         completedTurns: [],
       }],
@@ -3863,6 +4161,8 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/other.ts",
       mode: "review",
       path: "src/other.ts",
+      fileRef: reviewFileRef("src/other.ts"),
+      repositoryKey: "os-1",
       focus: "Redirect exactly.",
       requiredSessionKey: `Claude:${sessionId}`,
     })).rejects.toThrow("AGENT_REVIEW_SESSION_MISMATCH")
@@ -3872,6 +4172,7 @@ describe("Experience V2 real agent sessions", () => {
       assignment: "Review src/app.ts",
       mode: "review",
       path: "src/app.ts",
+      ...reviewInput,
       focus: "Do not reinterpret this as Builder work.",
       requiredSessionKey: `Claude:${sessionId}`,
     })).rejects.toThrow("AGENT_REVIEW_ROLE_INVALID")
@@ -3886,7 +4187,7 @@ describe("Experience V2 real agent sessions", () => {
   ])("starts Review fresh rather than resuming a valid but incompatible %s descriptor", async (role, reviewPath) => {
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role, provider: "Claude", assignment: "Prior work", ...(reviewPath ? { reviewPath } : {}), updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: false, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Fresh review" } },
       { type: "done", code: 0, reason: null },
     ))
@@ -3895,7 +4196,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
 
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: null, resume: false })
@@ -3903,9 +4204,9 @@ describe("Experience V2 real agent sessions", () => {
 
   it("rejects a resumed Review whose outer session does not echo the exact requested session", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
-    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", fileRef: REVIEW_FILE_REF, repository: REVIEW_REPOSITORY, updatedAt: "2026-08-27T16:05:00.000Z" }))
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: true },
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true, ...reviewSessionFrame },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Wrong thread" } },
       { type: "done", code: 0, reason: null },
     )))
@@ -3913,7 +4214,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
 
     await expect(act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", ...reviewInput, onReviewComplete: () => undefined })
     })).rejects.toThrow("AGENT_REVIEW_STREAM_INVALID")
     expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${sessionId}`, truth: "resume-unverified" })])
   })

@@ -1,8 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 
 import type { ProjectedWorldWorkerSession } from "@/lib/environment/world-execution"
+import type { AssignmentContextManifest } from "@/lib/loom/assignment-context-manifest"
+import type { ContractReservation, EnvironmentReservation } from "@/lib/loom/repository-reservations"
+import type { CanonicalWorkspaceProjectKey } from "@/lib/projects/workspace-project-binding"
+import { resolveWorkspaceRepositorySelection } from "@/lib/projects/core-seven-repositories"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import { parseAssignmentContextManifestView } from "./assignment-context-view"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
@@ -36,6 +42,18 @@ export type AgentSessionFileTarget = Readonly<{
   path: string
 }>
 
+export type AgentSessionRepository = Readonly<{
+  resourceKey: string
+  identity: string
+  mountKey: string
+  observedRevision: string
+}>
+
+export type AgentSessionReservationClaims = Readonly<{
+  contracts: readonly ContractReservation[]
+  environments: readonly EnvironmentReservation[]
+}>
+
 export type AgentSessionFileAuthorityProof = Readonly<{
   worldId: string
   worldRevision: number
@@ -64,10 +82,15 @@ export type AgentSessionDiffReview = Readonly<{
 export type DurableAgentSession = Readonly<{
   schemaVersion: 1
   sessionId: string
+  assignmentId?: string
   role: string
   provider: AgentProvider
   assignment: string
+  repository?: AgentSessionRepository
+  contextManifest?: AssignmentContextManifest
+  reservationClaims?: AgentSessionReservationClaims
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
   reviewPath?: string
   diffReview?: AgentSessionDiffReview
   forkedFrom?: string
@@ -87,6 +110,7 @@ export type DurableClaudeSession = DurableAgentSession
 
 export type ExperienceAgentSession = Readonly<{
   id: string
+  assignmentId?: string
   role: string
   providerLabel: string
   assignment: string
@@ -95,11 +119,16 @@ export type ExperienceAgentSession = Readonly<{
   truth: "live" | "persisted" | "resume-unverified"
   kind: "durable-session" | "world-worker"
   mode: "delegate" | "review" | "diff-review" | "preview"
+  repository?: AgentSessionRepository
+  contextManifest?: AssignmentContextManifest
+  reservationClaims?: AgentSessionReservationClaims
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
   reviewPath?: string
   diffReview?: AgentSessionDiffReview
   forkedFrom?: string
   preview?: AgentSessionPreview
+  updatedAt?: string
   lastResult?: string
   presentation?: string
 }>
@@ -142,6 +171,8 @@ export type RunClaudeTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string, binding?: AgentSessionDiffReview) => void
   target?: AgentSessionFileTarget
+  fileRef?: WorkspaceFileRef
+  repositoryKey?: string
   expectedFileAuthority?: AgentSessionFileAuthorityProof
   requiredSessionKey?: string
 }>
@@ -152,11 +183,12 @@ export type RunAgentTurnInput = Readonly<{
   assignment: string
   prompt: string
   target?: AgentSessionFileTarget
+  repositoryKey?: string
   expectedFileAuthority?: AgentSessionFileAuthorityProof
   automatic?: boolean
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
-  onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
+  onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }>) => void | Promise<void>
 }>
 
 export type RunPreviewDiagnosticInput = Readonly<{
@@ -236,7 +268,7 @@ type ActiveAgentOperation = {
   provider: AgentProvider
   role: string
   mode: "delegate" | "review" | "diff-review" | "fork" | "preview"
-  lane: "writer" | "reviewer" | "thinker" | null
+  lane: string | null
   accepted: DurableAgentSession | null
   acceptedKey: string | null
   presentation: string
@@ -350,6 +382,62 @@ function parseDiffReview(value: unknown): AgentSessionDiffReview | null {
     : null
 }
 
+function parseSessionRepository(value: unknown): AgentSessionRepository | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (Object.keys(candidate).sort().join("|") !== "identity|mountKey|observedRevision|resourceKey"
+    || typeof candidate.resourceKey !== "string"
+    || typeof candidate.identity !== "string"
+    || typeof candidate.mountKey !== "string"
+    || typeof candidate.observedRevision !== "string"
+    || !GIT_OBJECT_HASH.test(candidate.observedRevision)) return null
+  const selection = resolveWorkspaceRepositorySelection(
+    candidate.resourceKey === "williamos" ? "williamos" : "terrafusion",
+    candidate.resourceKey,
+  )
+  if (!selection.ok || selection.repository.identity !== candidate.identity
+    || selection.repository.mountKey !== candidate.mountKey) return null
+  return {
+    resourceKey: candidate.resourceKey,
+    identity: candidate.identity,
+    mountKey: candidate.mountKey,
+    observedRevision: candidate.observedRevision,
+  }
+}
+
+const RESERVATION_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/
+
+export function parseAgentSessionReservationClaims(value: unknown): AgentSessionReservationClaims | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (Object.keys(candidate).sort().join("|") !== "contracts|environments"
+    || !Array.isArray(candidate.contracts) || !Array.isArray(candidate.environments)) return null
+  const contracts: ContractReservation[] = []
+  for (const value of candidate.contracts) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null
+    const claim = value as Record<string, unknown>
+    if (Object.keys(claim).sort().join("|") !== "contractIdentity|revisionIdentity|role"
+      || typeof claim.contractIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.contractIdentity)
+      || typeof claim.revisionIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.revisionIdentity)
+      || claim.role !== "producer" && claim.role !== "consumer") return null
+    contracts.push({
+      contractIdentity: claim.contractIdentity,
+      revisionIdentity: claim.revisionIdentity,
+      role: claim.role,
+    })
+  }
+  const environments: EnvironmentReservation[] = []
+  for (const value of candidate.environments) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null
+    const claim = value as Record<string, unknown>
+    if (Object.keys(claim).sort().join("|") !== "access|environmentIdentity"
+      || typeof claim.environmentIdentity !== "string" || !RESERVATION_IDENTITY.test(claim.environmentIdentity)
+      || claim.access !== "exclusive" && claim.access !== "shared-read") return null
+    environments.push({ environmentIdentity: claim.environmentIdentity, access: claim.access })
+  }
+  return { contracts, environments }
+}
+
 function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
@@ -371,6 +459,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const updatedAt = typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
     ? candidate.updatedAt : null
   const target = candidate.target === undefined ? undefined : parseFileTarget(candidate.target)
+  let fileRef: WorkspaceFileRef | undefined
+  try { fileRef = candidate.fileRef === undefined ? undefined : parseWorkspaceFileRef(candidate.fileRef) } catch { return null }
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
   const forkedFrom = candidate.forkedFrom === undefined ? undefined
     : typeof candidate.forkedFrom === "string" && CLAUDE_SESSION_ID.test(candidate.forkedFrom) && candidate.forkedFrom !== candidate.sessionId
@@ -378,28 +468,56 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   const preview = candidate.preview === undefined ? undefined : parsePreview(candidate.preview)
   const diffReview = candidate.diffReview === undefined ? undefined : parseDiffReview(candidate.diffReview)
+  const repository = candidate.repository === undefined ? undefined : parseSessionRepository(candidate.repository)
+  const contextManifest = candidate.contextManifest === undefined ? undefined
+    : parseAssignmentContextManifestView(candidate.contextManifest)
+  const reservationClaims = candidate.reservationClaims === undefined ? undefined
+    : parseAgentSessionReservationClaims(candidate.reservationClaims)
+  const assignmentId = candidate.assignmentId === undefined ? undefined : boundedText(candidate.assignmentId, 300)
   const isClaudeReviewer = candidate.provider === "Claude" && role === "Reviewer"
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
+    || (candidate.repository !== undefined && !repository)
+    || (candidate.contextManifest !== undefined && !contextManifest)
+    || (candidate.reservationClaims !== undefined && !reservationClaims)
+    || (candidate.assignmentId !== undefined && !assignmentId)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
+    || (candidate.fileRef !== undefined && !fileRef)
     || target !== undefined && (role !== "Builder"
       || candidate.provider !== "Codex" && candidate.provider !== "Claude" || reviewPath !== undefined)
     || isClaudeReviewer !== (reviewPath !== undefined)
+    || fileRef !== undefined && (!isClaudeReviewer || fileRef.path !== reviewPath
+      || !repository || fileRef.repositoryResourceKey !== repository.resourceKey
+      || fileRef.repositoryMountKey !== repository.mountKey || fileRef.observedRevision !== repository.observedRevision)
     || (candidate.diffReview !== undefined && !diffReview)
     || diffReview != null && (candidate.provider !== "Claude" || role !== "Reviewer" || reviewPath !== diffReview.path
       || target !== undefined || preview !== undefined || forkedFrom !== undefined)
     || (candidate.preview !== undefined && !preview)
     || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined || preview !== undefined)
     || preview !== undefined && (candidate.provider !== "Claude" || role !== "Preview debugger" || target !== undefined || reviewPath !== undefined || forkedFrom !== undefined)
+    || contextManifest && (!repository || !target
+      || contextManifest.assignment.assignmentId !== (assignmentId ?? candidate.sessionId)
+      || contextManifest.targetRepository.repositoryKey !== repository.resourceKey
+      || contextManifest.targetRepository.repositoryIdentity !== repository.identity
+      || contextManifest.checkout.repositoryMountKey !== repository.mountKey
+      || contextManifest.checkout.baseRevision !== repository.observedRevision
+      || !contextManifest.mutationPosture.target.writablePaths.includes(target.path))
+    || reservationClaims && (!contextManifest || !target || role !== "Builder"
+      || candidate.provider !== "Codex" && candidate.provider !== "Claude")
     || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined || preview !== undefined)) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
+    ...(assignmentId ? { assignmentId } : {}),
     role,
     provider: candidate.provider,
     assignment,
+    ...(repository ? { repository } : {}),
+    ...(contextManifest ? { contextManifest } : {}),
+    ...(reservationClaims ? { reservationClaims } : {}),
     ...(target ? { target } : {}),
+    ...(fileRef ? { fileRef } : {}),
     ...(reviewPath ? { reviewPath } : {}),
     ...(diffReview ? { diffReview } : {}),
     ...(forkedFrom ? { forkedFrom } : {}),
@@ -603,6 +721,7 @@ function projectSessions(
     const isWorking = Boolean(active)
     sessions.push({
       id: descriptorKey,
+      ...(descriptor.assignmentId ? { assignmentId: descriptor.assignmentId } : {}),
       role: descriptor.role,
       providerLabel: descriptor.provider,
       assignment: descriptor.assignment,
@@ -613,11 +732,16 @@ function projectSessions(
       truth: isVerified || active ? "live" : "resume-unverified",
       kind: "durable-session",
       mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
+      ...(descriptor.repository ? { repository: descriptor.repository } : {}),
+      ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
+      ...(descriptor.reservationClaims ? { reservationClaims: descriptor.reservationClaims } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
+      updatedAt: descriptor.updatedAt,
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
       ...(active ? { presentation: active.presentation } : {}),
     })
@@ -628,6 +752,7 @@ function projectSessions(
     if (!descriptor) return
     sessions.push({
       id: turn.id,
+      ...(descriptor.assignmentId ? { assignmentId: descriptor.assignmentId } : {}),
       role: descriptor.role,
       providerLabel: descriptor.provider,
       assignment: descriptor.assignment,
@@ -636,11 +761,16 @@ function projectSessions(
       truth: "live",
       kind: "durable-session",
       mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
+      ...(descriptor.repository ? { repository: descriptor.repository } : {}),
+      ...(descriptor.contextManifest ? { contextManifest: descriptor.contextManifest } : {}),
+      ...(descriptor.reservationClaims ? { reservationClaims: descriptor.reservationClaims } : {}),
       ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.fileRef ? { fileRef: descriptor.fileRef } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
+      updatedAt: descriptor.updatedAt,
       presentation: turn.presentation,
     })
   })
@@ -738,6 +868,7 @@ export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
   worldId,
+  projectKey,
   executionSession,
   autoContinue = false,
   onAutoContinuation,
@@ -745,6 +876,7 @@ export function useExperienceAgentSessions({
   ownerScope: string
   worldScope: string
   worldId: string | null
+  projectKey: CanonicalWorkspaceProjectKey | null
   executionSession: ProjectedWorldWorkerSession | null
   autoContinue?: boolean
   onAutoContinuation?: RunAgentTurnInput["onContinuation"]
@@ -878,7 +1010,7 @@ export function useExperienceAgentSessions({
     setVerifiedSessions([])
     setDurableSession(null)
     setLoadedStorageKey(key)
-  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, worldScope])
+  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, projectKey, worldScope])
 
   useEffect(() => () => {
     const operations = [...operationsRef.current.values()]
@@ -935,8 +1067,11 @@ export function useExperienceAgentSessions({
     sourceSessionId?: string
     exactContinuation?: boolean
     automatic?: boolean
-    onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
+    onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }>) => void | Promise<void>
   }) => {
+    if (projectKey !== "williamos" && projectKey !== "terrafusion") {
+      throw new Error("AGENT_PROJECT_REQUIRED")
+    }
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
     }
@@ -953,6 +1088,15 @@ export function useExperienceAgentSessions({
     const expectedDiffFingerprint = candidateDiffFingerprint && new TextEncoder().encode(candidateDiffFingerprint).byteLength <= 16_384
       ? candidateDiffFingerprint : null
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
+    let requestedFileRef: WorkspaceFileRef | null = null
+    try { requestedFileRef = input.fileRef === undefined ? null : parseWorkspaceFileRef(input.fileRef) } catch {
+      throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    }
+    const requestedRepository = input.repositoryKey === undefined
+      ? null
+      : resolveWorkspaceRepositorySelection(projectKey, input.repositoryKey)
+    if (requestedRepository && !requestedRepository.ok) throw new Error("AGENT_REPOSITORY_SCOPE_INVALID")
+    const requestedRepositoryKey = requestedRepository?.ok ? requestedRepository.repository.key : null
     const expectedFileAuthority = input.expectedFileAuthority === undefined
       ? null : parseFileAuthorityProof(input.expectedFileAuthority)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
@@ -967,7 +1111,11 @@ export function useExperienceAgentSessions({
       || expectedFileAuthority.actor !== input.provider.toLowerCase())) throw new Error("AGENT_TARGET_INVALID")
     if (input.provider === "Claude" && requestedTarget && !expectedFileAuthority) throw new Error("AGENT_TARGET_INVALID")
     if (input.provider !== "Claude" && input.expectedFileAuthority !== undefined) throw new Error("AGENT_TARGET_INVALID")
-    if ((mode === "review" || diffReviewMode) && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    if ((mode === "review" || diffReviewMode) && (!reviewPath || !requestedFileRef
+      || requestedFileRef.path !== reviewPath || !requestedRepositoryKey
+      || requestedFileRef.repositoryResourceKey !== requestedRepositoryKey
+      || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    if (mode !== "review" && !diffReviewMode && input.fileRef !== undefined) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (diffReviewMode && (!reviewWorldId || reviewWorldId !== worldId || !expectedDiffFingerprint)) throw new Error("AGENT_DIFF_REVIEW_INPUT_INVALID")
     if ((mode === "review" || diffReviewMode) && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if ((mode === "review" || diffReviewMode) && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
@@ -998,6 +1146,7 @@ export function useExperienceAgentSessions({
         || requiredPrior.diffReview?.fingerprint !== expectedDiffFingerprint : Boolean(requiredPrior.diffReview))
       || (previewMode ? requiredPrior.preview?.worldId !== worldId : Boolean(requiredPrior.preview))
       || (requestedTarget ? requiredPrior.target?.path !== requestedTarget.path : Boolean(requiredPrior.target))
+      || (requestedFileRef ? JSON.stringify(requiredPrior.fileRef) !== JSON.stringify(requestedFileRef) : Boolean(requiredPrior.fileRef))
     )
     if (requiredSessionKey && (selectedSessionKeyRef.current !== requiredSessionKey
       || continuationMetadataMismatch
@@ -1028,7 +1177,19 @@ export function useExperienceAgentSessions({
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
         && !storedPrior.preview
         && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
-    const lane: ActiveAgentOperation["lane"] = input.provider === "Codex" && role === "Builder" && mode === "delegate" ? "writer"
+    const repositoryBoundPrior = prior ?? forkSource
+    if (repositoryBoundPrior && input.repositoryKey !== undefined
+      && repositoryBoundPrior.repository?.resourceKey !== requestedRepositoryKey) {
+      throw new Error("AGENT_REPOSITORY_SCOPE_MISMATCH")
+    }
+    const effectiveRepositoryKey = repositoryBoundPrior?.repository?.resourceKey ?? requestedRepositoryKey
+    if ((mode === "review" || diffReviewMode) && effectiveRepositoryKey !== requestedFileRef!.repositoryResourceKey) {
+      throw new Error("AGENT_REPOSITORY_SCOPE_MISMATCH")
+    }
+    const writerTarget = requestedTarget?.path ?? repositoryBoundPrior?.target?.path ?? "server-selected"
+    const lane: ActiveAgentOperation["lane"] = (input.provider === "Codex" || input.provider === "Claude")
+      && role === "Builder" && (mode === "delegate" || forkMode)
+      ? `writer:${effectiveRepositoryKey ?? "primary"}:${writerTarget}`
       : input.provider === "Claude" && role === "Reviewer" && (mode === "review" || diffReviewMode) ? "reviewer"
         : previewMode ? "reviewer"
         : input.provider === "Local" && mode === "delegate" ? "thinker" : null
@@ -1093,10 +1254,12 @@ export function useExperienceAgentSessions({
       const response = await fetch(input.provider === "Codex" ? "/api/loom/codex" : "/api/loom/agent", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(diffReviewMode ? {
+        body: JSON.stringify({ ...(diffReviewMode ? {
           mode: "diff-review",
+          projectKey,
           worldId: reviewWorldId,
           path: reviewPath,
+          fileRef: requestedFileRef,
           expectedDiffFingerprint,
           ...(focus ? { focus } : {}),
           provider: "cloud",
@@ -1104,13 +1267,16 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : mode === "review" ? {
           mode: "review",
+          projectKey,
           path: reviewPath,
+          fileRef: requestedFileRef,
           ...(focus ? { focus } : {}),
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
         } : previewMode ? {
           mode: "preview",
+          projectKey,
           worldId,
           prompt,
           provider: "cloud",
@@ -1118,21 +1284,26 @@ export function useExperienceAgentSessions({
           resume: prior !== null,
         } : forkMode ? {
           mode: "fork",
+          projectKey,
           worldId,
           provider: "cloud",
           sourceSessionId: forkSource!.sessionId,
           prompt,
         } : input.provider === "Codex" ? input.automatic ? {
           worldId,
+          projectKey,
           automatic: true,
           sessionId: null,
           resume: false,
         } : {
           worldId,
+          projectKey,
           prompt,
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
         } : input.provider === "Local" ? {
+          worldId,
+          projectKey,
           prompt,
           provider: "local",
           sessionId: prior?.sessionId ?? null,
@@ -1140,11 +1311,12 @@ export function useExperienceAgentSessions({
           completedTurns: prior?.completedTurns ?? [],
         } : {
           worldId,
+          projectKey,
           prompt,
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
-        }),
+        }), ...(effectiveRepositoryKey ? { repositoryKey: effectiveRepositoryKey } : {}) }),
         signal: operation.abort.signal,
         cache: "no-store",
       })
@@ -1217,6 +1389,43 @@ export function useExperienceAgentSessions({
             || input.provider === "Codex" && !serverAssignmentHash
             || input.provider === "Claude" && !claudeAuthorityBindingMatches
           ))
+          const repositoryValues = [
+            event.repositoryResourceKey,
+            event.repositoryIdentity,
+            event.repositoryMountKey,
+            event.observedRevision,
+          ]
+          const repositoryFramePresent = repositoryValues.some((value) => value !== undefined && value !== null)
+          const repository = repositoryFramePresent ? parseSessionRepository({
+            resourceKey: event.repositoryResourceKey,
+            identity: event.repositoryIdentity,
+            mountKey: event.repositoryMountKey,
+            observedRevision: event.observedRevision,
+          }) : null
+          const repositoryBindingInvalid = repositoryFramePresent && !repository
+            || Boolean(prior?.repository && JSON.stringify(prior.repository) !== JSON.stringify(repository))
+            || Boolean(effectiveRepositoryKey && repository?.resourceKey !== effectiveRepositoryKey)
+          const contextManifest = event.contextManifest === undefined ? undefined
+            : parseAssignmentContextManifestView(event.contextManifest)
+          const reservationClaims = event.reservationClaims === undefined ? undefined
+            : parseAgentSessionReservationClaims(event.reservationClaims)
+          const serverAssignmentId = event.assignmentId === undefined
+            ? event.sessionId as string
+            : boundedText(event.assignmentId, 300)
+          const contextManifestInvalid = event.contextManifest !== undefined && !contextManifest
+            || event.assignmentId !== undefined && !serverAssignmentId
+            || Boolean(contextManifest && (!repository || !capturedTarget
+              || contextManifest.assignment.assignmentId !== serverAssignmentId
+              || contextManifest.assignment.worldId !== worldId
+              || contextManifest.targetRepository.repositoryKey !== repository.resourceKey
+              || contextManifest.targetRepository.repositoryIdentity !== repository.identity
+              || contextManifest.checkout.repositoryMountKey !== repository.mountKey
+              || contextManifest.checkout.baseRevision !== repository.observedRevision
+              || !contextManifest.mutationPosture.target.writablePaths.includes(capturedTarget.path)))
+          const reservationClaimsInvalid = event.reservationClaims !== undefined && !reservationClaims
+            || Boolean(reservationClaims && (!contextManifest || !capturedTarget
+              || role !== "Builder" || input.provider !== "Codex" && input.provider !== "Claude"))
+            || Boolean(contextManifest && capturedTarget && !reservationClaims)
           const previewWorldId = previewMode ? boundedText(event.worldId, 200) : null
           const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
             ? event.evidenceFingerprint : null
@@ -1243,7 +1452,8 @@ export function useExperienceAgentSessions({
             ))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || invalidPreviewBinding || invalidDiffReviewBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || repositoryBindingInvalid || contextManifestInvalid
+            || reservationClaimsInvalid || invalidPreviewBinding || invalidDiffReviewBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -1252,10 +1462,15 @@ export function useExperienceAgentSessions({
           accepted = {
             schemaVersion: 1,
             sessionId: event.sessionId as string,
+            ...(contextManifest ? { assignmentId: serverAssignmentId! } : {}),
             role,
             provider: input.provider,
             assignment,
+            ...(repository ? { repository } : {}),
+            ...(contextManifest ? { contextManifest } : {}),
+            ...(reservationClaims ? { reservationClaims } : {}),
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
+            ...(requestedFileRef ? { fileRef: requestedFileRef } : {}),
             ...(mode === "review" || diffReviewMode ? { reviewPath: reviewPath! } : {}),
             ...(diffReviewBinding ? { diffReview: diffReviewBinding } : {}),
             ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
@@ -1293,8 +1508,9 @@ export function useExperienceAgentSessions({
           if (status === "NEXT_ASSIGNMENT") {
             const selectedPath = canonicalWorkspaceFilePath(event.selectedPath)
             const task = boundedText(event.task, 20_000)
-            if (!selectedPath || !task) { malformed = true; return }
-            input.onContinuation?.({ status, selectedPath, task })
+            const repository = resolveWorkspaceRepositorySelection(projectKey, event.repositoryKey)
+            if (!selectedPath || !task || !repository.ok) { malformed = true; return }
+            input.onContinuation?.({ status, selectedPath, task, repositoryKey: repository.repository.key })
           } else if (["ASSIGNMENT_IN_FLIGHT", "WORK_ORDER_PATHS_COMPLETE", "SPACE_PERSISTENCE_BUSY", "CONTINUATION_BLOCKED"].includes(status)) {
             input.onContinuation?.({ status })
           } else {
@@ -1459,13 +1675,13 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [loadedStorageKey, ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
+  }, [loadedStorageKey, ownerScope, persistCanonicalCollection, projectKey, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback(async (input: RunAgentTurnInput) => {
     let current = input
     let completed: DurableAgentSession | null = null
     for (let transition = 0; transition < 64; transition += 1) {
-      const transitionResult: { current: Readonly<{ status: string; selectedPath?: string; task?: string }> | null } = { current: null }
+      const transitionResult: { current: Readonly<{ status: string; selectedPath?: string; task?: string; repositoryKey?: string }> | null } = { current: null }
       completed = await executeTurn({
         ...current,
         mode: "delegate",
@@ -1480,13 +1696,14 @@ export function useExperienceAgentSessions({
           return completed
         }
       }
-      if (!next || next.status !== "NEXT_ASSIGNMENT" || !next.selectedPath || !next.task) return completed
+      if (!next || next.status !== "NEXT_ASSIGNMENT" || !next.selectedPath || !next.task || !next.repositoryKey) return completed
       current = {
         provider: "Codex",
         role: "Builder",
         assignment: next.selectedPath,
         prompt: next.task,
         target: { kind: "file", path: next.selectedPath },
+        repositoryKey: next.repositoryKey,
         automatic: true,
         onEvent: input.onEvent,
         onPresentation: input.onPresentation,
@@ -1498,7 +1715,7 @@ export function useExperienceAgentSessions({
 
   useEffect(() => {
     const exactStorageKey = storageKey(ownerScope, worldScope)
-    if (!autoContinue || !worldId || loadedStorageKey !== exactStorageKey
+    if (!autoContinue || !worldId || projectKey !== "williamos" && projectKey !== "terrafusion" || loadedStorageKey !== exactStorageKey
       || operationsRef.current.size > 0) return
     const exactWorldId = worldId
     const attemptKey = `${exactStorageKey}:${exactWorldId}`
@@ -1516,7 +1733,7 @@ export function useExperienceAgentSessions({
     async function read(attempt: number): Promise<void> {
       let response: Response
       try {
-        response = await fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(exactWorldId)}`, { cache: "no-store" })
+        response = await fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(exactWorldId)}&projectKey=${encodeURIComponent(projectKey ?? "")}`, { cache: "no-store" })
       } catch (cause) {
         if (cancelled) return
         if (attempt < 3) return retry(attempt)
@@ -1536,7 +1753,8 @@ export function useExperienceAgentSessions({
       if (cancelled || continuation.status !== "NEXT_ASSIGNMENT") return
       const selectedPath = canonicalWorkspaceFilePath(continuation.selectedPath)
       const task = boundedText(continuation.task, 20_000)
-      if (!selectedPath || !task) return
+      const repository = resolveWorkspaceRepositorySelection(projectKey, continuation.repositoryKey)
+      if (!selectedPath || !task || !repository.ok) return settleReadFailure()
       try {
         await runAgentTurn({
           provider: "Codex",
@@ -1544,6 +1762,7 @@ export function useExperienceAgentSessions({
           assignment: selectedPath,
           prompt: task,
           target: { kind: "file", path: selectedPath },
+          repositoryKey: repository.repository.key,
           automatic: true,
           onContinuation: onAutoContinuation,
         })
@@ -1557,7 +1776,7 @@ export function useExperienceAgentSessions({
       if (retryTimer) clearTimeout(retryTimer)
       if (autoContinuationAttemptRef.current === attemptKey) autoContinuationAttemptRef.current = null
     }
-  }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, runAgentTurn, worldId, worldScope])
+  }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, projectKey, runAgentTurn, worldId, worldScope])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
   const runPreviewDiagnostic = useCallback((input: RunPreviewDiagnosticInput) => executeTurn({
     ...input, provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview",
@@ -1586,7 +1805,9 @@ export function useExperienceAgentSessions({
         expectedDiffFingerprint: prior.diffReview!.fingerprint,
       } : {}),
       path: prior.reviewPath,
+      fileRef: prior.fileRef,
       target: prior.target,
+      repositoryKey: prior.repository?.resourceKey,
       mode,
       requiredSessionKey: exactKey,
       exactContinuation: true,
@@ -1655,7 +1876,47 @@ export function AgentSessionStrip({
   onSelect?: (session: ExperienceAgentSession) => void
   className?: string
 }) {
+  const stripIdentity = useId().replaceAll(":", "")
   if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
+  const repositoryLabel = (repository: AgentSessionRepository | undefined): string | null => {
+    if (!repository) return null
+    if (repository.resourceKey === "os-1") return "OS 1.0"
+    if (repository.resourceKey === "sovereign-os") return "Sovereign OS"
+    if (repository.resourceKey === "gpt") return "GPT"
+    if (repository.resourceKey === "williamos") return "WilliamOS"
+    return repository.resourceKey
+      .split("-")
+      .filter(Boolean)
+      .map((segment) => `${segment[0]?.toUpperCase() ?? ""}${segment.slice(1)}`)
+      .join(" ")
+  }
+  const identityGroups = new Map<string, ExperienceAgentSession[]>()
+  for (const session of sessions) {
+    const key = `${session.kind}\u0000${session.repository?.resourceKey ?? ""}\u0000${session.role}\u0000${session.providerLabel}\u0000${session.assignment}`
+    identityGroups.set(key, [...(identityGroups.get(key) ?? []), session])
+  }
+  const duplicatePositions = new Map<ExperienceAgentSession, Readonly<{ index: number; total: number }>>()
+  for (const group of identityGroups.values()) {
+    if (group.length < 2) continue
+    const ordered = [...group].sort((left, right) => {
+      const leftIdentity = `${left.updatedAt ?? ""}\u0000${left.id}`
+      const rightIdentity = `${right.updatedAt ?? ""}\u0000${right.id}`
+      return leftIdentity.localeCompare(rightIdentity)
+    })
+    ordered.forEach((session, index) => duplicatePositions.set(session, { index, total: ordered.length }))
+  }
+  const disambiguator = (session: ExperienceAgentSession): string | null => {
+    const position = duplicatePositions.get(session)
+    if (!position) return null
+    const ordinal = `${position.index + 1} of ${position.total}`
+    if (session.updatedAt) {
+      const parsed = new Date(session.updatedAt)
+      if (!Number.isNaN(parsed.getTime())) {
+        return `${parsed.toISOString().replace("T", " ").slice(0, 16)}Z · ${ordinal}`
+      }
+    }
+    return `session ${ordinal}`
+  }
   return (
     <nav
       className={className ?? "flex items-center justify-center gap-2"}
@@ -1684,14 +1945,29 @@ export function AgentSessionStrip({
           Stop
         </button>
       ) : null}
-      {sessions.map((session) => (
-        <button
+      {sessions.map((session) => {
+        const sessionRepositoryLabel = repositoryLabel(session.repository)
+        const repositoryDescriptionId = sessionRepositoryLabel
+          ? `agent-session-repository-${stripIdentity}-${encodeURIComponent(session.id)}`
+          : undefined
+        const identityLabel = `${session.role} · ${session.providerLabel}`
+        const repositoryQualifiedIdentity = [sessionRepositoryLabel, identityLabel].filter(Boolean).join(" · ")
+        const identityDisambiguator = disambiguator(session)
+        const assignmentLabel = identityDisambiguator
+          ? `${session.assignment} · ${identityDisambiguator}`
+          : session.assignment
+        const accessibleAssignmentLabel = duplicatePositions.get(session)?.index === 0
+          ? session.assignment
+          : assignmentLabel
+        return <button
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
+          aria-describedby={repositoryDescriptionId}
           aria-label={session.kind === "durable-session"
-            ? `${session.role} · ${session.providerLabel} · ${session.assignment}`
-            : `${session.role} · ${session.providerLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
+            ? `${identityLabel} · ${accessibleAssignmentLabel}`
+            : `${identityLabel} · ${session.assignment} · ${session.status} · ${session.evidence}`}
+          title={`${repositoryQualifiedIdentity} · ${assignmentLabel}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
@@ -1700,16 +1976,21 @@ export function AgentSessionStrip({
             {session.role.slice(0, 1).toUpperCase()}
           </span>
           <span className="grid min-w-0 flex-1 gap-px">
+            {sessionRepositoryLabel ? (
+              <small id={repositoryDescriptionId} data-agent-session-level="repository" className="truncate text-[9px] font-semibold uppercase tracking-[0.08em] text-[#a8c7a1]">
+                {sessionRepositoryLabel}
+              </small>
+            ) : null}
             <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
-              {session.role} · {session.providerLabel}
+              {identityLabel}
             </strong>
             {session.assignment ? (
               <span
                 data-agent-session-level="assignment"
-                title={session.assignment}
+                title={assignmentLabel}
                 className="block truncate text-[9.5px] text-[#c7d0c3]"
               >
-                {session.assignment}
+                {assignmentLabel}
               </span>
             ) : null}
             <small
@@ -1721,7 +2002,7 @@ export function AgentSessionStrip({
             </small>
           </span>
         </button>
-      ))}
+      })}
     </nav>
   )
 }

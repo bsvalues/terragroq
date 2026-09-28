@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+
 export type ChangeRefreshResult = "refreshed" | "dirty-conflict" | "failed"
 type ChangePhase = "streaming" | "refreshing" | "settled"
 
@@ -17,6 +19,7 @@ type Receipt = Readonly<{ success: boolean }>
 type ActiveChange = {
   controller: AbortController
   path: string
+  fileRef: WorkspaceFileRef
   scope: ChangeOperationScope | null
   started: boolean
   terminal: Receipt | null
@@ -44,13 +47,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function useSelectedFileChange({
   worldId,
+  projectKey,
   path,
+  fileRef,
   dirty,
   onVerifiedSuccess,
   isOperationScopeCurrent,
 }: {
   worldId: string | null
+  projectKey: "terrafusion" | "williamos"
   path: string | null
+  fileRef: WorkspaceFileRef | null
   dirty: boolean
   onVerifiedSuccess: (path: string) => Promise<ChangeRefreshResult> | ChangeRefreshResult
   isOperationScopeCurrent?: (scope: ChangeOperationScope) => boolean
@@ -104,6 +111,17 @@ export function useSelectedFileChange({
       setState({ phase: "settled", running: false, path: null, progress: null, outcome: "Select a file before starting Change." })
       return
     }
+    let exactFileRef: WorkspaceFileRef
+    try {
+      exactFileRef = parseWorkspaceFileRef(fileRef)
+    } catch {
+      setState({ phase: "settled", running: false, path, progress: null, outcome: "The selected file identity is unavailable. Reopen the file before starting Change." })
+      return
+    }
+    if (exactFileRef.path !== path) {
+      setState({ phase: "settled", running: false, path, progress: null, outcome: "The selected file identity changed. Reopen the file before starting Change." })
+      return
+    }
     if (dirty) {
       setState({ phase: "settled", running: false, path, progress: null, outcome: `Save ${path} before starting Change.` })
       return
@@ -112,6 +130,7 @@ export function useSelectedFileChange({
     const operation: ActiveChange = {
       controller: new AbortController(),
       path,
+      fileRef: exactFileRef,
       scope,
       started: false,
       terminal: null,
@@ -133,7 +152,10 @@ export function useSelectedFileChange({
       if (!operationIsCurrent()) return
       if (!isRecord(value) || operation.terminal) return rejectProtocol()
       if (value.type === "started") {
-        if (operation.started || value.file !== operation.path) return rejectProtocol()
+        let returnedFileRef: WorkspaceFileRef
+        try { returnedFileRef = parseWorkspaceFileRef(value.fileRef) } catch { return rejectProtocol() }
+        if (operation.started || value.file !== operation.path
+          || JSON.stringify(returnedFileRef) !== JSON.stringify(operation.fileRef)) return rejectProtocol()
         operation.started = true
         present((current) => ({ ...current, progress: `Working on ${operation.path}.` }))
         return
@@ -184,7 +206,15 @@ export function useSelectedFileChange({
       const response = await fetch("/api/loom/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId, path: operation.path, task, ...(improve ?? {}) }),
+        body: JSON.stringify({
+          worldId,
+          ...(projectKey === "williamos" ? { projectKey } : {}),
+          repositoryKey: operation.fileRef.repositoryResourceKey,
+          fileRef: operation.fileRef,
+          path: operation.path,
+          task,
+          ...(improve ?? {}),
+        }),
         signal: operation.controller.signal,
         cache: "no-store",
       })
@@ -231,7 +261,7 @@ export function useSelectedFileChange({
     } finally {
       if (active.current === operation) active.current = null
     }
-  }, [dirty, path, worldId])
+  }, [dirty, fileRef, path, projectKey, worldId])
 
   return { ...state, canStop: state.phase === "streaming", start, stop, reset, refuse, invalidate }
 }

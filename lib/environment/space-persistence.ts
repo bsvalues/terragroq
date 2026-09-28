@@ -23,6 +23,7 @@ import {
   type CouncilDispositionDirection,
   type CouncilSession,
 } from "@/lib/environment/council-session"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 
 export type OwnedWorkingWorldRecord = Readonly<{
   id: string
@@ -32,7 +33,11 @@ export type OwnedWorkingWorldRecord = Readonly<{
   updatedAt: Date
 }>
 
-export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+export type WorkspaceProject = Readonly<{
+  identity: string
+  name: string
+  repositories?: readonly WorkspaceRepositoryMountView[]
+}>
 export type OwnedSpaceSummary = Readonly<{
   worldId: string
   name: string
@@ -533,7 +538,10 @@ export function createDefaultSpace(runningAppUrl: string | null, runningAppTitle
   }
 }
 
-const MAX_PROJECT_SPACES = 12
+// Keep project Space reads and concurrent creation bounded without making a normal history of
+// completed owner outcomes block the next legitimate slice. Twelve was exhausted by ordinary
+// Experience V2 execution and turned retained evidence into a user-visible workflow gate.
+const MAX_PROJECT_SPACES = 64
 const PROJECT_SCAN_PAGE_SIZE = 50
 const MAX_PROJECT_SCAN_ROWS = 5_000
 

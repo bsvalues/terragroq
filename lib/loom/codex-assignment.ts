@@ -11,6 +11,7 @@ import { hashRecord } from "@/lib/governance/hash"
 import { reservationCoversRequestedPath } from "@/lib/governance/work-context-gate"
 import { providedAuthorityRank, requiredAuthorityRank } from "@/lib/goal/taxonomy"
 import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
+import type { WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
 
 export const CODEX_ASSIGNMENT_VERSION = "loom-codex-assignment.v1" as const
 const MAX_TARGET_BYTES = 2_000_000
@@ -21,7 +22,10 @@ export type CodexAssignmentRecord = Readonly<{
   project: Readonly<{
     id: number
     key: string
+    repositoryResourceKey?: string
     repositoryIdentity: string
+    repositoryMountKey?: string
+    observedRevision?: string | null
   }>
   outcome: Readonly<{
     id: number
@@ -73,6 +77,7 @@ export type CodexAssignment = Readonly<{
   workOrderId: number
   grantId: number
   selectedPath: string
+  selectedFileRef: WorkspaceFileRef | null
   allowed: readonly string[]
   forbidden: readonly string[]
   binding: Readonly<{
@@ -86,7 +91,10 @@ export type CodexAssignment = Readonly<{
     reservationVersion: string
     projectId: number
     projectKey: string
+    repositoryResourceKey?: string
     repositoryIdentity: string
+    repositoryMountKey?: string
+    observedRevision?: string | null
     spaceIdentity: string | null
   }>
   assignmentHash: string
@@ -101,7 +109,10 @@ export type CodexAssignmentDependencies = Readonly<{
 export type CodexAssignmentProjectBinding = Readonly<{
   projectId: number
   projectKey: string
+  repositoryResourceKey?: string
   repositoryIdentity: string
+  repositoryMountKey?: string
+  observedRevision?: string | null
   spaceIdentity: string
 }>
 
@@ -123,11 +134,12 @@ function normalizedReservation(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean))].sort()
 }
 
-function selectedSpacePath(world: WorkingWorldSnapshot): string {
+function selectedSpaceTarget(world: WorkingWorldSnapshot): Readonly<{ path: string; fileRef: WorkspaceFileRef | null }> {
   if (!world.space || world.space.activePaneId === null) refuse("the owned Space has no active source pane")
   const pane = world.space.panes.find((candidate) => candidate.id === world.space?.activePaneId)
-  if (!pane?.filePath) refuse("the owned Space has no persisted selected file")
-  return pane.filePath
+  const path = world.space.selection?.filePath ?? pane?.filePath ?? null
+  if (!path) refuse("the owned Space has no persisted selected file")
+  return { path, fileRef: world.space.selection?.fileRef ?? pane?.fileRef ?? null }
 }
 
 function assignmentSnapshot(input: {
@@ -135,6 +147,7 @@ function assignmentSnapshot(input: {
   worldId: string
   projectRoot: string
   selectedPath: string
+  selectedFileRef: WorkspaceFileRef | null
   record: CodexAssignmentRecord
   allowed: readonly string[]
   forbidden: readonly string[]
@@ -148,6 +161,7 @@ function assignmentSnapshot(input: {
     projectRoot: input.projectRoot,
     spaceRevision: record.world.space?.revision ?? null,
     selectedPath: input.selectedPath,
+    selectedFileRef: input.selectedFileRef,
     outcome: record.outcome,
     workOrder: {
       id: record.workOrder.id,
@@ -267,6 +281,7 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
   const result = await pool.query(
     `SELECT world."snapshot" AS "worldSnapshot",
       project_row."id" AS "projectId", project_row."key" AS "projectKey",
+      project_resource."resourceKey" AS "repositoryResourceKey",
       project_resource."canonicalIdentity" AS "repositoryIdentity",
       outcome."id" AS "outcomeId", outcome."outcomeKey", outcome."lifecycleState",
       outcome."activeWorkOrderId", outcome."version" AS "outcomeVersion",
@@ -285,11 +300,28 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
     LEFT JOIN "project" project_row
       ON project_row."userId" = world."userId"
       AND project_row."id" = (world."snapshot"::jsonb #>> '{spine,projectId}')::integer
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        world."snapshot"::jsonb #>> '{space,selection,fileRef,repositoryResourceKey}',
+        (
+          SELECT pane #>> '{fileRef,repositoryResourceKey}'
+          FROM jsonb_array_elements(COALESCE(world."snapshot"::jsonb #> '{space,panes}', '[]'::jsonb)) pane
+          WHERE pane ->> 'id' = world."snapshot"::jsonb #>> '{space,activePaneId}'
+          LIMIT 1
+        )
+      ) AS "repositoryResourceKey"
+    ) selected_repository ON true
     LEFT JOIN "project_resource" project_resource
       ON project_resource."userId" = project_row."userId"
       AND project_resource."projectId" = project_row."id"
       AND project_resource."type" = 'repo'
-      AND project_resource."relationship" = 'primary-repo'
+      AND (
+        project_resource."resourceKey" = selected_repository."repositoryResourceKey"
+        OR (
+          selected_repository."repositoryResourceKey" IS NULL
+          AND project_resource."relationship" = 'primary-repo'
+        )
+      )
     LEFT JOIN "outcome_queue_item" outcome
       ON outcome."userId" = world."userId"
       AND outcome."outcomeKey" = (world."snapshot"::jsonb #>> '{spine,outcomeKey}')
@@ -309,12 +341,19 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
     refuse("the owned Space is not bound to one active outcome, work order, and grant")
   }
   const parsedWorld = typeof row.worldSnapshot === "string" ? JSON.parse(row.worldSnapshot) : row.worldSnapshot
+  const world = validateWorkingWorld(parsedWorld)
+  const selected = selectedSpaceTarget(world)
   return {
-    world: validateWorkingWorld(parsedWorld),
+    world,
     project: {
       id: Number(row.projectId),
       key: String(row.projectKey),
+      ...(row.repositoryResourceKey == null ? {} : { repositoryResourceKey: String(row.repositoryResourceKey) }),
       repositoryIdentity: String(row.repositoryIdentity),
+      ...(selected.fileRef ? {
+        repositoryMountKey: selected.fileRef.repositoryMountKey,
+        observedRevision: selected.fileRef.observedRevision,
+      } : {}),
     },
     outcome: {
       id: Number(row.outcomeId),
@@ -370,7 +409,9 @@ async function deriveCodexAssignmentFromRootIdentity(
 ): Promise<CodexAssignment> {
   const record = await dependencies.loadRecord(input.userId, input.worldId)
   if (!record) refuse("the requested owned Space does not exist")
-  const selectedPath = selectedSpacePath(record.world)
+  const selected = selectedSpaceTarget(record.world)
+  const selectedPath = selected.path
+  const selectedFileRef = selected.fileRef
   if (record.world.spine.projectId !== record.project.id
     || !record.project.key.trim()
     || !record.project.repositoryIdentity.trim()) {
@@ -383,6 +424,24 @@ async function deriveCodexAssignmentFromRootIdentity(
       || record.project.repositoryIdentity !== input.projectBinding.repositoryIdentity
       || !record.world.resources.includes(expectedResource)) {
       refuse("the owned Space is not bound to the verified TerraFusion Project and workspace resource")
+    }
+    if (selectedFileRef) {
+      if (!input.projectBinding.repositoryResourceKey
+        || !input.projectBinding.repositoryMountKey
+        || !input.projectBinding.observedRevision
+        || selectedFileRef.projectIdentity !== input.projectBinding.spaceIdentity
+        || selectedFileRef.repositoryResourceKey !== input.projectBinding.repositoryResourceKey
+        || selectedFileRef.repositoryResourceKey !== record.project.repositoryResourceKey
+        || selectedFileRef.repositoryMountKey !== input.projectBinding.repositoryMountKey
+        || selectedFileRef.observedRevision !== input.projectBinding.observedRevision
+        || selectedFileRef.path !== selectedPath
+        || selectedFileRef.worktreeKey !== null) {
+        refuse("the selected file is stale or belongs to a different verified repository mount")
+      }
+    } else if (input.projectBinding.repositoryResourceKey
+      && input.projectBinding.repositoryResourceKey !== "os-1"
+      && input.projectBinding.repositoryResourceKey !== "williamos") {
+      refuse("a legacy path-only selection can bind only to the primary repository")
     }
   }
   if (record.world.spine.outcomeKey !== record.outcome.outcomeKey
@@ -424,6 +483,7 @@ async function deriveCodexAssignmentFromRootIdentity(
     worldId: input.worldId,
     projectRoot: input.projectRoot,
     selectedPath,
+    selectedFileRef,
     record,
     allowed,
     forbidden,
@@ -438,6 +498,7 @@ async function deriveCodexAssignmentFromRootIdentity(
     workOrderId: record.workOrder.id,
     grantId: record.grant.id,
     selectedPath,
+    selectedFileRef,
     allowed,
     forbidden,
     binding: {
@@ -451,7 +512,10 @@ async function deriveCodexAssignmentFromRootIdentity(
       reservationVersion,
       projectId: record.project.id,
       projectKey: record.project.key,
+      ...(input.projectBinding?.repositoryResourceKey ? { repositoryResourceKey: input.projectBinding.repositoryResourceKey } : {}),
       repositoryIdentity: record.project.repositoryIdentity,
+      ...(input.projectBinding?.repositoryMountKey ? { repositoryMountKey: input.projectBinding.repositoryMountKey } : {}),
+      ...(input.projectBinding?.observedRevision ? { observedRevision: input.projectBinding.observedRevision } : {}),
       spaceIdentity: input.projectBinding?.spaceIdentity ?? null,
     },
     assignmentHash,
@@ -513,7 +577,10 @@ export async function revalidateCodexAssignment(
         projectBinding: {
           projectId: assignment.binding.projectId,
           projectKey: assignment.binding.projectKey,
+          ...(assignment.binding.repositoryResourceKey ? { repositoryResourceKey: assignment.binding.repositoryResourceKey } : {}),
           repositoryIdentity: assignment.binding.repositoryIdentity,
+          ...(assignment.binding.repositoryMountKey ? { repositoryMountKey: assignment.binding.repositoryMountKey } : {}),
+          ...(assignment.binding.observedRevision ? { observedRevision: assignment.binding.observedRevision } : {}),
           spaceIdentity: assignment.binding.spaceIdentity,
         },
       } : {}),

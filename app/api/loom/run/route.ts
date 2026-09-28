@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process"
+import { StringDecoder } from "node:string_decoder"
 
 
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { describeUnavailableNodeOperation } from "@/lib/loom/node-operation-preflight"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
-import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
+import { resolveCanonicalWorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
+import { createToolOutputRedactor } from "@/lib/loom/output-redaction"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -29,16 +32,18 @@ const MAX_OUTPUT_BYTES = 2_000_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
-  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
-  const projectRoot = projectBinding.binding.workspaceRoot
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown; worldId?: unknown; projectKey?: unknown; repositoryKey?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
+  const projectBinding = body.repositoryKey === undefined
+    ? await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion")
+    : await resolveCanonicalWorkspaceProjectBinding(session.user.id, body.projectKey ?? "terrafusion", undefined, body.repositoryKey)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   const terminalOperation = body.terminalCommand === undefined ? null : resolveProjectTerminalCommand(body.terminalCommand)
   const resolution = terminalOperation
@@ -53,6 +58,20 @@ export async function POST(request: Request) {
     return Response.json({ error: resolution.refusal }, { status: resolution.refusal === "UNKNOWN_OPERATION" ? 404 : 409 })
   }
   const operation = resolution.operation
+  const operationArgs = operation.id === "tests.run" && projectBinding.binding.projectKey === "williamos"
+    ? [...operation.args, "--config", "vitest.ci.config.ts"]
+    : [...operation.args]
+
+  // An operation that runs a file from inside the checkout must be checked before it is spawned. Without
+  // this the child process fails inside Node's module loader and the operator is shown a raw stack trace
+  // ("Cannot find module .../node_modules/vitest/vitest.mjs") that names no cause they can act on. The
+  // absence of a test runner is a fact about the repository, so it is reported as one.
+  if (operation.command === "node") {
+    const unavailable = describeUnavailableNodeOperation(projectRoot, operationArgs)
+    if (unavailable) {
+      return Response.json({ error: unavailable.code, detail: unavailable.detail, operation: operation.id }, { status: 409 })
+    }
+  }
 
   // Reading repository state or tailing a log proves nothing and changes nothing; restarting the
   // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
@@ -79,7 +98,7 @@ export async function POST(request: Request) {
   }
 
   const command = operation.command === "node" ? process.execPath : operation.command
-  const child = spawn(command, [...operation.args], {
+  const child = spawn(command, operationArgs, {
     cwd: projectRoot,
     shell: false,
     windowsHide: true,
@@ -89,6 +108,10 @@ export async function POST(request: Request) {
   let bytes = 0
   let settled = false
   const encoder = new TextEncoder()
+  const outputChannels = {
+    stdout: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+    stderr: { decoder: new StringDecoder("utf8"), redactor: createToolOutputRedactor() },
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -104,6 +127,11 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        for (const channel of ["stdout", "stderr"] as const) {
+          const state = outputChannels[channel]
+          const text = state.redactor.push(state.decoder.end()) + state.redactor.end()
+          if (text) send({ type: channel, text })
+        }
         // Recorded on every exit path -- timeout, output cap, cancel, crash and success alike -- so
         // an operation cannot end without leaving a trace of how it ended.
         void recordLoomEnd({
@@ -116,12 +144,28 @@ export async function POST(request: Request) {
         try { controller.close() } catch { /* already closed */ }
       }
 
-      send({ type: "started", operation: operation.id, label: operation.label, mutating: operation.mutating })
+      send({
+        type: "started",
+        operation: operation.id,
+        label: operation.label,
+        mutating: operation.mutating,
+        repositoryKey: projectBinding.binding.repositoryKey,
+        repositoryIdentity: projectBinding.binding.repositoryIdentity,
+        repositoryMountKey: projectBinding.binding.repositoryMountKey,
+        observedRevision: projectBinding.binding.observedRevision,
+      })
       void recordLoomStart({
         userId: session.user.id,
         kind: "operation",
         subject: operation.id,
-        metadata: { scope: operation.scope, mutating: operation.mutating },
+        metadata: {
+          scope: operation.scope,
+          mutating: operation.mutating,
+          repositoryKey: projectBinding.binding.repositoryKey,
+          repositoryIdentity: projectBinding.binding.repositoryIdentity,
+          repositoryMountKey: projectBinding.binding.repositoryMountKey,
+          observedRevision: projectBinding.binding.observedRevision,
+        },
       })
 
       // A runaway process must not be able to fill memory or run forever unattended.
@@ -138,7 +182,9 @@ export async function POST(request: Request) {
           finish({ type: "exit", code: null, reason: "OUTPUT_LIMIT" })
           return
         }
-        send({ type: channel, text: chunk.toString("utf8") })
+        const state = outputChannels[channel]
+        const text = state.redactor.push(state.decoder.write(chunk))
+        if (text) send({ type: channel, text })
       }
 
       child.stdout.on("data", forward("stdout"))

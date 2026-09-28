@@ -1,3 +1,5 @@
+import { humanMessage } from "@/lib/workbench/human-vocabulary"
+
 export type ThreadItemKind =
   | "OWNER_INTENT"
   | "WILLIAMOS_RESPONSE"
@@ -84,6 +86,8 @@ export type ThreadProjectionInput = {
   threads: ThreadRecordInput[]
   bindings: ThreadBindingInput[]
   sources: ThreadSourceInput[]
+  /** True when the upstream thread read hit its row budget before grouping, so identical-intent runs beyond the fetched page may exist. */
+  threadListTruncated?: boolean
 }
 
 export type ThreadSourceRef = Readonly<{
@@ -138,6 +142,10 @@ export type Thread = Readonly<{
   lastActivityAt: Date
   coverage: ThreadCoverage
   items: ThreadItem[]
+  /** How many recorded work sessions share this thread's intent (identical title). 1 = a single session. */
+  runCount?: number
+  /** True when the upstream thread read was truncated before grouping, so runs beyond the fetched page may exist and the run count is partial. */
+  runCountPartial?: boolean
 }>
 
 const DEFAULT_TRUTH: ThreadTruth = {
@@ -287,12 +295,24 @@ function item(
     occurredAt: source.occurredAt,
     actorRole,
     title: safeText(title, kind.replaceAll("_", " ")),
-    summary: safeText(summary, "No safe summary recorded"),
+    // IF-12: the owner-facing summary never leaks Intelligence Fabric / infrastructure vocabulary.
+    // A summary that would name a model, provider, GPU, runtime, or placement is neutralized here so
+    // the Fabric stays invisible in the normal path (provenance stays available in drilldown).
+    summary: kind === "WORK_STATE" || kind === "ARTIFACT_DELIVERY"
+      ? safeText(humanMessage(summary, kind === "WORK_STATE" ? workStateFallback(summary) : "Done."), "No safe summary recorded")
+      : safeText(summary, "No safe summary recorded"),
     rawState,
     truth: truth(source.truth),
     source: sourceRef(source, facet),
     ...(decision ? { decision } : {}),
   }
+}
+
+function workStateFallback(summary: string): string {
+  const lowered = summary.toLowerCase()
+  if (lowered.includes("block") || lowered.includes("needs") || lowered.includes("attention") || lowered.includes("fail") || lowered.includes("error")) return "This needs your attention."
+  if (lowered.includes("run") || lowered.includes("progress") || lowered.includes("working") || lowered.includes("start")) return "Working on it."
+  return "Done."
 }
 
 function decisionDetail(value: unknown): ThreadDecisionDetail | null {
@@ -653,10 +673,62 @@ function projectThread(input: ThreadProjectionInput, thread: ThreadRecordInput):
   }
 }
 
+function mergeGroupedThreads(runs: readonly Thread[]): Thread {
+  if (runs.length === 1) return runs[0]
+  // The group keeps every recorded session's work visible: items merge (deduped by id),
+  // coverage unions, and the timeline spans earliest creation to latest activity.
+  const first = [...runs].sort((left, right) => left.lastActivityAt.getTime() - right.lastActivityAt.getTime())[runs.length - 1]
+  const itemsById = new Map<string, ThreadItem>()
+  for (const run of runs) {
+    for (const item of run.items) {
+      if (!itemsById.has(item.id)) itemsById.set(item.id, item)
+    }
+  }
+  const items = [...itemsById.values()].sort(itemSort)
+  const createdAt = runs.reduce(
+    (earliest, run) => run.createdAt.getTime() < earliest.getTime() ? run.createdAt : earliest,
+    runs[0].createdAt,
+  )
+  const lastActivityAt = runs.reduce(
+    (latest, run) => run.lastActivityAt.getTime() > latest.getTime() ? run.lastActivityAt : latest,
+    runs[0].lastActivityAt,
+  )
+  const coverage: ThreadCoverage = {
+    truncated: runs.some((run) => run.coverage.truncated),
+    truncatedSourceKinds: [...new Set(runs.flatMap((run) => run.coverage.truncatedSourceKinds))],
+    missingSources: [...new Set(runs.flatMap((run) => run.coverage.missingSources))],
+    conflicts: [...new Set(runs.flatMap((run) => run.coverage.conflicts))],
+    conversation: runs.some((run) => run.coverage.conversation === "AVAILABLE") ? "AVAILABLE" : "MISSING",
+  }
+  return { ...first, createdAt, lastActivityAt, coverage, items, runCount: runs.length }
+}
+
 export function projectWorkbenchThreads(input: ThreadProjectionInput): Thread[] {
-  return input.threads
+  const projected = input.threads
     .filter((thread) => thread.userId === input.userId && thread.projectId === input.projectId)
     .map((thread) => projectThread(input, thread))
+    .sort((left, right) => (
+      right.lastActivityAt.getTime() - left.lastActivityAt.getTime()
+      || left.id.localeCompare(right.id, "en", { numeric: true })
+    ))
+  const groups = new Map<string, Thread[]>()
+  for (const thread of projected) {
+    const key = thread.title.trim().toLowerCase()
+    const existing = groups.get(key)
+    if (!existing) {
+      groups.set(key, [thread])
+      continue
+    }
+    existing.push(thread)
+  }
+  const threadListTruncated = input.threadListTruncated === true
+  return [...groups.values()]
+    .map((runs) => {
+      const merged = mergeGroupedThreads(runs)
+      // Grouping happens after the upstream row budget, so runs beyond the fetched page may exist;
+      // the count is marked partial instead of pretending to be complete.
+      return threadListTruncated ? { ...merged, runCountPartial: true } : merged
+    })
     .sort((left, right) => (
       right.lastActivityAt.getTime() - left.lastActivityAt.getTime()
       || left.id.localeCompare(right.id, "en", { numeric: true })

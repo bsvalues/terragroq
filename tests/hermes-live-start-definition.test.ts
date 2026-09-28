@@ -21,10 +21,14 @@ import path from "node:path"
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
 const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
+const TRANSPORT_VERIFY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "verify-cockpit-transport.ps1")
+const RELAY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "hermes-cockpit-relay.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
 const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
+const transportVerifyText = fs.readFileSync(TRANSPORT_VERIFY_SCRIPT, "utf8")
+const relayText = fs.readFileSync(RELAY_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -94,7 +98,8 @@ describe("the cockpit's start script is declared in the repository", () => {
   })
 
   it("only applies the runtime variables it resolves or reads explicitly", () => {
-    const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
+    const code = executableOnly(startText)
+    const assignments = code.match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
     // WILLIAMOS_TERRAFUSION_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
     // reads the declared TerraFusion target root, `.env.local` declared it, and
@@ -105,11 +110,27 @@ describe("the cockpit's start script is declared in the repository", () => {
       "HOSTNAME",
       "PORT",
       "DATABASE_URL",
+      "LOCAL_SETUP_ENABLED",
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
       "WILLIAMOS_PROJECT_SPACE_IDENTITY",
+      "WILLIAMOS_WORKSPACE_APP_URL",
+      "NODE_EXTRA_CA_CERTS",
     ]))
+    expect(code).toMatch(/Set-Item\s+-Path\s+"Env:\$\(\$mount\.Environment\)"\s+-Value\s+\$mount\.ResolvedRoot/)
+  })
+
+  it("carries only an explicit local-setup enablement into the production process", () => {
+    const code = executableOnly(startText)
+    const read = code.indexOf('Get-DeclaredEnvValue -File $envFile -Key "LOCAL_SETUP_ENABLED"')
+    const exportFlag = code.indexOf("$env:LOCAL_SETUP_ENABLED = $localSetupEnabled")
+    const serverStart = code.indexOf("& $node $server")
+    expect(read).toBeGreaterThan(-1)
+    expect(code).toMatch(/\$localSetupEnabled\s*=\s*if\s*\(\$declaredLocalSetupEnabled\s+-ieq\s+"true"\)\s*\{\s*"true"\s*\}\s*else\s*\{\s*"false"\s*\}/)
+    expect(exportFlag).toBeGreaterThan(read)
+    expect(exportFlag).toBeLessThan(serverStart)
+    expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 })
 
@@ -134,6 +155,24 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
     expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("exports the declared Preview endpoint so a supervised restart preserves the real application", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_WORKSPACE_APP_URL\s*=\s*\$declaredWorkspaceAppUrl/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:WILLIAMOS_WORKSPACE_APP_URL"/)
+    expect(code.indexOf("$env:WILLIAMOS_WORKSPACE_APP_URL")).toBeLessThan(code.indexOf("& $node $server"))
+  })
+
+  it("adds only the existing Preview CA to Node trust for an HTTPS application", () => {
+    expect(code).toMatch(/\[string\]\$WorkspaceAppCaPath\s*=\s*"C:\\ProgramData\\WilliamOS\\williamos-preview-root-ca\.pem"/)
+    expect(code).toMatch(/\$declaredWorkspaceAppUrl\s+-match\s+'\^https:\/\/'/)
+    expect(code).toMatch(/Test-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\s+-PathType\s+Leaf/)
+    expect(code).toContain("WORKSPACE_APP_CA_MISSING")
+    expect(code).toMatch(/\$env:NODE_EXTRA_CA_CERTS\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$WorkspaceAppCaPath\)\.ProviderPath/)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:NODE_EXTRA_CA_CERTS"/)
+    expect(code.indexOf("$env:NODE_EXTRA_CA_CERTS")).toBeLessThan(code.indexOf("& $node $server"))
+    expect(code).not.toMatch(/NODE_TLS_REJECT_UNAUTHORIZED/)
   })
 
   it("does not carry a written-down workspace path of its own", () => {
@@ -184,6 +223,81 @@ describe("the cockpit is given a proven governed workspace, or it does not start
   it("reads one key from .env.local without echoing the file that holds the credential", () => {
     expect(code).not.toMatch(/Write-(Output|Host|Boot)[^\n]*Get-Content[^\n]*\$envFile/)
     expect(code).toMatch(/function Get-DeclaredEnvValue/)
+  })
+})
+
+describe("the cockpit validates optional Core Seven secondary mounts before exporting them", () => {
+  const code = executableOnly(startText)
+  const expected = [
+    ["WILLIAMOS_TERRAFUSION_SOVEREIGN_OS_ROOT", "bsvalues/terrafusion-os"],
+    ["WILLIAMOS_TERRAFUSION_FORGE_ROOT", "bsvalues/terrafusion-forge"],
+    ["WILLIAMOS_TERRAFUSION_ATLAS_ROOT", "bsvalues/terrafusion-atlas"],
+    ["WILLIAMOS_TERRAFUSION_DAIS_ROOT", "bsvalues/terrafusion-dais"],
+    ["WILLIAMOS_TERRAFUSION_DOSSIER_ROOT", "bsvalues/terrafusion-dossier"],
+    ["WILLIAMOS_TERRAFUSION_GPT_ROOT", "bsvalues/terrafusion-gpt"],
+  ] as const
+
+  it("owns the exact six environment-to-repository mappings", () => {
+    for (const [environment, repository] of expected) {
+      expect(code).toContain(`Environment = "${environment}"; Repository = "${repository}"`)
+    }
+    expect(code.match(/Environment = "WILLIAMOS_TERRAFUSION_[A-Z_]+_ROOT"; Repository = "bsvalues\/terrafusion-[a-z-]+"/g))
+      .toHaveLength(6)
+  })
+
+  it("allows an absent optional declaration without fabricating or exporting a mount", () => {
+    const clearInherited = code.indexOf('Remove-Item -Path "Env:$($secondary.Environment)"')
+    const readDeclaration = code.indexOf("Get-DeclaredEnvValue -File $envFile -Key $secondary.Environment")
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    expect(clearInherited).toBeGreaterThan(-1)
+    expect(clearInherited).toBeLessThan(readDeclaration)
+    expect(readDeclaration).toBeLessThan(retain)
+    expect(retain).toBeLessThan(exportMount)
+    expect(code).toMatch(/Remove-Item\s+-Path\s+"Env:\$\(\$secondary\.Environment\)"\s+-ErrorAction\s+SilentlyContinue/)
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+\$secondary\.Environment/)
+    expect(code).toMatch(/if \(-not \$declaredSecondaryRoot\)\s*\{\s*continue\s*\}/)
+    expect(code).not.toMatch(/WILLIAMOS_TERRAFUSION_(?:SOVEREIGN_OS|FORGE|ATLAS|DAIS|DOSSIER|GPT)_ROOT\s*=\s*["']/)
+  })
+
+  it("fails closed for every configured-root violation before Node starts", () => {
+    const serverStart = code.indexOf("& $node $server")
+    for (const refusal of [
+      "SECONDARY_ROOT_MISSING",
+      "SECONDARY_ROOT_IS_APP_ROOT",
+      "SECONDARY_ROOT_NOT_GOVERNED_WORKSPACE",
+      "SECONDARY_ROOT_NOT_WORKTREE_ROOT",
+      "SECONDARY_ROOT_NO_ORIGIN_REMOTE",
+      "SECONDARY_ROOT_REPOSITORY_MISMATCH",
+    ]) {
+      const at = code.indexOf(refusal)
+      expect(at, `${refusal} must be reachable`).toBeGreaterThan(-1)
+      expect(at, `${refusal} must refuse before the server starts`).toBeLessThan(serverStart)
+    }
+  })
+
+  it("proves exact worktree root and canonical origin before retaining or exporting a mount", () => {
+    const retain = code.indexOf("$verifiedSecondaryRepositoryMounts +=")
+    const exportMount = code.indexOf('Set-Item -Path "Env:$($mount.Environment)"')
+    const serverStart = code.indexOf("& $node $server")
+    expect(code).toMatch(/\$secondaryTopLevel\s*=\s*Invoke-GitProbe[^\n]*"rev-parse",\s*"--show-toplevel"/)
+    expect(code).toMatch(/\$normalizedSecondaryTopLevel\s+-ine\s+\$resolvedSecondaryRoot/)
+    expect(code).toMatch(/\$secondaryOriginRemote\s*=\s*Invoke-GitProbe[^\n]*"remote",\s*"get-url",\s*"origin"/)
+    expect(code).toMatch(/\$normalizedSecondaryOrigin\s+-ne\s+\$secondary\.Repository/)
+    expect(retain).toBeGreaterThan(code.indexOf("SECONDARY_ROOT_REPOSITORY_MISMATCH"))
+    expect(exportMount).toBeGreaterThan(retain)
+    expect(exportMount).toBeLessThan(serverStart)
+  })
+
+  it("normalizes GitHub's canonical SSH URI for both primary and secondary mounts", () => {
+    const sshUriBranches = code.match(/\^ssh:\/\/git@github\\\.com\(\?:\\:22\)\?\/\(\.\+\)\$/g) ?? []
+    expect(sshUriBranches).toHaveLength(2)
+  })
+
+  it("documents all six optional declarations without changing the required OS 1.0 declaration", () => {
+    const example = fs.readFileSync(path.join(process.cwd(), ".env.example"), "utf8")
+    expect(example).toContain('WILLIAMOS_TERRAFUSION_ROOT="/absolute/path/to/terrafusion_os_1.0"')
+    for (const [environment] of expected) expect(example).toMatch(new RegExp(`^${environment}=`, "m"))
   })
 })
 
@@ -294,6 +408,81 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("Test-HttpsCockpit")
   })
 
+  it("retires only the exact legacy overlay relay and records it for truthful rollback", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toContain("Get-LegacyCockpitRelayState")
+    expect(deploy).toContain("Remove-LegacyCockpitRelay")
+    expect(deploy).toContain("reserved by an unrelated portproxy target")
+    // v8: the signed deployment manifest joined the captured file set so a rollback re-attests the
+    // restored generation (round-3 review: the gate denied its own rolled-back door).
+    expect(deploy).toMatch(/version\s*=\s*8/)
+    expect(deploy).toContain("legacyRelay =")
+    expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
+    expect(deploy).toContain('"compatibility-relay"')
+    expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
+      .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
+    expect(restore).toMatch(/\$manifestVersion\s+-ne\s+6/)
+    // v7 = the four request-time loose trees joined the rollback directory set. The check is
+    // split nowhere else: deploy's list and restore's version-gated list must name the SAME trees,
+    // or every rollback after a deploy throws "does not name the exact runtime directory set".
+    for (const tree of ["scripts\\execution-fabric", "scripts\\multi-agent-operator", "components\\operator", "config\\execution-fabric"]) {
+      expect(deploy).toContain(`"${tree}"`)
+      expect(restore).toContain(`"${tree}"`)
+    }
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+7/)
+    expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
+    expect(restore).toMatch(/if \(\$overlayRestoreMode -in @\("legacy-relay", "compatibility-relay"\)\)[\s\S]*portproxy add v4tov4/)
+    expect(restore).toContain("Rollback manifest overlay mode contradicts the captured proxy and relay state")
+    expect(restore.indexOf("$manifestVersion -ne 6")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("validates request-time loose trees before any capture or copy can self-vouch them", () => {
+    const code = executableOnly(deployText)
+    // Phase A (the read-only validation loop) must precede the rollback capture AND the task
+    // stop: the current capture is a copy of the present runtime, so validating after capture
+    // lets every runtime-only file vouch for itself and the guard can never fire.
+    const phaseA = code.indexOf("foreach ($tree in $looseTreeSyncs)")
+    const capture = code.indexOf("if (-not $SkipRollbackCapture) {")
+    const stop = code.indexOf("Stop-ScheduledTask -TaskName $HttpsTaskName")
+    const phaseB = code.indexOf("foreach ($action in $syncActions)")
+    expect(phaseA).toBeGreaterThan(-1)
+    expect(capture).toBeGreaterThan(-1)
+    expect(phaseB).toBeGreaterThan(-1)
+    expect(phaseA).toBeLessThan(capture)
+    expect(phaseA).toBeLessThan(stop)
+    expect(capture).toBeLessThan(phaseB)
+    // defense-in-depth: even if the order moved, the scan excludes the current capture
+    expect(code).toMatch(/-ne \[IO\.Path\]::GetFullPath\(\$rollbackRoot\)/)
+    // a required tree cannot be silently skipped
+    expect(code).toMatch(/required at request time but absent/)
+    // vouching only counts manifests that recorded the tree as present
+    expect(code).toMatch(/\$dirs\[0\]\.wasPresent/)
+  })
+
+  it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
+    const code = executableOnly(deployText)
+    const finalStart = code.lastIndexOf("Start-ScheduledTask -TaskName $HttpsTaskName")
+    const afterStart = code.slice(finalStart)
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort")
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay")
+    expect(code).toContain('--resolve "williamos.lan:${Port}:$HermesOverlayAddress"')
+    expect(afterStart).toContain("canonical williamos.lan origin did not answer over the HERMES overlay")
+    expect(afterStart).toContain("Assert-OverlayFirewallRule")
+    expect(code).toContain("Get-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain("New-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain('[string]$rule.Enabled -ne "True"')
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(code.lastIndexOf("Ensure-OverlayFirewallRule")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+    expect(code).toContain("Assert-TailscaleServiceReady")
+    expect(code).toContain("configured for automatic start before WilliamOS deployment")
+    expect(code.lastIndexOf("Assert-TailscaleServiceReady")).toBeLessThan(code.indexOf('if ($VerifyOnly)'))
+    expect(code).toContain("not exactly scoped to inbound Private TCP")
+    expect(afterStart).toContain("remote acceptance remains separate")
+    expect(afterStart).toContain("verify-cockpit-transport.ps1 on OMEN")
+    expect(afterStart).not.toContain("canonical overlay HTTPS healthy")
+  })
+
   it("makes verify-only prove both product origins and agreement between both provenance surfaces", () => {
     const code = executableOnly(deployText)
     const verify = code.slice(code.indexOf('if ($VerifyOnly)'))
@@ -304,14 +493,57 @@ describe("the deploy places what the start script needs and can be undone", () =
 
   it("captures every loose file and directory it can overwrite in the rollback", () => {
     const code = executableOnly(deployText)
-    for (const file of ["server.js", "package.json", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
+    for (const file of ["server.js", "package.json", "pnpm-lock.yaml", "lib\\generated\\build-provenance.json", "scripts\\hermes-https-proxy.mjs", "scripts\\fabric\\resolve-authority-registry-url.mjs"]) {
       expect(code).toContain(file)
     }
     for (const directory of ['".next"', '"public"', '"lib\\fabric"', '"node_modules"']) {
       expect(code).toContain(directory)
     }
     expect(code).toMatch(/if \(\$WithDependencies\) \{ \$rollbackDirectories \+= "node_modules" \}/)
+    expect(code).toMatch(/\$wasPresent\s+-and\s+\$directory\s+-ne\s+"node_modules"/)
     expect(code).toContain("restore-hermes-runtime.ps1")
+  })
+
+  it("stages a portable locked dependency tree before production mutation and swaps it by rename", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toMatch(/pnpm-lock\.yaml/)
+    expect(deploy).toMatch(/install --prod --offline --ignore-workspace --frozen-lockfile --config\.node-linker=hoisted/)
+    expect(deploy).toMatch(/Get-ChildItem[^\n]*\$stagedModules[^\n]*ReparsePoint/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$rollbackModules/)
+    expect(deploy).toMatch(/Move-Item -LiteralPath \$stagedModules -Destination \$runtimeModules/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$dependencyStageRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackRoot[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(deploy).not.toMatch(/robocopy[^\n]*standalone[^\n]*node_modules/)
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+4[\s\S]*Move-Item -LiteralPath \(Join-Path \$RollbackRoot "node_modules"\) -Destination \$runtimeModules/)
+    expect(restore).toMatch(/Get-PhysicalVolumeIdentity -Path \$rollbackModules[\s\S]*Get-PhysicalVolumeIdentity -Path \$Runtime/)
+    expect(restore).toMatch(/Move-Item -LiteralPath \$runtimeModules -Destination \$heldModules/)
+    expect(restore).toMatch(/catch \{[\s\S]*Move-Item -LiteralPath \$heldModules -Destination \$runtimeModules[\s\S]*throw/)
+    expect(restore).not.toContain("install --prod --offline")
+    expect(deploy.indexOf("install --prod --offline")).toBeLessThan(deploy.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("refuses a default deploy when the runtime lock cannot prove the retained dependency graph", () => {
+    const code = executableOnly(deployText)
+    const stopIndex = code.indexOf("Stop-ScheduledTask")
+    const missingLockIndex = code.indexOf("runtime has no pnpm-lock.yaml")
+    const mismatchIndex = code.indexOf("source and runtime lockfiles differ")
+    expect(code).toMatch(/Get-FileHash -LiteralPath \$lockSource[\s\S]*Get-FileHash -LiteralPath \$runtimeLock/)
+    expect(missingLockIndex).toBeGreaterThan(-1)
+    expect(mismatchIndex).toBeGreaterThan(-1)
+    expect(missingLockIndex).toBeLessThan(stopIndex)
+    expect(mismatchIndex).toBeLessThan(stopIndex)
+  })
+
+  it("bounds every robocopy retry instead of hanging a failed deployment", () => {
+    for (const code of [executableOnly(deployText), executableOnly(restoreText)]) {
+      const copies = code.split(/\r?\n/).filter((line) => line.trimStart().startsWith("$null = robocopy "))
+      expect(copies.length).toBeGreaterThan(0)
+      for (const copy of copies) {
+        expect(copy).toContain("/R:2")
+        expect(copy).toContain("/W:1")
+      }
+    }
   })
 
   it("records absent rollback inputs so restore can remove files introduced by deploy", () => {
@@ -413,5 +645,66 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(restore).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(code).toContain("owned by an unrelated process")
+    expect(code).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+    expect(restore).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+  })
+
+  it("provisions the canonical HERMES hostname without replacing conflicting ownership", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain('$CanonicalHostname = "williamos.lan"')
+    expect(code).toContain('Add-Content -LiteralPath $HostsPath')
+    expect(code).toContain("contains a conflicting or ambiguous '$CanonicalHostname' mapping")
+    expect(code.lastIndexOf("Ensure-CanonicalHostname")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("requires Tailscale to survive reboot before accepting the direct overlay listener", () => {
+    const code = executableOnly(relayText)
+    const preflight = code.indexOf("TAILSCALE_NOT_AUTOMATIC")
+    const listenerProof = code.lastIndexOf("if (-not (Test-ExpectedDirectOverlayListener))")
+    expect(code).toContain("Get-CimInstance Win32_Service")
+    expect(code).toContain("StartMode -ne 'Auto'")
+    expect(code).toContain("TAILSCALE_NOT_RUNNING")
+    expect(code).toContain("[string]$rule.Enabled -ne 'True'")
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(preflight).toBeGreaterThan(-1)
+    expect(listenerProof).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(listenerProof)
+  })
+
+  it("keeps standalone relay migration inside the rollback-capturing deployment and proves the exact direct listener", () => {
+    const code = executableOnly(relayText)
+    expect(code).toContain("Test-ExpectedDirectOverlayListener")
+    expect(code).toContain("Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port")
+    expect(code).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(code).toContain("-ieq $proxyPath")
+    expect(code).toContain("RELAY_MIGRATION_REQUIRES_DEPLOYMENT")
+    expect(code).toContain("use deploy-hermes-runtime.ps1")
+    expect(code).toContain("DIRECT_LISTENER_NOT_PROVEN")
+    expect(code).not.toContain("portproxy delete")
+  })
+
+  it("removes an exact current relay before rollback applies Node-only listener ownership checks", () => {
+    const restore = executableOnly(restoreText)
+    expect(restore).toContain("Get-CurrentLegacyRelayState")
+    expect(restore).toContain("Remove-CurrentLegacyRelay")
+    expect(restore).toContain("owned by an unrelated portproxy target")
+    const preflight = restore.lastIndexOf("$currentLegacyRelay = Get-CurrentLegacyRelayState")
+    const stopTasks = restore.indexOf("Stop-ScheduledTask")
+    const removeRelay = restore.lastIndexOf("if ($currentLegacyRelay.wasPresent) { Remove-CurrentLegacyRelay }")
+    const stopHttpsListener = restore.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort')
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(stopTasks)
+    expect(removeRelay).toBeGreaterThan(stopTasks)
+    expect(removeRelay).toBeLessThan(stopHttpsListener)
+  })
+})
+
+describe("the OMEN transport verifier survives its expected off-LAN control", () => {
+  it("captures native curl stderr under Continue and restores the caller preference", () => {
+    const code = executableOnly(transportVerifyText)
+    expect(code).toContain("$previousPreference = $ErrorActionPreference")
+    expect(code).toMatch(/\$ErrorActionPreference\s*=\s*'Continue'[\s\S]*& \$curl @arguments 2>&1[\s\S]*\$curlExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).toContain("$ErrorActionPreference = $previousPreference")
+    expect(code.indexOf("$curlExit = $LASTEXITCODE")).toBeLessThan(code.indexOf("$ErrorActionPreference = $previousPreference"))
   })
 })

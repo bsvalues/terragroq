@@ -7,6 +7,39 @@ import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
+const REVISION = "a".repeat(40)
+
+function repository(projectKey: "terrafusion" | "williamos") {
+  const key = projectKey === "williamos" ? "williamos" : "os-1"
+  return {
+    key,
+    identity: projectKey === "williamos" ? "bsvalues/terragroq" : "bsvalues/terrafusion_os_1.0",
+    label: projectKey === "williamos" ? "WilliamOS" : "OS 1.0",
+    role: "integrated-runtime" as const,
+    suite: null,
+    previewSource: true,
+    defaultRepository: true,
+    mount: { key: projectKey === "williamos" ? "williamos:williamos:configured" : "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: REVISION, refusal: null },
+  }
+}
+
+function fileRef(projectKey: "terrafusion" | "williamos" = "terrafusion", path = "src/app.ts") {
+  const repo = repository(projectKey)
+  return { projectIdentity: projectKey === "williamos" ? "c:/repos/williamos" : "c:/repos/terrafusion", repositoryResourceKey: repo.key, repositoryMountKey: repo.mount.key, worktreeKey: null, observedRevision: REVISION, path }
+}
+
+function project(projectKey: "terrafusion" | "williamos" = "terrafusion") {
+  return { identity: projectKey === "williamos" ? "c:/repos/williamos" : "c:/repos/terrafusion", name: projectKey === "williamos" ? "WilliamOS" : "TerraFusion", repositories: [repository(projectKey)] }
+}
+
+function diffResponse(payload: Record<string, unknown>, projectKey: "terrafusion" | "williamos" = "terrafusion") {
+  const repo = repository(projectKey)
+  return Response.json({
+    ...payload,
+    repository: { key: repo.key, identity: repo.identity, mountKey: repo.mount.key, observedRevision: REVISION },
+  })
+}
+
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
     return <textarea aria-label="Source content" value={props.value} onChange={(event) => props.onChange(event.target.value)} />
@@ -20,7 +53,8 @@ afterEach(() => {
 })
 
 function ndjson(...events: readonly Record<string, unknown>[]): Response {
-  return new Response(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`, {
+  const exact = events.map((event) => event.type === "started" && event.fileRef === undefined ? { ...event, fileRef: fileRef() } : event)
+  return new Response(`${exact.map((event) => JSON.stringify(event)).join("\n")}\n`, {
     headers: { "content-type": "application/x-ndjson" },
   })
 }
@@ -31,16 +65,16 @@ function deferredNdjson(...events: readonly Record<string, unknown>[]) {
   const response = new Response(new ReadableStream<Uint8Array>({
     start(stream) {
       controller = stream
-      events.forEach((event) => stream.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)))
+      events.forEach((event) => stream.enqueue(encoder.encode(`${JSON.stringify(event.type === "started" && event.fileRef === undefined ? { ...event, fileRef: fileRef() } : event)}\n`)))
     },
   }), { headers: { "content-type": "application/x-ndjson" } })
   return {
     response,
     send(event: Record<string, unknown>) {
-      controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+      controller.enqueue(encoder.encode(`${JSON.stringify(event.type === "started" && event.fileRef === undefined ? { ...event, fileRef: fileRef() } : event)}\n`))
     },
     finish(event: Record<string, unknown>) {
-      controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+      controller.enqueue(encoder.encode(`${JSON.stringify(event.type === "started" && event.fileRef === undefined ? { ...event, fileRef: fileRef() } : event)}\n`))
       controller.close()
     },
     close() {
@@ -49,14 +83,17 @@ function deferredNdjson(...events: readonly Record<string, unknown>[]) {
   }
 }
 
-function initialSpace() {
+function initialSpace(projectKey: "terrafusion" | "williamos" = "terrafusion") {
+  const ref = fileRef(projectKey)
   return {
     ...defaultSpace(),
     selectedPath: "src/app.ts",
+    selectedFileRef: ref,
     activeWindowId: "editor" as const,
     editor: {
       openFiles: ["src/app.ts"],
-      panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }],
+      openFileRefs: [ref],
+      panes: [{ id: "primary" as const, activePath: "src/app.ts", activeFileRef: ref, selection: { anchor: 0, head: 0 } }],
       activePaneId: "primary" as const,
     },
   }
@@ -67,7 +104,7 @@ function workspaceResponse() {
     worldId: "browser-world",
     space: spaceToServer(initialSpace()),
     spine: EMPTY_SPINE,
-    project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+    project: project(),
     storage: "browser",
     browserStorageKey: "file-change-test",
   })
@@ -83,7 +120,7 @@ function serverWorkspaceResponse(
     name: space.name,
     space: spaceToServer(space),
     spine: EMPTY_SPINE,
-    project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+    project: project(),
     storage: "server",
     spaces,
     multiSpaceAvailable: Boolean(spaces && spaces.length > 1),
@@ -99,9 +136,11 @@ function successfulSpaceSave(init?: RequestInit) {
   })
 }
 
-function selectedFile(content: string, path = "src/app.ts") {
+function selectedFile(content: string, path = "src/app.ts", projectKey: "terrafusion" | "williamos" = "terrafusion") {
+  const repo = repository(projectKey)
   return Response.json({
     kind: "file", path, content, modifiedAt: "2026-08-28T12:00:00.000Z",
+    repository: { key: repo.key, identity: repo.identity, mountKey: repo.mount.key, observedRevision: REVISION },
   })
 }
 
@@ -122,18 +161,60 @@ async function openChange(task = "Use the verified helper.") {
 }
 
 describe("Experience V2 selected-file Change", () => {
+  it("binds a WilliamOS selected-file Change request to the active project", async () => {
+    const editBodies: Record<string, unknown>[] = []
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input).replace("&repositoryKey=os-1", "")
+      if (url === "/api/environment/space?projectKey=williamos" && !init?.method) {
+        return Promise.resolve(Response.json({
+          worldId: "world-a",
+          name: "WilliamOS",
+          space: spaceToServer(initialSpace("williamos")),
+          spine: EMPTY_SPINE,
+          project: project("williamos"),
+          storage: "server",
+        }))
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
+      if (url === "/api/loom/files?path=&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n", "src/app.ts", "williamos"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts&projectKey=williamos&repositoryKey=williamos" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }, "williamos"))
+      if (url === "/api/loom/edit" && init?.method === "POST") {
+        editBodies.push(JSON.parse(String(init.body)))
+        return Promise.resolve(ndjson(
+          { type: "started", file: "src/app.ts", fileRef: fileRef("williamos") },
+          { type: "done", receipt: { success: false } },
+        ))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell projectKey="williamos" />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+
+    await waitFor(() => expect(editBodies).toHaveLength(1))
+    expect(editBodies[0]).toMatchObject({
+      worldId: "world-a",
+      projectKey: "williamos",
+      path: "src/app.ts",
+      task: "Use the verified helper.",
+    })
+  })
+
   it("runs Improve for the exact live current patch through structured edit and refreshes its outcome", async () => {
     let diffReads = 0
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse())
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile(diffReads > 1 ? "export const improved = true\n" : "export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(diffResponse({
           path: "src/app.ts",
           state: "modified",
           fingerprint: diffReads === 1 ? "exact-live-diff" : "refreshed-diff",
@@ -169,6 +250,8 @@ describe("Experience V2 selected-file Change", () => {
     const edit = fetcher.mock.calls.find(([request, options]) => String(request) === "/api/loom/edit" && options?.method === "POST")
     expect(JSON.parse(String(edit?.[1]?.body))).toEqual({
       path: "src/app.ts",
+      repositoryKey: "os-1",
+      fileRef: fileRef(),
       task: "Make this patch clearer.",
       intent: "improve-diff",
       worldId: "world-a",
@@ -179,12 +262,12 @@ describe("Experience V2 selected-file Change", () => {
 
   it("keeps Improve unavailable until Changes has an exact live modified identity", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse())
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "clean", fingerprint: "clean", untracked: false, diff: "", status: "",
       }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -202,11 +285,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("keeps an exact live modified patch unavailable in a browser-only Space", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "browser-diff", untracked: false,
         diff: "-before\n+browser", status: " M src/app.ts",
       }))
@@ -219,7 +302,7 @@ describe("Experience V2 selected-file Change", () => {
     fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
 
     const improve = await screen.findByRole("button", { name: "Improve" })
-    await waitFor(() => expect(improve.getAttribute("title")).toContain("server-bound"))
+    await waitFor(() => expect(improve.getAttribute("title")).toContain("saves its state to the server"))
     expect((improve as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const before = true\n")
   })
@@ -227,7 +310,7 @@ describe("Experience V2 selected-file Change", () => {
   it("keeps Improve unavailable while the server-bound Space save is pending or failed", async () => {
     let saveMode: "pending" | "failed" = "pending"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse())
       if (url === "/api/environment/space" && init?.method === "PUT") {
         return saveMode === "pending"
@@ -236,7 +319,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "server-diff", untracked: false,
         diff: "-before\n+server", status: " M src/app.ts",
       }))
@@ -248,7 +331,7 @@ describe("Experience V2 selected-file Change", () => {
     await screen.findByLabelText("Source content")
     fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
     const pendingImprove = await screen.findByRole("button", { name: "Improve" })
-    await waitFor(() => expect(pendingImprove.getAttribute("title")).toContain("durably saved"))
+    await waitFor(() => expect(pendingImprove.getAttribute("title")).toContain("saved to the server"))
     expect((pendingImprove as HTMLButtonElement).disabled).toBe(true)
 
     view.unmount()
@@ -263,12 +346,12 @@ describe("Experience V2 selected-file Change", () => {
 
   it("surfaces the typed server stale refusal and materializes no successful outcome", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse())
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "captured-diff", untracked: false,
         diff: "-before\n+current", status: " M src/app.ts",
       }))
@@ -293,14 +376,14 @@ describe("Experience V2 selected-file Change", () => {
   it("refuses a captured Improve when the live patch identity changes before submit", async () => {
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse())
       if (url === "/api/environment/space" && init?.method === "PUT") return Promise.resolve(successfulSpaceSave(init))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({
+        return Promise.resolve(diffResponse({
           path: "src/app.ts", state: "modified", fingerprint: `fingerprint-${diffReads}`,
           untracked: false, diff: `-before\n+version-${diffReads}`, status: " M src/app.ts",
         }))
@@ -342,7 +425,7 @@ describe("Experience V2 selected-file Change", () => {
     const oldEdit = deferredResponse()
     let alphaFileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(serverWorkspaceResponse("world-a", alpha, summaries))
       if (url === "/api/environment/space?worldId=world-b" && !init?.method) return targetSpace.promise
       if (url === "/api/environment/space?worldId=world-a" && !init?.method) return new Promise<Response>(() => {})
@@ -353,11 +436,11 @@ describe("Experience V2 selected-file Change", () => {
         return Promise.resolve(selectedFile("export const alpha = true\n"))
       }
       if (url === "/api/loom/files?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(selectedFile("export const beta = true\n", "src/beta.ts"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/app.ts", state: "modified", fingerprint: "alpha-live", untracked: false,
         diff: "-before\n+alpha", status: " M src/app.ts",
       }))
-      if (url === "/api/loom/diff?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(Response.json({
+      if (url === "/api/loom/diff?path=src%2Fbeta.ts" && !init?.method) return Promise.resolve(diffResponse({
         path: "src/beta.ts", state: "clean", fingerprint: "beta-clean", untracked: false, diff: "", status: "",
       }))
       if (url === "/api/loom/edit" && init?.method === "POST") return oldEdit.promise
@@ -380,7 +463,7 @@ describe("Experience V2 selected-file Change", () => {
     await waitFor(() => expect(fetcher.mock.calls.some(([input, options]) => String(input) === "/api/loom/edit" && options?.method === "POST")).toBe(true))
 
     targetSpace.resolve(serverWorkspaceResponse("world-b", beta, summaries))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     oldEdit.resolve(ndjson(
       { type: "started", file: "src/app.ts" },
       { type: "done", receipt: { success: true } },
@@ -390,6 +473,8 @@ describe("Experience V2 selected-file Change", () => {
     expect(alphaFileReads).toBe(1)
     expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const beta = true\n")
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Enter Alpha" }))
     await waitFor(() => expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=world-a")).toBe(true))
     expect(screen.queryByText("Finish or stop active work before switching Spaces.")).toBeNull()
@@ -398,7 +483,7 @@ describe("Experience V2 selected-file Change", () => {
     let fileReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -410,7 +495,7 @@ describe("Experience V2 selected-file Change", () => {
         if (diffReads < 3) {
           return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
         }
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+        return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -429,11 +514,11 @@ describe("Experience V2 selected-file Change", () => {
   it("keeps a dirty Source draft and settles truthfully when minimization is attempted during Change", async () => {
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -462,11 +547,11 @@ describe("Experience V2 selected-file Change", () => {
   it("keeps a dirty Source draft visible when minimization is attempted after dirty-conflict settlement", async () => {
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -489,7 +574,7 @@ describe("Experience V2 selected-file Change", () => {
     let fileReads = 0
     let resolveDiff!: (response: Response) => void
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -514,7 +599,7 @@ describe("Experience V2 selected-file Change", () => {
     expect(minimize.disabled).toBe(true)
     expect(minimize.title).toBe("Changes cannot be minimized while Change is active")
     fireEvent.click(minimize)
-    resolveDiff(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+    resolveDiff(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
 
     expect(await screen.findByText("Change applied; source and diff refreshed.")).toBeTruthy()
     expect(screen.getByText("+after", { exact: false })).toBeTruthy()
@@ -525,7 +610,7 @@ describe("Experience V2 selected-file Change", () => {
     const reload = deferredResponse()
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -533,7 +618,7 @@ describe("Experience V2 selected-file Change", () => {
         return fileReads === 1 ? Promise.resolve(selectedFile("export const before = true\n")) : reload.promise
       }
       if (url === "/api/loom/files" && init?.method === "PUT") return saved.promise
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+after" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -563,7 +648,7 @@ describe("Experience V2 selected-file Change", () => {
       { type: "progress", text: "applying structured edit" },
     )
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -572,7 +657,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: fileReads > 1 ? "-before\n+after" : "-before\n+before" }))
+        return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: fileReads > 1 ? "-before\n+after" : "-before\n+before" }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -589,7 +674,7 @@ describe("Experience V2 selected-file Change", () => {
     expect(screen.getByText("Change applied; source and diff refreshed.")).toBeTruthy()
     expect(await screen.findByText("+after", { exact: false })).toBeTruthy()
     const edit = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/edit" && init?.method === "POST")
-    expect(JSON.parse(String(edit?.[1]?.body))).toEqual({ worldId: "browser-world", path: "src/app.ts", task: "Use the verified helper." })
+    expect(JSON.parse(String(edit?.[1]?.body))).toEqual({ worldId: "browser-world", repositoryKey: "os-1", fileRef: fileRef(), path: "src/app.ts", task: "Use the verified helper." })
     expect(fetcher.mock.calls.some(([input, init]) => String(input) === "/api/environment/line" && init?.method === "POST")).toBe(false)
     expect(diffReads).toBeGreaterThan(0)
     const minimize = screen.getByRole("button", { name: "Minimize Source" }) as HTMLButtonElement
@@ -601,11 +686,11 @@ describe("Experience V2 selected-file Change", () => {
   it("exposes Stop change and aborts the in-flight structured edit", async () => {
     let requestSignal: AbortSignal | undefined
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return new Promise<Response>((_resolve, reject) => requestSignal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
@@ -626,11 +711,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("does not call a completed stream successful when its receipt refuses the edit", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", reason: "REFUSED", receipt: { success: false } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -646,11 +731,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("treats a malformed stream as a visible unsuccessful result", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(new Response("not json\n", { headers: { "content-type": "application/x-ndjson" } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -665,11 +750,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("refuses Change for an unsaved selected buffer without discarding the draft or calling the edit route", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -689,14 +774,14 @@ describe("Experience V2 selected-file Change", () => {
     const originalRead = deferredResponse()
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         fileReads += 1
         return fileReads === 1 ? originalRead.promise : Promise.resolve(selectedFile("export const verified = true\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+verified" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+verified" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -715,11 +800,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("keeps the Change surface bound to its selected file while the edit is active", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -738,11 +823,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("keeps the active Change form and operation path visible when Escape is pressed", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -761,7 +846,7 @@ describe("Experience V2 selected-file Change", () => {
   it("binds each newly opened Change form to its displayed selected file", async () => {
     const posted: Array<{ path: string; task: string }> = []
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [
         { name: "app.ts", path: "src/app.ts", directory: false },
@@ -769,12 +854,12 @@ describe("Experience V2 selected-file Change", () => {
       ] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const app = true\\n"))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(selectedFile("export const other = true\\n", "src/other.ts"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { path: string; task: string }
         posted.push(body)
-        return Promise.resolve(ndjson({ type: "started", file: body.path }, { type: "done", receipt: { success: false } }))
+        return Promise.resolve(ndjson({ type: "started", file: body.path, fileRef: fileRef("terrafusion", body.path) }, { type: "done", receipt: { success: false } }))
       }
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -801,8 +886,8 @@ describe("Experience V2 selected-file Change", () => {
     await screen.findByText("Change was not verified.")
 
     expect(posted).toEqual([
-      { worldId: "browser-world", path: "src/app.ts", task: "Change the first file." },
-      { worldId: "browser-world", path: "src/other.ts", task: "Change the second file." },
+      { worldId: "browser-world", repositoryKey: "os-1", fileRef: fileRef(), path: "src/app.ts", task: "Change the first file." },
+      { worldId: "browser-world", repositoryKey: "os-1", fileRef: fileRef("terrafusion", "src/other.ts"), path: "src/other.ts", task: "Change the second file." },
     ])
   })
 
@@ -813,11 +898,11 @@ describe("Experience V2 selected-file Change", () => {
       { type: "done", receipt: { success: true } },
     )
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const refreshed = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+refreshed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+refreshed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") {
         requestSignal = init.signal ?? undefined
         return Promise.resolve(editStream.response)
@@ -839,11 +924,11 @@ describe("Experience V2 selected-file Change", () => {
   it("freezes the submitted Change instruction while its stream is active", async () => {
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -862,14 +947,14 @@ describe("Experience V2 selected-file Change", () => {
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts", model: "local" })
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         fileReads += 1
         return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const changed = true\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -889,14 +974,14 @@ describe("Experience V2 selected-file Change", () => {
     const reloadRead = deferredResponse()
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         fileReads += 1
         return fileReads === 1 ? Promise.resolve(selectedFile("export const before = true\n")) : reloadRead.promise
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -917,7 +1002,7 @@ describe("Experience V2 selected-file Change", () => {
     let fileReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -926,7 +1011,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        if (diffReads === 1) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+before" }))
+        if (diffReads === 1) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "-before\n+before" }))
         if (diffReads === 2) return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
         return Promise.resolve(Response.json({ error: "MANUAL_REFUSED" }, { status: 500 }))
       }
@@ -949,7 +1034,7 @@ describe("Experience V2 selected-file Change", () => {
     let fileReads = 0
     let diffReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
@@ -958,7 +1043,7 @@ describe("Experience V2 selected-file Change", () => {
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
         diffReads += 1
-        if (diffReads < 3) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "-before\\n+before" : "-before\\n+proven" }))
+        if (diffReads < 3) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "-before\\n+before" : "-before\\n+proven" }))
         return Promise.resolve(Response.json({ error: "UNJOINED_REFRESH" }, { status: 500 }))
       }
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
@@ -980,14 +1065,14 @@ describe("Experience V2 selected-file Change", () => {
     const originalRead = deferredResponse()
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         fileReads += 1
         return fileReads === 1 ? originalRead.promise : Promise.resolve(selectedFile("export const verified = true\\n"))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+verified" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+verified" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -1007,14 +1092,14 @@ describe("Experience V2 selected-file Change", () => {
   it("distinguishes a verified mutation from a source or diff refresh failure", async () => {
     let fileReads = 0
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
         fileReads += 1
         return Promise.resolve(fileReads === 1 ? selectedFile("export const before = true\n") : Response.json({ error: "READ_REFUSED" }, { status: 500 }))
       }
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "+changed" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
@@ -1030,11 +1115,11 @@ describe("Experience V2 selected-file Change", () => {
 
   it("rejects a success receipt when a post-terminal protocol event follows it", async () => {
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = String(input).replace("&repositoryKey=os-1", "")
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
-      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(diffResponse({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson(
         { type: "started", file: "src/app.ts" },
         { type: "done", receipt: { success: true } },

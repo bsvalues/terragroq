@@ -15,7 +15,11 @@ vi.mock("next/dynamic", () => ({
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.localStorage.clear(); vi.unstubAllGlobals() })
 
+const PROJECT_REVISION = "a".repeat(40)
+const PROJECT_REPOSITORY = { key: "os-1", identity: "bsvalues/terrafusion_os_1.0", label: "OS 1.0", role: "integrated-runtime" as const, suite: null, previewSource: true, defaultRepository: true, mount: { key: "terrafusion:os-1:configured", configured: true, verified: true, branch: "main", revision: PROJECT_REVISION, refusal: null } }
+const PROJECT_TOOL_IDENTITY = { repositoryKey: PROJECT_REPOSITORY.key, repositoryIdentity: PROJECT_REPOSITORY.identity, repositoryMountKey: PROJECT_REPOSITORY.mount.key, observedRevision: PROJECT_REVISION } as const
 const project = { identity: "c:/project", name: "Project" }
+const exactProject = { ...project, repositories: [PROJECT_REPOSITORY] }
 const preferenceStorageKey = "opaque-preference"
 const alpha = spaceToServer({ ...defaultSpace(1440, 900, "a", "Alpha"), windows: { ...defaultSpace().windows, editor: { ...defaultSpace().windows.editor, x: 41 } } })
 const beta = spaceToServer({ ...defaultSpace(1440, 900, "b", "Beta"), windows: { ...defaultSpace().windows, editor: { ...defaultSpace().windows.editor, x: 177 } } })
@@ -148,7 +152,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     await waitFor(() => expect(screen.queryByText("Reasoning")).toBeNull())
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("keeps the initial server Space when removing a stale preference hint throws", async () => {
@@ -245,7 +251,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByText(/Current-Space judgment: Alpha judgment\./)).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     expect(screen.getByText(/Current Space: Beta\./)).toBeTruthy()
     expect(screen.getByText(/Current-Space judgment: Beta judgment\./)).toBeTruthy()
     expect(screen.queryByText(/Alpha judgment/)).toBeNull()
@@ -281,7 +289,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
     await waitFor(() => expect(screen.getByText(/Most recent Space: Alpha\./)).toBeTruthy())
     releaseBeta()
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("does not reorder recency when the current Space save fails", async () => {
@@ -412,12 +422,14 @@ describe("Experience V2 multi-Space re-entry", () => {
     render(<WorkspaceShell />)
     await user.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     await user.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     expect(order.indexOf("PUT:a")).toBeLessThan(order.indexOf("GET:b"))
     expect(window.localStorage.getItem(`williamos:selected-space:${preferenceStorageKey}`)).toBe("b")
 
+    await user.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     await user.click(screen.getByRole("button", { name: "Enter Alpha" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
     expect(order.lastIndexOf("PUT:b")).toBeLessThan(order.lastIndexOf("GET:a"))
   })
 
@@ -435,7 +447,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Enter Alpha" })).toBeTruthy()
     expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
   })
@@ -552,7 +566,9 @@ describe("Experience V2 multi-Space re-entry", () => {
     fireEvent.keyDown(window, { key: "Escape" })
     expect(screen.getByRole("dialog", { name: "Mission Control" })).toBeTruthy()
     resolveB({ ok: true, status: 200, json: async () => envelope("b") })
-    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
   })
 
   it("cannot dismiss Mission Control while a deferred Space creation is in flight", async () => {
@@ -587,31 +603,36 @@ describe("Experience V2 multi-Space re-entry", () => {
     const pendingRun = new Promise<Response>((done) => { settleRun = done })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), project: exactProject }) }
       if (url === "/api/loom/run" && init?.method === "POST") return pendingRun
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
       return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
     }))
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: /^(Restore|Focus) Tests$/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run repository tests" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
     expect(screen.getByText("Stop the active Test or Terminal run before switching Spaces.")).toBeTruthy()
-    settleRun(new Response(`${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
+    settleRun(new Response(`${JSON.stringify({ type: "started", operation: "tests.run", label: "Run the tests", mutating: false, ...PROJECT_TOOL_IDENTITY })}\n${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
   })
 
-  it("blocks re-entry while canonical Space execution is live", async () => {
+  it("allows re-entry while canonical server-side Space execution remains live", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), judgment: null, spine: { ...EMPTY_SPINE, execution: "implementing" } }) }
+      if (url === "/api/environment/space?worldId=b" && !init?.method) return { ok: true, status: 200, json: async () => envelope("b") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
-      return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init?.body ?? "{}"))?.space }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
     }))
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
-    expect(screen.getByText("Finish or stop the active Space execution before switching Spaces.")).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Mission Control" })).toBeNull())
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
+    expect(screen.queryByText("Finish or stop the active Space execution before switching Spaces.")).toBeNull()
   })
 
   it("blocks re-entry visibly while the current source has unsaved edits", async () => {

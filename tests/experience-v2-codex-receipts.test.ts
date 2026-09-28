@@ -65,6 +65,8 @@ describe("strict Codex success receipts", () => {
       grantVersion: "grant-hash",
       allowed: ["src/selected.ts"],
       forbidden: ["src/forbidden.ts"],
+      contracts: [],
+      environments: [],
       reservationVersion: "f".repeat(64),
       selectedPath: "src/selected.ts",
       assignmentHash: "a".repeat(64),
@@ -89,6 +91,8 @@ describe("strict Codex success receipts", () => {
       reservation: {
         allowed: ["src/selected.ts"],
         forbidden: ["src/forbidden.ts"],
+        contracts: [],
+        environments: [],
         version: "f".repeat(64),
       },
       promotionPath: "src/selected.ts",

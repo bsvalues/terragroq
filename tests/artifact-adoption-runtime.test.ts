@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto"
 
 import { describe, expect, it, vi } from "vitest"
 
+import type { ArtifactAdoptionTarget } from "@/lib/governance/artifact-adoption"
 import { createArtifactAdoptionRuntime, deriveArtifactAdoptionBaseSha } from "@/lib/governance/artifact-adoption-runtime"
 
 const head = "2".repeat(40)
@@ -36,39 +37,134 @@ function authorityRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function harness(row = authorityRow()) {
-  const artifactPaths = Array.isArray(row.allowedFiles)
+function harness(row = authorityRow(), artifactTarget: ArtifactAdoptionTarget = target, artifactPathSet?: readonly string[]) {
+  const artifactPaths = artifactPathSet ?? (Array.isArray(row.allowedFiles)
     ? row.allowedFiles.filter((value): value is string => typeof value === "string")
-    : paths
-  const events: Array<{ type: string; entity: string; metadata: unknown }> = []
+    : paths)
+  const events: Array<{ type: string; entity: string; entityId?: string; metadata: unknown }> = []
   const grants: Array<Record<string, unknown>> = []
+  const leases: Array<Record<string, unknown>> = []
+  const fixtureNow = new Date("2026-08-31T20:00:00.000Z")
+  const leaseSim = (sql: string, values?: readonly unknown[]) => {
+    if (sql.includes('UPDATE "promotion_lease" AS l')) {
+      for (const lease of leases.filter((entry) => entry.status === "live")) {
+        const grant = grants.find((g) => g.ref === lease.grantRef && g.status === "active" && g.revokedAt == null)
+        const expiry = new Date(String(lease.expiresAt))
+        if (!grant || expiry <= fixtureNow) {
+          lease.status = "released"
+          lease.reason = expiry <= fixtureNow ? "LEASE_EXPIRED" : "LEASE_STALE_GRANT"
+        }
+      }
+      return { rows: [] }
+    }
+    if (sql.includes("LEASE_REBOUND")) {
+      for (const lease of leases) {
+        if (lease.status === "live" && lease.repository === values?.[0] && lease.targetRef === values?.[1]
+          && lease.adoptionHash !== values?.[2] && lease.outcomeId === values?.[3] && lease.workOrderId === values?.[4]) {
+          lease.status = "released"; lease.reason = "LEASE_REBOUND"
+        }
+      }
+      return { rows: [] }
+    }
+    if (sql.includes('UPDATE "promotion_lease"') && sql.includes('"adoptionHash" = $1')) {
+      const changed: Array<{ id: unknown }> = []
+      for (const lease of leases) {
+        if (lease.status === "live" && lease.adoptionHash === values?.[0]) {
+          lease.status = "released"; lease.reason = values?.[1]; changed.push({ id: lease.id })
+        }
+      }
+      return { rows: changed }
+    }
+    if (sql.includes('FROM "promotion_lease"')) {
+      return { rows: leases.filter((l) => l.status === "live" && l.repository === values?.[0] && l.targetRef === values?.[1]) }
+    }
+    if (sql.includes('INSERT INTO "promotion_lease"')) {
+      if (leases.some((l) => l.status === "live" && l.repository === values?.[1] && l.targetRef === values?.[2])) return { rows: [] }
+      const row = {
+        id: 700 + leases.length, repository: values?.[1], targetRef: values?.[2],
+        pullRequest: values?.[3], boundHeadSha: values?.[4], adoptionHash: values?.[5],
+        grantRef: values?.[6] ?? null, outcomeId: values?.[7] ?? null, workOrderId: values?.[8] ?? null,
+        status: "live", reason: null, expiresAt: values?.[9] == null ? null : new Date(String(values?.[9])),
+      }
+      leases.push(row)
+      return { rows: [row] }
+    }
+    return null
+  }
   let expireGrantAtFence = false
   const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.includes("FROM \"working_world\" world")) return { rows: [row] }
+    if (sql.includes("FROM \"outcome_queue_mutation_receipt\" receipt")) {
+      return { rows: [{
+        ...row,
+        resultBinding: {
+          worldId: row.admissionRequest.worldId,
+          outcomeKey: row.outcomeKey,
+          workOrderId: row.workOrderId,
+          repository: row.repository,
+          reservedPaths: row.allowedFiles,
+        },
+        requestBinding: row.admissionRequest,
+      }] }
+    }
     if (sql.includes("FROM \"authority_grant\"") && !sql.includes("JOIN")) {
       const grant = grants.find((value) => Number(value.id) === Number(values?.[1]))
       return { rows: grant ? [grant] : [] }
     }
     if (sql.includes("entityType\"='williamos_delivery_seal'")) {
-      const sealed = events.find((event) => event.type === "EVIDENCE_RECORDED")
-      return { rows: sealed ? [{ metadata: sealed.metadata }] : [] }
+      const matching = events.filter((event) => {
+        if (event.type !== "EVIDENCE_RECORDED") return false
+        const metadata = event.metadata as Record<string, any>
+        if (sql.includes("metadata\"->>'adoptionHash'=$2")) return metadata.adoptionHash === values?.[1]
+        const adoption = metadata.seal?.payload?.adoption
+        return adoption?.worldId === values?.[1]
+          && (values?.length !== 4 || (
+            adoption.outcome?.key === values[2]
+            && adoption.workOrder?.id === values[3]
+          ))
+          && (values?.length !== 6 || (
+            adoption.outcome?.key === values[2]
+            && adoption.workOrder?.id === values[3]
+            && adoption.artifact?.pullRequest === values[4]
+            && adoption.artifact?.headSha === values[5]
+          ))
+      }).reverse()
+      return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ entityId: event.entityId, metadata: event.metadata })) }
     }
     if (sql.includes("FROM \"governance_event\"") && sql.includes("ARTIFACT_ADOPTION_AUTHORIZED")) {
-      const match = events.find((event) => event.type === "ARTIFACT_ADOPTION_AUTHORIZED")
-      return { rows: match ? [{ id: 101, metadata: match.metadata }] : [] }
+      const matching = events.filter((event) => {
+        if (event.type !== "ARTIFACT_ADOPTION_AUTHORIZED") return false
+        const metadata = event.metadata as Record<string, any>
+        if (sql.includes("entityId\"=$2")) return metadata.adoptionHash === values?.[1]
+        if (sql.includes("idempotencyKey'=$3")) return metadata.context?.worldId === values?.[1] && metadata.idempotencyKey === values?.[2]
+        if (sql.includes("previewDigest'=$3")) return metadata.context?.worldId === values?.[1] && metadata.previewDigest === values?.[2]
+        return true
+      }).reverse()
+      return { rows: matching.slice(0, sql.includes("LIMIT 2") ? 2 : 1).map((event) => ({ id: 101, metadata: event.metadata })) }
     }
     if (sql.includes("FROM \"governance_event\"") && sql.includes("ARTIFACT_ADOPTION_VALIDATED")) {
       const validation = events.find((event) => event.type === "ARTIFACT_ADOPTION_VALIDATED")
       const review = events.find((event) => event.type === "ARTIFACT_ADOPTION_REVIEWED")
-      return { rows: validation && review ? [{ validationEventId: 102, validationMetadata: validation.metadata, reviewEventId: 103, reviewMetadata: review.metadata }] : [] }
+      return { rows: validation && review ? [{
+        validationEventId: 102,
+        validationEntityType: validation.entity,
+        validationEntityId: validation.entityId,
+        validationMetadata: validation.metadata,
+        reviewEventId: 103,
+        reviewEntityType: review.entity,
+        reviewEntityId: review.entityId,
+        reviewMetadata: review.metadata,
+      }] : [] }
     }
     if (sql.includes("INSERT INTO \"governance_event\"")) {
       const type = String(values?.[1])
       const entity = String(values?.[2])
       const metadata = JSON.parse(String(values?.[5]))
-      events.push({ type, entity, metadata })
+      events.push({ type, entity, entityId: String(values?.[3] ?? ""), metadata })
       return { rows: [{ id: 100 + events.length }] }
     }
+    const lease = leaseSim(sql, values)
+    if (lease) return lease
     return { rows: [] }
   })
   const txQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
@@ -96,17 +192,19 @@ function harness(row = authorityRow()) {
     if (sql.includes("ARTIFACT_ADOPTION_AUTHORIZED") && sql.includes("FOR UPDATE")) return { rows: [] }
     if (sql.includes("INSERT INTO \"governance_event\"")) {
       if (sql.includes("williamos_delivery_seal")) {
-        events.push({ type: "EVIDENCE_RECORDED", entity: "williamos_delivery_seal", metadata: JSON.parse(String(values?.[2])) })
+        events.push({ type: "EVIDENCE_RECORDED", entity: "williamos_delivery_seal", entityId: String(values?.[1] ?? ""), metadata: JSON.parse(String(values?.[2])) })
         return { rows: [{ id: 104 }] }
       }
       if (values?.[1] === "ARTIFACT_ADOPTION_AUTHORIZED") events.push({ type: String(values[1]), entity: String(values[2]), metadata: JSON.parse(String(values[5])) })
       return { rows: [{ id: values?.[1] === "ARTIFACT_ADOPTION_AUTHORIZED" ? 101 : 104 }] }
     }
+    const lease = leaseSim(sql, values)
+    if (lease) return lease
     return { rows: [] }
   })
   const db = { query, connect: vi.fn(async () => ({ query: txQuery, release: vi.fn() })) }
   const lifecycle = {
-    inspectPullRequest: vi.fn(async (_number: number, _options?: { allowRemediationBranch?: boolean }): Promise<Record<string, unknown>> => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
+    inspectPullRequest: vi.fn(async (_number: number, _options?: { allowRemediationBranch?: boolean }): Promise<Record<string, unknown>> => ({ number: artifactTarget.pullRequest, state: "OPEN", headRefOid: artifactTarget.expectedHeadSha, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
     inspectPullRequestFiles: vi.fn(async (_number: number): Promise<readonly string[]> => artifactPaths),
   }
   const deriveBaseSha = vi.fn(async (_root: string, _repository: string, _pullRequest: number, _headSha: string) => ({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base }))
@@ -116,11 +214,11 @@ function harness(row = authorityRow()) {
     workspaceExists: vi.fn(async () => true),
     createLifecycle: vi.fn(() => lifecycle),
     deriveBaseSha,
-    inspectDelivery: vi.fn(async () => ({ repository: "https://github.com/bsvalues/terragroq", baseSha: base, commitSha: head, paths: artifactPaths, patchDigest: "d".repeat(64), contentDigest: "e".repeat(64) })),
+    inspectDelivery: vi.fn(async () => ({ repository: "https://github.com/bsvalues/terragroq", baseSha: base, commitSha: artifactTarget.expectedHeadSha, paths: artifactPaths, patchDigest: "d".repeat(64), contentDigest: "e".repeat(64) })),
     signingKey: { keyId: "test-key", privateKey, publicKey },
     now: () => new Date("2026-08-31T20:00:00.000Z"),
   })
-  return { runtime, db, lifecycle, events, txQuery, deriveBaseSha, expireGrantAtFence: () => { expireGrantAtFence = true } }
+  return { runtime, db, lifecycle, events, leases, txQuery, deriveBaseSha, expireGrantAtFence: () => { expireGrantAtFence = true } }
 }
 
 describe("persisted prospective artifact adoption", () => {
@@ -169,6 +267,182 @@ describe("persisted prospective artifact adoption", () => {
       },
     })).runtime.preview("owner-1", "space-1", target))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+  })
+
+  it("allows an active Space admitted before a pull request exists to choose its exact target later", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("never restores an unverified seal through the later-target fallback", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:deferred", preview.previewDigest)
+    await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:deferred")
+    const persisted = candidate.events.find((event) => event.type === "EVIDENCE_RECORDED")
+    const metadata = persisted?.metadata as { seal?: { signature?: string } } | undefined
+    if (!metadata?.seal) throw new Error("expected a persisted seal")
+    metadata.seal.signature = "tampered"
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+  })
+
+  it("restores a verified deferred-target seal after the pull request is merged", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:merged", preview.previewDigest)
+    await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:merged")
+    candidate.lifecycle.inspectPullRequest.mockClear()
+    candidate.lifecycle.inspectPullRequest.mockResolvedValue({
+      number: 1117,
+      state: "MERGED",
+      headRefOid: head,
+      isDraft: false,
+      reviewDecision: "",
+      checksGreen: true,
+      checksComplete: true,
+      reviewed: true,
+      reviewCompleted: true,
+      unresolvedThreadCount: 0,
+    })
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      worldId: "space-1",
+      pullRequest: 1117,
+      headSha: head,
+      paths,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("requires and honors an exact target selector when one Space has multiple sealed artifacts", async () => {
+    const deferred = authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+      },
+    })
+    const candidate = harness(deferred)
+    const firstPreview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:first", firstPreview.previewDigest)
+    const firstSeal = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:first")
+
+    const otherTarget = { pullRequest: 1154, expectedHeadSha: "4".repeat(40) } as const
+    const other = harness(deferred, otherTarget)
+    const otherPreview = await other.runtime.preview("owner-1", "space-1", otherTarget)
+    await other.runtime.authorize("owner-1", "space-1", otherTarget, "adopt:1154:second", otherPreview.previewDigest)
+    await other.runtime.issue("owner-1", "space-1", "adopt:1154:second")
+    candidate.events.push(...structuredClone(other.events))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_TARGET_REQUIRED" })
+    candidate.lifecycle.inspectPullRequest.mockClear()
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+    await expect(candidate.runtime.preview("owner-1", "space-1", target)).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1117,
+      headSha: head,
+      adoptionHash: firstSeal.adoptionHash,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("still rejects a partially recorded pull request identity", async () => {
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: 1117 },
+        },
+      },
+    }))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+    expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+  })
+
+  it("rejects coercible or over-specified persisted admission targets", async () => {
+    const invalidTargets = [
+      { number: "1117", headSha: head },
+      { number: true, headSha: head },
+      { number: 1117, headSha: head, mutable: true },
+    ]
+    for (const pullRequest of invalidTargets) {
+      const candidate = harness(authorityRow({
+        admissionRequest: {
+          worldId: "space-1",
+          externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths, pullRequest },
+        },
+      }))
+      await expect(candidate.runtime.preview("owner-1", "space-1"))
+        .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+      expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    }
+  })
+
+  it("requires exact ledger entity identities when restoring a persisted seal", async () => {
+    const cases = [
+      ["seal entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.entity === "williamos_delivery_seal")!
+        event.entityId = "wrong-signature"
+      }],
+      ["validation entity type", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_VALIDATED")!
+        event.entity = "wrong_validation_type"
+      }],
+      ["validation entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_VALIDATED")!
+        event.entityId = "f".repeat(64)
+      }],
+      ["review entity type", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_REVIEWED")!
+        event.entity = "wrong_review_type"
+      }],
+      ["review entity ID", (candidate: ReturnType<typeof harness>) => {
+        const event = candidate.events.find((entry) => entry.type === "ARTIFACT_ADOPTION_REVIEWED")!
+        event.entityId = "f".repeat(64)
+      }],
+    ] as const
+    for (const [label, mutate] of cases) {
+      const candidate = harness(authorityRow({
+        admissionRequest: {
+          worldId: "space-1",
+          externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: paths },
+        },
+      }))
+      const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+      await candidate.runtime.authorize("owner-1", "space-1", target, `adopt:1117:ledger:${label}`, preview.previewDigest)
+      await candidate.runtime.issue("owner-1", "space-1", `adopt:1117:ledger:${label}`)
+      mutate(candidate)
+      candidate.lifecycle.inspectPullRequest.mockClear()
+
+      await expect(candidate.runtime.preview("owner-1", "space-1"))
+        .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+      expect(candidate.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    }
   })
 
   it("accepts a canonical literal Next route path containing a dynamic segment", async () => {
@@ -238,13 +512,150 @@ describe("persisted prospective artifact adoption", () => {
       seal: sealed.seal,
       sealBlock: sealed.sealBlock,
     })
-    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(7)
+    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(6)
 
     const replayed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
     expect(replayed.seal).toEqual(sealed.seal)
     expect(events.filter((event) => event.type === "ARTIFACT_ADOPTION_VALIDATED")).toHaveLength(2)
     expect(events.filter((event) => event.type === "ARTIFACT_ADOPTION_REVIEWED")).toHaveLength(2)
     expect(events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
+  })
+
+  it("restores a persisted seal after merge without re-entering the open-PR issuance path", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:restore-merged", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:restore-merged")
+    const inspectedBeforeRestore = candidate.lifecycle.inspectPullRequest.mock.calls.length
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      worldId: "space-1",
+      pullRequest: 1117,
+      headSha: head,
+      paths,
+      adoptionHash: sealed.adoptionHash,
+      seal: sealed.seal,
+      sealBlock: sealed.sealBlock,
+    })
+    expect(candidate.lifecycle.inspectPullRequest).toHaveBeenCalledTimes(inspectedBeforeRestore)
+    expect(candidate.events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
+  })
+
+  it("ignores an unrelated historical seal when restoring the current admission", async () => {
+    const candidate = harness()
+    candidate.events.push({
+      type: "EVIDENCE_RECORDED",
+      entity: "williamos_delivery_seal",
+      metadata: {
+        adoptionHash: "9".repeat(64),
+        authorizationEventId: 91,
+        seal: { payload: { adoption: { worldId: "space-1" } }, signature: "historical" },
+      },
+    })
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:latest-space-seal", preview.previewDigest)
+    const latest = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:latest-space-seal")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      adoptionHash: latest.adoptionHash,
+      seal: latest.seal,
+    })
+    expect(candidate.events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(2)
+  })
+
+  it("restores the seal bound to the current admission instead of a later seal for another Space artifact", async () => {
+    const current = harness()
+    const currentPreview = await current.runtime.preview("owner-1", "space-1", target)
+    await current.runtime.authorize("owner-1", "space-1", target, "adopt:1117:current-admission", currentPreview.previewDigest)
+    const currentSeal = await current.runtime.issue("owner-1", "space-1", "adopt:1117:current-admission")
+
+    const otherHead = "3".repeat(40)
+    const otherTarget = { pullRequest: 1118, expectedHeadSha: otherHead } as const
+    const other = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-other",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: otherTarget.pullRequest, headSha: otherTarget.expectedHeadSha },
+        },
+      },
+    }), otherTarget)
+    const otherPreview = await other.runtime.preview("owner-1", "space-other", otherTarget)
+    await other.runtime.authorize("owner-1", "space-other", otherTarget, "adopt:1118:other-artifact", otherPreview.previewDigest)
+    await other.runtime.issue("owner-1", "space-other", "adopt:1118:other-artifact")
+    current.events.push(...structuredClone(other.events.filter((event) =>
+      event.type === "ARTIFACT_ADOPTION_AUTHORIZED" || event.type === "EVIDENCE_RECORDED")))
+    current.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(current.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1117,
+      headSha: head,
+      adoptionHash: currentSeal.adoptionHash,
+      seal: currentSeal.seal,
+    })
+  })
+
+  it("restores a prospective artifact whose exact paths differ from the admission anchor reservation", async () => {
+    const anchorPaths = ["app/anchor.ts"]
+    const prospectivePaths = ["lib/adopted.ts", "tests/adopted.test.ts"]
+    const candidate = harness(authorityRow({
+      allowedFiles: anchorPaths,
+      grantAllowed: anchorPaths,
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: anchorPaths,
+          pullRequest: { number: 1117, headSha: head },
+        },
+      },
+    }), target, prospectivePaths)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    expect(preview.paths).toEqual(prospectivePaths)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:separate-paths", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1117:separate-paths")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1117,
+      headSha: head,
+      paths: prospectivePaths,
+      adoptionHash: sealed.adoptionHash,
+    })
+  })
+
+  it("restores the latest prospective artifact when its PR head differs from the historical admission anchor", async () => {
+    const anchorHead = "4".repeat(40)
+    const artifactHead = "5".repeat(40)
+    const artifactTarget = { pullRequest: 1139, expectedHeadSha: artifactHead } as const
+    const candidate = harness(authorityRow({
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: {
+          repository: "bsvalues/terragroq",
+          reservedPaths: paths,
+          pullRequest: { number: 1121, headSha: anchorHead },
+        },
+      },
+    }), artifactTarget)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", artifactTarget)
+    await candidate.runtime.authorize("owner-1", "space-1", artifactTarget, "adopt:1139:separate-anchor", preview.previewDigest)
+    const sealed = await candidate.runtime.issue("owner-1", "space-1", "adopt:1139:separate-anchor")
+    candidate.lifecycle.inspectPullRequest.mockRejectedValue(new Error("merged pull requests cannot enter prospective issuance"))
+
+    await expect(candidate.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({
+      status: "SEALED",
+      pullRequest: 1139,
+      headSha: artifactHead,
+      adoptionHash: sealed.adoptionHash,
+    })
   })
 
   it("permits a legitimate non-expiring Space grant to authorize and issue", async () => {
@@ -348,5 +759,22 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
     const grantFence = String(candidate.txQuery.mock.calls.find(([statement]) => String(statement).includes('FROM "authority_grant"') && String(statement).includes("FOR UPDATE"))?.[0] ?? "")
     expect(grantFence).toContain('"expiresAt" > CURRENT_TIMESTAMP')
+  })
+
+  it("releases the promotion lease when a seal attempt fails after authorization (P1 #1244)", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:lease-release", preview.previewDigest)
+    const live = candidate.leases.filter((lease) => lease.status === "live")
+    expect(live).toHaveLength(1)
+    // Evidence inspection fails for a non-lease reason; the wrapper must give the target
+    // back instead of holding it until grant expiry.
+    candidate.lifecycle.inspectPullRequest.mockRejectedValueOnce(new Error("evidence unavailable"))
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:lease-release"))
+      .rejects.toThrow("evidence unavailable")
+    const stillLive = candidate.leases.filter((lease) => lease.status === "live")
+    expect(stillLive).toEqual([])
+    const released = candidate.leases.filter((lease) => lease.status === "released")
+    expect(released.some((lease) => lease.reason === "LEASE_RELEASED_ON_FAILURE")).toBe(true)
   })
 })

@@ -440,4 +440,122 @@ describe("projectWorkbenchThreads", () => {
     expect(thread.coverage.missingSources).toEqual(["conversation", "decision:missing"])
     expect(thread.lastActivityAt).toEqual(at("2026-08-14T10:00:00.000Z"))
   })
+
+  it("collapses identical-intent threads into one entry that reports the run count without losing recorded work", () => {
+    const input = baseInput()
+    input.threads.push({
+      id: "thread-alpha-rerun-1",
+      userId: "owner-1",
+      projectId: 7,
+      projectKey: "williamos",
+      projectName: "WilliamOS",
+      title: "Ship the cockpit",
+      rootSourceKind: "goal",
+      rootSourceId: "41b",
+      createdAt: at("2026-08-16T09:00:00.000Z"),
+      updatedAt: at("2026-08-16T09:00:00.000Z"),
+    }, {
+      id: "thread-alpha-rerun-2",
+      userId: "owner-1",
+      projectId: 7,
+      projectKey: "williamos",
+      projectName: "WilliamOS",
+      title: "ship the cockpit ",
+      rootSourceKind: "goal",
+      rootSourceId: "41c",
+      createdAt: at("2026-08-18T11:00:00.000Z"),
+      updatedAt: at("2026-08-18T11:00:00.000Z"),
+    })
+    input.bindings.push({
+      threadId: "thread-alpha-rerun-1", userId: "owner-1", projectId: 7,
+      sourceKind: "goal", sourceId: "41b", role: "root",
+    }, {
+      threadId: "thread-alpha-rerun-2", userId: "owner-1", projectId: 7,
+      sourceKind: "goal", sourceId: "41c", role: "root",
+    })
+    input.sources.push({
+      kind: "goal", id: "41b", userId: "owner-1",
+      occurredAt: at("2026-08-16T09:00:00.000Z"),
+      ref: "GOAL-0042",
+      data: {
+        command: "Make the cockpit usable (run 2)",
+        response: "Classified as governed product work",
+        verdict: "allow",
+        repo: "must-not-create-membership",
+      },
+    }, {
+      kind: "goal", id: "41c", userId: "owner-1",
+      occurredAt: at("2026-08-18T11:00:00.000Z"),
+      ref: "GOAL-0043",
+      data: {
+        command: "Make the cockpit usable (run 3)",
+        response: "Classified as governed product work",
+        verdict: "allow",
+        repo: "must-not-create-membership",
+      },
+    })
+
+    const [thread] = projectWorkbenchThreads(input)
+
+    expect(thread.runCount).toBe(3)
+    expect(thread.runCountPartial).toBeUndefined()
+    expect(thread.createdAt).toEqual(at("2026-08-14T10:00:00.000Z"))
+    expect(thread.lastActivityAt).toEqual(at("2026-08-18T11:00:00.000Z"))
+    // Every recorded session's work stays visible in the collapsed entry:
+    // items from all three runs merge instead of only the newest surviving.
+    const ownerIntents = thread.items
+      .filter((item) => item.kind === "OWNER_INTENT")
+      .map((item) => item.summary)
+    expect(ownerIntents).toEqual([
+      "Make the cockpit usable",
+      "Make the cockpit usable (run 2)",
+      "Make the cockpit usable (run 3)",
+    ])
+    expect(thread.coverage.missingSources).toContain("conversation")
+  })
+
+  it("marks the run count partial when the upstream thread read was truncated before grouping", () => {
+    const input = baseInput()
+    input.threadListTruncated = true
+
+    const [thread] = projectWorkbenchThreads(input)
+
+    expect(thread.runCountPartial).toBe(true)
+  })
+})
+
+describe("IF-12 wired: owner-facing WORK_STATE summary never leaks Fabric vocabulary", () => {
+  it("a loop_run summary naming a model/GPU/runtime is neutralized to a human message", () => {
+    const input = baseInput()
+    input.bindings.push({
+      threadId: "thread-alpha", userId: "owner-1", projectId: 7,
+      sourceKind: "loop_run", sourceId: "run-1", role: "member",
+    })
+    input.sources.push({
+      kind: "loop_run", id: "run-1", userId: "owner-1",
+      occurredAt: at("2026-09-10T18:00:00.000Z"),
+      data: { summary: "Placed on daedalus via Qwen3-8B on the GPU runtime.", status: "completed" },
+    })
+    const thread = projectWorkbenchThreads(input)[0]
+    const workState = thread.items.find((item) => item.kind === "WORK_STATE")
+    expect(workState).toBeDefined()
+    // the owner sees a neutral human message, never the Fabric vocabulary
+    expect(workState!.summary).not.toMatch(/qwen|gpu|runtime|daedalus|model|provider/i)
+  })
+
+  it("a clean human loop_run summary passes through unchanged", () => {
+    const input = baseInput()
+    input.bindings.push({
+      threadId: "thread-alpha", userId: "owner-1", projectId: 7,
+      sourceKind: "loop_run", sourceId: "run-2", role: "member",
+    })
+    input.sources.push({
+      kind: "loop_run", id: "run-2", userId: "owner-1",
+      occurredAt: at("2026-09-10T18:00:00.000Z"),
+      data: { summary: "The 39-county digest is ready.", status: "completed" },
+    })
+    const thread = projectWorkbenchThreads(input)[0]
+    const workState = thread.items.find((item) => item.kind === "WORK_STATE")
+    expect(workState!.summary).toBe("The 39-county digest is ready.")
+  })
 })

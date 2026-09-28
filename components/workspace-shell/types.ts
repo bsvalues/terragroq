@@ -1,5 +1,7 @@
 import type { WilliamJudgment, WorldSpine } from "@/lib/environment/working-world"
 import { isSummonedSurface } from "@/lib/environment/summon"
+import { parseWorkspaceFileRef, type WorkspaceFileRef } from "@/lib/projects/workspace-object-ref"
+import type { WorkspaceRepositoryMountView } from "@/lib/projects/core-seven-repositories"
 import { parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 
 export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
@@ -18,6 +20,20 @@ export type PreviewEvidenceSnapshot = Readonly<{
   identity: "TerraFusion" | "unverified"
   reachable: boolean
   frameable: boolean
+  composition: Readonly<{
+    schemaVersion: 1
+    runtime: Readonly<{
+      repositoryIdentity: "bsvalues/terrafusion_os_1.0"
+      revision: string
+      instance: string
+    }>
+    consumedArtifacts: readonly Readonly<{
+      suite: "forge" | "atlas" | "dais" | "dossier" | "gpt"
+      repositoryIdentity: string
+      artifactIdentity: string
+      sourceRevision: string
+    }>[]
+  }> | null
   checkedAt: string
   limitations: Readonly<{ dom: "unavailable"; console: "unavailable"; network: "unavailable" }>
   fingerprint: string
@@ -92,6 +108,47 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
     && typeof evidence.fingerprint === "string" && /^[a-f0-9]{64}$/.test(evidence.fingerprint)
   if (!common) return null
 
+  let composition: PreviewEvidenceSnapshot["composition"] = null
+  if (evidence.composition !== null && evidence.composition !== undefined) {
+    if (!evidence.composition || typeof evidence.composition !== "object") return null
+    const rawComposition = evidence.composition as Record<string, unknown>
+    const runtime = rawComposition.runtime
+    const artifacts = rawComposition.consumedArtifacts
+    if (rawComposition.schemaVersion !== 1 || !runtime || typeof runtime !== "object" || !Array.isArray(artifacts)) return null
+    const rawRuntime = runtime as Record<string, unknown>
+    if (rawRuntime.repositoryIdentity !== "bsvalues/terrafusion_os_1.0"
+      || typeof rawRuntime.revision !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rawRuntime.revision)
+      || typeof rawRuntime.instance !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/.test(rawRuntime.instance)
+      || artifacts.length > 5) return null
+    const seen = new Set<string>()
+    const parsedArtifacts: NonNullable<PreviewEvidenceSnapshot["composition"]>["consumedArtifacts"][number][] = []
+    for (const value of artifacts) {
+      if (!value || typeof value !== "object") return null
+      const artifact = value as Record<string, unknown>
+      if (typeof artifact.suite !== "string" || !["forge", "atlas", "dais", "dossier", "gpt"].includes(artifact.suite)
+        || artifact.repositoryIdentity !== `bsvalues/terrafusion-${artifact.suite}`
+        || typeof artifact.artifactIdentity !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,199}$/.test(artifact.artifactIdentity)
+        || typeof artifact.sourceRevision !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(artifact.sourceRevision)
+        || seen.has(artifact.suite)) return null
+      seen.add(artifact.suite)
+      parsedArtifacts.push({
+        suite: artifact.suite as "forge" | "atlas" | "dais" | "dossier" | "gpt",
+        repositoryIdentity: artifact.repositoryIdentity,
+        artifactIdentity: artifact.artifactIdentity,
+        sourceRevision: artifact.sourceRevision,
+      })
+    }
+    composition = {
+      schemaVersion: 1,
+      runtime: {
+        repositoryIdentity: rawRuntime.repositoryIdentity,
+        revision: rawRuntime.revision,
+        instance: rawRuntime.instance,
+      },
+      consumedArtifacts: parsedArtifacts,
+    }
+  }
+
   const attached = evidence.status === "attached" && reason === null && configuredUrl !== null
     && admittedUrl !== null && origin !== null && evidence.identity === "TerraFusion"
     && evidence.reachable === true && evidence.frameable === true
@@ -115,6 +172,7 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
       identity: evidence.identity,
       reachable: evidence.reachable,
       frameable: evidence.frameable,
+      composition,
       checkedAt,
       limitations: { dom: "unavailable", console: "unavailable", network: "unavailable" },
       fingerprint: evidence.fingerprint,
@@ -136,6 +194,7 @@ export type EditorSelection = Readonly<{ anchor: number; head: number }>
 export type EditorPane = Readonly<{
   id: "primary" | "secondary"
   activePath: string | null
+  activeFileRef?: WorkspaceFileRef | null
   selection: EditorSelection | null
 }>
 
@@ -150,8 +209,12 @@ export type WorkspaceSpace = Readonly<{
   dock: readonly WindowId[]
   activeWindowId: string | null
   selectedPath: string | null
+  selectedFileRef?: WorkspaceFileRef | null
   editor: Readonly<{
     openFiles: readonly string[]
+    openFileRefs?: readonly WorkspaceFileRef[]
+    workingSetRepositoryKeys?: readonly string[]
+    activeRepositoryKey?: string | null
     panes: readonly EditorPane[]
     activePaneId: EditorPane["id"]
   }>
@@ -187,7 +250,45 @@ export type SpaceSummary = Readonly<{
   updatedAt: string
 }>
 
-export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+export type WorkspaceProject = Readonly<{
+  identity: string
+  name: string
+  repositories?: readonly WorkspaceRepositoryMountView[]
+}>
+
+/**
+ * Legacy Spaces predate repository-qualified file identity. Their paths were always relative to the
+ * one project root, so the only honest upgrade target is the server-verified default repository for
+ * that same project. If no such binding exists, leave the legacy state untouched and fail closed at
+ * mutation time rather than inventing a repository or revision.
+ */
+export function qualifyLegacyWorkspaceFiles(space: WorkspaceSpace, project: WorkspaceProject | null | undefined): WorkspaceSpace {
+  if (space.editor.openFileRefs !== undefined || space.editor.openFiles.length === 0) return space
+  const repository = project?.repositories?.find((candidate) => candidate.defaultRepository)
+  if (!project || !repository?.mount.verified || !repository.mount.revision) return space
+
+  const refs = space.editor.openFiles.map((path): WorkspaceFileRef => ({
+    projectIdentity: project.identity,
+    repositoryResourceKey: repository.key,
+    repositoryMountKey: repository.mount.key,
+    worktreeKey: null,
+    observedRevision: repository.mount.revision as string,
+    path,
+  }))
+  const refForPath = (path: string | null) => path === null
+    ? null
+    : refs.find((ref) => ref.path === path) ?? null
+
+  return {
+    ...space,
+    selectedFileRef: refForPath(space.selectedPath),
+    editor: {
+      ...space.editor,
+      openFileRefs: refs,
+      panes: space.editor.panes.map((pane) => ({ ...pane, activeFileRef: refForPath(pane.activePath) })),
+    },
+  }
+}
 
 export const WILLIAM_RAIL_WIDTH = 348
 export const WILLIAM_RAIL_BREAKPOINT = 1040
@@ -318,7 +419,7 @@ export function normalizeSpace(
       x: 120, y: 90, width: 560, height: 480, z: 3, minimized: false,
     }, viewport)]]
   }))
-  const inspectorSeeds = Object.fromEntries(rawWindows.flatMap((window) => {
+  const rawInspectorSeeds = Object.fromEntries(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string"
@@ -335,8 +436,35 @@ export function normalizeSpace(
       ...(persistedPayload ? { payload: item.surfacePayload as string } : {}),
     } satisfies InspectorSeed]]
   }))
+  const retainedInspectorIds = new Set<string>()
+  const summonedSingletons = new Map<string, string>()
+  for (const [id, seed] of Object.entries(rawInspectorSeeds)) {
+    if (!isSummonedSurface(seed.kind)) {
+      retainedInspectorIds.add(id)
+      continue
+    }
+    const key = `${seed.kind}\0${seed.subject}`
+    const retainedId = summonedSingletons.get(key)
+    if (!retainedId) {
+      summonedSingletons.set(key, id)
+      retainedInspectorIds.add(id)
+      continue
+    }
+    const retainedGeometry = rawInspectorWindows[retainedId]
+    const candidateGeometry = rawInspectorWindows[id]
+    const preferCandidate = candidate.activeWindowId === id
+      || candidate.activeWindowId !== retainedId && (candidateGeometry?.z ?? -1) > (retainedGeometry?.z ?? -1)
+    if (preferCandidate) {
+      retainedInspectorIds.delete(retainedId)
+      retainedInspectorIds.add(id)
+      summonedSingletons.set(key, id)
+    }
+  }
+  const inspectorSeeds = Object.fromEntries(
+    Object.entries(rawInspectorSeeds).filter(([id]) => retainedInspectorIds.has(id)),
+  ) as Record<string, InspectorSeed>
   const inspectorWindows = Object.fromEntries(
-    Object.entries(rawInspectorWindows).filter(([id]) => Boolean(inspectorSeeds[id])),
+    Object.entries(rawInspectorWindows).filter(([id]) => retainedInspectorIds.has(id)),
   ) as Record<string, WindowGeometry>
   const normalizeWindow = (id: WindowId): WindowGeometry => {
     const input = windowsByKind.get(id) as Record<string, unknown> | undefined
@@ -349,9 +477,25 @@ export function normalizeSpace(
   const rawSelection = candidate.selection && typeof candidate.selection === "object"
     ? candidate.selection as Record<string, unknown>
     : null
+  const openFileRefs = candidate.fileRefs === undefined ? undefined : Array.isArray(candidate.fileRefs)
+    ? candidate.fileRefs.flatMap((value) => {
+      try { return [parseWorkspaceFileRef(value)] } catch { return [] }
+    })
+    : undefined
+  const workingSetRepositoryKeys = candidate.workingSetRepositoryKeys === undefined ? undefined
+    : Array.isArray(candidate.workingSetRepositoryKeys)
+      ? candidate.workingSetRepositoryKeys.filter((key): key is string => typeof key === "string")
+      : undefined
+  const activeRepositoryKey = candidate.activeRepositoryKey === undefined ? undefined
+    : typeof candidate.activeRepositoryKey === "string" ? candidate.activeRepositoryKey : null
   const panes: EditorPane[] = rawPanes.flatMap((pane, index) => {
     if (!pane || typeof pane !== "object") return []
     const item = pane as Record<string, unknown>
+    let activeFileRef: WorkspaceFileRef | null | undefined
+    if (item.fileRef === null) activeFileRef = null
+    else if (item.fileRef !== undefined) {
+      try { activeFileRef = parseWorkspaceFileRef(item.fileRef) } catch { activeFileRef = undefined }
+    }
     const paneSelection = item.selection && typeof item.selection === "object"
       ? item.selection as Record<string, unknown>
       : null
@@ -363,6 +507,7 @@ export function normalizeSpace(
     return [{
       id: index === 0 ? "primary" : "secondary",
       activePath: typeof item.filePath === "string" ? item.filePath : null,
+      ...(activeFileRef !== undefined ? { activeFileRef } : {}),
       selection,
     }]
   })
@@ -402,11 +547,20 @@ export function normalizeSpace(
     activeWindowId,
     selectedPath: typeof rawSelection?.filePath === "string"
       ? rawSelection.filePath
-      : panes[activePaneIndex]?.selection ? panes[activePaneIndex].activePath : null,
+      : panes[activePaneIndex]?.activePath ?? null,
+    selectedFileRef: (() => {
+      if (rawSelection?.fileRef !== undefined) {
+        try { return parseWorkspaceFileRef(rawSelection.fileRef) } catch { return null }
+      }
+      return panes[activePaneIndex]?.activeFileRef ?? null
+    })(),
     editor: {
       openFiles: Array.isArray(candidate.openFiles)
         ? candidate.openFiles.filter((path): path is string => typeof path === "string")
         : fallback.editor.openFiles,
+      ...(openFileRefs !== undefined ? { openFileRefs } : {}),
+      ...(workingSetRepositoryKeys !== undefined ? { workingSetRepositoryKeys } : {}),
+      ...(activeRepositoryKey !== undefined ? { activeRepositoryKey } : {}),
       panes: panes.length > 0 ? panes : fallback.editor.panes,
       activePaneId: activePaneIndex === 1 ? "secondary" : "primary",
     },
@@ -492,9 +646,15 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
       }
     })],
     openFiles: space.editor.openFiles,
+    ...(space.editor.openFileRefs ? { fileRefs: space.editor.openFileRefs } : {}),
+    ...(space.editor.workingSetRepositoryKeys !== undefined
+      ? { workingSetRepositoryKeys: space.editor.workingSetRepositoryKeys } : {}),
+    ...(space.editor.activeRepositoryKey !== undefined
+      ? { activeRepositoryKey: space.editor.activeRepositoryKey } : {}),
     panes: space.editor.panes.map((pane) => ({
       id: pane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary",
       filePath: pane.activePath,
+      ...(pane.activeFileRef !== undefined ? { fileRef: pane.activeFileRef } : {}),
       selection: pane.activePath && pane.selection ? {
         anchor: Math.max(0, Math.round(pane.selection.anchor)),
         head: Math.max(0, Math.round(pane.selection.head)),
@@ -502,6 +662,7 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     })),
     selection: activePane?.activePath && activePane.selection ? {
       filePath: activePane.activePath,
+      ...(activePane.activeFileRef ? { fileRef: activePane.activeFileRef } : {}),
       anchor: Math.max(0, Math.round(activePane.selection.anchor)),
       head: Math.max(0, Math.round(activePane.selection.head)),
     } : null,
