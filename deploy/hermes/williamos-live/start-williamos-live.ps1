@@ -389,41 +389,46 @@ $env:PORT = "$Port"
 $env:LOCAL_SETUP_ENABLED = $localSetupEnabled
 
 # ---------------------------------------------------------------------------------------------
-# ONE-SHOT PRIMARY-CREDENTIAL RECOVERY (#1251).
+# PRIMARY-CREDENTIAL RECOVERY WINDOW (#1251).
 #
 # Recovery must be arm-able by an administrator WITHOUT editing .env.local -- nothing a normal setup
-# flow writes may arm it -- and it must clear itself: a process that stays armed after the reset is a
-# standing credential-reset surface, and an ambient machine/user environment variable is not a
-# bounded control.
+# flow writes may arm it.
 #
-# WHY THE MACHINE REGISTRY, NOT A FILE: `C:\ProgramData\WilliamOS` inherits a Users write ACE, and
-# `scripts/hermes-bridge/protect-door-artifacts.ps1` deliberately preserves it -- so any file-based
-# token under ProgramData can be created by the limited door user, which would let that process arm
-# recovery and then reset the Primary password. HKLM\SOFTWARE cannot be written without elevation, so
-# the operating system itself enforces "an administrator armed this", and there is no ACL for this
-# launcher to get wrong.
+# WHY THE MACHINE REGISTRY: `C:\ProgramData\WilliamOS` inherits a Users write ACE and
+# `scripts/hermes-bridge/protect-door-artifacts.ps1` deliberately preserves it, so a file-based token
+# under ProgramData can be created by the limited door user -- which would let that process arm its
+# own credential reset. HKLM\SOFTWARE cannot be written without elevation, so the operating system
+# enforces "an administrator armed this".
 #
-# The value is CONSUMED (deleted) before the server starts, so it is single-use by construction: the
-# value lives in one process lifetime and the next start is unarmed. If it cannot be consumed -- most
-# likely because this launcher is not elevated -- recovery does NOT arm; a one-shot that can fire
-# twice is worse than no one-shot.
+# WHY THIS LAUNCHER ONLY READS IT: the door runs at RunLevel=Limited with no Administrators allow ACE,
+# so it can read HKLM but cannot delete a value from it. Consumption therefore cannot happen here --
+# an attempt to write would fail closed and leave recovery permanently 403. The administrator sets a
+# UTC DEADLINE instead, and the window closes on its own; the one-shot USE is consumed by the route,
+# which clears the capability after the first successful reset (#1251 review P1).
 $recoveryKey = "HKLM:\SOFTWARE\WilliamOS\PrimaryRecovery"
-$recoveryValueName = "Arm"
-$declaredRecovery = $null
+$recoveryValueName = "ArmedUntilUtc"
+$declaredRecoveryUntil = $null
 try {
-  $declaredRecovery = (Get-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop).$recoveryValueName
+  $declaredRecoveryUntil = (Get-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop).$recoveryValueName
 } catch {
-  $declaredRecovery = $null
+  $declaredRecoveryUntil = $null
 }
 $recoveryArmed = $false
-if ("$declaredRecovery" -ieq "true") {
+if ("$declaredRecoveryUntil".Trim().Length -gt 0) {
   try {
-    Remove-ItemProperty -LiteralPath $recoveryKey -Name $recoveryValueName -ErrorAction Stop
-    $recoveryArmed = $true
-    Write-Boot "RECOVERY_ARMED_ONE_SHOT source=$recoveryKey\$recoveryValueName"
+    $recoveryDeadline = [datetime]::Parse(
+      "$declaredRecoveryUntil",
+      [System.Globalization.CultureInfo]::InvariantCulture,
+      [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+    if ($recoveryDeadline -gt [datetime]::UtcNow) {
+      $recoveryArmed = $true
+      Write-Boot "RECOVERY_ARMED_UNTIL $($recoveryDeadline.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    } else {
+      Write-Boot "RECOVERY_WINDOW_EXPIRED $($recoveryDeadline.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+    }
   } catch {
     $recoveryArmed = $false
-    Write-Boot "RECOVERY_TOKEN_NOT_CONSUMED source=$recoveryKey\$recoveryValueName detail=$($_.Exception.Message)"
+    Write-Boot "RECOVERY_WINDOW_UNREADABLE value=$declaredRecoveryUntil detail=$($_.Exception.Message)"
   }
 }
 $env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed) { "true" } else { "false" }

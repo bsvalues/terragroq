@@ -134,33 +134,42 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/\$env:LOCAL_SETUP_ENABLED\s*=\s*\$declaredLocalSetupEnabled/)
   })
 
-  it("arms credential recovery only from a consumed, administrator-only one-shot", () => {
-    // The control has to be bounded AND genuinely administrator-gated. A file under ProgramData is
-    // not: that tree inherits a Users write ACE and protect-door-artifacts.ps1 preserves it, so the
-    // limited door user could create the token and arm its own credential reset. HKLM cannot be
-    // written without elevation, so the OS enforces the authority and there is no ACL to get wrong.
+  it("arms credential recovery only inside an administrator-set deadline, and only reads it", () => {
+    // Two constraints meet here. The arming authority must be something the limited door user cannot
+    // grant itself, so it comes from HKLM (unwritable without elevation) rather than a file under
+    // ProgramData, whose Users write ACE protect-door-artifacts.ps1 deliberately preserves. And the
+    // launcher runs at RunLevel=Limited, so it must NOT try to consume the value by writing -- that
+    // would fail closed and leave recovery permanently 403. The window is therefore an administrator
+    // supplied UTC deadline that closes on its own; the one-shot USE is spent in the route.
     const code = executableOnly(startText)
     const key = code.indexOf('"HKLM:\\SOFTWARE\\WilliamOS\\PrimaryRecovery"')
-    const consume = code.indexOf("Remove-ItemProperty -LiteralPath $recoveryKey")
+    const valueName = code.indexOf('"ArmedUntilUtc"')
+    const deadline = code.indexOf("[datetime]::Parse(")
     const exportFlag = code.indexOf('$env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed)')
     const serverStart = code.indexOf("& $node $server")
 
     expect(key, "the arming input must be the machine registry path").toBeGreaterThan(-1)
-    expect(consume, "the value must be consumed, not merely read").toBeGreaterThan(key)
-    expect(exportFlag, "the flag must be exported").toBeGreaterThan(consume)
+    expect(valueName, "the value is a deadline, not a boolean").toBeGreaterThan(key)
+    expect(deadline, "the deadline must be parsed").toBeGreaterThan(valueName)
+    expect(exportFlag, "the flag must be exported after the decision").toBeGreaterThan(deadline)
     expect(exportFlag, "the flag must be set before the server starts").toBeLessThan(serverStart)
+    expect(code, "the window must be compared against UTC now").toMatch(/\[datetime\]::UtcNow/)
 
-    // No file-based token anywhere: that is the forgeable shape this replaced.
+    // Read-only: the door cannot write HKLM, so no consumption may be attempted here.
+    expect(code).not.toMatch(/Remove-ItemProperty/)
+    expect(code).not.toMatch(/Set-ItemProperty/)
+    expect(code).not.toMatch(/New-ItemProperty/)
+    // No file-based token anywhere: that shape was forgeable by the door user.
     expect(code).not.toMatch(/ARM-PRIMARY-RECOVERY/)
     expect(code).not.toMatch(/Move-Item[^\n]*recoveryToken/)
-    // Never arm from an inherited value, and never from .env.local (setup writes that file).
+    // Never inherited, and never read from .env.local (the setup flow writes that file).
     expect(code).not.toMatch(/Get-DeclaredEnvValue[^\n]*WILLIAMOS_PRIMARY_RECOVERY/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*\$env:WILLIAMOS_PRIMARY_RECOVERY/)
-    // The default is unarmed: a conditional, never a bare "true".
     expect(code).not.toMatch(/\$env:WILLIAMOS_PRIMARY_RECOVERY\s*=\s*"true"/)
     expect(code).toMatch(/RECOVERY_UNARMED/)
-    expect(code).toMatch(/RECOVERY_ARMED_ONE_SHOT/)
-    expect(code).toMatch(/RECOVERY_TOKEN_NOT_CONSUMED/)
+    expect(code).toMatch(/RECOVERY_ARMED_UNTIL/)
+    expect(code).toMatch(/RECOVERY_WINDOW_EXPIRED/)
+    expect(code).toMatch(/RECOVERY_WINDOW_UNREADABLE/)
   })
 })
 

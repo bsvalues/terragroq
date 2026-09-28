@@ -345,6 +345,11 @@ export async function POST(req: Request) {
         }
       }
 
+      // The USE has to be single-use, not merely the arming. This route reads the flag on every
+      // request, so a process that was armed at start would keep serving credential resets for its
+      // entire lifetime -- long after the owner finished recovering. Spend the capability here: the
+      // next request in this process is refused, and the launcher's window bounds the next start.
+      delete process.env.WILLIAMOS_PRIMARY_RECOVERY
       return {
         ok: true as const,
         operation,

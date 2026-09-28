@@ -277,6 +277,33 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(connectMock).not.toHaveBeenCalled()
   })
 
+  it("spends the recovery capability, so a reset cannot be replayed in the same process", async () => {
+    // Arming is bounded by the launcher's window; USE must be bounded here. Without this, an armed
+    // process serves resets for its whole lifetime, including after the owner has finished.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+      }
+      if (/select id from "user" where lower\(email\)/i.test(sql)) {
+        return { rows: [{ id: "primary-user-id" }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const first = await POST(credentialRequest())
+    const firstBody = await first.json()
+    expect(first.status).toBe(200)
+    expect(firstBody.operation).toBe("recovery")
+    expect(process.env.WILLIAMOS_PRIMARY_RECOVERY).toBeUndefined()
+
+    const second = await POST(credentialRequest())
+    expect(second.status).toBe(403)
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since
