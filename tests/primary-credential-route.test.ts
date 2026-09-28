@@ -181,6 +181,25 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(connectMock).not.toHaveBeenCalled()
   })
 
+  it("refuses before touching the database when both capabilities are off", async () => {
+    // The production default: setup closed, recovery unarmed. Nothing this route can do is allowed,
+    // so it must not check out a pooled connection -- nor disclose, via a 409, whether auth records
+    // happen to exist.
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "false"
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+
+    const response = await POST(credentialRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.ok).toBe(false)
+    expect(body.message).toContain("both disabled")
+    expect(queryMock).not.toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since

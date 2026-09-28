@@ -203,6 +203,21 @@ export async function POST(req: Request) {
     )
   }
 
+  // If neither capability is available, refuse before touching the database. A pooled query here
+  // would check out a connection to answer a question this surface is already refusing, and its
+  // result would disclose whether auth records exist -- which is not something an unauthenticated
+  // loopback caller should be able to read while every credential operation is disabled.
+  if (!localSetupEnabled() && !primaryRecoveryEnabled()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Primary credential setup and recovery are both disabled in this environment. Contact your platform administrator.",
+      },
+      { status: 403 },
+    )
+  }
+
   // Classify and refuse BEFORE the expensive work. A cheap read on the pool answers "what would this
   // request do"; if the environment is not configured for that operation the request ends here,
   // without hashing a password and without borrowing a pooled connection.
