@@ -9,7 +9,11 @@ import {
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
-import { isLoopbackHost as isLoopbackHostname, primaryRecoveryEnabled } from "@/lib/setup/local-setup-enabled"
+import {
+  isLoopbackHost as isLoopbackHostname,
+  localSetupEnabled,
+  primaryRecoveryEnabled,
+} from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
 
@@ -135,19 +139,6 @@ async function recoverPrimary(
 }
 
 export async function POST(req: Request) {
-  if (!primaryRecoveryEnabled()) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message:
-          "Primary credential recovery is not armed in this environment. Recovery is a deliberate, "
-          + "process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never persists; it "
-          + "cannot be enabled by LOCAL_SETUP_ENABLED.",
-      },
-      { status: 403 },
-    )
-  }
-
   if (!isLocalSetupRequest(req)) {
     return NextResponse.json(
       {
@@ -203,6 +194,33 @@ export async function POST(req: Request) {
           operation,
           message:
             "Primary identity is not declared in the local auth records. Resolve identity before credential recovery.",
+        }
+      }
+
+      // The gate depends on WHAT the request would do, which is only known after classification.
+      //
+      // `provisioning` is the first-owner case: no auth records exist yet, and the standard `/setup`
+      // flow drives it. It keeps the ordinary local-setup gate, because refusing it would leave a
+      // fresh installation unable to provision at all -- the flow writes `LOCAL_SETUP_ENABLED` and
+      // nothing arms recovery, so the visible "Save Primary credential" action would 403 until
+      // somebody injected an environment variable by hand.
+      //
+      // `recovery` is a RESET of a credential that already exists. That is the operation the
+      // separate, never-persisted opt-in exists for: the persisted setup flag is written by the
+      // setup flow itself and carried into the production process by the live launcher, so gating a
+      // reset on it would arm an unauthenticated password replacement by side effect.
+      const setupAllowed = operation === "recovery" ? primaryRecoveryEnabled() : localSetupEnabled()
+      if (!setupAllowed) {
+        return {
+          ok: false as const,
+          status: 403,
+          operation,
+          message: operation === "recovery"
+            ? "Primary credential recovery is not armed in this environment. Recovery is a "
+              + "deliberate, process-only opt-in (WILLIAMOS_PRIMARY_RECOVERY=true) that setup never "
+              + "persists; it cannot be enabled by LOCAL_SETUP_ENABLED."
+            : "Primary credential provisioning is not enabled in this environment. Contact your "
+              + "platform administrator.",
         }
       }
 

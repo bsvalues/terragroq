@@ -62,6 +62,17 @@ describe("POST /api/setup/primary-credential route contract", () => {
     }
   }
 
+  function credentialRequest() {
+    return new Request("http://localhost:3000/api/setup/primary-credential", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: JSON.stringify(primaryPayload()),
+    })
+  }
+
   it("rejects loopback cross-origin credential setup requests", async () => {
     const req = new Request("http://localhost:3000/api/setup/primary-credential", {
       method: "POST",
@@ -121,48 +132,69 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(releaseMock).toHaveBeenCalledTimes(1)
   })
 
-  it("refuses recovery when only the persisted setup flag is set", async () => {
+  it("refuses to RESET an existing Primary credential on the persisted setup flag alone", async () => {
     // The regression this separation exists for: `local-config` writes LOCAL_SETUP_ENABLED="true"
     // into .env.local during full setup and the live launcher carries that file into production, so
-    // a deployment is routinely running with that flag set. It must not arm this route.
+    // a deployment is routinely running with that flag set. It must not arm a credential reset.
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
     process.env.LOCAL_SETUP_ENABLED = "true"
-
-    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "http://localhost:3000",
-      },
-      body: JSON.stringify(primaryPayload()),
+    // A declared Primary already exists -> classifyPrimaryCredentialOperation() -> "recovery".
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
     })
 
-    const response = await POST(req)
+    const response = await POST(credentialRequest())
     const body = await response.json()
 
     expect(response.status).toBe(403)
     expect(body.ok).toBe(false)
+    expect(body.operation).toBe("recovery")
     expect(body.message).toContain("WILLIAMOS_PRIMARY_RECOVERY")
-    expect(connectMock).not.toHaveBeenCalled()
-    expect(hashPasswordMock).not.toHaveBeenCalled()
   })
 
-  it("refuses recovery when nothing is set at all", async () => {
+  it("refuses to RESET when nothing is armed at all", async () => {
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
     delete process.env.LOCAL_SETUP_ENABLED
-
-    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "http://localhost:3000",
-      },
-      body: JSON.stringify(primaryPayload()),
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
     })
 
-    const response = await POST(req)
+    const response = await POST(credentialRequest())
 
     expect(response.status).toBe(403)
-    expect(connectMock).not.toHaveBeenCalled()
+  })
+
+  it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
+    // The other half of the boundary: gating this route on the recovery opt-in before the operation
+    // is known would 403 the visible "Save Primary credential" action on a fresh installation, since
+    // the standard setup flow writes LOCAL_SETUP_ENABLED and nothing ever arms recovery. A
+    // provisioning run must therefore succeed with the persisted flag alone and recovery unarmed.
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    let provisioned = false
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 0, declared_primary_count: 0 }], rowCount: 1 }
+      }
+      if (/insert into "user"/i.test(sql)) provisioned = true
+      return { rows: [], rowCount: 0 }
+    })
+
+    const response = await POST(credentialRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.operation).toBe("provisioning")
+    expect(provisioned).toBe(true)
   })
 })

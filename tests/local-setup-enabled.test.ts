@@ -154,6 +154,18 @@ describe("every setup route shares the one declaration", () => {
     expect(src, "the recovery route must not re-inline the enable predicate").not.toMatch(
       /function\s+localSetupEnabled\s*\(/,
     )
+    // The gate must be applied AFTER the operation is classified, so first-owner provisioning keeps
+    // the ordinary setup gate. Gating the whole route on recovery up front 403s a fresh install's
+    // visible "Save Primary credential" action, because a standard setup flow writes
+    // LOCAL_SETUP_ENABLED and nothing ever arms recovery.
+    const classifiedAt = src.indexOf("classifyPrimaryCredentialOperation(")
+    const recoveryGateAt = src.indexOf("primaryRecoveryEnabled()")
+    expect(classifiedAt, "the operation must be classified in this route").toBeGreaterThan(-1)
+    expect(recoveryGateAt, "the recovery gate must exist").toBeGreaterThan(-1)
+    expect(
+      recoveryGateAt,
+      "the recovery opt-in must be evaluated only after the operation is classified",
+    ).toBeGreaterThan(classifiedAt)
   })
 
   it("all three routes share the loopback host predicate", () => {
