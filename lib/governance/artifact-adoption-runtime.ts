@@ -27,9 +27,26 @@ import {
 } from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
 import { hashRecord } from "@/lib/governance/hash"
+import { PROMOTION_TARGET_REF, acquirePromotionLease, validatePromotionLease, releasePromotionLease, type PromotionLeaseClaim } from "@/lib/governance/promotion-lease"
 import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/repository-lifecycle.mjs"
 
 const runFile = promisify(execFile)
+
+function leaseClaimFrom(userId: string, authorization: ArtifactAdoptionAuthorization): PromotionLeaseClaim {
+  return {
+    userId,
+    repository: authorization.context.repository,
+    targetRef: PROMOTION_TARGET_REF,
+    pullRequest: authorization.artifact.pullRequest,
+    boundHeadSha: authorization.artifact.headSha,
+    adoptionHash: authorization.adoptionHash,
+    grantRef: authorization.deliveryGrant?.ref ?? null,
+    outcomeId: authorization.context.outcome.id,
+    workOrderId: authorization.context.workOrder.id,
+    expiresAt: authorization.deliveryGrant?.expiresAt ?? authorization.context.grant.expiresAt,
+  }
+}
+
 const SHA = /^[0-9a-f]{40}$/
 const DIGEST = /^[0-9a-f]{64}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
@@ -561,6 +578,11 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
             || hashRecord(persisted.artifact) !== hashRecord(authorization.artifact)) {
             fail("DELIVERY_SEAL_CONFIRMATION_STALE", "idempotency key is bound to another artifact")
           }
+          // Replay path: a lease predating this change (or lost) must be backfilled here or
+          // the paired ISSUE validation would refuse a valid idempotent re-authorization.
+          await acquirePromotionLease({
+            query: async (sql, params) => await client.query(sql, [...(params ?? [])]),
+          }, leaseClaimFrom(userId, persisted))
           await client.query("COMMIT")
           return { eventId: Number(prior.rows[0].id), authorization: persisted }
         }
@@ -592,6 +614,23 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
             expiresAt: grantRow.expiresAt == null ? null : iso(grantRow.expiresAt),
           },
         }
+        // Promotion lease: acquire atomically with the delivery grant, keyed to the
+        // authoritative target (repository + promotion ref), never to the user. Another
+        // live promotion holding the same target refuses this AUTHORIZE with 409.
+        await acquirePromotionLease({
+          query: async (sql, params) => await client.query(sql, [...(params ?? [])]),
+        }, {
+          userId,
+          repository: authorization.context.repository,
+          targetRef: PROMOTION_TARGET_REF,
+          pullRequest: authorization.artifact.pullRequest,
+          boundHeadSha: authorization.artifact.headSha,
+          adoptionHash: authorization.adoptionHash,
+          grantRef: persistedAuthorization.deliveryGrant.ref,
+          outcomeId: authorization.context.outcome.id,
+          workOrderId: authorization.context.workOrder.id,
+          expiresAt: persistedAuthorization.deliveryGrant.expiresAt,
+        })
         const inserted = await client.query(
           `INSERT INTO "governance_event" ("userId","eventType","entityType","entityId","actor","reason","metadata")
             VALUES ($1,$2,$3,$4,'williamos',$5,$6::jsonb) RETURNING "id"`,
@@ -714,6 +753,38 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     },
     now: options.now,
   }
+  const issueBound = async (
+    userId: string, worldId: string,
+    persisted: { eventId: number; authorization: ArtifactAdoptionAuthorization },
+    leaseClaim: PromotionLeaseClaim,
+  ) => {
+    const leaseOk = await validatePromotionLease(
+      { query: async (sql, params) => await options.database.query(sql, [...(params ?? [])]) },
+      leaseClaim,
+    )
+    if (!leaseOk) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the promotion lease for the authoritative target is missing, stale, or released")
+    const existing = await dependencies.loadSeal?.(userId, persisted.authorization.adoptionHash)
+    if (existing) {
+      const seal = await issueProspectiveArtifactAdoptionSeal({ userId, adoptionHash: persisted.authorization.adoptionHash }, dependencies)
+      return {
+        status: "SEALED" as const, worldId,
+        pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
+        paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
+        adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
+      }
+    }
+    await recordProspectiveArtifactAdoptionEvidence({ userId, authorizationEventId: persisted.eventId, authorization: persisted.authorization, }, dependencies)
+    // Reinspect and persist the trusted exact-head state immediately before signing. The seal loader
+    // selects the newest evidence pair, so a head/path/check/review drift between phases fails closed.
+    await recordProspectiveArtifactAdoptionEvidence({ userId, authorizationEventId: persisted.eventId, authorization: persisted.authorization, }, dependencies)
+    const seal = await issueProspectiveArtifactAdoptionSeal({ userId, adoptionHash: persisted.authorization.adoptionHash }, dependencies)
+    return {
+      status: "SEALED" as const, worldId,
+      pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
+      paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
+      adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
+    }
+  }
   return {
     preview: async (userId: string, worldId: string, requestedTarget?: ArtifactAdoptionTarget) => {
       let target = requestedTarget
@@ -781,26 +852,19 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     },
     issue: async (userId: string, worldId: string, idempotencyKey: string) => {
       const persisted = await findAuthorization(userId, worldId, idempotencyKey)
-      const existing = await dependencies.loadSeal?.(userId, persisted.authorization.adoptionHash)
-      if (existing) {
-        const seal = await issueProspectiveArtifactAdoptionSeal({ userId, adoptionHash: persisted.authorization.adoptionHash }, dependencies)
-        return {
-          status: "SEALED" as const, worldId,
-          pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
-          paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
-          adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
-        }
-      }
-      await recordProspectiveArtifactAdoptionEvidence({ userId, authorizationEventId: persisted.eventId, authorization: persisted.authorization }, dependencies)
-      // Reinspect and persist the trusted exact-head state immediately before signing. The seal loader
-      // selects the newest evidence pair, so a head/path/check/review drift between phases fails closed.
-      await recordProspectiveArtifactAdoptionEvidence({ userId, authorizationEventId: persisted.eventId, authorization: persisted.authorization }, dependencies)
-      const seal = await issueProspectiveArtifactAdoptionSeal({ userId, adoptionHash: persisted.authorization.adoptionHash }, dependencies)
-      return {
-        status: "SEALED" as const, worldId,
-        pullRequest: persisted.authorization.artifact.pullRequest, headSha: persisted.authorization.artifact.headSha,
-        paths: persisted.authorization.artifact.paths, previewDigest: persisted.authorization.previewDigest,
-        adoptionHash: persisted.authorization.adoptionHash, seal, sealBlock: sealBlock(seal),
+      // Promotion lease lifecycle for the ISSUE phase: revalidate up front, and release on
+      // ANY failed seal attempt (owner ruling: release immediately on failed revalidation).
+      // A lane whose attempt failed must re-AUTHORIZE to re-claim; meanwhile the target
+      // stays open for genuinely-ready deliveries instead of being held by an abandoned
+      // authorization (review P1 on #1244).
+      const leaseClaim = leaseClaimFrom(userId, persisted.authorization)
+      try {
+        return await issueBound(userId, worldId, persisted, leaseClaim)
+      } catch (error) {
+        try {
+          await releasePromotionLease(options.database, leaseClaim.adoptionHash, "LEASE_RELEASED_ON_FAILURE")
+        } catch { /* preserve the original failure */ }
+        throw error
       }
     },
   }
@@ -868,6 +932,15 @@ export async function recordArtifactAdoptionSealWithAuthorityFence(
     if (deliveryGrant.rows.length !== 1 || !validDeliveryGrantRow(input.userId, authorization, deliveryGrant.rows[0])) {
       fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the exact prospective delivery grant changed or expired before sealing")
     }
+    // Promotion lease revalidation INSIDE this serializable seal transaction (review P1 on
+    // #1244): the out-of-transaction check left a window where a same-lineage re-
+    // authorization at a moved head could rebind the lease while an older-head ISSUE was
+    // in flight. The row locks above serialize the two; this closes the race exactly.
+    const leaseLive = await validatePromotionLease(
+      { query: async (sql, params) => await client.query(sql, [...(params ?? [])]) },
+      leaseClaimFrom(input.userId, authorization),
+    )
+    if (!leaseLive) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the promotion lease no longer binds this exact adoption and head")
     const validationEvidence = object(validation.evidence) as unknown as ArtifactAdoptionEvidence
     const reviewEvidence = object(review.evidence) as unknown as ArtifactAdoptionEvidence
     const signed = seal.payload.adoption

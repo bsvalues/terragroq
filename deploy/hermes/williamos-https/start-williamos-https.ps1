@@ -11,7 +11,8 @@
 [CmdletBinding()]
 param(
   [string]$AppRoot = "C:\HermesLab\williamos-runtime-64034e93-flat",
-  [string]$LogRoot = "C:\ProgramData\WilliamOS\logs"
+  [string]$LogRoot = "C:\ProgramData\WilliamOS\logs",
+  [string]$ProvenanceGate
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +25,58 @@ foreach ($required in @($node, $proxy)) {
   if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
     throw "Refusing to start WilliamOS HTTPS: required file is missing: $required"
   }
+}
+
+# THE DOOR PROVENANCE GATE (#1223) — the proxy listener is part of the door: refusing only the
+# cockpit task would leave "robocopy + restart :3443" as a live bypass. Same gate, same ledger,
+# same fail-closed contract as start-williamos-live.ps1; a tree whose built provenance is not an
+# authorized integrated lab-main revision cannot become the HTTPS surface either.
+$appRootResolved = (Resolve-Path -LiteralPath $AppRoot).ProviderPath.TrimEnd('\')
+# Trust placement (#1223 R2): the verifier lives beside THIS launcher (ProgramData), not inside
+# the runtime tree the gate exists to distrust.
+if ($ProvenanceGate) { $provenanceGate = $ProvenanceGate }
+else { $provenanceGate = Join-Path $PSScriptRoot "scripts\hermes-bridge\verify-door-provenance.mjs" }
+$provenanceGateDir = (Resolve-Path -LiteralPath (Split-Path -Parent $provenanceGate) -ErrorAction SilentlyContinue)
+if (-not $provenanceGateDir) { $provenanceGateDir = Split-Path -Parent $provenanceGate } else { $provenanceGateDir = $provenanceGateDir.Path }
+if (-not (Test-Path -LiteralPath $provenanceGate -PathType Leaf)) {
+  throw "Refusing to start WilliamOS HTTPS: the trusted gate script is absent at $provenanceGate (#1223 fail-closed)."
+}
+# #1223 R3: same tamper check as the Live launcher — a writable verifier is not an anchor.
+$gateTamperProbe = $null
+try {
+  $gateTamperProbe = [System.IO.File]::Open($provenanceGate, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+} catch {
+  # not writable is the healthy case; the probe simply stays null
+  $gateTamperProbe = $null
+}
+if ($gateTamperProbe) {
+  $gateTamperProbe.Close()
+  throw "Refusing to start WilliamOS HTTPS: $provenanceGate is writable by the identity running the door (#1223 fail-closed)."
+}
+
+# #1223 R6 (BLOCKING B6-1): node honours NODE_OPTIONS/NODE_PATH/NODE_REPL_EXTERNAL_MODULE for every
+# child it starts; the door identity owns HKCU\Environment, so a preload there can print
+# DOOR_PROVENANCE_OK and exit 0 without verifying anything. Clear them, and the gate refuses
+# independently if any is still set.
+foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE")) {
+  $nodeInjectValue = [Environment]::GetEnvironmentVariable($nodeInjectVar)
+  if (-not [string]::IsNullOrEmpty($nodeInjectValue)) {
+    Remove-Item -LiteralPath "Env:$nodeInjectVar" -ErrorAction SilentlyContinue
+    Write-Host "DOOR_NODE_INJECTION_ENV_CLEARED $nodeInjectVar=$nodeInjectValue"
+  }
+}
+$gatePreviousPreference = $ErrorActionPreference
+try {
+  # Native stderr is not an error here; the exit code is the verdict. (PS 5.1 traps, twice now.)
+  $ErrorActionPreference = "Continue"
+  $gateOutput = & $node $provenanceGate --app-root="$appRootResolved" --gate-dir="$provenanceGateDir" 2>&1
+  $gateExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $gatePreviousPreference
+}
+$gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+if ($gateExit -ne 0) {
+  throw "Refusing to start WilliamOS HTTPS: $gateSummary"
 }
 
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null

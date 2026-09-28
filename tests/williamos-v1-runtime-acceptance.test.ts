@@ -278,14 +278,28 @@ describe("WilliamOS V1 Issue #448 acceptance campaign", () => {
   it("loads the complete canonical AC-12 inventory rather than a caller-selected subset", () => {
     const inventory = readExpectedInventory(process.cwd())
 
-    expect(inventory).toHaveLength(44)
-    expect(new Set(inventory.map((entry) => entry.capability)).size).toBe(44)
+    expect(inventory).toHaveLength(49)
+    expect(new Set(inventory.map((entry) => entry.capability)).size).toBe(49)
     expect(inventory).toContainEqual({
       capability: "hermes-worker-sidecar",
       classification: "RUNTIME_PROVEN",
     })
     expect(inventory).toContainEqual({
       capability: "local-nested-codex-adapter",
+      classification: "EXCLUDED",
+    })
+    // The promotion lane added five compute capabilities; their classifications are part of the
+    // canonical inventory rather than a caller-selected subset.
+    expect(inventory).toContainEqual({
+      capability: "gpu-tabular-ml",
+      classification: "RUNTIME_PROVEN",
+    })
+    expect(inventory).toContainEqual({
+      capability: "gpu-anomaly-screening",
+      classification: "STATIC_READ_ONLY",
+    })
+    expect(inventory).toContainEqual({
+      capability: "gpu-dimensional-reduction",
       classification: "EXCLUDED",
     })
   })

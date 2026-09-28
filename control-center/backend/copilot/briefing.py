@@ -154,7 +154,10 @@ def build_briefing(now: Optional[datetime] = None) -> dict:
         pass
 
     git = {
-        "branch": git_raw.get("branch", git_raw.get("latest_commit", "unknown")),
+        # A missing branch name is reported as unknown, never substituted with the
+        # commit subject: the two are different facts, and the briefing used to
+        # label a commit message as the branch.
+        "branch": git_raw.get("branch") or "unknown",
         "clean": git_raw.get("clean", "unknown"),
     }
     # Preserve any extra keys callers might rely on

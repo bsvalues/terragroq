@@ -21,10 +21,14 @@ import path from "node:path"
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
 const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
+const TRANSPORT_VERIFY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "verify-cockpit-transport.ps1")
+const RELAY_SCRIPT = path.join(process.cwd(), "scripts", "lab-control", "transport", "hermes-cockpit-relay.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
 const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
+const transportVerifyText = fs.readFileSync(TRANSPORT_VERIFY_SCRIPT, "utf8")
+const relayText = fs.readFileSync(RELAY_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -404,6 +408,81 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).toContain("Test-HttpsCockpit")
   })
 
+  it("retires only the exact legacy overlay relay and records it for truthful rollback", () => {
+    const deploy = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(deploy).toContain("Get-LegacyCockpitRelayState")
+    expect(deploy).toContain("Remove-LegacyCockpitRelay")
+    expect(deploy).toContain("reserved by an unrelated portproxy target")
+    // v8: the signed deployment manifest joined the captured file set so a rollback re-attests the
+    // restored generation (round-3 review: the gate denied its own rolled-back door).
+    expect(deploy).toMatch(/version\s*=\s*8/)
+    expect(deploy).toContain("legacyRelay =")
+    expect(deploy).toContain("overlayRestoreMode = $rollbackOverlayMode")
+    expect(deploy).toContain('"compatibility-relay"')
+    expect(deploy.lastIndexOf("if ($legacyRelayState.wasPresent) { Remove-LegacyCockpitRelay }"))
+      .toBeLessThan(deploy.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort'))
+    expect(restore).toMatch(/\$manifestVersion\s+-ne\s+6/)
+    // v7 = the four request-time loose trees joined the rollback directory set. The check is
+    // split nowhere else: deploy's list and restore's version-gated list must name the SAME trees,
+    // or every rollback after a deploy throws "does not name the exact runtime directory set".
+    for (const tree of ["scripts\\execution-fabric", "scripts\\multi-agent-operator", "components\\operator", "config\\execution-fabric"]) {
+      expect(deploy).toContain(`"${tree}"`)
+      expect(restore).toContain(`"${tree}"`)
+    }
+    expect(restore).toMatch(/\$manifestVersion\s+-ge\s+7/)
+    expect(restore).toContain("Rollback manifest does not name the exact legacy cockpit relay boundary")
+    expect(restore).toMatch(/if \(\$overlayRestoreMode -in @\("legacy-relay", "compatibility-relay"\)\)[\s\S]*portproxy add v4tov4/)
+    expect(restore).toContain("Rollback manifest overlay mode contradicts the captured proxy and relay state")
+    expect(restore.indexOf("$manifestVersion -ne 6")).toBeLessThan(restore.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("validates request-time loose trees before any capture or copy can self-vouch them", () => {
+    const code = executableOnly(deployText)
+    // Phase A (the read-only validation loop) must precede the rollback capture AND the task
+    // stop: the current capture is a copy of the present runtime, so validating after capture
+    // lets every runtime-only file vouch for itself and the guard can never fire.
+    const phaseA = code.indexOf("foreach ($tree in $looseTreeSyncs)")
+    const capture = code.indexOf("if (-not $SkipRollbackCapture) {")
+    const stop = code.indexOf("Stop-ScheduledTask -TaskName $HttpsTaskName")
+    const phaseB = code.indexOf("foreach ($action in $syncActions)")
+    expect(phaseA).toBeGreaterThan(-1)
+    expect(capture).toBeGreaterThan(-1)
+    expect(phaseB).toBeGreaterThan(-1)
+    expect(phaseA).toBeLessThan(capture)
+    expect(phaseA).toBeLessThan(stop)
+    expect(capture).toBeLessThan(phaseB)
+    // defense-in-depth: even if the order moved, the scan excludes the current capture
+    expect(code).toMatch(/-ne \[IO\.Path\]::GetFullPath\(\$rollbackRoot\)/)
+    // a required tree cannot be silently skipped
+    expect(code).toMatch(/required at request time but absent/)
+    // vouching only counts manifests that recorded the tree as present
+    expect(code).toMatch(/\$dirs\[0\]\.wasPresent/)
+  })
+
+  it("requires both the LAN listener and the canonical overlay route before deploy reports green", () => {
+    const code = executableOnly(deployText)
+    const finalStart = code.lastIndexOf("Start-ScheduledTask -TaskName $HttpsTaskName")
+    const afterStart = code.slice(finalStart)
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort")
+    expect(afterStart).toContain("Test-HttpsCockpit -Port $HttpsPort -CanonicalOverlay")
+    expect(code).toContain('--resolve "williamos.lan:${Port}:$HermesOverlayAddress"')
+    expect(afterStart).toContain("canonical williamos.lan origin did not answer over the HERMES overlay")
+    expect(afterStart).toContain("Assert-OverlayFirewallRule")
+    expect(code).toContain("Get-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain("New-NetFirewallRule -DisplayName $ruleName")
+    expect(code).toContain('[string]$rule.Enabled -ne "True"')
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(code.lastIndexOf("Ensure-OverlayFirewallRule")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+    expect(code).toContain("Assert-TailscaleServiceReady")
+    expect(code).toContain("configured for automatic start before WilliamOS deployment")
+    expect(code.lastIndexOf("Assert-TailscaleServiceReady")).toBeLessThan(code.indexOf('if ($VerifyOnly)'))
+    expect(code).toContain("not exactly scoped to inbound Private TCP")
+    expect(afterStart).toContain("remote acceptance remains separate")
+    expect(afterStart).toContain("verify-cockpit-transport.ps1 on OMEN")
+    expect(afterStart).not.toContain("canonical overlay HTTPS healthy")
+  })
+
   it("makes verify-only prove both product origins and agreement between both provenance surfaces", () => {
     const code = executableOnly(deployText)
     const verify = code.slice(code.indexOf('if ($VerifyOnly)'))
@@ -566,5 +645,66 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(code).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(restore).not.toContain("CommandLine.IndexOf($ExpectedCommandPath")
     expect(code).toContain("owned by an unrelated process")
+    expect(code).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+    expect(restore).toContain("Select-Object -ExpandProperty OwningProcess -Unique")
+  })
+
+  it("provisions the canonical HERMES hostname without replacing conflicting ownership", () => {
+    const code = executableOnly(deployText)
+    expect(code).toContain('$CanonicalHostname = "williamos.lan"')
+    expect(code).toContain('Add-Content -LiteralPath $HostsPath')
+    expect(code).toContain("contains a conflicting or ambiguous '$CanonicalHostname' mapping")
+    expect(code.lastIndexOf("Ensure-CanonicalHostname")).toBeLessThan(code.indexOf("Stop-ScheduledTask"))
+  })
+
+  it("requires Tailscale to survive reboot before accepting the direct overlay listener", () => {
+    const code = executableOnly(relayText)
+    const preflight = code.indexOf("TAILSCALE_NOT_AUTOMATIC")
+    const listenerProof = code.lastIndexOf("if (-not (Test-ExpectedDirectOverlayListener))")
+    expect(code).toContain("Get-CimInstance Win32_Service")
+    expect(code).toContain("StartMode -ne 'Auto'")
+    expect(code).toContain("TAILSCALE_NOT_RUNNING")
+    expect(code).toContain("[string]$rule.Enabled -ne 'True'")
+    expect(code).not.toContain("-not $rule.Enabled")
+    expect(preflight).toBeGreaterThan(-1)
+    expect(listenerProof).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(listenerProof)
+  })
+
+  it("keeps standalone relay migration inside the rollback-capturing deployment and proves the exact direct listener", () => {
+    const code = executableOnly(relayText)
+    expect(code).toContain("Test-ExpectedDirectOverlayListener")
+    expect(code).toContain("Get-NetTCPConnection -LocalAddress $overlayAddress -LocalPort $port")
+    expect(code).toContain("[IO.Path]::GetFullPath($tokens[1])")
+    expect(code).toContain("-ieq $proxyPath")
+    expect(code).toContain("RELAY_MIGRATION_REQUIRES_DEPLOYMENT")
+    expect(code).toContain("use deploy-hermes-runtime.ps1")
+    expect(code).toContain("DIRECT_LISTENER_NOT_PROVEN")
+    expect(code).not.toContain("portproxy delete")
+  })
+
+  it("removes an exact current relay before rollback applies Node-only listener ownership checks", () => {
+    const restore = executableOnly(restoreText)
+    expect(restore).toContain("Get-CurrentLegacyRelayState")
+    expect(restore).toContain("Remove-CurrentLegacyRelay")
+    expect(restore).toContain("owned by an unrelated portproxy target")
+    const preflight = restore.lastIndexOf("$currentLegacyRelay = Get-CurrentLegacyRelayState")
+    const stopTasks = restore.indexOf("Stop-ScheduledTask")
+    const removeRelay = restore.lastIndexOf("if ($currentLegacyRelay.wasPresent) { Remove-CurrentLegacyRelay }")
+    const stopHttpsListener = restore.indexOf('Stop-ExpectedListener -ListenerPort $HttpsPort')
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeLessThan(stopTasks)
+    expect(removeRelay).toBeGreaterThan(stopTasks)
+    expect(removeRelay).toBeLessThan(stopHttpsListener)
+  })
+})
+
+describe("the OMEN transport verifier survives its expected off-LAN control", () => {
+  it("captures native curl stderr under Continue and restores the caller preference", () => {
+    const code = executableOnly(transportVerifyText)
+    expect(code).toContain("$previousPreference = $ErrorActionPreference")
+    expect(code).toMatch(/\$ErrorActionPreference\s*=\s*'Continue'[\s\S]*& \$curl @arguments 2>&1[\s\S]*\$curlExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).toContain("$ErrorActionPreference = $previousPreference")
+    expect(code.indexOf("$curlExit = $LASTEXITCODE")).toBeLessThan(code.indexOf("$ErrorActionPreference = $previousPreference"))
   })
 })

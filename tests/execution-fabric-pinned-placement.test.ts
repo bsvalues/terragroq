@@ -106,9 +106,14 @@ function inProcessFixture(mutate?: (values: Record<string, JsonObject>) => void)
 }
 
 function args(value: Fixture, at = "2026-08-10T07:00:00.000Z") {
+  const registry = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/registry.seed.json"), "utf8"))
+  // Keep the new declaration within this historical fixture clock without claiming observation.
+  registry.nodes.find((node: JsonObject) => node.id === "daedalus").evidence.observed_at = "2026-08-10T07:00:00.000Z"
+  const registryPath = path.join(value.root, "registry.json")
+  fs.writeFileSync(registryPath, JSON.stringify(registry))
   return [
     "--snapshot-root", value.snapshotRoot, "--verifier", verifier, "--python", testPython,
-    "--registry", path.join(repositoryRoot, "config/execution-fabric/registry.seed.json"),
+    "--registry", registryPath,
     "--schema", path.join(repositoryRoot, "config/execution-fabric/registry.schema.json"),
     "--policy", path.join(repositoryRoot, "config/execution-fabric/pinned-evidence-policy.json"),
     "--workloads", path.join(repositoryRoot, "config/execution-fabric/placement-workloads.json"),

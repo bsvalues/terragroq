@@ -6,6 +6,7 @@ import {
   type OutcomeLifecycleState,
   type OutcomeQueueRecord,
   type OutcomeTime,
+  type ParentMissionIdentity,
   type SelectOutcomeOptions,
 } from "./engine"
 
@@ -98,6 +99,7 @@ export interface OutcomeQueueOperatorSurface {
     nonTerminal: number
     terminal: number
   }
+  unresolvedParentMissions: readonly ParentMissionIdentity[]
 }
 
 export interface OutcomeQueueOperatorSurfaceInput extends SelectOutcomeOptions {
@@ -160,6 +162,8 @@ const REASON_LABELS: Readonly<Record<OutcomeQueueSurfaceReason, string>> = {
   NO_ELIGIBLE_OUTCOME: "No queued outcome is currently eligible",
   NEXT_OUTCOME_ELIGIBLE: "The next outcome is eligible for activation",
   STALE_LEASE_RECOVERY_ELIGIBLE: "The stale active outcome is eligible for recovery",
+  ORPHANED_ACTIVE_MISSION: "An active parent mission has no executable child outcome",
+  PARENT_MISSION_BINDING_REQUIRED: "Persisted parent mission evidence is missing or ambiguous",
 }
 
 function milliseconds(value: Date | string): number {
@@ -247,6 +251,10 @@ function queueState(
   if (selection.reason === "EMPTY_QUEUE") return { state: "EMPTY", reason: selection.reason }
   if (selection.reason === "ALL_OUTCOMES_TERMINAL") {
     return { state: "ALL_TERMINAL", reason: selection.reason }
+  }
+  if (selection.reason === "ORPHANED_ACTIVE_MISSION"
+    || selection.reason === "PARENT_MISSION_BINDING_REQUIRED") {
+    return { state: "BLOCKED", reason: selection.reason }
   }
   if (hasLiveActive) return { state: "ACTIVE", reason: selection.reason }
   return { state: "BLOCKED", reason: selection.reason }
@@ -353,6 +361,7 @@ export function projectOutcomeQueueOperatorSurface(
       nonTerminal: ordered.length - terminal,
       terminal,
     },
+    unresolvedParentMissions: input.parentMissions?.unresolved ?? [],
   }
 }
 

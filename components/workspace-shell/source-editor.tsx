@@ -46,8 +46,12 @@ function languageFor(path: string) {
   }
 }
 
-export function SourceEditor({ path, value, selection, onChange, onSelection, onSave }: {
+export function SourceEditor({ path, paneLabel, value, selection, onChange, onSelection, onSave }: {
   path: string
+  /** Which pane owns this editor. Both panes can hold the SAME file (split() copies the primary into the
+      secondary), so a path-only name gave assistive technology two identically-named controls and no way
+      to tell which pane was being edited. */
+  paneLabel?: string
   value: string
   selection: EditorSelection | null
   onChange: (content: string) => void
@@ -59,10 +63,18 @@ export function SourceEditor({ path, value, selection, onChange, onSelection, on
     return [
       editorTheme,
       EditorView.lineWrapping,
+      // The element that carries role="textbox" is CodeMirror's content node, not the
+      // outer wrapper. Naming the wrapper alone leaves the textbox unnamed to assistive
+      // technology (axe: aria-input-field-name), so the accessible name is applied to
+      // the content element itself. tabindex keeps the scrollable scroller keyboard-reachable.
+      EditorView.contentAttributes.of({
+        "aria-label": paneLabel ? `${path} (${paneLabel})` : path,
+        tabindex: "0",
+      }),
       ...(language ? [language] : []),
       Prec.highest(keymap.of([{ key: "Mod-s", preventDefault: true, run: () => { onSave(); return true } }])),
     ]
-  }, [path, onSave])
+  }, [path, paneLabel, onSave])
 
   return (
     <CodeMirror

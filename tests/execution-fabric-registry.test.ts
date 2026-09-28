@@ -390,7 +390,7 @@ describe("Execution Fabric registry schema and identity", () => {
     const ids = (canonicalSeed.nodes as JsonObject[]).map((node) => node.id)
     const aegis = nodeById(canonicalSeed, "aegis")
 
-    expect(ids).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure"])
+    expect(ids).toEqual(["omen", "hermes-node", "atlas", "aegis", "azure", "daedalus"])
     expect(ids).not.toContain("t5810-2")
     expect(aegis).toMatchObject({
       hostname: "aegis",
@@ -1505,6 +1505,7 @@ describe("Gate 1 - the used-VRAM seam and the pins that must move with it", () =
     ["seed", "config/execution-fabric/registry.seed.json", "expectedSeedSha256"],
     ["schema", "config/execution-fabric/registry.schema.json", "expectedSchemaSha256"],
     ["identity contract", "config/execution-fabric/node-identity-contract.json", "expectedIdentityContractSha256"],
+    ["model-runtime adoption", "config/execution-fabric/model-runtime-adoption.json", "expectedAdoptionSha256"],
   ])("keeps the %s digest pinned in assemble-registry.mjs current with the file on disk", (_label, filePath, pinName) => {
     const entrypoint = fs.readFileSync(entrypointPath, "utf8")
     const declared = new RegExp(`const ${pinName} = '([0-9a-f]{64})'`).exec(entrypoint)

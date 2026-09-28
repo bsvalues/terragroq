@@ -1,0 +1,222 @@
+# Sovereign Git Authority — local lab is the integration authority
+
+**Status: CONTROLLING (owner decision, 2026-09-11).** This document sets the repository lifecycle
+boundary for the estate: WilliamOS, TerraFusion, and every lab repository.
+
+## The standing rule
+
+> **HERMES lab is the authoritative development, review, integration, and deployment environment.
+> WilliamOS is its owner-facing operating surface. Local Git is authoritative. GitHub is a
+> downstream mirror and optional collaboration surface. No hosted reviewer, CI provider, or GitHub
+> control may be required for TerraFusion to progress from authorized work to running product.**
+
+GitHub's proper position in the architecture:
+
+```text
+                 WILLIAMOS            owner-visible control plane
+                     │
+          intent / outcome / approval
+                     ▼
+                   HERMES            execution + authority plane
+      ┌──────────────┼───────────────┐
+      ▼              ▼               ▼
+   DAEDALUS        ATLAS           AEGIS
+ GPU / AI work   data/storage    CPU workers
+      └──────────────┴───────────────┘
+                     ▼
+             LOCAL GIT AUTHORITY     ← lab bare repo on atlas (the `lab` remote)
+                     │
+          review → seal → merge      ← all executed by lab machinery
+                     ▼
+            deploy/test/observe      ← the door on HERMES, the fabric workers
+                     ▼
+             GitHub MIRROR           ← backup + public collaboration; NOT a gate
+```
+
+If GitHub is down, rate-limited, changes its review API, removes a bot, or the internet disappears,
+**development continues**. A failed mirror sync records:
+
+```text
+PRODUCT STATE: COMPLETE
+MIRROR STATE: OUT OF SYNC
+```
+
+It never turns a completed product change into an incomplete one.
+
+## Why the seal was already 90% of this — and what this document changes
+
+The estate's own CI verifier states the doctrine exactly: *"GitHub verifies WilliamOS delivery; it
+does not mint work authority and rejects client-authored receipts."* The signature is Ed25519 from a
+key the lab holds; the patch is re-measured from git objects; the review verdict is signed by the
+lab's sovereign reviewer. But as long as the merge button sat behind GitHub branch protection, the
+verifier was the de facto gate — a hosted service deciding whether the lab's own signed authority
+takes effect. That dependency is now removed: the integration point is `lab/main`, and the same
+pure verification code runs locally before it advances.
+
+## The lifecycle (canonical order)
+
+1. **Assignment** — work proceeds under an admission chain (outcome → work order → grant) minted by
+   the Environment on HERMES. Steps 1–5 are the **preparation phase**: they run concurrently across
+   lanes and hold NO reservation. The admission chain is minted when the lane is promotion-ready
+   (see *Reservation boundary — the promotion lease*); a lane that is still coding, in review, or
+   remediating review findings does not hold the sovereign slot and does not block other lanes. A
+   candidate branch is built in a lane worktree.
+2. **Local evidence (operative)** — the deterministic suite and the production build are run **on
+   the lab machine** against the exact candidate head. GitHub's check runs, when they happen, are
+   recorded as a corroborating mirror signal, never required.
+3. **Independent review** — the Tier 1 sovereign reviewer (a separated lab agent context, signed
+   with the reviewer key; `lib/governance/sovereign-review.mjs`) returns a verdict bound to the
+   exact head. `EXTERNAL_REVIEW_UNAVAILABLE ≠ REVIEW_NOT_DONE` still holds: the lab reviewer is the
+   completion, hosted reviewers are optional additions.
+4. **Seal** — the Environment issues the delivery seal over the exact head (adoption PREVIEW →
+   AUTHORIZE → ISSUE), unchanged. The seal remains the authority artifact of record.
+   **Seal authoring rule (mandatory):** the recorded `baseSha` MUST be the lab main **tip at the
+   moment the lane is cut** — i.e. the candidate's actual fork point. The lab integration authority
+   hard-refuses a declared base that is not the natural merge-base against current lab main
+   (`INTEGRATION_BASE_NOT_MERGE_BASE`), because a stale or laterally-chosen base lets a path whose
+   content equals the base slip past the revert guard and silently prefer the candidate's lineage
+   over main's newer work. The remedy is always to **re-cut the lane on current lab main and re-seal
+   (with re-review)** — never to weaken the check. Branch from the tip, not from an old PR branch
+   tip or a stale mirror commit.
+5. **Merge = `scripts/execution-fabric/integrate-lab-main.mjs`** — the lab integration authority:
+   re-verifies the seal signature, the receipt, the re-measured sealed patch, and the attestation
+   **using the production verifier modules** (the local authority can never be laxer than the gate
+   it replaces), then squash-integrates the candidate into **`lab/main`** (bare repo on atlas,
+   `ssh://bs@192.168.88.8/srv/git/williamos.git`, fabric key). Only then does it *attempt* the
+   mirror sync — a PR merge via the governed path where available, otherwise a `mirror/<sha>`
+   branch — and records `PRODUCT STATE` / `MIRROR STATE` honestly in
+   `~/.williamos/integrations.json`. Mirror failure never reopens the product transition.
+   Tool guarantees as of the follow-up hardening pass: the local full-suite record is **parsed**
+   (vitest JSON), success-checked (tests must have EXECUTED and passed — `failed===0` on an
+   all-skipped record is not success), counter-consistent, suite-identified (each named suite must
+   resolve to a real file CONTAINED in the integration worktree — existence alone is not binding)
+   and **head-bound** to the
+   candidate (`LOCAL_TESTS_*` typed refusals; rehearsal-only mode stays advisory), and the recorded
+   evidence carries the record's own path and head so the digest is locatable; the worktree must
+   independently sit at the candidate (`LOCAL_TESTS_WORKTREE_HEAD_MISMATCH`) and the record must
+   cover every test file the candidate changed (`LOCAL_TESTS_CHANGED_TESTS_UNCOVERED`), so a stale
+   report re-stamped to a new head cannot pass; the governed mirror
+   merge is **bound to the sealed head** — strict decimal PR, `origin` bound by full URL form
+   (github.com host AND `bsvalues/terragroq`, not a path suffix),
+   and `--match-head-commit` so a head that moves between read and merge is refused — and `IN_SYNC`
+   is recorded only after the mirror tree is fetched and proven tree-equal to the lab main tree this
+   run produced (`MIRROR_PR_INVALID` / `MIRROR_REMOTE_MISMATCH` / `MIRROR_HEAD_MISMATCH` /
+   `MIRROR_TREE_MISMATCH` / `MIRROR_VERIFY_FAILED_AFTER_MERGE`, the last distinguishing a merge that
+   happened from a merge that failed); a candidate sharing no ancestor with lab main refuses typed
+   (`INTEGRATION_BASE_UNRELATED`), while a merge-base probe that cannot answer refuses
+   `INTEGRATION_BASE_PROBE_FAILED` instead of claiming unrelated history.
+   Declared trust boundary (reviewer threads on #1234): the local record is anti-mistake evidence,
+   not anti-forgery — its producer is the lab operator, who already holds the seal key and the
+   state file, so a forged record grants nothing the operator lacks. What the tool guarantees is
+   that an honest run cannot accidentally integrate on missing, stale, zero-executed, foreign, or
+   head-mismatched evidence; the head-bound seal, independent review, and post-merge CI remain the
+   anti-forgery layer because they are signature-checked.
+   The sealed-content guard carries ONE declared relaxation: when main deletes a sealed path whose
+   candidate blob still exists **somewhere** in the merged tree (the rename/modify resolution),
+   integration proceeds; the allowance is content-equality based, deliberately not rename-aware, is
+   withheld for the empty blob, and is pinned in both directions by tests.
+6. **Deploy / observe / FINALIZE** — the merged lab main deploys to the HERMES door, runtime
+   verification as usual, then the seal chain is FINALIZE'd (slot release).
+7. **Reconciliation (mirror → lab)** — for anything that landed on GitHub main outside this
+   lifecycle, the path is: fetch `origin/main`, integrate onto `lab/main` **sealed or owner-
+   approved**, then re-push the mirror. GitHub main is never fast-forwarded into lab main silently.
+
+## Reservation boundary — the promotion lease (owner directive, CONTROLLING)
+
+**The reservation is a mutex on shared authoritative mutation, never on a lane's life.** The risk
+being fenced is concurrent mutation of integration, promotion, deployment, and rollback state:
+**one authoritative mutation transaction at a time.** That requirement is unchanged and is not
+weakened here.
+
+What changes is its extent. Acquire the sovereign slot/lease **only when a lane is
+promotion-ready** — head frozen, review CLEAN at that exact head, evidence and attestation inputs
+complete — and hold it through the shortest critical section only:
+
+    head re-verification -> integration/promotion -> deploy + rollback capture
+      -> authoritative post-state verification -> release
+
+Release immediately afterward. **If review discovers a defect and the head moves, give up the
+lease**: remediate and re-review outside the critical section, then reacquire when promotion-ready
+again.
+
+Consequences, each of which was a live failure mode:
+
+- **Development, testing, review, review remediation, CI, and attestation preparation happen
+  outside the reservation.** N lanes can be promotion-ready in parallel; the mutex is contended for
+  minutes rather than for the length of a lane.
+- **Admission belongs to the promotion window, not to lane start.** The admission / outcome /
+  work-order chain exists to bind the seal to an exact head. Minting it at lane start is what made a
+  single lane hold the estate's only slot through coding, review, fixes, CI, sealing, merge, and
+  finalize. Late admission is also *safer*: any commit pushed after AUTHORIZE invalidates the
+  exact-head authorization, so a shorter admission→ISSUE gap means fewer stale-digest re-cycles.
+- **Do not widen a lane whose head is under review.** An unrelated change rides in its own lane;
+  otherwise the head move invalidates the review and the seal chain.
+
+Two mechanisms are distinct here and only one was over-broad:
+
+- the execution-engine **lane lease** (`scripts/multi-agent-operator/lane-lease-checkpoint.mjs`:
+  fencing token, generation, heartbeat, `ACTIVE`/`RELEASED`/`EXPIRED`, explicit stale-lease
+  recovery) is scoped to operations and stays as-is;
+- the **authority reservation** (single active outcome slot, historically taken at admission and
+  released only at FINALIZE) is the boundary this section narrows.
+
+## What is NOT changed
+
+- No hosted service is forbidden. CodeRabbit/Sourcery/GitHub Actions may contribute additional
+  information; they own no availability and no transition.
+- The seal is not abolished. It is what makes the local merge auditable by anything that reads the
+  history later — including the mirror.
+- `enforce_admins=false` on GitHub main is retained deliberately: it is the compatibility surface
+  for mirror reconciliation, not the authority path.
+- Safety doctrine is unchanged: no protected-data access, no owner bypass, no weakening of any
+  gate to make a transition pass. This document removes a *dependency*, not a *control*: every
+  control the mirror-side gate exercised (signature, patch digest, exact head, review binding) is
+  now exercised locally, by the same code, with the same keys.
+
+## Terminology
+
+- **lab main** — `lab/main` on atlas: the authoritative branch.
+- **mirror main** — `origin/main` on GitHub: a replica and collaboration surface.
+- **integration** — advancing lab main under a verified seal. The word "merge" in older documents
+  refers to this act wherever it previously assumed a GitHub PR button.
+
+
+## Deployment artifact authentication (#1223)
+
+A revision claim is not an artifact proof. `lib/generated/build-provenance.json` self-declares the
+integrated sha, but it lives inside the writable runtime tree: anything able to robocopy into the
+runtime root could carry a known-good sha alongside unreviewed bytes. The door gate therefore
+requires a second, independent proof of the exact bytes being admitted, rooted outside the tree it
+audits.
+
+**What is anchored, and where**
+
+| Piece | Lives | Protection |
+| --- | --- | --- |
+| Signed deployment manifest (tree digest + sha) | `lib/generated/deployment-manifest.json`, inside the runtime | signature only; the file is attacker-writable by construction, and that is fine |
+| External signed receipt (same tree digest + sha) | `C:\ProgramData\WilliamOS\deployment-attestation.json` | ACL `Users:R`; survives a runtime-writer deleting the manifest |
+| Public key ring | `C:\ProgramData\WilliamOS\scripts\hermes-bridge\deployment-attestation-keys.json` | ACL `Users:R`, derived from the private key at deploy time |
+| Gate + attester code | `C:\ProgramData\WilliamOS\scripts\hermes-bridge\` | ACL `Users:(OI)(CI)RX`; installed by an elevated deploy |
+| Attestation private key | `C:\ProgramData\WilliamOS\trust\` | ACL: SYSTEM/Administrators only — unreadable by the runtime identity |
+
+The digest covers the shipped subtrees (`server.js`, `package.json`, `.next`, `lib`, `scripts`,
+`config`, `components`, `public`); volatile `node_modules`, `.next/cache`, `.next/diagnostics` are
+excluded (measured: zero files in the hashed set change across a live door's operation).
+
+**Boot decision, in order** — trusted placement (the verifier must be the one installed in the gate
+directory: `GATE_NOT_IN_TRUSTED_DIR`) → tamper resistance (a gate, ring, or receipt the runtime
+identity can rewrite refuses to act as an anchor: `GATE_TAMPERABLE`, `TRUST_RING_TAMPERABLE`,
+`SEAL_RECEIPT_TAMPERABLE`) → ledger authorization (the sha must be the `labMainAfter` of a COMPLETE
+integrated revision) → artifact authenticity (signed manifest **or** external signed receipt, whose
+tree digest must equal the digest recomputed from the bytes about to be served). Every refusal is
+typed on stderr and recorded as `BOOT_REFUSED DOOR_PROVENANCE_REFUSED` in the boot log. No network,
+no fallback: an unstattested or unauthenticated revision cannot start the door.
+
+**Why the receipt is signed, not MAC'd.** An HMAC receipt would need its secret readable at boot —
+i.e. readable by the same identity the gate exists to distrust. A signed receipt needs only public
+material at the door, so the private key can live where that identity cannot reach it.
+
+**Accepted residual.** A writer that can read the protected trust root (i.e. one running elevated)
+can mint attestations for arbitrary bytes, exactly as it could already write the integration ledger
+directly. The gate defends the invariant against unreviewed content reaching the door through the
+filesystem/restart path by a non-privileged writer; it is not an intra-administrator boundary.

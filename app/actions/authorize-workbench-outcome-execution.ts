@@ -32,6 +32,7 @@ import {
   type AuthorizeWorkbenchOutcomeExecutionResult,
   type WorkbenchExecutionUnavailableReason,
   type WorkbenchOutcomeExecutionSnapshot,
+  EXECUTION_PROVISIONED_REPOSITORIES,
 } from "@/lib/workbench/outcome-execution-authorization"
 
 const OPERATION = "workbench_execution.authorize"
@@ -60,7 +61,8 @@ function unavailable(
 function statusFor(reason: WorkbenchExecutionUnavailableReason) {
   if (reason === "IDEMPOTENCY_CONFLICT") return "CONFLICT" as const
   if (reason === "PROJECT_THREAD_OUTCOME_UNAVAILABLE"
-    || reason === "REPOSITORY_UNAVAILABLE" || reason === "REPOSITORY_AMBIGUOUS") {
+    || reason === "REPOSITORY_UNAVAILABLE" || reason === "REPOSITORY_AMBIGUOUS"
+    || reason === "REPOSITORY_EXECUTION_TARGET_UNAVAILABLE") {
     return "UNAVAILABLE" as const
   }
   return "INELIGIBLE" as const
@@ -225,6 +227,9 @@ export async function authorizeWorkbenchOutcomeExecution(
             acceptedContractIds: snapshot.goal.acceptedContractIds,
           })
         : null
+      const replayRepository = snapshot.resources.find((resource) => (
+        resource.type === "repo" && resource.relationship === "primary-repo"
+      ))?.canonicalIdentity
       const storedWorkContract = binding.workContract as Record<string, unknown> | null
       const acceptanceVerification = verifyIssue911AcceptanceIntakeProof(snapshot)
       const delivery = workContract && "delivery" in workContract ? workContract.delivery : null
@@ -257,8 +262,10 @@ export async function authorizeWorkbenchOutcomeExecution(
         && threadRow.projectId === input.projectId && snapshot.roots.length === 1
         && snapshot.roots[0].threadId === input.threadId
         && snapshot.roots[0].sourceType === "outcome" && snapshot.roots[0].sourceId === input.outcomeKey
+        // Exactly one primary repo is the contract. WHICH repository it is comes from the Project
+        // graph and is settled by the authorization, not asserted here -- pinning the literal
+        // `bsvalues/terragroq` here is what made every other project permanently ineligible.
         && snapshot.resources.filter((resource) => resource.type === "repo" && resource.relationship === "primary-repo").length === 1
-        && snapshot.resources.some((resource) => resource.type === "repo" && resource.relationship === "primary-repo" && resource.canonicalIdentity === "bsvalues/terragroq")
         && outcome !== null && outcome !== undefined && outcome.outcomeKey === input.outcomeKey
         && goalRow !== null && goalRow !== undefined
         && goalRow.userId === userId && outcome.goalId === goalRow.id
@@ -280,6 +287,16 @@ export async function authorizeWorkbenchOutcomeExecution(
           : binding.acceptanceIntakeProof === undefined)
         && approval.evidence.includes(`work-contract:${workContract.id}`)
         && approval.evidence.includes(`work-contract-digest:${workContract.digest}`)
+        // A replay must not survive its Project being repointed at another repository. The replay
+        // path derives its work contract WITHOUT a repository, so the contract digest cannot catch
+        // that -- the hard-coded literal had been enforcing it by accident. Two checks replace it,
+        // and neither invalidates authorizations recorded before #1015: the repository must still
+        // be one execution is provisioned for, and where a decision recorded one it must match.
+        && replayRepository !== undefined
+        && EXECUTION_PROVISIONED_REPOSITORIES.includes(replayRepository)
+        && approval.evidence.every((entry: string) => (
+          !entry.startsWith("repo:") || entry === `repo:${replayRepository}`
+        ))
         && (!acceptanceVerification.selected || (
           approval.evidence.includes(`acceptance-intake-receipt:${acceptanceVerification.proof?.receiptId}`)
           && approval.evidence.includes(`acceptance-intake-request:${acceptanceVerification.proof?.requestHash}`)
@@ -331,7 +348,7 @@ export async function authorizeWorkbenchOutcomeExecution(
       consequences: "No work order, lease, process, workspace, command, or dispatch is created.",
       status: "accepted", authority: "binding", owner: userId, scope: input.outcomeKey,
       evidence: [
-        `project:${input.projectId}`, `thread:${input.threadId}`, "repo:bsvalues/terragroq",
+        `project:${input.projectId}`, `thread:${input.threadId}`, `repo:${assessment.repository}`,
         `work-contract:${assessment.workContract.id}`,
         `work-contract-digest:${assessment.workContract.digest}`,
         `work-contract-json:${JSON.stringify(assessment.workContract)}`,

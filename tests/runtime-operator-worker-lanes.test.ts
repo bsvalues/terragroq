@@ -7,11 +7,16 @@ const FUTURE = "2026-08-19T20:33:00-07:00"
 const PAST = "2026-08-18T00:00:00Z"
 
 describe("the roster tells the truth", () => {
-  it("has three declared lanes, one honestly not yet capable of implementation", () => {
+  it("declares the implementation lanes plus the read-only daedalus analysis lane, each truthful", () => {
     const roster = laneRoster()
-    expect(roster.map((lane) => lane.id)).toEqual(["codex", "claude", "hermes-local"])
+    expect(roster.map((lane) => lane.id)).toEqual(["codex", "claude", "hermes-local", "daedalus-model"])
     const implementers = roster.filter((lane) => lane.capabilities.includes(IMPLEMENTATION))
     expect(implementers.map((lane) => lane.id)).toEqual(["codex", "claude"])
+    // The read-only model lane is declared but unproven for analysis until a measurement says so,
+    // and it can never be an implementer regardless of what it is later measured to analyze.
+    const daedalus = roster.find((lane) => lane.id === "daedalus-model")
+    expect(daedalus?.readOnly).toBe(true)
+    expect(daedalus?.capabilities).toEqual([])
   })
 
   it("keeps saying so after WO-0030 wired the local lane end to end", () => {

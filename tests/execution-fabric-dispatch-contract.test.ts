@@ -318,6 +318,8 @@ describe("Execution Fabric bounded dispatch-contract proof", () => {
   it("consumes the canonical placement evaluator artifact without a hand-shaped adapter", () => {
     const root = process.cwd()
     const registry = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/registry.seed.json"), "utf8"))
+    // Keep the new declaration within this historical fixture clock without claiming observation.
+    registry.nodes.find((node: any) => node.id === "daedalus").evidence.observed_at = "2026-08-10T03:38:05.166Z"
     const schema = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/registry.schema.json"), "utf8"))
     const catalog = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/placement-workloads.json"), "utf8"))
     const observedTimes: Record<string, string> = {

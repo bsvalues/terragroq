@@ -523,3 +523,39 @@ describe("projectWorkbenchThreads", () => {
     expect(thread.runCountPartial).toBe(true)
   })
 })
+
+describe("IF-12 wired: owner-facing WORK_STATE summary never leaks Fabric vocabulary", () => {
+  it("a loop_run summary naming a model/GPU/runtime is neutralized to a human message", () => {
+    const input = baseInput()
+    input.bindings.push({
+      threadId: "thread-alpha", userId: "owner-1", projectId: 7,
+      sourceKind: "loop_run", sourceId: "run-1", role: "member",
+    })
+    input.sources.push({
+      kind: "loop_run", id: "run-1", userId: "owner-1",
+      occurredAt: at("2026-09-10T18:00:00.000Z"),
+      data: { summary: "Placed on daedalus via Qwen3-8B on the GPU runtime.", status: "completed" },
+    })
+    const thread = projectWorkbenchThreads(input)[0]
+    const workState = thread.items.find((item) => item.kind === "WORK_STATE")
+    expect(workState).toBeDefined()
+    // the owner sees a neutral human message, never the Fabric vocabulary
+    expect(workState!.summary).not.toMatch(/qwen|gpu|runtime|daedalus|model|provider/i)
+  })
+
+  it("a clean human loop_run summary passes through unchanged", () => {
+    const input = baseInput()
+    input.bindings.push({
+      threadId: "thread-alpha", userId: "owner-1", projectId: 7,
+      sourceKind: "loop_run", sourceId: "run-2", role: "member",
+    })
+    input.sources.push({
+      kind: "loop_run", id: "run-2", userId: "owner-1",
+      occurredAt: at("2026-09-10T18:00:00.000Z"),
+      data: { summary: "The 39-county digest is ready.", status: "completed" },
+    })
+    const thread = projectWorkbenchThreads(input)[0]
+    const workState = thread.items.find((item) => item.kind === "WORK_STATE")
+    expect(workState!.summary).toBe("The 39-county digest is ready.")
+  })
+})

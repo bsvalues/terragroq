@@ -36,7 +36,9 @@ function dependencies(
     projectId: number
     projectKey: string
     projectName: string
+    repositoryResourceId?: number
     repositoryIdentity: string
+    repositoryLabel?: string
     repositoryKey?: string | null
     repositoryRelationship?: string
   }>[] = [{
@@ -508,7 +510,11 @@ describe("WilliamOS workspace Project binding", () => {
     projectId: 1,
     projectKey: "williamos",
     projectName: "WilliamOS",
+    repositoryResourceId: 1,
     repositoryIdentity: "bsvalues/terragroq",
+    repositoryKey: "williamos",
+    repositoryRelationship: "primary-repo",
+    repositoryLabel: "WilliamOS",
   }
 
   it("binds only the declared WilliamOS checkout to the canonical TerraGroq repository", async () => {
@@ -524,7 +530,28 @@ describe("WilliamOS workspace Project binding", () => {
         projectName: "WilliamOS",
         repositoryIdentity: "bsvalues/terragroq",
         workspaceAppUrl: null,
-        project: expect.objectContaining({ name: "WilliamOS", identity: expect.stringMatching(/repos[\\/]terragroq$/) }),
+        project: expect.objectContaining({
+          name: "WilliamOS",
+          identity: expect.stringMatching(/repos[\\/]terragroq$/),
+          repositories: [{
+            repositoryResourceId: 1,
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            label: "WilliamOS",
+            role: "integrated-runtime",
+            suite: null,
+            previewSource: true,
+            defaultRepository: true,
+            mount: {
+              key: "williamos:williamos:configured",
+              configured: true,
+              verified: true,
+              branch: null,
+              revision: "1".repeat(40),
+              refusal: null,
+            },
+          }],
+        }),
       }),
     })
   })
@@ -541,7 +568,15 @@ describe("WilliamOS workspace Project binding", () => {
       ok: true,
       binding: expect.objectContaining({
         configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terragroq$/),
-        project: { identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/), name: "WilliamOS" },
+        project: expect.objectContaining({
+          identity: expect.stringMatching(/repos[\\/]original[\\/]terragroq$/),
+          name: "WilliamOS",
+          repositories: [expect.objectContaining({
+            key: "williamos",
+            identity: "bsvalues/terragroq",
+            mount: expect.objectContaining({ verified: true, revision: "1".repeat(40) }),
+          })],
+        }),
       }),
     })
   })

@@ -7,12 +7,20 @@ Never modifies source notes.
 
 import json
 import os
+import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
 VAULT = Path(os.environ.get("WILLIAMOS_VAULT", "WilliamOS"))
 TZ_NAME = os.environ.get("WILLIAMOS_TZ", "America/Los_Angeles")
+
+# The CLI must be probed from the repository root with the *running* interpreter.
+# Resolving it relative to the process CWD is what made this probe return a
+# confident zero whenever the caller happened to run from another directory.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CLI_PATH = REPO_ROOT / "scripts" / "william.py"
 
 CMD_DIR = VAULT / "104_CommandRegistry"
 REPORTS_DIR = CMD_DIR / "reports"
@@ -214,22 +222,32 @@ def all_commands():
 
 
 def count_cli_commands():
+    """Count argparse subcommands from the CLI's own ``--help`` output.
+
+    Returns ``None`` when the count cannot be determined. It must never return
+    ``0`` on failure: an unknown count and a genuinely empty CLI are different
+    facts, and collapsing them made a broken probe report a healthy 92-command
+    registry as a parity failure while every gate stayed green.
+    """
     try:
         result = subprocess.run(
-            ["python", "scripts/william.py", "--help"],
-            capture_output=True, text=True, timeout=15
+            [sys.executable, str(CLI_PATH), "--help"],
+            capture_output=True, text=True, timeout=30, cwd=str(REPO_ROOT),
         )
-        lines = result.stdout.strip().split("\n")
-        cmd_count = 0
-        in_cmds = False
-        for line in lines:
-            if "{" in line and "}" in line and "," in line:
-                parts = line.split("{")[1].split("}")[0]
-                cmd_count = len([c.strip() for c in parts.split(",") if c.strip()])
-                break
-        return cmd_count
     except Exception:
-        return 0
+        return None
+
+    if result.returncode != 0 or not result.stdout:
+        return None
+
+    # argparse prints the subcommand list as ``{a,b,c}`` and wraps it across
+    # lines, so the block is matched with DOTALL and flattened before splitting.
+    match = re.search(r"\{([^{}]*)\}", result.stdout, re.S)
+    if not match:
+        return None
+
+    parts = [p.strip() for p in match.group(1).replace("\n", " ").split(",") if p.strip()]
+    return len(parts) or None
 
 
 def command_status():
@@ -245,6 +263,8 @@ def command_status():
         "docs_exist": all((CMD_DIR / d).exists() for d in ["README.md", "COMMAND_REGISTRY_POLICY.md"]),
         "registry_count": len(registry_cmds),
         "cli_count": cli_count,
+        "cli_count_status": "OK" if cli_count is not None else "UNKNOWN",
+        "parity": cli_count is not None and len(registry_cmds) == cli_count,
         "groups": len(COMMAND_GROUPS),
         "safe_count": sum(1 for c in registry_cmds if c.get("safe", True)),
         "write_count": sum(1 for c in registry_cmds if c.get("writes", False)),

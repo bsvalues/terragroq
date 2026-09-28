@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { AppServerTimeoutError, AppServerTurnEndedError, AppServerWallError, sanitizeAppServerText } from "./app-server-client.mjs"
 import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, TURN_OUTPUT_SENTINEL_CLOSE, TURN_OUTPUT_SENTINEL_OPEN, validateAgainstTurnSchema } from "./hermes-kernel-output.mjs"
+import { placementDecisionFromFabric, resolveAgentModelBinding, assertAgentExecutesPlacedModel } from "../execution-fabric/hermes-agent-worker.mjs"
 import { HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 
 export const HERMES_KERNEL_POLICY_RELATIVE = "config/execution-fabric/hermes-free-dev-agent-v2.policy.json"
@@ -60,11 +61,25 @@ export function buildKernelPromptEpilogue(runId = null) {
 export const KERNEL_STATE_DIR = "kernel-state"
 export const KERNEL_SESSION_ID_PATTERN = /^Session:[ \t]+([A-Za-z0-9_-]{4,64})[ \t]*$/m
 
-export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null }) {
-  return {
+/**
+ * @typedef {{ modelBinding: string, modelAlias: string, providerId: string, runtime: string, executionClass: string, compute: string, runtimeId: string }} AgentModelBinding
+ */
+
+/**
+ * @param {{ policy: any, prompt: string, workspacePath: string, runId: string, statePath: string, kernelSessionId?: string | null, placementBinding?: AgentModelBinding | null }} input
+ */
+export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null, placementBinding = null }) {
+  // Tier 2: when a Fabric placement decision selected the model for this turn, the packet carries
+  // the placed binding (serving alias) and its provenance. The immutable identity never travels as
+  // a caller-supplied packet field — the invoker re-derives it from trusted placement state.
+  if (placementBinding !== null) {
+    if (typeof placementBinding.modelAlias !== "string" || placementBinding.modelAlias.length === 0) throw new TypeError("PLACEMENT_BINDING_ALIAS_REQUIRED")
+    if (typeof placementBinding.modelBinding !== "string" || placementBinding.modelBinding.length === 0) throw new TypeError("PLACEMENT_BINDING_MODEL_REQUIRED")
+  }
+  const base = {
     schemaVersion: 3,
     workOrderId: policy.workOrderId,
-    model: policy.model.id,
+    model: placementBinding !== null ? placementBinding.modelAlias : policy.model.id,
     prompt: `${prompt}\n\n${buildKernelPromptEpilogue(runId)}`,
     maximumTurns: policy.execution.maximumTurns,
     toolsets: [...policy.execution.allowedToolsets],
@@ -74,6 +89,14 @@ export function buildKernelPacket({ policy, prompt, workspacePath, runId, stateP
     statePath,
     kernelSessionId,
   }
+  if (placementBinding !== null) {
+    base.placement = {
+      runtimeId: placementBinding.runtimeId,
+      computeId: placementBinding.compute,
+      executionClass: placementBinding.executionClass,
+    }
+  }
+  return base
 }
 
 // Wall tokens are only believed at the start of a line: the model's own stdout is
@@ -94,10 +117,23 @@ export function createHermesKernelClient({
   timeoutMs = 45 * 60 * 1000,
   now = () => new Date(),
   powershellCommand = process.platform === "win32" ? "powershell" : "pwsh",
+  invokerKind = "powershell",
+  pythonCommand,
   randomUUID = () => crypto.randomUUID(),
+  // Tier 2: trusted host wiring that returns the current Fabric placement record (the same record
+  // refresh-model-fabric writes to evidence). When present, every turn executes the model HERMES
+  // placed — never the policy's default. When absent (probe/test lanes), the default applies.
+  placementProvider = null,
 } = {}) {
   requiredString(workspacePath, "workspacePath"); requiredString(runtimeRoot, "runtimeRoot")
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
+  // These are trusted host configuration, never fields from the model packet.
+  // Python is an explicit alternative for a separately qualified Linux invoker.
+  if (!["powershell", "python"].includes(invokerKind)) throw new TypeError("invokerKind must be powershell or python")
+  if (invokerKind === "python") {
+    if (!path.isAbsolute(requiredString(pythonCommand, "pythonCommand"))) throw new TypeError("pythonCommand must be an absolute executable path")
+    if (!path.isAbsolute(requiredString(invokerPath, "invokerPath"))) throw new TypeError("invokerPath must be absolute for Python")
+  }
   const threadsRoot = kernelThreadsRoot(runtimeRoot)
   const worktreesRoot = path.join(path.resolve(runtimeRoot), "worktrees")
   const quarantinePath = kernelQuarantinePath(runtimeRoot)
@@ -163,6 +199,15 @@ export function createHermesKernelClient({
   }
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    // For a Python invoker the interpreter is part of the trusted invocation contract too: an
+    // absolute-but-missing or directory pythonCommand otherwise passes connect() and only fails
+    // inside runTurn (recorded as an interruption after session state exists). Validate it here,
+    // on the resident host in remote mode, as a regular executable file before connected=true.
+    if (invokerKind === "python") {
+      const stat = fs.statSync(pythonCommand, { throwIfNoEntry: false })
+      if (!stat?.isFile() || stat.isSymbolicLink()) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+      if (process.platform !== "win32" && (stat.mode & 0o111) === 0) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+    }
   }
   /**
    * Spec §4 item 6: the kernel's own deadline must fit inside the budget the host runner enforces.
@@ -387,7 +432,21 @@ export function createHermesKernelClient({
       const statePath = path.join(threadsRoot, threadId, KERNEL_STATE_DIR)
       fs.mkdirSync(statePath, { recursive: true })
       const kernelSessionId = typeof session.kernelSessionId === "string" && session.kernelSessionId.length > 0 ? session.kernelSessionId : null
-      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId, statePath, kernelSessionId })
+      // Tier 2: resolve the Fabric-selected model binding for this turn. The placement record is
+      // trusted host configuration (the fabric evidence the orchestrator refreshed), never a model
+      // packet field. If placement exists but no qualified binding matches, this throws — the
+      // worker refuses to improvise a model instead of running what HERMES placed.
+      let placementBinding = null
+      if (placementProvider !== null) {
+        const record = await placementProvider()
+        if (record?.recommendation) {
+          const decision = placementDecisionFromFabric({ recommendation: record.recommendation, qualifiedBindings: policy.modelRoster ?? [] })
+          placementBinding = resolveAgentModelBinding(decision, policy)
+          const check = assertAgentExecutesPlacedModel(placementBinding, decision)
+          if (!check.ok) throw wall("RESIDENT_MODEL_PLACEMENT_MISMATCH", "runTurn")
+        }
+      }
+      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId, statePath, kernelSessionId, placementBinding })
       if (packet.prompt.length > (policy.execution?.promptMaxChars ?? 16000)) throw wall("RESIDENT_MODEL_PROMPT_TOO_LONG", "runTurn")
       const turnIndex = session.turns.length + 1
       const turnDir = path.join(threadsRoot, threadId, "turns", String(turnIndex))
@@ -401,11 +460,15 @@ export function createHermesKernelClient({
       const ignoredBefore = await ignoredPaths(workspaceReal, turnTimeoutMs)
       let result
       try {
+        const invocation = invokerKind === "python"
+          ? { command: pythonCommand, args: ["-I", invokerPath,
+              "--packet-path", packetPath, "--policy-path", policyPath, "--workspace-path", workspaceReal, "--run-id", runId,
+              "--quarantine-path", quarantinePath, "--state-path", statePath] }
+          : { command: powershellCommand, args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+              "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
+              "-QuarantinePath", quarantinePath, "-StatePath", statePath] }
         result = await commandRunner({
-          command: powershellCommand,
-          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-            "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
-            "-QuarantinePath", quarantinePath, "-StatePath", statePath],
+          ...invocation,
           cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
         })
       } catch (error) {

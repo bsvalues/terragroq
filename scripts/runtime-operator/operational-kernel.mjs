@@ -83,6 +83,13 @@ function validateAuthorityRecord(record) {
   if (record.baseBranch !== "main" || record.mergeMode !== "AUTO_ELIGIBLE") throw new Error("AUTHORITY_MERGE_WALL")
   if (!Array.isArray(record.allowedPaths) || record.allowedPaths.length === 0) throw new Error("AUTHORITY_PATH_WALL")
   if (record.allowedPaths.some((candidate) => typeof candidate !== "string" || candidate.startsWith("/") || candidate.includes("\\") || candidate.split("/").includes("..") || FORBIDDEN_PATH.test(candidate))) throw new Error("AUTHORITY_PATH_WALL")
+  // Read-only analysis orders run no build/test gate -- there is no patch to validate. They require
+  // only that a context reservation exists (allowedPaths, checked above); the validators field may be
+  // empty or name the read-only gate. Implementation orders keep the original strict requirement.
+  if (record.capability === "analysis") {
+    if (!Array.isArray(record.requiredValidation) || record.requiredValidation.some((gate) => !["read-only"].includes(gate))) throw new Error("AUTHORITY_VALIDATION_WALL")
+    return
+  }
   if (!Array.isArray(record.requiredValidation) || record.requiredValidation.length === 0 || record.requiredValidation.some((gate) => !ALLOWED_VALIDATION.has(gate))) throw new Error("AUTHORITY_VALIDATION_WALL")
 }
 
@@ -324,6 +331,27 @@ async function runCycle({ root, registry, adapters }) {
     await adapters.lease(entry.issueNumber, entry)
     checkpoint = { ...checkpoint, queueLeased: true }
     writeCheckpoint(root, checkpoint)
+    // Read-only analysis orders take a different, deliberately narrower road: no worktree to edit,
+    // no patch, no PR. The model reads declared context and returns findings; the order completes
+    // with evidence. Implementation orders fall through to the patch pipeline untouched.
+    if (authority.capability === "analysis") {
+      if (typeof adapters.dispatchAnalysis !== "function") throw new Error("ANALYSIS_LANE_UNAVAILABLE")
+      const result = await adapters.dispatchAnalysis({
+        workOrderId: authority.workOrderId,
+        task: authority.task,
+        contextPaths: authority.contextPaths ?? [],
+      })
+      if (result?.result !== "ANALYSIS_READY") throw new Error("ANALYSIS_DISPATCH_WALL")
+      checkpoint = transition(root, checkpoint, "ANALYZED", { analysisEvidence: result.evidencePath ?? null, failureCode: null })
+      await adapters.complete(checkpoint.issueNumber, {
+        workOrderRowId: checkpoint.workOrderRowId,
+        userId: checkpoint.userId,
+        workOrderId: checkpoint.workOrderId,
+        projectionCompletionOwned: checkpoint.projectionCompletionOwned,
+      })
+      checkpoint = transition(root, checkpoint, "COMPLETED")
+      return completionResult({ checkpoint, registry: selectionRegistry, adapters })
+    }
     const workspace = await adapters.prepareWorkspace({ workOrderId: authority.workOrderId, baseSha })
     checkpoint = { ...checkpoint, workspace }
     writeCheckpoint(root, checkpoint)

@@ -20,7 +20,7 @@ describe("the two-installation WilliamOS topology", () => {
   })
 
   it("binds both native surfaces to the canonical HERMES origin", () => {
-    expect(cockpitConfig.hermesOrigin).toBe("https://192.168.88.9:3443")
+    expect(cockpitConfig.hermesOrigin).toBe("https://williamos.lan:3443")
     expect(productContract).toContain(cockpitConfig.hermesOrigin)
     expect(cockpitReadme).toContain(cockpitConfig.hermesOrigin)
   })

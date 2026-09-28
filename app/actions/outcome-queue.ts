@@ -21,6 +21,7 @@ import {
   type OutcomeQueueOperatorSurface,
 } from "@/lib/outcome-queue/operator-surface"
 import type { OutcomeQueueRecord } from "@/lib/outcome-queue/engine"
+import { readExternalParentMissionState } from "@/lib/environment/external-parent-mission-admission"
 import {
   buildOutcomeQueueRuntimeMutation,
   classifyOutcomeQueueMutationError,
@@ -141,7 +142,7 @@ function grantMatches(
 export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurface> {
   const userId = await getUserId()
   const now = new Date()
-  const [rows, decisions, grants] = await Promise.all([
+  const [rows, decisions, grants, parentMissions] = await Promise.all([
     db.select().from(outcomeQueueItem).where(eq(outcomeQueueItem.userId, userId)),
     db
       .select()
@@ -158,6 +159,7 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurfac
         eq(authorityGrant.userId, userId),
         eq(authorityGrant.status, "active"),
       )),
+    readExternalParentMissionState(userId),
   ])
   const queue = rows.map(asRecord)
   const byDecisionId = new Map(decisions.map((entry) => [entry.id, entry]))
@@ -202,6 +204,7 @@ export async function getOutcomeQueueSurface(): Promise<OutcomeQueueActionSurfac
     validAuthorityGrantRefs,
     availableApprovalDecisionIdsByOutcomeKey,
     availableAuthorityGrantRefsByOutcomeKey,
+    parentMissions,
   })
   const retainedRuntimeBindings = new Map(rows.map((row) => [
     row.outcomeKey,

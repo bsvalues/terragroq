@@ -109,7 +109,8 @@ function exactFindingPayloadDigest(metadata) {
 const RUNTIME_CHECKPOINT_PAYLOAD_KEYS = Object.freeze([
   "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
   "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
-  "mergeSha", "terminalCleanupRecoveryProofDigest", "executionBinding", "acquisitionKey",
+  "mergeSha", "terminalCleanupRecoveryProofDigest", "reviewRecoveryProofDigest",
+  "executionBinding", "acquisitionKey",
   "acquisitionFencingToken", "executionEpochDigest", "findingsSetDigest",
   "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
   "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",

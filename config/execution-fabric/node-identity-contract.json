@@ -126,6 +126,27 @@
           "implicit-protected-data-egress"
         ]
       }
+    },
+    "daedalus": {
+      "hostnames": [
+        "DAEDALUS",
+        "daedalus-ThinkStation-P620"
+      ],
+      "authority": {
+        "allow": [
+          "local-llm-inference",
+          "gpu-batch",
+          "bounded-execution",
+          "repository-worker"
+        ],
+        "deny": [
+          "authoritative-durable-state",
+          "county-production-write",
+          "pacs-production-write",
+          "direct-model-lan-exposure",
+          "autonomous-work-selection"
+        ]
+      }
     }
   }
 }
