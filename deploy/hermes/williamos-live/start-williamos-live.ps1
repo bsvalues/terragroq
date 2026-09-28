@@ -81,6 +81,42 @@ param(
   [string]$ProvenanceGate
 )
 
+# BOOT_ENTRY: the launcher's first act, recorded unconditionally and BEFORE `Stop` is armed.
+# A boot that dies before it opens its logs leaves nothing behind to diagnose, so a cockpit can
+# fail silently for days with only a task result of 1 to show for it. This block exists so that
+# EVERY attempt is visible, whoever ran it and whatever happened next. It is deliberately outside
+# $ErrorActionPreference = "Stop", it can never throw, and it records into the declared LogRoot
+# first and the process temp directory second so a failure to reach either still leaves the other.
+try {
+  $entryLine = @(
+    ([DateTimeOffset]::UtcNow.ToString('o')),
+    'BOOT_ENTRY',
+    ('pid=' + $PID),
+    ('user=' + [Security.Principal.WindowsIdentity]::GetCurrent().Name),
+    ('elevated=' + ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)),
+    ('script=' + $PSCommandPath),
+    ('logRoot=' + $LogRoot),
+    ('cmd=' + [Environment]::CommandLine)
+  ) -join ' '
+  $entryTargets = @()
+  if (-not [string]::IsNullOrEmpty($LogRoot)) { $entryTargets += (Join-Path $LogRoot 'williamos-live.boot.log') }
+  if (-not [string]::IsNullOrEmpty($env:TEMP)) { $entryTargets += (Join-Path $env:TEMP 'williamos-live.entry.log') }
+  foreach ($entryTarget in $entryTargets) {
+    try {
+      $entryParent = Split-Path -Parent $entryTarget
+      if (-not [string]::IsNullOrEmpty($entryParent)) { New-Item -ItemType Directory -Path $entryParent -Force -ErrorAction SilentlyContinue | Out-Null }
+      Add-Content -LiteralPath $entryTarget -Value $entryLine -Encoding utf8 -ErrorAction Stop
+    } catch {
+      # A second target exists precisely so one being unwritable is survivable. Report it rather than
+      # swallow it: this launcher has an invariant against silent catches, and a boot record that
+      # vanished quietly would be the same defect it exists to close.
+      [Console]::Error.WriteLine("BOOT_ENTRY_TARGET_FAILED $entryTarget $($_.Exception.Message)")
+    }
+  }
+} catch {
+  [Console]::Error.WriteLine("BOOT_ENTRY_FAILED $($_.Exception.Message)")
+}
+
 $ErrorActionPreference = "Stop"
 
 $node = "C:\Program Files\nodejs\node.exe"
@@ -206,6 +242,11 @@ foreach ($nodeInjectVar in @("NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MO
   }
 }
 $gatePreviousPreference = $ErrorActionPreference
+# The provenance gate is the dominant boot cost, and its duration was the only part of the boot
+# that nothing recorded: the measured BOOT_ENTRY -> BOOT_ALLOWED span runs 82s to 431s and lands
+# almost entirely here, so a slow boot was unattributable. Started before the try so that a slow
+# refusal is timed as well as a slow pass.
+$gateTimer = [System.Diagnostics.Stopwatch]::StartNew()
 try {
   # PS 5.1 wraps ANY native stderr in a NativeCommandError; under Stop that masks the typed
   # refusal behind a PowerShell error instead of the reason code. Read the exit code; fold the
@@ -217,6 +258,8 @@ try {
   $ErrorActionPreference = $gatePreviousPreference
 }
 $gateSummary = [string]::Join(" ", (@($gateOutput) | ForEach-Object { [string]$_ }))
+$gateTimer.Stop()
+Write-Boot ("BOOT_GATE_ELAPSED_MS " + [int]$gateTimer.Elapsed.TotalMilliseconds)
 if ($gateExit -ne 0) {
   Deny-Boot "DOOR_PROVENANCE_REFUSED" $gateSummary
 }
