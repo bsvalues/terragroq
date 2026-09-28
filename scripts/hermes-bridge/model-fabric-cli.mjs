@@ -131,7 +131,7 @@ export async function runModelFabric({ command, config, workOrder }, {
       JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA), "Use these exact identity/non-action fields, replacing validation with your analysis:", JSON.stringify(expectedOutput),
       "WORK_ORDER_DATA", JSON.stringify({ id: order.id, objective: order.objective, baseSha: order.baseSha, context })].join("\n")
     if (prompt.length > 16000) fail("PROMPT_TOO_LARGE")
-    client = await backend.runCodexClient({ workspacePath })
+    client = await backend.runCodexClient({ workspacePath, placementProvider: async () => placement })
     await client.connect()
     const threadId = await client.startThread()
     fs.writeFileSync(path.join(directory, "dispatch.json"), JSON.stringify({ requestSha256, workspacePath, threadId, policyWorkOrderId: health.policyWorkOrderId,

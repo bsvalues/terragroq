@@ -149,13 +149,17 @@ export class ResidentModelExecutionBackend extends LocalExecutionBackend {
     this.kernelInvokerPath = path.resolve(kernelInvokerPath ?? path.join(this.repositoryRoot, HERMES_KERNEL_INVOKER_RELATIVE))
   }
 
-  async runCodexClient({ workspacePath, timeoutMs } = {}) {
+  async runCodexClient({ workspacePath, timeoutMs, placementProvider } = {}) {
     return createHermesKernelClient({
       workspacePath: requiredString(workspacePath, "workspacePath"),
       runtimeRoot: this.runtimeRoot,
       commandRunner: this.commandRunner,
       policyPath: this.kernelPolicyPath,
       invokerPath: this.kernelInvokerPath,
+      // Tier 2: when the caller supplies the current Fabric placement record, every turn executes
+      // the model HERMES placed (validated against the policy's qualified roster) instead of the
+      // policy default. Absent (probe/test lanes) the commissioned default applies unchanged.
+      ...(placementProvider === undefined ? {} : { placementProvider }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })
   }

@@ -1,0 +1,390 @@
+{
+  "schemaVersion": "williamos-gpu-tabular-trust-gate-parity/1",
+  "promoted": false,
+  "referenceImplementation": "control-center/backend/workers.py#validate_preventive_trust_gate_v2",
+  "adapterImplementation": "scripts/execution-fabric/gpu-tabular-capability.mjs#assertPreventiveTrustGateV2",
+  "cases": 31,
+  "agreeing": 30,
+  "stricter": [
+    {
+      "case": "identity provider mismatch",
+      "reason": "the adapter pins provider+surface to the reviewed binding; the referenced gate compares only the selected worker id"
+    }
+  ],
+  "failures": [],
+  "ok": true,
+  "matrix": [
+    {
+      "case": "baseline passes",
+      "python": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "adapter": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "gate missing",
+      "python": {
+        "allowed": false,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_MISSING"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_MISSING"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "schemaVersion wrong",
+      "python": {
+        "allowed": false,
+        "reasonCode": "TRUST_GATE_SCHEMA_MISMATCH"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "TRUST_GATE_SCHEMA_MISMATCH"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "identity missing",
+      "python": {
+        "allowed": false,
+        "reasonCode": "WORKER_IDENTITY_MISSING"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "WORKER_IDENTITY_MISSING"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "identity provider mismatch",
+      "python": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "WORKER_IDENTITY_MISMATCH"
+      },
+      "verdict": "adapter_stricter"
+    },
+    {
+      "case": "identity not attributable",
+      "python": {
+        "allowed": false,
+        "reasonCode": "WORKER_IDENTITY_MISMATCH"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "WORKER_IDENTITY_MISMATCH"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "rawCredentialInspection true",
+      "python": {
+        "allowed": false,
+        "reasonCode": "RAW_CREDENTIAL_INSPECTION_FORBIDDEN"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "RAW_CREDENTIAL_INSPECTION_FORBIDDEN"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "boundary unrecognized",
+      "python": {
+        "allowed": false,
+        "reasonCode": "PROMPT_INJECTION_BOUNDARY_UNRECOGNIZED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "PROMPT_INJECTION_BOUNDARY_UNRECOGNIZED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "boundary trusted-work-order-envelope-v1",
+      "python": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "adapter": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "exactPathConfinement false",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_CONFINEMENT_REQUIRED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_CONFINEMENT_REQUIRED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "outputRedaction false",
+      "python": {
+        "allowed": false,
+        "reasonCode": "OUTPUT_REDACTION_REQUIRED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "OUTPUT_REDACTION_REQUIRED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "cancellation unsupported",
+      "python": {
+        "allowed": false,
+        "reasonCode": "CANCELLATION_REQUIRED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "CANCELLATION_REQUIRED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "cancellation missing",
+      "python": {
+        "allowed": false,
+        "reasonCode": "CANCELLATION_REQUIRED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "CANCELLATION_REQUIRED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "independentEvidenceCapture false",
+      "python": {
+        "allowed": false,
+        "reasonCode": "INDEPENDENT_EVIDENCE_CAPTURE_REQUIRED"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "INDEPENDENT_EVIDENCE_CAPTURE_REQUIRED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "authority missing",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISSING"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISSING"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "grant paths missing",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISSING"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISSING"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "grant/scope mismatch",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISMATCH"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_MISMATCH"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "duplicate paths",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "empty path list",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "absolute path",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "drive-letter path",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "traversal path",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "dot segment",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "double separator",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "question mark",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "square brackets",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "colon in first segment",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "wildcard",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "empty string path",
+      "python": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "adapter": {
+        "allowed": false,
+        "reasonCode": "EXACT_PATH_SCOPE_INVALID"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "nesting accepted",
+      "python": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "adapter": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "verdict": "agree"
+    },
+    {
+      "case": "backslash normalized",
+      "python": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "adapter": {
+        "allowed": true,
+        "reasonCode": "PREVENTIVE_TRUST_GATE_V2_PASSED"
+      },
+      "verdict": "agree"
+    }
+  ]
+}

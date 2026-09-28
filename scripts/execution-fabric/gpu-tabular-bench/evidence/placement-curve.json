@@ -1,0 +1,288 @@
+{
+  "schemaVersion": "williamos-gpu-tabular-placement-curve/1",
+  "startedAt": "2026-09-11T17:47:46Z",
+  "seed": 20260911,
+  "transactionsPerParcel": 8,
+  "marginRequired": 0.25,
+  "provenance": "synthetic, schema- and scale-matched to pacs_oltp; no county rows used",
+  "promoted": false,
+  "points": [
+    {
+      "parcels": 50000,
+      "transactions": 400000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 0.7341865159978624,
+          "gpuSeconds": 0.5368675749923568,
+          "ratioCpuOverGpu": 1.3675374528035424,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.016388936333000547,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 0.4410298090078868,
+          "gpuSeconds": 0.13021525100339204,
+          "ratioCpuOverGpu": 3.3869289934125932,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.003331800693744802,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 0.02942968998104334,
+          "gpuSeconds": 0.02621059402008541,
+          "ratioCpuOverGpu": 1.122816596926079,
+          "parityWithinTolerance": true,
+          "parityDelta": 1.222789598998541e-16,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 0.10970641998574138
+    },
+    {
+      "parcels": 100000,
+      "transactions": 800000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 1.3896817399945576,
+          "gpuSeconds": 0.6493191749905236,
+          "ratioCpuOverGpu": 2.1402136168469674,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.032096812548927524,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 0.7163099229801446,
+          "gpuSeconds": 0.2796915850194637,
+          "ratioCpuOverGpu": 2.561070698391933,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.0018033020671755606,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 0.05302085998118855,
+          "gpuSeconds": 0.03067483499762602,
+          "ratioCpuOverGpu": 1.7284806906146986,
+          "parityWithinTolerance": true,
+          "parityDelta": 1.2766874351787703e-16,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 0.1838218689954374
+    },
+    {
+      "parcels": 250000,
+      "transactions": 2000000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 3.7763693379820324,
+          "gpuSeconds": 0.886239112005569,
+          "ratioCpuOverGpu": 4.261117893382144,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.024788868938304818,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 1.6041537590208463,
+          "gpuSeconds": 0.5091689779947046,
+          "ratioCpuOverGpu": 3.1505331792572986,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.0018627965494450247,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 0.13724855100736022,
+          "gpuSeconds": 0.04762957597267814,
+          "ratioCpuOverGpu": 2.8815824664508964,
+          "parityWithinTolerance": true,
+          "parityDelta": 2.0455892100731196e-16,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 0.44927514999289997
+    },
+    {
+      "parcels": 500000,
+      "transactions": 4000000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 8.975003642000956,
+          "gpuSeconds": 1.187867920001736,
+          "ratioCpuOverGpu": 7.555556885472453,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.024541695518567903,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 3.1195328480098397,
+          "gpuSeconds": 1.2970489760045893,
+          "ratioCpuOverGpu": 2.405100274331354,
+          "parityWithinTolerance": true,
+          "parityDelta": 4.730153873543238e-05,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 0.3144649199966807,
+          "gpuSeconds": 0.036416862974874675,
+          "ratioCpuOverGpu": 8.635145762380509,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.0,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 0.816485469986219
+    },
+    {
+      "parcels": 1000000,
+      "transactions": 8000000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 23.21985772100743,
+          "gpuSeconds": 1.888382013014052,
+          "ratioCpuOverGpu": 12.296165479751709,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.021356907606620117,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 7.443880625010934,
+          "gpuSeconds": 2.0391011079773307,
+          "ratioCpuOverGpu": 3.650569653407147,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.000676590765106675,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 1.033431196003221,
+          "gpuSeconds": 0.061813427018933,
+          "ratioCpuOverGpu": 16.71855526933798,
+          "parityWithinTolerance": true,
+          "parityDelta": 2.0802138133129958e-16,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 1.5694805229722988
+    },
+    {
+      "parcels": 2500000,
+      "transactions": 20000000,
+      "tasks": {
+        "regression": {
+          "cpuSeconds": 83.9807344910223,
+          "gpuSeconds": 4.121261062013218,
+          "ratioCpuOverGpu": 20.3774362330733,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.020958340875943907,
+          "parityTolerance": 0.3,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "clustering": {
+          "cpuSeconds": 20.642984638980124,
+          "gpuSeconds": 4.297637453011703,
+          "ratioCpuOverGpu": 4.8033331951986575,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.0012711825137613148,
+          "parityTolerance": 0.05,
+          "cpuError": null,
+          "gpuError": null
+        },
+        "aggregation": {
+          "cpuSeconds": 3.7948691280034836,
+          "gpuSeconds": 0.1071883499971591,
+          "ratioCpuOverGpu": 35.40374609837788,
+          "parityWithinTolerance": true,
+          "parityDelta": 0.0,
+          "parityTolerance": 0.02,
+          "cpuError": null,
+          "gpuError": null
+        }
+      },
+      "generationSeconds": 4.065293535008095
+    }
+  ],
+  "warmUpSeconds": 5.670274283009348,
+  "thresholds": {
+    "regression": {
+      "measuredSizes": [
+        50000,
+        100000,
+        250000,
+        500000,
+        1000000,
+        2500000
+      ],
+      "gpuPreferredAboveRows": 50000,
+      "cpuPreferredAtOrBelowRows": null,
+      "insufficientEvidence": false,
+      "thresholdIsAtMeasurementFloor": true,
+      "placementDefaultWhenBelowThreshold": "cpu",
+      "marginRequired": 0.25,
+      "note": "threshold equals the smallest measured size: the true crossover is at or below it and is UNMEASURED there, so the CPU default below the threshold is a conservative choice, not a measured one"
+    },
+    "clustering": {
+      "measuredSizes": [
+        50000,
+        100000,
+        250000,
+        500000,
+        1000000,
+        2500000
+      ],
+      "gpuPreferredAboveRows": 50000,
+      "cpuPreferredAtOrBelowRows": null,
+      "insufficientEvidence": false,
+      "thresholdIsAtMeasurementFloor": true,
+      "placementDefaultWhenBelowThreshold": "cpu",
+      "marginRequired": 0.25,
+      "note": "threshold equals the smallest measured size: the true crossover is at or below it and is UNMEASURED there, so the CPU default below the threshold is a conservative choice, not a measured one"
+    },
+    "aggregation": {
+      "measuredSizes": [
+        50000,
+        100000,
+        250000,
+        500000,
+        1000000,
+        2500000
+      ],
+      "gpuPreferredAboveRows": 100000,
+      "cpuPreferredAtOrBelowRows": null,
+      "insufficientEvidence": false,
+      "thresholdIsAtMeasurementFloor": false,
+      "placementDefaultWhenBelowThreshold": "cpu",
+      "marginRequired": 0.25,
+      "note": "threshold holds at the candidate size and every larger measured size"
+    }
+  },
+  "finishedAt": "2026-09-11T17:50:59Z"
+}

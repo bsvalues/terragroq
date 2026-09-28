@@ -1,3 +1,5 @@
+import { AuthorityBoard } from "@/components/fabric/authority-board"
+import { CapabilityBoard } from "@/components/fabric/capability-board"
 import { NodeBoard } from "@/components/fabric/node-board"
 
 export const dynamic = "force-dynamic"
@@ -13,6 +15,8 @@ export default function FabricPage() {
         </p>
       </header>
       <NodeBoard />
+      <CapabilityBoard />
+      <AuthorityBoard />
     </main>
   )
 }

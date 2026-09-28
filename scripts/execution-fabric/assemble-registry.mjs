@@ -12,6 +12,7 @@ const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const canonicalSeedPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'registry.seed.json');
 const canonicalSchemaPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'registry.schema.json');
 const canonicalIdentityContractPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'node-identity-contract.json');
+const canonicalAdoptionPath = path.join(repositoryRoot, 'config', 'execution-fabric', 'model-runtime-adoption.json');
 const corePath = path.join(scriptDirectory, 'assemble-registry-core.mjs');
 const expectedSeedSha256 = 'a9ef6ab1f28cf1202e0605148dbb2b8d162a1515ad45ff88387e40036ac9f4d1';
 const expectedSchemaSha256 = '3b1647ea39f37f936a18c4ec9127d5dba7bac490647ba11a5a098b4bcd7ff11f';
@@ -19,6 +20,10 @@ const expectedSchemaSha256 = '3b1647ea39f37f936a18c4ec9127d5dba7bac490647ba11a5a
 // pinned here for the same reason the seed is: an unreviewed edit to authority must stop assembly,
 // and moving those facts out of code must not move them out of review.
 const expectedIdentityContractSha256 = '65e15ed4c29edd79c815276208625eea7e81a2863277f68e9f79b3e1489ea527';
+// The adopted-runtime record decides which models and runtimes placement may see, so it is pinned
+// here for the same reason as the seed: an unreviewed edit to placement-visible capability must stop
+// assembly, not quietly change what the Fabric can schedule.
+const expectedAdoptionSha256 = 'e3b254b54f07f70838541915a63af5a244c192b10f8db0f9a00d41c60ab8e3d8';
 
 function digest(filePath) {
   const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -47,6 +52,7 @@ for (let index = 0; index < process.argv.slice(2).length; index += 1) {
 if (digest(canonicalSeedPath) !== expectedSeedSha256) fail('canonical seed digest mismatch');
 if (digest(canonicalSchemaPath) !== expectedSchemaSha256) fail('canonical schema digest mismatch');
 if (digest(canonicalIdentityContractPath) !== expectedIdentityContractSha256) fail('canonical identity contract digest mismatch');
+if (digest(canonicalAdoptionPath) !== expectedAdoptionSha256) fail('canonical model-runtime adoption digest mismatch');
 
 const environment = { ...process.env };
 delete environment.FABRIC_NOW_UTC;
@@ -56,6 +62,7 @@ const result = spawnSync(process.execPath, [
   '--seed', canonicalSeedPath,
   '--schema', canonicalSchemaPath,
   '--identity-contract', canonicalIdentityContractPath,
+  '--adoption', canonicalAdoptionPath,
   ...forwarded,
 ], {
   cwd: repositoryRoot,

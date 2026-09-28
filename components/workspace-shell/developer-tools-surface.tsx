@@ -391,7 +391,15 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
           : { ...(worldId ? { worldId } : {}), ...(projectKey === "williamos" ? { projectKey } : {}), ...(repositoryKey ? { repositoryKey } : {}), operation }),
         signal: abort.signal, cache: "no-store",
       })
-      if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
+      if (!response.ok) {
+        // The route refuses operations the selected repository cannot run, with a reason naming the
+        // cause. Showing only the status code would hide the one fact the operator can act on.
+        const refused = await response.json().catch(() => null) as { error?: unknown; detail?: unknown } | null
+        const detail = typeof refused?.detail === "string" ? refused.detail : null
+        const code = typeof refused?.error === "string" ? refused.error : null
+        throw new Error(detail ?? code ?? `RUN_${response.status}`)
+      }
+      if (!response.body) throw new Error(`RUN_${response.status}`)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -459,10 +467,22 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
           controller.current?.abort()
           return
         }
-        const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
+        // A refusal is an explainable outcome, not an interruption. Persisting only "INTERRUPTED" made
+        // the actionable reason disappear as soon as the transcript was selected or restored, because
+        // the header prefers the saved transcript's truth over the transient error. The reason the route
+        // gave is what the operator can act on, so it belongs in the saved lines AND in the durable
+        // outcome: the persisted status stays "interrupted" (the stored schema's vocabulary) while the
+        // reason carries the real refusal text, which is what the header renders for that transcript.
+        const reason = caught instanceof Error ? caught.message : "RUN_UNAVAILABLE"
+        // The persisted outcome schema bounds `reason` to 200 characters, and a preflight detail that
+        // embeds the checkout path routinely exceeds that. Oversize text makes the transcript fail
+        // validation and be dropped entirely -- losing the very explanation this path exists to keep.
+        // The saved line keeps the full text (its bound is far larger); only the outcome reason is cut.
+        const persistedReason = reason.length <= 200 ? reason : `${reason.slice(0, 197)}...`
+        const next = [...current.lines, { channel: "meta", text: reason } satisfies ToolOutputLine]
         current.lines = next
         if (present) setLines(next)
-        settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
+        settleRun(current, { status: "interrupted", code: null, reason: persistedReason }, next)
       }
     } finally {
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
@@ -492,7 +512,9 @@ export function DeveloperToolsSurface({ kind, projectKey = "terrafusion", reposi
   const visibleLines = selectedTranscript?.lines ?? lines
   const transcriptTruth = selectedTranscript?.outcome.status === "completed" ? "Saved browser transcript · not live evidence"
     : selectedTranscript?.outcome.status === "cancelled" ? "Cancelled · not completed or live evidence"
-      : selectedTranscript ? "Interrupted · not completed or live evidence" : null
+    : selectedTranscript?.outcome.reason && selectedTranscript.outcome.reason !== "INTERRUPTED"
+      ? selectedTranscript.outcome.reason
+    : selectedTranscript ? "Interrupted · not completed or live evidence" : null
   const title = kind === "tests" ? "Focused validation" : kind === "diff" ? "Current change" : "Project terminal"
   const surfaceRunning = activeRun.current?.kind === kind ? running : null
 

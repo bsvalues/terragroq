@@ -2,7 +2,7 @@ import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 import { describe, expect, it } from "vitest"
 
-import { outcomeQueueItem } from "@/lib/db/schema"
+import { outcomeQueueItem, promotionLease } from "@/lib/db/schema"
 import {
   acquireOutcome,
   canTransitionOutcome,
@@ -100,10 +100,22 @@ describe("outcome lifecycle", () => {
   it("binds the engine to the additive durable queue table", () => {
     expect(getTableName(outcomeQueueItem)).toBe("outcome_queue_item")
     const config = getTableConfig(outcomeQueueItem)
+    // The legacy one-active-outcome-per-user mutex is retired for good: multiple outcomes
+    // may be active simultaneously; single-writer promotion is guarded by the narrow
+    // promotion_lease invariant instead. This pin must never flip back.
     expect(config.indexes.some((index) => (
       index.config.name === "outcome_queue_item_one_active_per_user_idx"
+    ))).toBe(false)
+    const leaseConfig = getTableConfig(promotionLease)
+    expect(getTableName(promotionLease)).toBe("promotion_lease")
+    expect(leaseConfig.indexes.some((index) => (
+      index.config.name === "promotion_lease_one_live_per_target_idx"
       && index.config.unique === true
     ))).toBe(true)
+    expect(leaseConfig.columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "repository", "targetRef", "pullRequest", "boundHeadSha", "adoptionHash", "grantRef",
+      "outcomeId", "workOrderId", "status", "expiresAt",
+    ]))
     expect(config.checks.map((check) => check.name)).toEqual(expect.arrayContaining([
       "outcome_queue_item_lifecycle_state_check",
       "outcome_queue_item_approval_state_check",
