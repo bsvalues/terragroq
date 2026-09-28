@@ -41,6 +41,7 @@ export type CapabilitySurfaceRow = {
   placementProbe: { workload: string; rows: number; placement: string; reasonCode: string } | null
   restrictions: string[]
   evidenceRefs: string[]
+  ownerRunnable: boolean
 }
 
 export const COMPUTE_CAPABILITY_WORKLOADS: Readonly<Record<string, string>> = Object.freeze({
@@ -50,6 +51,30 @@ export const COMPUTE_CAPABILITY_WORKLOADS: Readonly<Record<string, string>> = Ob
   "gpu-anomaly-screening": "outlier",
   "gpu-dimensional-reduction": "decomposition",
 })
+
+/**
+ * Which compute capabilities the owner may run from the product surface, and with what
+ * bounded synthetic input. One source: the POST handler gates on exactly this map, and the
+ * GET projection marks rows from it, so the button's affordance and the seam's admission can
+ * never disagree — an inventoried-but-not-owner-runnable capability (screening/rejected paths)
+ * shows no run control, and a forged POST against it is refused by name.
+ */
+export const OWNER_RUNNABLE_COMPUTE: Readonly<Record<string, string>> = Object.freeze(
+  (["gpu-tabular-ml", "gpu-clustering", "gpu-aggregation"] as const).reduce<Record<string, string>>(
+    (runnable, capabilityId) => {
+      // Derived from the parent map, never restated: the workload string has exactly one source,
+      // so the inventory's projected row and the POST gate cannot drift apart.
+      const workload = COMPUTE_CAPABILITY_WORKLOADS[capabilityId]
+      if (workload) runnable[capabilityId] = workload
+      return runnable
+    },
+    {},
+  ),
+)
+
+/** Owner-run row budget: crosses every promoted threshold, far below the seam's 10M ceiling. */
+export const OWNER_RUN_MIN_ROWS = 50_000
+export const OWNER_RUN_MAX_ROWS = 250_000
 
 // Native dynamic import the bundler must not rewrite: webpack's default treatment of a
 // non-literal import() is a context __webpack_require__, which cannot resolve a file:// URL of
@@ -61,7 +86,11 @@ export const COMPUTE_CAPABILITY_WORKLOADS: Readonly<Record<string, string>> = Ob
 const importNative = (specifier: string) =>
   import(/* webpackIgnore: true */ /* @vite-ignore */ specifier)
 
-async function loadSameModulesAsDispatch(root = process.cwd()) {
+// Exported so the owner-run route (app/api/environment/capability) consumes the SAME module
+// objects dispatch enforces — the no-second-source rule that makes the read-only board honest
+// must hold for the write side too, or the button would govern against a different registry
+// than the inventory displays.
+export async function loadSameModulesAsDispatch(root = process.cwd()) {
   const [registry, adapter, dispatch] = await Promise.all([
     importNative(pathToFileURL(path.resolve(root, "components/operator/multi-agent-capability-registry.ts")).href),
     importNative(pathToFileURL(path.resolve(root, "scripts/execution-fabric/gpu-tabular-capability.mjs")).href),
@@ -182,6 +211,9 @@ export async function projectComputeCapabilities({
             : null,
           restrictions: [...entry.restrictions],
           evidenceRefs: [...entry.evidence],
+          // Derived from the one owner-run vocabulary, not a per-row guess: the POST gate reads
+          // the same map, so a visible Run control and an admitted POST cannot diverge.
+          ownerRunnable: Object.prototype.hasOwnProperty.call(OWNER_RUNNABLE_COMPUTE, entry.capabilityId),
         }
       }),
   )
@@ -189,6 +221,8 @@ export async function projectComputeCapabilities({
   return {
     // The surface's own identity: which source produced it. Same file dispatch reads.
     source: "components/operator/multi-agent-capability-registry.ts (same module dispatch imports)",
+    // The run control's displayed bounds come from here, so the client never restates them.
+    ownerRun: { minRows: OWNER_RUN_MIN_ROWS, maxRows: OWNER_RUN_MAX_ROWS },
     capabilities,
-  } satisfies { source: string; capabilities: CapabilitySurfaceRow[] }
+  } satisfies { source: string; ownerRun: { minRows: number; maxRows: number }; capabilities: CapabilitySurfaceRow[] }
 }
