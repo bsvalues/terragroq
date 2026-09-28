@@ -12,9 +12,11 @@ import { getSignupPolicy } from "@/lib/auth-policy"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
 import {
+  claimPrimaryRecovery,
   isLoopbackHost as isLoopbackHostname,
   localSetupEnabled,
   primaryRecoveryEnabled,
+  releasePrimaryRecovery,
 } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
@@ -293,6 +295,28 @@ export async function POST(req: Request) {
     if (policyRefusal) return NextResponse.json({ ok: false, ...policyRefusal }, { status: policyRefusal.status })
   }
 
+  // Claim the one-shot capability SYNCHRONOUSLY, before any await below. Checking the flag at the gate
+  // and spending it after the transaction would let two concurrent recovery requests both pass that
+  // gate, and the second would overwrite what the first just committed. The first claimant wins; any
+  // other request -- concurrent or later -- sees an unarmed surface. A claim that does not complete
+  // is released, so a failed recovery does not spend the owner's one authorization.
+  let recoveryClaimed = false
+  if (declaredOperation === "recovery") {
+    recoveryClaimed = claimPrimaryRecovery()
+    if (!recoveryClaimed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          operation: declaredOperation,
+          message:
+            "Primary credential recovery is not armed in this environment, or its one-shot capability "
+            + "has already been spent in this process.",
+        },
+        { status: 403 },
+      )
+    }
+  }
+
   try {
     const passwordHash = await hashPassword(input.password)
 
@@ -311,11 +335,15 @@ export async function POST(req: Request) {
         }
       }
 
-      // Re-evaluated inside the transaction: the pre-flight classification is a cheap read taken
-      // outside it, so the state could have moved between the two. The refusal is identical.
-      const setupRefusal = setupGateRefusal(operation)
-      if (setupRefusal) {
-        return { ok: false as const, ...setupRefusal }
+      // Re-evaluated inside the transaction for PROVISIONING only: the pre-flight classification is a
+      // cheap read taken outside it, so the state could have moved. Recovery is deliberately not
+      // re-gated here -- it was authorized by the synchronous claim above, and re-checking the flag
+      // now would see the very claim this request just spent.
+      if (operation === "provisioning") {
+        const setupRefusal = setupGateRefusal(operation)
+        if (setupRefusal) {
+          return { ok: false as const, ...setupRefusal }
+        }
       }
 
       if (operation === "provisioning") {
@@ -345,11 +373,8 @@ export async function POST(req: Request) {
         }
       }
 
-      // The USE has to be single-use, not merely the arming. This route reads the flag on every
-      // request, so a process that was armed at start would keep serving credential resets for its
-      // entire lifetime -- long after the owner finished recovering. Spend the capability here: the
-      // next request in this process is refused, and the launcher's window bounds the next start.
-      delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+      // The capability was claimed synchronously before the transaction, so the reset itself is what
+      // spends it: nothing to clear here, and a later request in this process sees an unarmed surface.
       return {
         ok: true as const,
         operation,
@@ -358,6 +383,8 @@ export async function POST(req: Request) {
     })
 
     if (!result.ok) {
+      // Nothing was committed, so the owner's one authorization is not spent by this attempt.
+      if (recoveryClaimed) releasePrimaryRecovery()
       return NextResponse.json(result, { status: result.status })
     }
 
@@ -375,6 +402,9 @@ export async function POST(req: Request) {
       message: result.message,
     })
   } catch {
+    // The transaction rolled back, so the capability was not spent -- give it back. A failed recovery
+    // must not cost the owner their one authorization.
+    if (recoveryClaimed) releasePrimaryRecovery()
     return NextResponse.json(
       {
         ok: false,

@@ -38,6 +38,16 @@ export function isLoopbackHost(hostname: string): boolean {
 export const PRIMARY_RECOVERY_ENV_VAR = "WILLIAMOS_PRIMARY_RECOVERY"
 
 /**
+ * The instant the recovery window closes, carried into the process alongside the flag.
+ *
+ * Checked on EVERY call, not once at startup: a server that starts inside its window and keeps
+ * running past the deadline must stop honouring the capability the moment the deadline passes.
+ * An armed flag with no readable deadline is not armed at all -- the deadline is the bound, so
+ * omitting it cannot mean "unbounded".
+ */
+export const PRIMARY_RECOVERY_DEADLINE_ENV_VAR = "WILLIAMOS_PRIMARY_RECOVERY_UNTIL"
+
+/**
  * Whether the Primary-credential recovery surface (`/api/setup/primary-credential`) is armed.
  *
  * This is a SEPARATE decision from `localSetupEnabled`, and it must stay separate.
@@ -62,6 +72,34 @@ export const PRIMARY_RECOVERY_ENV_VAR = "WILLIAMOS_PRIMARY_RECOVERY"
  * to take effect); that is the point -- it is a deliberate, ephemeral recovery action rather than a
  * property of a bootstrapped deployment.
  */
-export function primaryRecoveryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[PRIMARY_RECOVERY_ENV_VAR] === "true"
+export function primaryRecoveryEnabled(env: NodeJS.ProcessEnv = process.env, now: number = Date.now()): boolean {
+  if (env[PRIMARY_RECOVERY_ENV_VAR] !== "true") return false
+  const deadline = Date.parse(String(env[PRIMARY_RECOVERY_DEADLINE_ENV_VAR] ?? ""))
+  if (!Number.isFinite(deadline)) return false
+  return deadline > now
+}
+
+/**
+ * Claim the recovery capability for ONE request, synchronously.
+ *
+ * Authorization and use are separated in time by `await`s (hashing, the transaction), so checking the
+ * flag and spending it later lets two concurrent requests both pass a gate that only one of them
+ * should satisfy. This is a synchronous read-and-clear: the first caller wins, every other caller --
+ * concurrent or later -- sees an unarmed surface.
+ *
+ * The caller MUST `releasePrimaryRecovery()` if the work does not complete, so a failed recovery does
+ * not spend the owner's one authorization.
+ */
+export function claimPrimaryRecovery(env: NodeJS.ProcessEnv = process.env, now: number = Date.now()): boolean {
+  if (!primaryRecoveryEnabled(env, now)) return false
+  env[PRIMARY_RECOVERY_ENV_VAR] = "false"
+  return true
+}
+
+/**
+ * Give an unspent claim back. The deadline still governs: re-arming is refused once it has passed,
+ * because `primaryRecoveryEnabled()` re-reads it.
+ */
+export function releasePrimaryRecovery(env: NodeJS.ProcessEnv = process.env): void {
+  env[PRIMARY_RECOVERY_ENV_VAR] = "true"
 }

@@ -432,6 +432,13 @@ if ("$declaredRecoveryUntil".Trim().Length -gt 0) {
   }
 }
 $env:WILLIAMOS_PRIMARY_RECOVERY = if ($recoveryArmed) { "true" } else { "false" }
+# The deadline travels WITH the flag: the server rechecks it on every request, so a long-running
+# process stops honouring the capability the moment the window closes rather than at its next start.
+if ($recoveryArmed) {
+  $env:WILLIAMOS_PRIMARY_RECOVERY_UNTIL = "$declaredRecoveryUntil".Trim()
+} else {
+  Remove-Item Env:WILLIAMOS_PRIMARY_RECOVERY_UNTIL -ErrorAction SilentlyContinue
+}
 if (-not $recoveryArmed) {
   Write-Boot "RECOVERY_UNARMED"
 }

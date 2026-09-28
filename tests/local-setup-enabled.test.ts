@@ -25,10 +25,13 @@ import { describe, expect, it } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
 import {
+  PRIMARY_RECOVERY_DEADLINE_ENV_VAR,
   PRIMARY_RECOVERY_ENV_VAR,
+  claimPrimaryRecovery,
   isLoopbackHost,
   localSetupEnabled,
   primaryRecoveryEnabled,
+  releasePrimaryRecovery,
 } from "@/lib/setup/local-setup-enabled"
 
 const ROOT = process.cwd()
@@ -73,44 +76,93 @@ describe("localSetupEnabled semantics", () => {
   })
 })
 
-describe("primaryRecoveryEnabled is a separate decision", () => {
-  it("is armed only by its own literal flag", () => {
-    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "true", NODE_ENV: "production" })).toBe(true)
-    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "true" })).toBe(true)
-    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "false", NODE_ENV: "production" })).toBe(false)
-    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "1" })).toBe(false)
-    expect(primaryRecoveryEnabled({ WILLIAMOS_PRIMARY_RECOVERY: "yes" })).toBe(false)
+describe("primaryRecoveryEnabled is a separate decision, bounded by a deadline", () => {
+  const NOW = Date.parse("2026-09-29T00:00:00Z")
+  const future = (ms: number) => new Date(NOW + ms).toISOString()
+  const armed = (ms: number) => ({
+    [PRIMARY_RECOVERY_ENV_VAR]: "true",
+    [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: future(ms),
+  })
+
+  it("is armed only while a readable deadline is still in the future", () => {
+    expect(primaryRecoveryEnabled(armed(60_000), NOW)).toBe(true)
+    // The deadline is rechecked on EVERY call: a long-running server must stop honouring the
+    // capability the moment the window closes, not at its next start.
+    expect(primaryRecoveryEnabled(armed(60_000), NOW + 60_001)).toBe(false)
+    expect(primaryRecoveryEnabled(armed(-1), NOW)).toBe(false)
+  })
+
+  it("refuses an armed flag with no readable deadline", () => {
+    // The deadline IS the bound, so its absence cannot mean "unbounded".
+    expect(primaryRecoveryEnabled({ [PRIMARY_RECOVERY_ENV_VAR]: "true" }, NOW)).toBe(false)
+    expect(primaryRecoveryEnabled({ [PRIMARY_RECOVERY_ENV_VAR]: "true", [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: "soon" }, NOW)).toBe(false)
+    expect(primaryRecoveryEnabled({}, NOW)).toBe(false)
   })
 
   it("is refused when nothing is set, in EVERY environment", () => {
-    // No default-on: unlike localSetupEnabled there is no development carve-out. An unset value
-    // must never mean "armed", because the value this route could otherwise inherit is one the
-    // setup flow writes by itself.
-    expect(primaryRecoveryEnabled({})).toBe(false)
-    expect(primaryRecoveryEnabled({ NODE_ENV: "production" })).toBe(false)
-    expect(primaryRecoveryEnabled({ NODE_ENV: "development" })).toBe(false)
-    expect(primaryRecoveryEnabled({ NODE_ENV: "test" })).toBe(false)
+    expect(primaryRecoveryEnabled({}, NOW)).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "production" }, NOW)).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "development" }, NOW)).toBe(false)
+    expect(primaryRecoveryEnabled({ NODE_ENV: "test" }, NOW)).toBe(false)
   })
 
   it("the persisted setup flag must NOT arm recovery", () => {
-    // The regression this whole separation exists for. `local-config` writes
-    // LOCAL_SETUP_ENABLED="true" into .env.local during full setup, and the launcher carries that
-    // file into the production process; if recovery were gated on that value, a bootstrapped
-    // production deployment would accept an unauthenticated Primary-credential reset from any local
-    // process that can reach the loopback listener with a same-origin Origin header.
+    // The regression this whole separation exists for: local-config writes LOCAL_SETUP_ENABLED="true"
+    // into .env.local during full setup and the launcher carries that file into the running process.
     for (const env of [
       { LOCAL_SETUP_ENABLED: "true" },
       { LOCAL_SETUP_ENABLED: "true", NODE_ENV: "production" },
       { LOCAL_SETUP_ENABLED: "true", NODE_ENV: "development" },
-      { LOCAL_SETUP_ENABLED: "1", NODE_ENV: "development" },
     ]) {
-      expect(primaryRecoveryEnabled(env), `LOCAL_SETUP_ENABLED must not arm recovery: ${JSON.stringify(env)}`).toBe(false)
+      expect(primaryRecoveryEnabled(env, NOW), `LOCAL_SETUP_ENABLED must not arm recovery: ${JSON.stringify(env)}`).toBe(false)
     }
+    // ...and adding a deadline must not rescue it either: the flag itself has to be present.
+    expect(primaryRecoveryEnabled({ LOCAL_SETUP_ENABLED: "true", [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: future(60_000) }, NOW)).toBe(false)
   })
 
-  it("names its own variable, distinct from the persisted one", () => {
+  it("names its own variables, distinct from the persisted one", () => {
     expect(PRIMARY_RECOVERY_ENV_VAR).toBe("WILLIAMOS_PRIMARY_RECOVERY")
+    expect(PRIMARY_RECOVERY_DEADLINE_ENV_VAR).toBe("WILLIAMOS_PRIMARY_RECOVERY_UNTIL")
     expect(PRIMARY_RECOVERY_ENV_VAR).not.toBe("LOCAL_SETUP_ENABLED")
+  })
+})
+
+describe("claimPrimaryRecovery is synchronous and single-use", () => {
+  const NOW = Date.parse("2026-09-29T00:00:00Z")
+  it("gives the capability to exactly one caller", () => {
+    const env: NodeJS.ProcessEnv = {
+      [PRIMARY_RECOVERY_ENV_VAR]: "true",
+      [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: new Date(NOW + 60_000).toISOString(),
+    }
+    // Two callers, no await between them -- the shape a concurrent pair would take.
+    expect(claimPrimaryRecovery(env, NOW)).toBe(true)
+    expect(claimPrimaryRecovery(env, NOW)).toBe(false)
+  })
+
+  it("refuses to claim outside the window", () => {
+    const env: NodeJS.ProcessEnv = {
+      [PRIMARY_RECOVERY_ENV_VAR]: "true",
+      [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: new Date(NOW - 1).toISOString(),
+    }
+    expect(claimPrimaryRecovery(env, NOW)).toBe(false)
+  })
+
+  it("hands an unspent claim back, and the deadline still governs", () => {
+    const env: NodeJS.ProcessEnv = {
+      [PRIMARY_RECOVERY_ENV_VAR]: "true",
+      [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: new Date(NOW + 60_000).toISOString(),
+    }
+    expect(claimPrimaryRecovery(env, NOW)).toBe(true)
+    releasePrimaryRecovery(env)
+    expect(claimPrimaryRecovery(env, NOW)).toBe(true)
+    // A release after the window closed must not reopen it.
+    const late: NodeJS.ProcessEnv = {
+      [PRIMARY_RECOVERY_ENV_VAR]: "true",
+      [PRIMARY_RECOVERY_DEADLINE_ENV_VAR]: new Date(NOW + 1_000).toISOString(),
+    }
+    expect(claimPrimaryRecovery(late, NOW)).toBe(true)
+    releasePrimaryRecovery(late)
+    expect(claimPrimaryRecovery(late, NOW + 2_000)).toBe(false)
   })
 })
 

@@ -26,9 +26,11 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env = { ...originalEnv }
     process.env.NODE_ENV = "development"
     delete process.env.LOCAL_SETUP_ENABLED
-    // Recovery is a separate, process-only opt-in. These contract tests exercise a deliberate
-    // recovery run, so the flag is armed here; the case where it is NOT armed is asserted below.
+    // Recovery is a separate, process-only opt-in, bounded by a deadline the server rechecks. These
+    // contract tests exercise a deliberate recovery run, so the window is open here; the cases where
+    // it is unarmed or expired are asserted below.
     process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL = new Date(Date.now() + 3_600_000).toISOString()
 
     hashPasswordMock.mockResolvedValue("hashed-primary-password")
     connectMock.mockResolvedValue({
@@ -138,6 +140,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     // into .env.local during full setup and the live launcher carries that file into production, so
     // a deployment is routinely running with that flag set. It must not arm a credential reset.
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
     process.env.LOCAL_SETUP_ENABLED = "true"
     // A declared Primary already exists -> classifyPrimaryCredentialOperation() -> "recovery".
     queryMock.mockImplementation(async (sql: string) => {
@@ -207,6 +210,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env.NODE_ENV = "production"
     process.env.LOCAL_SETUP_ENABLED = "false"
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
 
     const req = new Request("http://localhost:3000/api/setup/primary-credential", {
       method: "POST",
@@ -231,6 +235,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env.NODE_ENV = "production"
     process.env.LOCAL_SETUP_ENABLED = "true"
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
 
     const oversized = JSON.stringify({ ...primaryPayload(), pad: "x".repeat(20_000) })
     const req = new Request("http://localhost:3000/api/setup/primary-credential", {
@@ -258,6 +263,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env.LOCAL_SETUP_ENABLED = "true"
     process.env.AUTH_SIGNUP_MODE = "closed"
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
     queryMock.mockImplementation(async (sql: string) => {
       if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
       if (sql.includes("count(*)::int as auth_record_count")) {
@@ -283,6 +289,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     process.env.NODE_ENV = "production"
     process.env.LOCAL_SETUP_ENABLED = "true"
     process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL = new Date(Date.now() + 3_600_000).toISOString()
     queryMock.mockImplementation(async (sql: string) => {
       if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
       if (sql.includes("count(*)::int as auth_record_count")) {
@@ -298,7 +305,9 @@ describe("POST /api/setup/primary-credential route contract", () => {
     const firstBody = await first.json()
     expect(first.status).toBe(200)
     expect(firstBody.operation).toBe("recovery")
-    expect(process.env.WILLIAMOS_PRIMARY_RECOVERY).toBeUndefined()
+        // The claim marks the capability spent rather than removing the name, so the surface is unarmed
+        // for every later request in this process.
+        expect(process.env.WILLIAMOS_PRIMARY_RECOVERY).not.toBe("true")
 
     const second = await POST(credentialRequest())
     expect(second.status).toBe(403)
@@ -310,6 +319,7 @@ describe("POST /api/setup/primary-credential route contract", () => {
     // the standard setup flow writes LOCAL_SETUP_ENABLED and nothing ever arms recovery. A
     // provisioning run must therefore succeed with the persisted flag alone and recovery unarmed.
     delete process.env.WILLIAMOS_PRIMARY_RECOVERY
+    delete process.env.WILLIAMOS_PRIMARY_RECOVERY_UNTIL
     process.env.LOCAL_SETUP_ENABLED = "true"
     // Bootstrap mode without a DSN cannot be evaluated, and the policy refuses rather than guessing;
     // supply one so this test exercises "bootstrap, no users yet -> open".

@@ -112,6 +112,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "DATABASE_URL",
       "LOCAL_SETUP_ENABLED",
       "WILLIAMOS_PRIMARY_RECOVERY",
+      "WILLIAMOS_PRIMARY_RECOVERY_UNTIL",
       "WILLIAMOS_TERRAFUSION_ROOT",
       "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
@@ -170,6 +171,11 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).toMatch(/RECOVERY_ARMED_UNTIL/)
     expect(code).toMatch(/RECOVERY_WINDOW_EXPIRED/)
     expect(code).toMatch(/RECOVERY_WINDOW_UNREADABLE/)
+    // The deadline must travel WITH the flag, so the server can recheck it per request: a server that
+    // starts inside the window and outlives it must stop honouring the capability on its own.
+    const deadlineExport = code.indexOf("$env:WILLIAMOS_PRIMARY_RECOVERY_UNTIL")
+    expect(deadlineExport, "the deadline must be carried into the process").toBeGreaterThan(exportFlag)
+    expect(deadlineExport).toBeLessThan(serverStart)
   })
 })
 
