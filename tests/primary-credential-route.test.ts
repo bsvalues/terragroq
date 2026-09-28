@@ -224,6 +224,39 @@ describe("POST /api/setup/primary-credential route contract", () => {
     expect(hashPasswordMock).not.toHaveBeenCalled()
   })
 
+  it("bounds the request body when a capability is enabled", async () => {
+    // The post-bootstrap state the reviewer named: setup enabled by the persisted flag, recovery
+    // still unarmed. The fully-disabled guard does not fire here, so the body must be bounded by the
+    // shared reader rather than buffered whole by req.json().
+    process.env.NODE_ENV = "production"
+    process.env.LOCAL_SETUP_ENABLED = "true"
+    process.env.WILLIAMOS_PRIMARY_RECOVERY = "true"
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [], rowCount: 0 }
+      if (sql.includes("count(*)::int as auth_record_count")) {
+        return { rows: [{ auth_record_count: 1, declared_primary_count: 1 }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const oversized = JSON.stringify({ ...primaryPayload(), pad: "x".repeat(20_000) })
+    const req = new Request("http://localhost:3000/api/setup/primary-credential", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body: oversized,
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(413)
+    expect(body.message).toContain("too large")
+    expect(hashPasswordMock).not.toHaveBeenCalled()
+  })
+
   it("still allows FIRST-OWNER provisioning through the ordinary setup gate", async () => {
     // The other half of the boundary: gating this route on the recovery opt-in before the operation
     // is known would 403 the visible "Save Primary credential" action on a fresh installation, since

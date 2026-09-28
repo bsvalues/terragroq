@@ -8,6 +8,7 @@ import {
   validatePrimaryCredentialPayload,
   type PrimaryCredentialPayload,
 } from "@/lib/primary-credential"
+import { readBoundedJson } from "@/lib/environment/line-guard"
 import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "@/lib/primary-identity"
 import {
   isLoopbackHost as isLoopbackHostname,
@@ -16,6 +17,14 @@ import {
 } from "@/lib/setup/local-setup-enabled"
 
 export const runtime = "nodejs"
+
+/**
+ * Ceiling on a credential request body, matched to the other setup surfaces. This route is reachable
+ * from any local process that can forge the required same-origin `Origin`, so an unbounded body must
+ * not be buffered and parsed here -- the refusal paths return without it now, and the paths that do
+ * read a body read at most this much.
+ */
+const MAX_SETUP_REQUEST_BYTES = 16_000
 
 /**
  * The request URL is loopback when its HOST is. The host predicate lives in
@@ -191,12 +200,19 @@ export async function POST(req: Request) {
     )
   }
 
-  let payload: PrimaryCredentialPayload
-  try {
-    payload = (await req.json()) as PrimaryCredentialPayload
-  } catch {
-    return NextResponse.json({ ok: false, message: "Invalid JSON payload." }, { status: 400 })
+  const parsedBody = await readBoundedJson(req, MAX_SETUP_REQUEST_BYTES)
+  if (!parsedBody.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: parsedBody.status === 413
+          ? "Invalid JSON payload: the request body is too large."
+          : "Invalid JSON payload.",
+      },
+      { status: parsedBody.status },
+    )
   }
+  const payload = parsedBody.value as PrimaryCredentialPayload
 
   let input
   try {
