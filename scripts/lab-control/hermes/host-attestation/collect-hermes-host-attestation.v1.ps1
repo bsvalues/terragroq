@@ -501,12 +501,12 @@ Add-Fact 'operations.heartbeats' 'operations' 'Process table and HERMES heartbea
     $created = if ($_.CreationDate -is [DateTime]) { ([DateTime]$_.CreationDate).ToUniversalTime() } elseif ($_.CreationDate) { [Management.ManagementDateTimeConverter]::ToDateTime([string]$_.CreationDate).ToUniversalTime() } else { $null }
     [ordered]@{ pid = [int]$_.ProcessId; name = [string]$_.Name; exe = Protect-Text ([string]$_.ExecutablePath); startedAt = if ($created) { $created.ToString('o') } else { $null } }
   })
-  $heartbeatRoot = 'C:\HermesLab\hermes'
-  $heartbeats = if (Test-Path -LiteralPath $heartbeatRoot) {
-    @(Get-ChildItem -LiteralPath $heartbeatRoot -File -Force | Where-Object { $_.Name -match '(?i)heartbeat|health|watch|guard' } | ForEach-Object {
+  $heartbeatRoots = @('C:\ProgramData\Hermes\health','C:\ProgramData\Hermes\p40','G:\HermesReports')
+  $heartbeats = @($heartbeatRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | ForEach-Object {
+    Get-ChildItem -LiteralPath $_ -File -Force | Where-Object { $_.Name -match '(?i)heartbeat|health|watch|guard' } | ForEach-Object {
       [ordered]@{ path = Protect-Text $_.FullName; writtenAt = $_.LastWriteTimeUtc.ToString('o'); bytes = [int64]$_.Length }
-    })
-  } else { @() }
+    }
+  })
   [ordered]@{ processes = $processes; heartbeatFiles = $heartbeats }
 } @('credential-shaped process paths are replaced before binding')
 
@@ -647,7 +647,7 @@ Add-Fact 'inference.gpus' 'inference' 'NVIDIA management interface' 'nvidia-smi 
 }
 
 Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, deployed service, live owner/listener, startup evidence, and catalog' 'Compare deployed/repository service scripts; inspect WilliamOS-HERMES-Ollama task and PID-owned loopback listener; read allow-listed server-config/API fields' 'VOLATILE' {
-  $servicePath = 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1'
+  $servicePath = 'C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1'
   $repositoryServicePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'ollama-service\hermes-ollama-service.ps1'
   if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf) -or -not (Test-Path -LiteralPath $repositoryServicePath -PathType Leaf)) {
     return [ordered]@{ __truth = 'UNKNOWN'; __value = $null }
@@ -715,7 +715,12 @@ Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, dep
   $taskArguments = if ($taskAction -and $taskAction.Arguments) { [string]$taskAction.Arguments } else { '' }
   $taskExecute = if ($taskAction -and $taskAction.Execute) { ([string]$taskAction.Execute).Trim() } else { '' }
   $trustedPowerShellActions = @('powershell.exe','C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe','C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe')
-  $exactTaskArguments = '(?i)^-NoProfile\s+-NonInteractive\s+-ExecutionPolicy\s+Bypass\s+-File\s+"?C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service\.ps1"?$'
+  # The task action must be the same service this fact reads above. Pinning the retired
+  # C:\HermesLab\hermes\... path here made every post-deployment attestation report inference drift:
+  # deploy-hermes-appliance.ps1 rewrites privileged task arguments onto the protected runtime root,
+  # so the registered action names the protected path while this predicate rejected it. Deriving the
+  # predicate from $servicePath keeps the two from disagreeing again.
+  $exactTaskArguments = '(?i)^-NoProfile\s+-NonInteractive\s+-ExecutionPolicy\s+Bypass\s+-File\s+"?' + [regex]::Escape($servicePath) + '"?$'
   $taskTriggers = if ($task) { @($task.Triggers) } else { @() }
   $hasBootTrigger = @($taskTriggers | Where-Object { [bool]$_.Enabled -and $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }).Count -eq 1
   $hasRecheckTrigger = @($taskTriggers | Where-Object { [bool]$_.Enabled -and $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and [string]$_.Repetition.Interval -eq 'PT2M' }).Count -eq 1
@@ -793,7 +798,7 @@ Add-Fact 'inference.dockerContainers' 'inference' 'Docker Engine read-only CLI' 
 }
 
 Add-Fact 'inference.guardBaseline' 'inference' 'Standing P40 guard state' 'Read allow-listed p40-guard.json health and commissioned baseline fields' 'VOLATILE' {
-  $guardPath = 'C:\HermesLab\hermes\p40-guard.json'
+  $guardPath = 'C:\ProgramData\Hermes\p40\p40-guard.json'
   if (-not (Test-Path -LiteralPath $guardPath -PathType Leaf)) {
     return [ordered]@{ __truth = 'UNKNOWN'; __value = $null }
   }

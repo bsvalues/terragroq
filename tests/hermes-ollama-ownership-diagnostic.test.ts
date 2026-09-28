@@ -41,7 +41,7 @@ describe("#1046 read-only ownership diagnostic", () => {
     expect(source).toContain("Get-CommandProjection")
     expect(source).toContain("messageSha256")
     expect(source).toContain("lineSha256")
-    for (const classification of ["CANONICAL_OWNER", "RECOVERY_CALLER", "LEGACY_DISABLED", "UNDECLARED"]) expect(source).toContain(classification)
+    for (const classification of ["CANONICAL_OWNER", "SOURCE_PROJECTION", "RECOVERY_CALLER", "LEGACY_DISABLED", "UNDECLARED"]) expect(source).toContain(classification)
   })
 
   it("redacts common credential forms before any selected text is retained", () => {

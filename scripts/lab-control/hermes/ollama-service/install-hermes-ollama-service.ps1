@@ -13,7 +13,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$TaskName = 'WilliamOS-HERMES-Ollama',
-    [string]$ScriptPath = 'C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1',
+    [string]$ScriptPath = 'C:\ProgramData\Hermes\runtime\ollama-service\hermes-ollama-service.ps1',
     # How often the task re-fires to check that the one owner is still there. A firing is a no-op
     # while the service is healthy (MultipleInstances = IgnoreNew) and a recovery when it is not.
     [int]$RecheckMinutes = 2,
@@ -85,6 +85,28 @@ $settings = New-ScheduledTaskSettingsSet `
 # that Task Scheduler terminates after three days would look exactly like an unexplained outage.
 
 if ($PSCmdlet.ShouldProcess($TaskName, 'Register scheduled task')) {
+    # The service fails closed without a protected receipt directory. Provision it on fresh restores
+    # before registration, without granting ordinary users write access to owner evidence.
+    $ownerRoot = 'C:\ProgramData\Hermes\inference'
+    foreach ($parent in @('C:\ProgramData', 'C:\ProgramData\Hermes', $ownerRoot)) {
+        if (Test-Path -LiteralPath $parent) {
+            if ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "owner-state path is a reparse point: $parent"
+            }
+        }
+    }
+    New-Item -ItemType Directory -Path $ownerRoot -Force | Out-Null
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    $readers = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($readers, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    Set-Acl -LiteralPath $ownerRoot -AclObject $acl
+
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal `
         -Trigger $trigger -Settings $settings `
