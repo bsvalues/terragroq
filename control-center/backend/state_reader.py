@@ -124,15 +124,15 @@ _CONVERGENCE_STAGES = set(_CONVERGENCE_STAGE_RANK)
 def _terrafusion_convergence_path() -> tuple[Path, str]:
     """Resolve the TerraFusion convergence ledger without creating a second copy.
 
-    TERRAFUSION_OS_ROOT is the explicit runtime contract. When it is not set,
+    WILLIAMOS_TERRAFUSION_ROOT is the explicit runtime contract. When it is not set,
     a sibling checkout named terrafusion_os_1.0 is the only implicit
     compatibility path. Missing paths stay unavailable; no fixture or cached
     fallback is substituted.
     """
-    override = os.environ.get("TERRAFUSION_OS_ROOT", "").strip()
+    override = os.environ.get("WILLIAMOS_TERRAFUSION_ROOT", "").strip()
     if override:
         root = Path(override).expanduser()
-        source = "env:TERRAFUSION_OS_ROOT"
+        source = "env:WILLIAMOS_TERRAFUSION_ROOT"
     else:
         root = PROJECT_ROOT.parent / "terrafusion_os_1.0"
         source = "sibling:terrafusion_os_1.0"
@@ -165,7 +165,7 @@ def get_terrafusion_convergence() -> dict:
             **base,
             "reason": (
                 "TerraFusion convergence ledger is not mounted. "
-                "Set TERRAFUSION_OS_ROOT to the TerraFusion OS checkout."
+                "Set WILLIAMOS_TERRAFUSION_ROOT to the TerraFusion OS checkout."
             ),
         }
 
