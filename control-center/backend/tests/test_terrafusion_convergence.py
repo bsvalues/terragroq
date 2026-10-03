@@ -42,13 +42,13 @@ def _item(item_id, priority="P1", stage="MAPPED", accepted=False):
 
 
 def test_convergence_reader_is_loud_when_checkout_is_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setenv("TERRAFUSION_OS_ROOT", str(tmp_path / "missing"))
+    monkeypatch.setenv("WILLIAMOS_TERRAFUSION_ROOT", str(tmp_path / "missing"))
     result = state_reader.get_terrafusion_convergence()
 
     assert result["status"] == "UNAVAILABLE"
     assert result["top"] is None
     assert result["accepted"] == 0
-    assert "TERRAFUSION_OS_ROOT" in result["reason"]
+    assert "WILLIAMOS_TERRAFUSION_ROOT" in result["reason"]
 
 
 def test_convergence_reader_projects_counts_and_highest_priority_seam(tmp_path, monkeypatch):
@@ -62,7 +62,7 @@ def test_convergence_reader_projects_counts_and_highest_priority_seam(tmp_path, 
             ]
         ),
     )
-    monkeypatch.setenv("TERRAFUSION_OS_ROOT", str(root))
+    monkeypatch.setenv("WILLIAMOS_TERRAFUSION_ROOT", str(root))
 
     result = state_reader.get_terrafusion_convergence()
 
@@ -84,7 +84,7 @@ def test_convergence_reader_rejects_dishonest_accepted_state(tmp_path, monkeypat
     bad = _item("CV-001", stage="ACCEPTED", accepted=False)
     bad["missing_seam"] = "Still open."
     root = _write_ledger(tmp_path, _base_ledger([bad]))
-    monkeypatch.setenv("TERRAFUSION_OS_ROOT", str(root))
+    monkeypatch.setenv("WILLIAMOS_TERRAFUSION_ROOT", str(root))
 
     result = state_reader.get_terrafusion_convergence()
 
@@ -98,7 +98,7 @@ def test_convergence_reader_rejects_mock_runtime_policy_regression(tmp_path, mon
     data = _base_ledger([_item("CV-001")])
     data["rules"]["mock_runtime_policy"] = "ALLOW_DEMO_FALLBACK"
     root = _write_ledger(tmp_path, data)
-    monkeypatch.setenv("TERRAFUSION_OS_ROOT", str(root))
+    monkeypatch.setenv("WILLIAMOS_TERRAFUSION_ROOT", str(root))
 
     result = state_reader.get_terrafusion_convergence()
 
