@@ -37,6 +37,7 @@ from state_reader import (
     get_inbox_count,
     get_git_info,
     get_backup_info,
+    get_terrafusion_convergence,
 )
 
 # Agent is imported with an alias so tests can patch it cleanly at
@@ -75,7 +76,7 @@ def build_briefing(now: Optional[datetime] = None) -> dict:
 
     Returns
     -------
-    dict with keys: generated, health, pending, next_action, git, backup
+    dict with keys: generated, health, pending, next_action, git, backup, convergence
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -179,6 +180,25 @@ def build_briefing(now: Optional[datetime] = None) -> dict:
         if k not in backup:
             backup[k] = v
 
+    # -- TerraFusion convergence ----------------------------------------------
+    # Read-only cross-project projection. Missing checkout/ledger is surfaced as
+    # UNAVAILABLE by the reader; no duplicate cache or sample status is created.
+    convergence = {
+        "status": "UNAVAILABLE",
+        "reason": "TerraFusion convergence reader unavailable.",
+        "total": 0,
+        "accepted": 0,
+        "open": 0,
+        "parked": 0,
+        "top": None,
+    }
+    try:
+        convergence_raw = get_terrafusion_convergence()
+        if isinstance(convergence_raw, dict):
+            convergence = convergence_raw
+    except Exception:
+        pass
+
     return {
         "generated": now.isoformat(),
         "health": health,
@@ -186,6 +206,7 @@ def build_briefing(now: Optional[datetime] = None) -> dict:
         "next_action": next_action,
         "git": git,
         "backup": backup,
+        "convergence": convergence,
     }
 
 
