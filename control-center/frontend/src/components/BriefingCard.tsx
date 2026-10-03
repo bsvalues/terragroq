@@ -83,8 +83,19 @@ export function BriefingCard() {
 
   const health = briefing.health ?? {}
   const nextAction = briefing.next_action ?? {}
+  const convergence = briefing.convergence ?? null
   const pendingReview = briefing.pending_review ?? 0
   const inboxCount = briefing.inbox_count ?? 0
+
+  const convergenceStatus = String(convergence?.status ?? 'UNAVAILABLE').toUpperCase()
+  const convergenceColor =
+    convergenceStatus === 'INVALID'
+      ? C.red
+      : convergenceStatus === 'AVAILABLE' && Number(convergence?.open ?? 0) === 0
+        ? C.green
+        : convergenceStatus === 'AVAILABLE'
+          ? C.amber
+          : C.textDim
 
   return (
     <div style={{
@@ -125,6 +136,57 @@ export function BriefingCard() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* TerraFusion convergence — direct read-only projection from the OS ledger */}
+      {convergence && (
+        <div
+          data-testid='terrafusion-convergence-pulse'
+          style={{
+            background: convergenceStatus === 'INVALID'
+              ? C.redBg
+              : convergenceStatus === 'AVAILABLE'
+                ? C.amberBg
+                : 'rgba(74,85,104,.08)',
+            border: `1px solid ${convergenceColor}33`,
+            borderLeft: `3px solid ${convergenceColor}`,
+            borderRadius: 8,
+            padding: '10px 14px',
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: convergenceColor }}>
+              TerraFusion Convergence
+            </div>
+            <div style={{ fontSize: 11, color: C.textDim }}>
+              {convergenceStatus === 'AVAILABLE'
+                ? `${convergence.accepted ?? 0}/${convergence.total ?? 0} accepted · ${convergence.open ?? 0} open`
+                : convergenceStatus}
+            </div>
+          </div>
+
+          {convergenceStatus === 'AVAILABLE' && convergence.top ? (
+            <div style={{ marginTop: 7 }}>
+              <div style={{ fontSize: 11, color: convergenceColor, fontWeight: 700, marginBottom: 3 }}>
+                [{convergence.top.priority}] {convergence.top.id} · {String(convergence.top.stage).replace(/_/g, ' ')}
+              </div>
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: 4 }}>
+                {convergence.top.title}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.45 }}>
+                Next: {convergence.top.next_action}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 6, fontSize: 11, color: C.textMuted, lineHeight: 1.45 }}>
+              {convergence.reason ??
+                (convergenceStatus === 'AVAILABLE'
+                  ? 'No active convergence seam remains.'
+                  : 'Convergence status unavailable.')}
+            </div>
+          )}
         </div>
       )}
 
