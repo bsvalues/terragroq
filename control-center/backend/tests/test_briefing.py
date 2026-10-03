@@ -46,6 +46,25 @@ _GIT_DIRTY = {"branch": "copilot-phase1", "clean": False, "latest_commit": "abc1
 
 _BACKUP_OK = {"count": 3, "latest": "WilliamOS-backup-2026-06-19.zip"}
 
+_CONVERGENCE_OK = {
+    "status": "AVAILABLE",
+    "ledger_version": 1,
+    "updated": "2026-10-02",
+    "total": 7,
+    "accepted": 0,
+    "open": 7,
+    "parked": 0,
+    "top": {
+        "id": "CV-001",
+        "title": "Governed tool result to OS effect execution",
+        "priority": "P0",
+        "stage": "SEAM_DEFINED",
+        "missing_seam": "One canonical bounded effect executor.",
+        "next_action": "Prove route_to_parcel through Workbench.",
+    },
+    "reason": None,
+}
+
 _NEXT_ACTION_REC = {
     "action": "System is healthy. Capture a thought or review the cortex.",
     "command": "cortex-status",
@@ -71,6 +90,7 @@ def _patch_all(
     inbox=0,
     git=_GIT_CLEAN,
     backup=_BACKUP_OK,
+    convergence=_CONVERGENCE_OK,
     agent_result=_AGENT_RESULT,
 ):
     """Return a context-manager stack patching every reader used by briefing.py."""
@@ -86,6 +106,7 @@ def _patch_all(
             patch("copilot.briefing.get_inbox_count", return_value=inbox),
             patch("copilot.briefing.get_git_info", return_value=git),
             patch("copilot.briefing.get_backup_info", return_value=backup),
+            patch("copilot.briefing.get_terrafusion_convergence", return_value=convergence),
             patch("copilot.briefing.agent_get_next_action", return_value=agent_result),
         ):
             yield
@@ -106,7 +127,7 @@ def test_build_briefing_returns_dict():
 def test_build_briefing_has_all_top_level_keys():
     with _patch_all():
         result = briefing.build_briefing(now=_NOW)
-    for key in ("generated", "health", "pending", "next_action", "git", "backup"):
+    for key in ("generated", "health", "pending", "next_action", "git", "backup", "convergence"):
         assert key in result, f"Missing key: {key}"
 
 
@@ -176,6 +197,16 @@ def test_build_briefing_backup_latest():
     with _patch_all(backup=_BACKUP_OK):
         result = briefing.build_briefing(now=_NOW)
     assert result["backup"]["latest"] == "WilliamOS-backup-2026-06-19.zip"
+
+
+def test_build_briefing_surfaces_terrafusion_convergence():
+    with _patch_all(convergence=_CONVERGENCE_OK):
+        result = briefing.build_briefing(now=_NOW)
+
+    assert result["convergence"]["status"] == "AVAILABLE"
+    assert result["convergence"]["accepted"] == 0
+    assert result["convergence"]["open"] == 7
+    assert result["convergence"]["top"]["id"] == "CV-001"
 
 
 # ---------------------------------------------------------------------------
